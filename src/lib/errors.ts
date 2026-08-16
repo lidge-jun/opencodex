@@ -143,6 +143,15 @@ export function classifyError(status: number, type: string, message: string): Oc
   if (type === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(text)) {
     return { message, type: "invalid_request_error", code: CYBER_POLICY_ERROR_CODE };
   }
+  // A LOCAL preflight refusal keeps its own code (#1524). The message necessarily says
+  // "context window" -- that is what it is refusing on -- so the generic remap below would
+  // rewrite it to `context_length_exceeded` and make it indistinguishable from an UPSTREAM
+  // verdict. The two need opposite fallback handling: ours means "this candidate does not
+  // fit", theirs means "the request is impossible", so collapsing them ended the chain at
+  // the first candidate that was merely too small.
+  if (type === "input_admission_refused") {
+    return { message, type: "invalid_request_error", code: "input_admission_refused" };
+  }
   if (
     text.includes("context_length_exceeded") ||
     text.includes("context window") ||

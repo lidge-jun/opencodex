@@ -391,7 +391,9 @@ fixe de l'API Provider, préserve les identifiants natifs du fournisseur et limi
 256 lignes brutes. `ocx login command-code` prend en charge OAuth par connexion dans le navigateur, avec
 importation facultative des identifiants locaux depuis `~/.commandcode/auth.json` pour les utilisateurs de la
 CLI Command Code. Le catalogue, propre au compte, provient du point de terminaison de découverte authentifié
-après la connexion. Les requêtes de chat utilisent la clé Bearer configurée. Créez des clés dans
+après la connexion. Les requêtes de chat du préréglage Provider-API `commandcode` utilisent la clé Bearer active
+configurée ; le préréglage OAuth `command-code` utilise le jeton Bearer du compte enregistré pour la découverte
+authentifiée et les requêtes de chat. Créez des clés Provider-API dans
 [Command Code Studio](https://commandcode.ai/studio/).
 
 **Quota Command Code.** Le tableau de bord et `ocx account refresh` sondent les fenêtres
@@ -607,4 +609,4 @@ au fournisseur.
 
 Les fournisseurs qui disposent d'une sonde en direct sont OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax, Moonshot, Venice, Synthetic, DeepInfra,
-Neuralwatt, ainsi que tout fournisseur personnalisé reposant sur a6api.
+Neuralwatt, Command Code, ainsi que tout fournisseur personnalisé reposant sur a6api.

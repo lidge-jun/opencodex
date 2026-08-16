@@ -30,6 +30,8 @@ import {
 } from "./user-identity";
 import {
   markJournalInjectedState,
+  journaledInjectedOpenaiBaseUrl,
+  journaledInjectedCatalogPath,
   removeJournal,
   restoreJournalState,
   writeJournal,
@@ -52,6 +54,7 @@ import {
   providerTableStart,
   providerTableString,
   rootTomlString,
+  stripJournaledOpenaiBaseUrl,
   tomlStringPattern,
 } from "./injected-marker";
 import {
@@ -1138,12 +1141,18 @@ interface StripOpencodexConfigResult {
  */
 function stripOpencodexConfigResult(
   content: string,
+  journaledBaseUrl: string | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
     readRootTomlString(out, "model_provider") === "opencodex";
-  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out);
+  // #1798: marker adjacency is FORMATTING evidence, and a Codex app rewrite keeps values
+  // while dropping comments. Fall back to VALUE evidence -- the exact URL we recorded
+  // writing -- so an app-rewritten config is still recognized as ours.
+  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
+    || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
+  out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl);
   if (out.includes("[model_providers.opencodex]")) {
     out = removeOcxSection(out);
   }
@@ -1195,8 +1204,12 @@ export function removeCodexConfig(
   // The unchanged fast path compares in LF space so an untouched file is never rewritten.
   const eol = dominantEol(rawContent);
   const content = applyEol(rawContent, "\n");
-  const had = hasOpencodexRouting(content);
-  const stripped = stripOpencodexConfigResult(content);
+  // Read the recorded injection once: the strip below consumes it, and so does the
+  // ownership verdict, which must agree with what was actually removed.
+  const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
+  const had = hasOpencodexRouting(content)
+    || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl);
+  const stripped = stripOpencodexConfigResult(content, journaledBaseUrl);
   if (had || stripped.content !== content) {
     atomicWriteFile(CODEX_CONFIG_PATH, applyEol(stripped.content, eol));
   }
@@ -1371,13 +1384,23 @@ function restoreCodexConfigInline(): CodexRestoreConfigResult {
 }
 
 /** The catalog half, always inside its own K acquisition. */
-function restoreCodexCatalogArtifact(revalidateDesiredState: boolean): CodexRestoreCatalogResult {
+/**
+ * The catalog half, always inside its own K acquisition.
+ *
+ * `journaledCatalogPath` must be captured by the CALLER, before the config half runs: a
+ * successful journal restore deletes the journal, and a config restore can remove
+ * `model_catalog_json`. Reading it here would be too late in both cases (#1798).
+ */
+function restoreCodexCatalogArtifact(
+  revalidateDesiredState: boolean,
+  journaledCatalogPath: string | null,
+): CodexRestoreCatalogResult {
   const owningCodexHome = getCodexHome();
   try {
     const restored = withCatalogWriteSerialization(owningCodexHome, permit =>
       revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())
         ? null
-        : restoreCodexCatalogWithPermit(permit, owningCodexHome));
+        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath));
     return restored.kind === "completed" && restored.value !== null
       ? { state: "ok", changed: restored.value.removed > 0, ...restored.value, message: "Codex catalog restored." }
       : restored.kind === "completed"
@@ -1435,6 +1458,10 @@ export async function restoreNativeCodexAsync(
     integrationRecord: () => readIntegrationRecord(),
   });
 
+  // Captured before the config half: a successful journal restore DELETES the journal, and
+  // restoring the config can drop `model_catalog_json`. Either one would hide the routed
+  // catalog we actually wrote (#1798).
+  const journaledCatalogPath = journaledInjectedCatalogPath();
   let config: CodexRestoreConfigResult;
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
 
@@ -1511,7 +1538,7 @@ export async function restoreNativeCodexAsync(
     config = restoreCodexConfigInline();
   }
 
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true);
+  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   const outcome = await runCodexHistoryJob({
     ...resolveCodexHistoryJobTarget(),
     ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
@@ -1561,8 +1588,12 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
     return desiredEnabledRestoreSkip();
   }
+  // Captured before the config half: a successful journal restore DELETES the journal, and
+  // restoring the config can drop `model_catalog_json`. Either one would hide the routed
+  // catalog we actually wrote (#1798).
+  const journaledCatalogPath = journaledInjectedCatalogPath();
   const config = restoreCodexConfigInline();
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true);
+  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
   // no-op with a readonly probe instead of write-opening a DB the Codex app may hold
   // (Windows: WAL writer lock -> seconds of stalling + a false warning on every stop).

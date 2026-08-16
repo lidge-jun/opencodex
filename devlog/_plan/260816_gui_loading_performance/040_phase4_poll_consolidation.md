@@ -160,3 +160,46 @@ else add cases to client-resource-revalidate.test.tsx):
 
 Server-side endpoint merging, render-level memoization audits, virtualization
 tuning, bundle-size work.
+
+## D addendum — landed (2026-08-16/17)
+
+Implementation: commit d6ea35ef0.
+
+### Measurement (CDP, sandboxed instance on :5198, same protocol as 001/E0)
+
+| Scenario | Before | After |
+|---|---|---|
+| Dashboard, 31s dwell, visible | 57 requests / 9 concurrent 5s timers | 57 requests / **1** shared 5s timer |
+| Integrations revisit inside 60s | full refetch of 8 overview resources, skeletons on mount | **0 requests, 0 skeletons** |
+| Hidden tab (any page) | WP3 guarantee | unchanged: zero timers, zero requests |
+
+The visible-tab request count is deliberately unchanged: bucketing removes wakeups,
+not cadence, and freshness (not volume) is what a live dashboard is for. The real
+volume win is the revisit path — previously every tab hop re-fetched everything
+because `scheduleStoreEviction` drops the store on route change.
+
+### Interval tuning decision (§3)
+
+No cadence changed. The measurement does not show Logs (2s) or Debug (1s+2s)
+dominating: they are page-gated (`enabled: tab === "logs"` / `active`), so they
+contribute nothing unless the user is looking at them, and both are now
+visibility-paused and in-flight-guarded by WP3. Changing a freshness-affecting
+default without the numbers supporting it would be exactly the kind of unforced
+regression this section exists to prevent.
+
+### Deviations from spec
+
+- The spec assumed the Integrations pages would gain hand-written cache wiring.
+  Ten resources across two files needed the identical seed+write pair, so
+  `useDataSurface` gained an opt-in `sessionCacheKey` instead and the pages pass a
+  key. Same mechanism, one implementation.
+- `startVisibilityPoll` schedules through `window.setInterval` when available. The
+  migrated pollers all used the window timer and their tests intercept it there;
+  the bare global bound to a different scope and broke nine tests (found by running
+  the full suite, fixed before commit).
+
+### Verification
+
+- `cd gui && bun test tests` → **922 pass / 0 fail** (157 files), exit 0.
+- `bun run lint`, `bun run lint:i18n`, `bun run build` → all green.
+- Browser: revisit flow measured above; dashboard poll wave unchanged and healthy.

@@ -1251,6 +1251,39 @@ describe("codex routing", () => {
     })).toMatchObject({ weeklyPercent: 20, weeklyResetAt: 2 });
   });
 
+  test("a sub-day primary window is KEPT as its own burst window (#1791)", () => {
+    // Not masquerading as weekly was only half the fix. The 5-hour reading is a real
+    // upstream-enforced limit -- the issue reports it at 99% remaining alongside a
+    // separate weekly limit -- so discarding it hides a window that genuinely gates
+    // the account. Both windows must survive parsing with independent resets.
+    expect(parseUsageQuota({
+      plan_type: "k12",
+      rate_limit: {
+        primary_window: { used_percent: 1, reset_at: 2000000000, limit_window_seconds: 18000 },
+        secondary_window: { used_percent: 0, reset_at: 2000586800, limit_window_seconds: 604800 },
+      },
+    })).toMatchObject({
+      shortPercent: 1,
+      shortResetAt: 2000000000,
+      shortWindowSeconds: 18000,
+      weeklyPercent: 0,
+      weeklyResetAt: 2000586800,
+    });
+  });
+
+  test("an exhausted burst window takes the account out of rotation (#1791)", () => {
+    // Upstream enforces the 5-hour window independently, so an account at 100% there is
+    // genuinely blocked even while its weekly quota is untouched. Reporting it as usable
+    // would route traffic straight into a 429.
+    const quota = parseUsageQuota({
+      plan_type: "k12",
+      rate_limit: {
+        primary_window: { used_percent: 100, reset_at: 2000000000, limit_window_seconds: 18000 },
+        secondary_window: { used_percent: 10, reset_at: 2000586800, limit_window_seconds: 604800 },
+      },
+    });
+    expect(isCodexQuotaExhausted(quota, "k12")).toBe(true);
+  });
   test("a primary window with no declared duration is still treated as weekly (#1791)", () => {
     // Older payloads omit limit_window_seconds entirely. Guessing there would reclassify
     // every legacy account, so an undeclared duration keeps the historical behavior.

@@ -55,6 +55,16 @@ following 10s+, skeleton forever. Non-polled stores have no retry path at all on
 their single attempt is lost inside the auth wedge (no poll tick, no visibility
 listener without pollMs — client-resource.ts:175 installs it only while polling).
 
+CORRECTION (2026-08-16, WP2 verification): the post-heal portion of this
+observation was polluted by a test-harness artifact — the raw-CDP channel rejects
+`Fetch.disable` (silently, via my own catch), so interception never actually
+cleared and "heal" phases kept pausing requests. The mechanism claim stands on the
+code (a non-polled cold store whose single attempt dies has no refire path), and
+WP1's deadline converts it into a settled failed-cold with a working retry; but
+the specific "never recovered even after heal" live observation is withdrawn as
+evidence. The corrected end-to-end result (WP2 D addendum): after a real heal,
+ALL tabs recover automatically with no reload.
+
 ## E4 — hidden-tab emulation limit
 
 The in-app browser keeps background tabs `visibilityState: "visible"` (verified by

@@ -12,6 +12,8 @@ import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
+import { createBoundedFetch } from "../bounded-fetch";
+import { startVisibilityPoll } from "../visibility-poll";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -284,18 +286,21 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   }, [models, shadowCall?.model, shadowModelOptions]);
 
   const loadShadowCall = useCallback(async () => {
+    const bounded = createBoundedFetch(15_000);
     try {
-      const r = await fetch(`${apiBase}/api/shadow-call-settings`);
+      const r = await fetch(`${apiBase}/api/shadow-call-settings`, { signal: bounded.signal });
       const data = await readJsonIfOk<ShadowCallData>(r);
       if (data) setShadowCall(data);
     } catch { /* old server / network: keep the section disabled */ }
+    finally { bounded.clear(); }
   }, [apiBase]);
 
   const loadV2 = useCallback(async () => {
     // Never let a toggle in flight be clobbered by the poll (same single-flight rule as models).
     if (v2BusyRef.current) return;
+    const bounded = createBoundedFetch(15_000);
     try {
-      const r = await fetch(`${apiBase}/api/v2`);
+      const r = await fetch(`${apiBase}/api/v2`, { signal: bounded.signal });
       if (!(r.headers.get("content-type") ?? "").includes("application/json")) { setV2(null); return; }
       const data = await readJsonIfOk<V2Status>(r);
       if (!data || typeof data.enabled !== "boolean") { setV2(null); return; }
@@ -309,6 +314,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     } catch {
       setV2(null); // old server / network: hide the section instead of guessing
     } finally {
+      bounded.clear();
       setV2Loading(false);
     }
   }, [apiBase]);
@@ -412,12 +418,13 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       void loadShadowCall();
       void loadV2();
     }, 0);
-    const timer = window.setInterval(() => {
+    // Hidden tab: no timer, no /api/v2 traffic; the make-up tick refreshes on return.
+    const stop = startVisibilityPoll(() => {
       if (!v2BusyRef.current) void loadV2();
-    }, 10000);
+    }, 10_000);
     return () => {
       window.clearTimeout(timeout);
-      window.clearInterval(timer);
+      stop();
     };
   }, [catalogActive, loadShadowCall, loadV2]);
 

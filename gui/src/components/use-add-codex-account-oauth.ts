@@ -7,6 +7,7 @@ import type {
 } from "./add-codex-account-reducer";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { startVisibilityPoll } from "../visibility-poll";
 import {
   codexAccountMutationCompletion,
   type CodexAccountMutationCompletion,
@@ -34,7 +35,7 @@ export function useAddCodexAccountOAuth({
   const aliveRef = useRef(true);
   const pollErrorStreakRef = useRef(0);
   const pollInFlightRef = useRef(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<(() => void) | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const flowRef = useRef<string | null>(null);
@@ -55,7 +56,7 @@ export function useAddCodexAccountOAuth({
   }, [ui.flowId]);
 
   const stopPolling = useCallback(() => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (pollRef.current) { pollRef.current(); pollRef.current = null; }
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     pollAbortRef.current?.abort();
     pollAbortRef.current = null;
@@ -174,7 +175,9 @@ export function useAddCodexAccountOAuth({
           : `${apiBase}/api/codex-auth/login-status`;
         const pollSession = new AbortController();
         pollAbortRef.current = pollSession;
-        pollRef.current = setInterval(async () => {
+        // A hidden tab cannot complete OAuth; the visible make-up tick checks the
+        // login status the moment the user returns to the modal.
+        pollRef.current = startVisibilityPoll(async () => {
           if (pollInFlightRef.current || pollSession.signal.aborted) return;
           pollInFlightRef.current = true;
           // Bound each tick and abort it when stopPolling/cleanup cancels the session.

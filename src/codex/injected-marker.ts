@@ -50,6 +50,34 @@ export function providerTableString(content: string, provider: string, key: stri
   return null;
 }
 
+/**
+ * Drop a root `openai_base_url` whose VALUE is the one a recorded injection wrote.
+ *
+ * #1798: the marker-adjacency rule below is formatting evidence, and the Codex app
+ * reserializes the file -- values kept, comments dropped. This rule is value evidence
+ * instead, so it still recognizes our URL after that rewrite. It is deliberately an
+ * EXACT value match against what we recorded writing: a user gateway we never wrote
+ * cannot match, so restore can never delete a URL that was not ours.
+ */
+export function stripJournaledOpenaiBaseUrl(content: string, injectedUrl: string | null): string {
+  if (!injectedUrl) return content;
+  const lines = content.split(String.fromCharCode(10));
+  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const drop = new Set<number>();
+  for (let i = 0; i < rootEnd; i++) {
+    const line = lines[i]!;
+    if (!isRootOpenaiBaseUrlLine(line)) continue;
+    if (rootTomlString(line, "openai_base_url") !== injectedUrl) continue;
+    drop.add(i);
+    // Take an ownership marker directly above it too, so repeated cycles cannot
+    // accumulate orphaned comments.
+    if (i > 0 && lines[i - 1]!.includes(OCX_SECTION_MARKER)) drop.add(i - 1);
+  }
+  if (drop.size === 0) return content;
+  return lines.filter((_, i) => !drop.has(i)).join(String.fromCharCode(10));
+}
+
 export function hasInjectedOpenaiBaseUrl(content: string): boolean {
   const lines = content.split("\n");
   const firstTable = lines.findIndex(l => /^\s*\[/.test(l));

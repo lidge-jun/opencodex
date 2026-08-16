@@ -1686,8 +1686,16 @@ export async function syncCatalogModels(config: OcxConfig): Promise<RetainedCata
 export function restoreCodexCatalogWithPermit(
   permit: CatalogWritePermit,
   owningCodexHome: string,
+  /**
+   * The catalog this injection actually wrote, when it is known (#1798).
+   *
+   * Re-resolving from the CURRENT config is wrong after a Codex app rewrite that dropped
+   * `model_catalog_json`: that sends restore to the default catalog while the routed file we
+   * really wrote is left untouched. The recorded path is the file whose routing is ours.
+   */
+  injectedCatalogPath?: string | null,
 ): { removed: number; kept: number; path: string } {
-  const catalogPath = readCodexCatalogPath();
+  const catalogPath = injectedCatalogPath ?? readCodexCatalogPath();
   const catalog = readCatalog(catalogPath);
   if (!catalog || !Array.isArray(catalog.models)) return { removed: 0, kept: 0, path: catalogPath };
   const disabledModels = currentDisabledModelsForRestore();

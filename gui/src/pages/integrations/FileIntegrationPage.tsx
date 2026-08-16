@@ -74,13 +74,21 @@ export default function FileIntegrationPage({
     `integration-state:${apiBase}:${client}`,
     [apiBase, client],
     fetchState,
-    { isEmpty: () => false, enabled: active },
+    {
+      isEmpty: () => false,
+      enabled: active,
+      sessionCacheKey: `ocx.integrations.state.v1:${apiBase}:${client}`,
+    },
   );
   const historyResource = useDataSurface<IntegrationJournalRow[]>(
     `integration-journal:${apiBase}:${client}`,
     [apiBase, client],
     fetchHistory,
-    { isEmpty: rows => rows.length === 0, enabled: active },
+    {
+      isEmpty: rows => rows.length === 0,
+      enabled: active,
+      sessionCacheKey: `ocx.integrations.client-journal.v1:${apiBase}:${client}`,
+    },
   );
 
   const status = stateResource.state.data ?? null;

@@ -7,7 +7,9 @@
  * with per-page booleans, which is why a slow load could look identical to an empty result.
  */
 
+import { useCallback, useMemo } from "react";
 import { type ResourceSnapshot, useKeyedClientResource } from "./client-resource";
+import { readSessionListCacheEntry, writeSessionListCacheEntry } from "./session-list-cache";
 
 export type DataSurfaceKind =
   | "disabled"
@@ -47,6 +49,22 @@ export type DataSurfaceOptions<T> = {
   initialData?: T;
   /** Forwarded to the resource layer; see ClientResourceOptions.deadlineMs. */
   deadlineMs?: number;
+  /** Forwarded to the resource layer; see ClientResourceOptions.staleAfterMs. */
+  staleAfterMs?: number;
+  /** Forwarded to the resource layer; see ClientResourceOptions.initialDataCachedAt. */
+  initialDataCachedAt?: number | null;
+  /**
+   * Opt-in session-cache wiring: the surface seeds from this key on mount and writes
+   * every successful payload back with its timestamp. Pages that already own their
+   * cache keep doing it themselves and leave this unset.
+   *
+   * Seeding alone (no `staleAfterMs`) keeps today's always-revalidate behavior: the
+   * cached payload paints immediately instead of a skeleton, and the live value still
+   * arrives. Add `staleAfterMs` only for a surface that OWNS its truth — a view that
+   * mirrors state another page can mutate would otherwise contradict the toggle the
+   * user just made, with no request in flight to correct it.
+   */
+  sessionCacheKey?: string;
 };
 
 /**
@@ -146,8 +164,31 @@ export function useDataSurface<T>(
   load: (signal: AbortSignal) => Promise<T>,
   options: DataSurfaceOptions<T>,
 ): DataSurfaceResource<T> {
-  const { isEmpty, ...resourceOptions } = options;
-  const resource = useKeyedClientResource(key, deps, load, resourceOptions);
+  const { isEmpty, sessionCacheKey, ...resourceOptions } = options;
+  // The seed only applies while the store is empty, so reading it once per key is
+  // enough — and a page like the Integrations overview holds eight of these, whose
+  // parses would otherwise repeat on every render as each resource settles.
+  const cachedEntry = useMemo(
+    () => (sessionCacheKey ? readSessionListCacheEntry<T>(sessionCacheKey) : null),
+    [sessionCacheKey],
+  );
+  const loadAndCache = useCallback(
+    async (signal: AbortSignal): Promise<T> => {
+      const next = await load(signal);
+      if (sessionCacheKey) writeSessionListCacheEntry(sessionCacheKey, next);
+      return next;
+    },
+    [load, sessionCacheKey],
+  );
+  const resource = useKeyedClientResource(key, deps, loadAndCache, {
+    ...resourceOptions,
+    ...(sessionCacheKey
+      ? {
+        initialData: resourceOptions.initialData ?? cachedEntry?.data,
+        initialDataCachedAt: resourceOptions.initialDataCachedAt ?? cachedEntry?.cachedAt ?? null,
+      }
+      : {}),
+  });
   return {
     ...resource,
     state: classifyDataSurface(resource, isEmpty, options.enabled !== false),

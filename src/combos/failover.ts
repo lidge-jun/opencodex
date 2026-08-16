@@ -121,18 +121,28 @@ export function comboFailureDecision(
   if (isCyberPolicyCode(options?.code)) return "stop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
+  // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
+  // not "the request is impossible": the next candidate may have a larger context window.
+  //
+  // This MUST be tested before the generic stop list below. Our own refusal message says
+  // "context window" -- that is what it refuses on -- and the classifier remaps that phrase,
+  // so checking the stop list first swallowed the signal and ended the chain. An UPSTREAM
+  // `context_length_exceeded` carries no admission code and still falls through to stop.
+  //
+  // Matched on the STRUCTURED code only, which classifyError now preserves for our own
+  // refusal. A raw substring test would additionally let any upstream override a terminal
+  // verdict by echoing the token in prose we do not control.
+  //
+  // Precise about what this is NOT: an upstream can still SET this code deliberately, since
+  // both extractors read the upstream error object. That is bounded rather than dangerous --
+  // an upstream already controls other hop signals (429, 5xx), and traversal is finite: policy
+  // tries each candidate once via `tried`, and combo excludes each attempted target. So this is
+  // structured-code-only, not provably local.
+  if (options?.code === "input_admission_refused" || error.code === "input_admission_refused") {
+    return "hop";
+  }
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
-  }
-  // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
-  // not "the request is impossible". Hopping is exactly right: the next candidate may have a
-  // larger context window. Read it from the structured code OR the body text, because the
-  // generic classifier maps 413 to its own code and would otherwise swallow this signal.
-  // Upstream `context_length_exceeded` above still stops.
-  if (options?.code === "input_admission_refused"
-    || error.code === "input_admission_refused"
-    || message.includes("input_admission_refused")) {
-    return "hop";
   }
   if ([401, 403, 404, 408, 429].includes(status) || status >= 500) return "hop";
   if ([

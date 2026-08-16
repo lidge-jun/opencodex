@@ -10,6 +10,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
 import { readJsonIfOk } from "../../fetch-json";
+import { createBoundedFetch } from "../../bounded-fetch";
+import { startVisibilityPoll } from "../../visibility-poll";
 import { useT } from "../../i18n/shared";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
@@ -152,15 +154,21 @@ export default function ProviderSettings({
   useEffect(() => {
     if (!apiBase) return;
     let active = true;
+    let inFlight = false;
     const load = () => {
-      fetch(`${apiBase}/api/provider-request-pacing?name=${encodeURIComponent(item.name)}`)
+      // Guarded + bounded: a hung pacing read must never stack or pin the panel.
+      if (inFlight) return;
+      inFlight = true;
+      const bounded = createBoundedFetch(10_000);
+      fetch(`${apiBase}/api/provider-request-pacing?name=${encodeURIComponent(item.name)}`, { signal: bounded.signal })
         .then(r => readJsonIfOk<PacingStatus>(r))
         .then(status => { if (active && status) setPacingStatus(status); })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => { bounded.clear(); inFlight = false; });
     };
     load();
-    const timer = window.setInterval(load, 2_000);
-    return () => { active = false; window.clearInterval(timer); };
+    const stop = startVisibilityPoll(load, 2_000);
+    return () => { active = false; stop(); };
   }, [apiBase, item.name]);
 
   const pacingDraft = useMemo(() => ({

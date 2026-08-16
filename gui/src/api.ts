@@ -1,4 +1,5 @@
 import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
+import { createBoundedFetch } from "./bounded-fetch";
 
 let installed = false;
 /** Shared 401 refresh gate — concurrent waiters join one prompt / token resolution. */
@@ -24,6 +25,29 @@ let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
 const SESSION_REBOOTSTRAP_PATH = "/opencodex-session";
 /** Safe authenticated read used to validate a raw admin token before closing the sign-in form. */
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
+
+/**
+ * The silent re-bootstrap must fail fast: every /api/* request queues behind the
+ * shared resolution, so an unbounded bootstrap hangs the whole dashboard (H2).
+ */
+const SESSION_REBOOTSTRAP_TIMEOUT_MS = 10_000;
+let rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
+
+/**
+ * Whole-resolution watchdog. The bootstrap bound covers a well-behaved fetch; this
+ * covers everything else — a fetch that never honors the abort, a prompt path that
+ * pends without settling, any surprise inside the shared body. Without it one stuck
+ * resolution pins every /api/* waiter for the page lifetime, which is the exact
+ * failure this module exists to kill.
+ *
+ * Scope note: the watchdog races the BOOTSTRAP CALL ONLY, never the admin-token
+ * prompt. The prompt is user-controlled and unbounded by design; while its body
+ * pends, later waves join the same resolution, which is what keeps a single dialog
+ * on screen (promptForAdminToken has no singleton guard — a watchdog that fired
+ * during the prompt would stack a fresh modal every cycle).
+ */
+const RESOLUTION_WATCHDOG_MS = 15_000;
+let resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
 
 function needsApiAuth(input: RequestInfo | URL): boolean {
   try {
@@ -102,23 +126,42 @@ function metaContentFromHtml(html: string, name: string): string | null {
  * Silently renew the GUI session from a freshly served document. Loopback servers mint
  * short-lived sessions into the HTML on every page load, so an expired session (5-minute
  * TTL) or one invalidated by a proxy restart is replaced without ever asking the user for
- * a token. Returns null when the server refuses to mint sessions (non-loopback operator
- * dashboards), where the manual admin-token prompt remains the fallback.
+ * a token.
+ *
+ * Tri-state by design: only a definitive refusal ("unavailable": 4xx, or an OK
+ * document without valid session meta — the non-loopback shape) may fall through to
+ * the admin-token prompt. Anything transient — timeout, abort, network error, 5xx
+ * from an intermediate proxy — is "failed", which settles this wave as an ordinary
+ * request failure and lets the next poll retry. Mapping a transient failure to the
+ * prompt would pop a credential modal on a loopback dashboard that needs no token.
  */
-async function reBootstrapSessionToken(): Promise<string | null> {
-  if (!rawFetch) return null;
+type RebootstrapResult =
+  | { kind: "minted"; token: string }
+  | { kind: "unavailable" }
+  | { kind: "failed" };
+
+async function reBootstrapSessionToken(): Promise<RebootstrapResult> {
+  if (!rawFetch) return { kind: "failed" };
+  const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
-    const response = await rawFetch(SESSION_REBOOTSTRAP_PATH, { cache: "no-store" });
-    if (!response.ok) return null;
+    const response = await rawFetch(SESSION_REBOOTSTRAP_PATH, { cache: "no-store", signal: bounded.signal });
+    if (!response.ok) {
+      // Only a definitive refusal is "unavailable"; 5xx and everything else is transient.
+      return response.status >= 400 && response.status < 500 ? { kind: "unavailable" } : { kind: "failed" };
+    }
     const html = await response.text();
     const stored = storeSession(
       metaContentFromHtml(html, "opencodex-session-token"),
       metaContentFromHtml(html, "opencodex-session-csrf"),
       metaContentFromHtml(html, "opencodex-session-origin"),
     );
-    return stored ? readToken() : null;
+    const token = readToken();
+    if (stored && token) return { kind: "minted", token };
+    return { kind: "unavailable" };
   } catch {
-    return null;
+    return { kind: "failed" };
+  } finally {
+    bounded.clear();
   }
 }
 
@@ -162,30 +205,61 @@ function withToken(input: RequestInfo | URL, init: RequestInit | undefined, toke
  * memoryToken before prompting so waiters that wake after another request already stored a token
  * do not re-prompt.
  */
-async function resolveTokenAfter401(failedToken: string | null): Promise<string | null> {
+async function resolveTokenAfter401(failedToken: string | null, callerSignal?: AbortSignal): Promise<string | null> {
   if (promptCancelled) return null;
-  if (resolutionInFlight) return resolutionInFlight;
+  if (callerSignal?.aborted) return null;
+  if (!resolutionInFlight) {
+    const body = (async () => {
+      if (promptCancelled) return null;
+      const current = readToken();
+      if (current && current !== failedToken) return current;
 
-  resolutionInFlight = (async () => {
-    if (promptCancelled) return null;
-    const current = readToken();
-    if (current && current !== failedToken) return current;
+      // The watchdog races the bootstrap call only — never the prompt below. When
+      // it wins, the wave fails and the conditional clear lets the NEXT 401 start
+      // a fresh resolution instead of joining the zombie.
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      const renewed = await Promise.race([
+        reBootstrapSessionToken(),
+        new Promise<RebootstrapResult>((resolve) => {
+          watchdog = setTimeout(() => resolve({ kind: "failed" }), resolutionWatchdogMs);
+        }),
+      ]).finally(() => clearTimeout(watchdog));
+      if (renewed.kind === "minted") return renewed.token;
+      // Transient bootstrap failure: this wave fails and the next 401 re-arms a
+      // fresh resolution (the finally clears resolutionInFlight). No prompt.
+      if (renewed.kind === "failed") return null;
 
-    const renewed = await reBootstrapSessionToken();
-    if (renewed) return renewed;
+      // User-controlled and unbounded: later waves join this pending body, which
+      // is what keeps exactly one prompt dialog on screen.
+      const prompted = await requestAdminToken(verifyAdminToken);
+      if (prompted) {
+        storeToken(prompted);
+        return prompted;
+      }
+      promptCancelled = true;
+      return null;
+    })();
+    const tracked = body.finally(() => {
+      // Only clear if nobody replaced us — a late settle must not wipe a newer
+      // in-flight resolution. (Async callback: tracked is assigned long before
+      // this can run.)
+      if (resolutionInFlight === tracked) resolutionInFlight = null;
+    });
+    resolutionInFlight = tracked;
+  }
 
-    const prompted = await requestAdminToken(verifyAdminToken);
-    if (prompted) {
-      storeToken(prompted);
-      return prompted;
-    }
-    promptCancelled = true;
-    return null;
-  })().finally(() => {
-    resolutionInFlight = null;
+  if (!callerSignal) return resolutionInFlight;
+  // Per-caller race: an abort unwinds THIS caller only — a dead caller must not
+  // cancel the shared resolution other waiters still need. The listener is removed
+  // whether the race resolves by token or by abort, so waiters never accumulate.
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<null>((resolve) => {
+    onAbort = () => resolve(null);
+    callerSignal.addEventListener("abort", onAbort, { once: true });
   });
-
-  return resolutionInFlight;
+  return Promise.race([resolutionInFlight, aborted]).finally(() => {
+    if (onAbort) callerSignal.removeEventListener("abort", onAbort);
+  });
 }
 
 export function installApiAuthFetch(): void {
@@ -199,6 +273,7 @@ export function installApiAuthFetch(): void {
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!needsApiAuth(input)) return originalFetch(input, init);
 
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const token = readToken();
     const [firstInput, firstInit] = token ? withToken(input, init, token) : [input, init];
     const response = await originalFetch(firstInput, firstInit);
@@ -215,7 +290,7 @@ export function installApiAuthFetch(): void {
       clearTokenIfCurrent(token);
     }
 
-    const nextToken = await resolveTokenAfter401(token);
+    const nextToken = await resolveTokenAfter401(token, callerSignal ?? undefined);
     if (!nextToken) return response;
 
     const [retryInput, retryInit] = withToken(input, init, nextToken);
@@ -235,4 +310,16 @@ export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = p
   rawFetch = null;
   promptCancelled = false;
   requestAdminToken = adminTokenPrompt;
+  rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
+  resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
+}
+
+/** Test-only: shrink the re-bootstrap deadline so timeout paths run in milliseconds. */
+export function setRebootstrapTimeoutForTests(ms: number): void {
+  rebootstrapTimeoutMs = ms;
+}
+
+/** Test-only: shrink the whole-resolution watchdog so zombie paths run in milliseconds. */
+export function setResolutionWatchdogForTests(ms: number): void {
+  resolutionWatchdogMs = ms;
 }

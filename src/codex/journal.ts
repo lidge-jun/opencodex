@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
-import { hasInjectedCodexRouting } from "./injected-marker";
+import { hasInjectedCodexRouting, rootTomlString } from "./injected-marker";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 
 /**
@@ -22,6 +22,24 @@ interface Journal {
   originalProfile: string | null;
   injectedConfigHash?: string;
   injectedProfileHash?: string | null;
+  /**
+   * The exact root `openai_base_url` this injection wrote, when it wrote one.
+   *
+   * #1798: ownership used to be inferred from a marker COMMENT on the preceding line,
+   * which a reserializing Codex app deletes while keeping the value. Recording the value
+   * we actually wrote makes ownership provable from evidence rather than from formatting,
+   * and it is what lets restore tell OUR loopback URL apart from a gateway the user set.
+   */
+  injectedOpenaiBaseUrl?: string | null;
+  /**
+   * The catalog path this injection actually wrote to.
+   *
+   * #1798: restore re-resolves the catalog from the CURRENT config, so a Codex app rewrite
+   * that dropped `model_catalog_json` sends restore to the default catalog while the
+   * proxy-written one is left routed. The injected path is the only durable record of which
+   * file we actually touched.
+   */
+  injectedCatalogPath?: string | null;
   pid: number;
   timestamp: string;
 }
@@ -96,7 +114,28 @@ export function markJournalInjectedState(config: string, profile: string | null)
   if (journal.injectedConfigHash) return;
   journal.injectedConfigHash = sha256(config) ?? undefined;
   journal.injectedProfileHash = sha256(profile);
+  // Read from the bytes we are about to install, not from the file: another writer may
+  // already have rewritten it, and then the recorded value would describe their config.
+  journal.injectedOpenaiBaseUrl = rootTomlString(config, "openai_base_url");
+  journal.injectedCatalogPath = rootTomlString(config, "model_catalog_json");
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal));
+}
+
+/**
+ * The root `openai_base_url` the last injection wrote, or null when it wrote none.
+ *
+ * #1798: the fallback strip recognizes an injected URL by the marker COMMENT above it,
+ * and a Codex app rewrite keeps values while dropping comments. This is the evidence that
+ * survives such a rewrite, so restore can still prove the URL is ours -- and, just as
+ * importantly, prove that a DIFFERENT URL is not.
+ */
+export function journaledInjectedOpenaiBaseUrl(): string | null {
+  return readJournal()?.injectedOpenaiBaseUrl ?? null;
+}
+
+/** The catalog path the last injection wrote to, or null when none was recorded. */
+export function journaledInjectedCatalogPath(): string | null {
+  return readJournal()?.injectedCatalogPath ?? null;
 }
 
 export function removeJournal(): void {

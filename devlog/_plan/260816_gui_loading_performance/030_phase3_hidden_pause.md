@@ -169,3 +169,45 @@ for real; browser check = hidden-tab request count (see below).
 
 Request-count reduction on visible tabs (WP4), re-activation staleness (WP4),
 server push (SSE) migration.
+
+## D addendum — landed (2026-08-16/17)
+
+Implementation: commits 955d90b34 (suspension state machine, visibility-poll.ts,
+nine poller migrations, 9 new tests) and 794466b10 (round-5 audit fixes).
+
+Audit history: binding round r5 returned FAIL first —
+
+- HIGH: the Debug 1s tail poll lost its `useEffectEvent` dispatch in the migration,
+  so a stream switch (provider→usage, both enabled) kept polling the OLD stream:
+  wrong entries appended into the new buffer, the shared `logGenerationRef` bumped
+  by stale ticks cancelling the new stream's initial load, and corrupted `afterRef`
+  seqs. Fixed by dispatching the tick through `useEffectEvent` again — every tick
+  reads the latest `fetchLogs` while the interval stays pinned to
+  `[active, follow, streamEnabled]`.
+- MEDIUM: `recomputePoll` never re-evaluated `anyOptOut` in its keep-countdown and
+  suspended branches, so an opt-out subscriber leaving while hidden left a timer
+  waking with nothing eligible, and an opt-out joining a suspended store never ran
+  until visible. Both branches now re-check `documentIsHidden() && !anyOptOut`.
+
+Round 2 PASS: the reviewer enumerated all four recomputePoll paths (teardown /
+unchanged-interval / suspended / changed-interval) against the failure shapes —
+no visible store ends timerless, no hidden non-opt-out store keeps a timer, the
+listener is never lost while a poll is registered, and the suspended fall-through
+cannot double-arm. Also folded in: abort signals for the three remaining 30s
+pollers, `loadShadowCall` clearing in `finally`, and a throw guard in
+`startVisibilityPoll` (without it a throwing make-up tick would skip `arm()` and
+kill the cadence permanently).
+
+Verification evidence:
+- `cd gui && bun test` over the 22 touched-surface suites → 146 pass / 0 fail.
+- `bun run lint` (oxlint) and `bun run build` (tsc -b + vite) green.
+- Hidden-tab proof is the happy-dom timer probe (`hasPollTimerForTests`), not live
+  emulation: as 001/E4 predicted, the in-app browser keeps background tabs
+  `visible`, `Emulation.setPageVisibilityState` is not exposed through the raw CDP
+  channel, and page-context `visibilityState` patching does not stick because
+  evaluation runs in an isolated world. Fetch-count assertions alone cannot see
+  this guarantee (a skipped tick looks identical to no tick), which is exactly why
+  the timer probe exists.
+- Visible-tab baseline re-measured after the change (12s dwell on Dashboard,
+  sandboxed instance): unchanged cadence, no regression in request volume — the
+  reduction work is WP4's.

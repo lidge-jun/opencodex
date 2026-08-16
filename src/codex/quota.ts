@@ -9,6 +9,20 @@ export type StoredAccountQuota = {
   monthlyPercent?: number;
   weeklyResetAt?: number;
   monthlyResetAt?: number;
+  /**
+   * A sub-day burst window, when upstream declares one (#1791).
+   *
+   * K12 and similar plans enforce a rolling 5-hour limit ALONGSIDE the weekly one.
+   * Not folding it into `weeklyPercent` stopped the mislabeling, but dropping it
+   * entirely hides a limit that genuinely blocks the account: a 429 at 100% here is
+   * real even while the weekly quota is untouched.
+   *
+   * `shortWindowSeconds` is retained because the duration is the only thing that makes
+   * this window self-describing; the slot it arrived in is not stable across plans.
+   */
+  shortPercent?: number;
+  shortResetAt?: number;
+  shortWindowSeconds?: number;
   resetCredits?: number;
   /**
    * True when `monthlyPercent` came from an explicitly-monthly PRIMARY window —
@@ -85,13 +99,16 @@ export const CODEX_UNKNOWN_USAGE_SCORE = 101;
 export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
 
 export function isCodexQuotaExhausted(
-  quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent"> | null,
+  quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent" | "shortPercent"> | null,
   plan?: unknown,
 ): boolean {
   if (!quota) return false;
+  // The burst window counts on EVERY plan. It is upstream-enforced independently, so an
+  // account at 100% there is blocked regardless of which longer window governs its plan;
+  // omitting it would route traffic straight into a 429 (#1791).
   const values = codexQuotaWindowForPlan(plan) === "monthly"
-    ? [quota.monthlyPercent]
-    : [quota.weeklyPercent, quota.monthlyPercent];
+    ? [quota.monthlyPercent, quota.shortPercent]
+    : [quota.weeklyPercent, quota.monthlyPercent, quota.shortPercent];
   return values.some(value => typeof value === "number"
     && Number.isFinite(value)
     && value >= CODEX_EXHAUSTED_USAGE_PERCENT);
@@ -117,7 +134,7 @@ export function codexQuotaWindowForPlan(plan?: unknown): "monthly" | "weekly" {
 }
 
 export function isCompleteCodexQuotaRecoverySnapshot(
-  quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent" | "monthlyIsPrimaryWindow"> | null,
+  quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent" | "monthlyIsPrimaryWindow" | "shortPercent"> | null,
   plan?: unknown,
 ): boolean {
   if (!quota || isCodexQuotaExhausted(quota, plan)) return false;
@@ -494,6 +511,14 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   const primaryIsShort = isExplicitShortWindow(primaryWindow);
   const weeklyCandidatePercent = primaryIsShort ? undefined : primaryPercent;
   const weeklyCandidateResetAt = primaryIsShort ? undefined : primaryResetAt;
+  // Keep the burst reading instead of dropping it on the floor: it is a real limit, and
+  // the account is blocked when it fills even though the weekly window is fine (#1791).
+  if (primaryIsShort && primaryPercent !== undefined) {
+    quota.shortPercent = primaryPercent;
+    if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
+    const seconds = primaryWindow?.limit_window_seconds;
+    if (typeof seconds === "number" && Number.isFinite(seconds)) quota.shortWindowSeconds = seconds;
+  }
   const weeklyPercent = primaryIsMonthly ? secondaryPercent : weeklyCandidatePercent ?? secondaryPercent;
   const weeklyResetAt = primaryIsMonthly
     ? secondaryResetAt

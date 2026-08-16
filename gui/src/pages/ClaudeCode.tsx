@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Notice, Switch } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
-import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { backgroundHelperOptions } from "./claude-code-helper-options";
@@ -28,7 +28,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang ?? "en";
   const cacheKey = `ocx.claude-code.v1:${apiBase}`;
   const resourceKey = `claude-code:${apiBase}`;
-  const cached = useMemo(() => readSessionListCache<CachedClaudeCode>(cacheKey), [cacheKey]);
+  const cachedEntry = useMemo(() => readSessionListCacheEntry<CachedClaudeCode>(cacheKey), [cacheKey]);
+  const cached = cachedEntry?.data ?? null;
   const [draftState, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
   const [draftRows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
   const [hasDraftRows, setHasDraftRows] = useState(Boolean(cached));
@@ -76,7 +77,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     setState(nextState);
     setRows(nextRows);
     setHasDraftRows(true);
-    writeSessionListCache(cacheKey, next);
+    writeSessionListCacheEntry(cacheKey, next);
     return next;
   }, [apiBase, cacheKey, t]);
 
@@ -84,7 +85,13 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     resourceKey,
     [apiBase],
     fetchCode,
-    { isEmpty: () => false, enabled: active, initialData: cached ?? undefined },
+    {
+      isEmpty: () => false,
+      enabled: active,
+      initialData: cached ?? undefined,
+      initialDataCachedAt: cachedEntry?.cachedAt ?? null,
+      staleAfterMs: 60_000,
+    },
   );
   const loadState = codeResource.state;
   const data = loadState.data ?? cached;
