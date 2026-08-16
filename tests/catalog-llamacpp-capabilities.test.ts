@@ -3,16 +3,17 @@ import { catalogHintsFromModelsApiItem } from "../src/codex/catalog/provider-fet
 import { extractProviderModelItems } from "../src/providers/model-discovery";
 
 /**
- * Regression coverage for the context half of #1797.
+ * Regression coverage for #1797 (llama.cpp dual-envelope metadata).
  *
- * A llama.cpp server reports its served context under `meta.n_ctx`, which was in
- * none of the recognized context fields, so a correct local server produced no
- * context evidence at all.
+ * A llama.cpp server splits one model across two arrays: an Ollama-style
+ * `models[]` carrying `capabilities` and an OpenAI-style `data[]` carrying
+ * `meta`. Discovery reads only `data[]`, so the served context (`meta.n_ctx`)
+ * and the image signal (`multimodal`) never met and a correct server produced
+ * a context-unknown, image-blind row.
  *
- * The image half of #1797 is NOT fixed here and is characterized below: the
- * `multimodal` token lives in the Ollama-style `models[]` array while discovery
- * deliberately reads only `data[]`, and even a merged item would stay
- * image-unknown because `multimodal` is not a recognized capability string.
+ * Both halves now resolve. The tests below also pin the boundary that makes
+ * the join safe: admission is decided on the original `data[]` row before any
+ * enrichment, and only capability keys are copied.
  */
 
 const VERBATIM_LLAMACPP_BODY = {
