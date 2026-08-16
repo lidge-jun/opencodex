@@ -219,7 +219,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {
-      const text = contentText(message).trim();
+      const text = historyContentText(message).trim();
       // Cursor root replay expects OpenAI-style content parts for historical user messages.
       // A bare string survives blob hydration but external workers reject the completed replay
       // before tokenization (`usedTokens: 0`, then invalid_argument).

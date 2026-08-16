@@ -279,6 +279,41 @@ describe("Cursor blob handshake", () => {
     expect(historicalUser?.selectedContext?.selectedImages.length).toBe(0);
   });
 
+  test("external root-prompt replay keeps image-only history as the text marker", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "follow-up" }],
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        { role: "user", content: "follow-up", timestamp: 3 },
+      ],
+    });
+    const roots = decodeRootMessages(bytes) as Array<{
+      role?: string;
+      content?: Array<{ type?: string; text?: string }>;
+    }>;
+    const rootsJson = JSON.stringify(roots);
+    expect(rootsJson).toContain("[image attached]");
+    expect(rootsJson).not.toContain("data:image/png;base64,");
+    expect(rootsJson).not.toContain("abc");
+    expect(roots).toContainEqual({
+      role: "user",
+      content: [{ type: "text", text: "[image attached]" }],
+    });
+  });
+
   test("encodeCursorRunRequest uses userMessageAction for image-only turns with selectedImages", () => {
     const imageBytes = PNG_1X1;
     const bytes = encodeCursorRunRequest({
