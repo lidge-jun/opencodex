@@ -120,6 +120,50 @@ describe("runWindowsElevated spawn contract", () => {
     await expect(runWindowsElevated("schtasks.exe", ["/create"])).resolves.toBe(1);
   });
 
+  test("keeps scheduled-task elevation arguments in one Start-Process statement", async () => {
+    let commandScript = "";
+    setWindowsElevationSpawnForTests(((
+      _cmd: string,
+      args: ReadonlyArray<string>,
+    ) => {
+      commandScript = String(args[args.length - 1] ?? "");
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter & { setEncoding?: (enc: string) => void };
+        stderr: EventEmitter & { setEncoding?: (enc: string) => void };
+        kill: ReturnType<typeof mock>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdout.setEncoding = () => undefined;
+      child.stderr.setEncoding = () => undefined;
+      child.kill = mock(() => true);
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child as never;
+    }) as never);
+
+    await expect(runWindowsElevatedScheduledTaskRegistration(
+      "opencodex-proxy",
+      "<Task />",
+    )).resolves.toBe(0);
+
+    const startProcessIndex = commandScript.indexOf("Start-Process");
+    const filePathIndex = commandScript.indexOf(" -FilePath ");
+    const argumentListIndex = commandScript.indexOf(" -ArgumentList ");
+    const verbIndex = commandScript.indexOf(" -Verb RunAs ");
+    const waitIndex = commandScript.indexOf(" -Wait");
+    const firstTerminator = commandScript.indexOf(";");
+
+    expect(startProcessIndex).toBeGreaterThanOrEqual(0);
+    expect(filePathIndex).toBeGreaterThan(startProcessIndex);
+    expect(argumentListIndex).toBeGreaterThan(filePathIndex);
+    expect(verbIndex).toBeGreaterThan(argumentListIndex);
+    expect(waitIndex).toBeGreaterThan(verbIndex);
+    expect(firstTerminator).toBeGreaterThan(waitIndex);
+    expect(commandScript.match(/Start-Process/g)).toHaveLength(1);
+    expect(commandScript).not.toMatch(/powershell\.exe';\s+-ArgumentList/i);
+    expect(commandScript).not.toMatch(/-ArgumentList\s+'[^']*';\s+-Verb RunAs/);
+  });
+
   test("scheduled-task registration embeds immutable XML bytes instead of a file path", async () => {
     let commandScript = "";
     setWindowsElevationSpawnForTests(((

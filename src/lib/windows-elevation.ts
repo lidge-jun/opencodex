@@ -648,12 +648,12 @@ export function runWindowsElevatedScheduledTaskRegistration(
       "-EncodedCommand",
       encodedCommand,
     ]))}`,
-    " -Verb RunAs -WindowStyle Hidden -PassThru -Wait",
+    " -Verb RunAs -WindowStyle Hidden -PassThru -Wait;",
     `if ($null -eq $p) { exit ${OCX_ELEVATED_UAC_CANCELLED} }`,
-    "$null = $p.Handle",
+    "$null = $p.Handle;",
     `if ($null -eq $p.ExitCode) { exit ${OCX_ELEVATED_PROTOCOL_FAILED} }`,
     "exit $p.ExitCode",
-  ].join("; ");
+  ].join("");
 
   return startPowerShellCommand(script).completion.then(result => result.exitCode);
 }
