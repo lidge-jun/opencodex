@@ -56,7 +56,7 @@ Grok Build 的 `/effort`（以及 `--effort`）只對目錄條目宣告了階梯
 `modelDefaultReasoningEfforts` 的預設值）。這份中繼資料描述 proxy 設定的路由階梯；adapter 可以模擬
 reasoning，或把檔位對映到供應商專用欄位。階梯清單為空的模型不會顯示 effort 控制項。原生 GPT-5.6
 條目會保留固定於上游的 reasoning 階梯。模型宣告的有效 Grok 檔位（包括 `none` 與 `minimal`）都會
-保留。只有 Codex 專用的 `ultra` 會從檔案省略，確保寫出的每個選項都能實際使用。
+保留。不受支援或重複的檔位（包括 Codex 專用的 `ultra`）會從檔案省略，確保寫出的每個選項都能實際使用。
 
 Grok Build 透過 Chat Completions 與 opencodex 通訊，並在條目宣告階梯時送出
 `reasoning_effort`。在這種情況下，Chat Completions 入站轉換器會把內部 Responses 的
