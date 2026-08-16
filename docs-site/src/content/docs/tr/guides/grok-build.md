@@ -75,9 +75,9 @@ katmanlarını (`reasoningEfforts` / `modelReasoningEfforts` ve
 tarafından yapılandırılmış merdiveni açıklar; adaptörler akıl yürütmeyi taklit
 edebilir veya seviyeleri sağlayıcıya özgü alanlarla eşleyebilir. Boş bir katman
 listesine sahip modeller çaba denetimi göstermez. Yerel GPT-5.6 girdileri,
-sabitlenmiş yukarı akış akıl yürütme merdivenlerini korur. `ultra` gibi yalnızca
-Codex'e özgü katmanlar, Grok CLI'nin standart sözlüğü `max` düzeyinde sona
-erdiği için dosyadan çıkarılır; yazılan her seçenek seçilebilir durumda kalır.
+sabitlenmiş yukarı akış akıl yürütme merdivenlerini korur. Modelin bildirdiği
+geçerli Grok katmanları, `none` ve `minimal` dahil olmak üzere korunur. Yalnızca
+Codex'e özgü `ultra` dosyadan çıkarılır; yazılan her seçenek seçilebilir durumda kalır.
 
 Grok Build, opencodex ile Chat Completions üzerinden konuşur ve merdiven
 bildirildiğinde `reasoning_effort` gönderir. Bu durumda Chat Completions giriş

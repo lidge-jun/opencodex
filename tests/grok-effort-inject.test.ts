@@ -156,6 +156,35 @@ describe("Grok managed-block thinking-intensity injection", () => {
     expect(table.reasoning_effort).toBe("low");
   });
 
+  test("writer preserves none and minimal while dropping Codex-only ultra", () => {
+    const block = buildGrokManagedBlock(10100, [{
+      id: "voice/dual-mode",
+      reasoningEfforts: ["none", "minimal", "low", "ultra"],
+      defaultReasoningEffort: "minimal",
+    }]);
+    expect(block).not.toContain("ultra");
+
+    const table = parseModels(block)["ocx-voice-dual-mode"];
+    expect(table.reasoning_effort).toBe("minimal");
+    expect(table.reasoning_efforts?.map(row => row.value)).toEqual(["none", "minimal", "low"]);
+    expect(table.reasoning_efforts?.slice(0, 2)).toEqual([
+      {
+        id: "none",
+        value: "none",
+        label: "None",
+        description: "No reasoning",
+        default: false,
+      },
+      {
+        id: "minimal",
+        value: "minimal",
+        label: "Minimal",
+        description: "Minimal reasoning",
+        default: true,
+      },
+    ]);
+  });
+
   test("sync writes each model's own ladder into a parseable config.toml", async () => {
     const { root, grokHome } = tempGrokHome();
     try {

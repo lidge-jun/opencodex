@@ -21,7 +21,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 372000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... autres niveaux de ce modèle, puis une table [model.ocx-*] par modèle visible ...
 # <<< opencodex managed block <<<
 ```
 
@@ -51,15 +62,20 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 Les commandes `/effort` et `--effort` de Grok Build ne fonctionnent que pour les modèles dont l’entrée de catalogue
 annonce une échelle d’effort : la récupération de la liste des modèles lit la réponse brute de `GET /v1/models`, et
 les entrées doivent contenir `supports_reasoning_effort` ainsi que les choix du menu
-`reasoning_efforts`. Pour les entrées de modèles routés, opencodex reflète les niveaux configurés pour le fournisseur
+`reasoning_efforts`. Une projection compatible avec Grok de cette échelle est également écrite dans chaque table
+`[model.*]` gérée, avec `supports_reasoning_effort`, la valeur par défaut `reasoning_effort` et les lignes
+`[[model.<alias>.reasoning_efforts]]`, afin que le menu soit présent lorsque Grok lit le modèle depuis
+`config.toml`. Pour les entrées de modèles routés, opencodex reflète les niveaux configurés pour le fournisseur
 (`reasoningEfforts` / `modelReasoningEfforts`, et la valeur par défaut de
-`modelDefaultReasoningEfforts`) dans cette réponse. Ces métadonnées décrivent l’échelle des modèles routés
-configurée dans le proxy ; elles ne prétendent pas que le fournisseur prend nativement en charge ces niveaux.
+`modelDefaultReasoningEfforts`). Ces métadonnées décrivent l’échelle des modèles routés configurée dans le proxy ;
+elles ne prétendent pas que le fournisseur prend nativement en charge ces niveaux.
 Les adaptateurs peuvent émuler le raisonnement ou mapper les niveaux sur des champs propres au fournisseur.
 Les modèles routés qui possèdent une échelle configurée affichent le contrôle de l’effort dans Grok Build comme
 dans Codex. Ceux dont la liste de niveaux est vide n’affichent aucun contrôle d’effort, conformément au comportement
 de Codex. Les entrées GPT-5.6 natives sont distinctes : elles conservent et exposent leurs échelles de raisonnement
-en amont fixes, et non les métadonnées configurées pour les modèles routés.
+en amont fixes, et non les métadonnées configurées pour les modèles routés. Les niveaux Grok valides, notamment
+`none` et `minimal`, sont conservés lorsqu’ils sont annoncés.
+Seul le niveau `ultra`, propre à Codex, est omis du fichier afin que chaque option générée reste sélectionnable.
 
 Grok Build communique avec opencodex au moyen de Chat Completions et envoie `reasoning_effort` lorsque
 l’échelle est annoncée. Dans ce cas, le traducteur Chat Completions entrant définit par défaut le champ Responses
