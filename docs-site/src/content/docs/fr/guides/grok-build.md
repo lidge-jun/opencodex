@@ -155,9 +155,10 @@ l'identifiant `grok-4.5`. Les alias générés évitent entièrement les points 
   prévisibles. Grok Build surveille `~/.grok/config.toml` et recharge la configuration lorsque la table
   `[model]` change réellement (temporisation d’environ une seconde, avec comparaison du contenu) ;
   un bloc actualisé atteint une session ouverte sans redémarrage. Pour confirmer ce que Grok a analysé,
-  run `grok inspect` : il répertorie les sources de configuration qu'il a chargées et avertit de tout champ qu'il a chargé
-  rejeté. Il n'imprime pas la liste des modèles résolus. Notez qu’une seule erreur TOML
-  invalide *l'intégralité* de la couche de configuration utilisateur, c'est pourquoi opencodex écrit le fichier
-  atomiquement - Grok ne voit jamais une configuration à moitié écrite.
+  exécutez `grok inspect` : il répertorie les sources de configuration chargées et signale les champs
+  rejetés. Il n'affiche pas la liste des modèles résolus. La version actuelle de Grok Build signale et
+  ignore les champs de modèle invalides tout en conservant le reste de l'entrée. Une erreur de syntaxe
+  TOML empêche toujours le chargement du fichier. opencodex écrit de manière atomique, de sorte que
+  Grok observe un document complet à chaque rechargement.
 - **Mises à jour du catalogue :** le bloc délimité reflète le catalogue au moment de l’injection. Après
   l’ajout de fournisseurs ou de modèles, exécutez `ocx ensure` (ou redémarrez le proxy) pour l’actualiser.
