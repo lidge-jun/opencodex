@@ -2380,12 +2380,7 @@ function configMutationDatabasePath(): string {
   return path;
 }
 
-/**
- * Prepare the shared config-mutation database path for an independent top-level
- * SQLite transaction. Callers must not invoke this while holding
- * {@link withConfigMutationLockSync}; a second `BEGIN IMMEDIATE` deliberately
- * fails busy instead of joining an uncommitted transaction.
- */
+/** Raised when an independent config-mutation transaction is requested recursively. */
 export class NestedConfigMutationError extends Error {
   constructor() {
     super("prepareConfigMutationDatabasePathForWrite must not run inside withConfigMutationLockSync");
@@ -2393,6 +2388,14 @@ export class NestedConfigMutationError extends Error {
   }
 }
 
+/**
+ * Prepare the shared config-mutation database path for an independent top-level
+ * SQLite transaction. Callers must not invoke this while holding
+ * {@link withConfigMutationLockSync}; a second `BEGIN IMMEDIATE` deliberately
+ * fails busy instead of joining an uncommitted transaction.
+ *
+ * @throws {NestedConfigMutationError} If a config mutation lock is already held.
+ */
 export function prepareConfigMutationDatabasePathForWrite(): string {
   if (configMutationLockDepth > 0) {
     throw new NestedConfigMutationError();

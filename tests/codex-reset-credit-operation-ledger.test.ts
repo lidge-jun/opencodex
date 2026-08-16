@@ -110,6 +110,70 @@ function fixtureOperationId(index: number): string {
   return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
 }
 
+const MIGRATION_REJECTION_FIXTURES = [
+  {
+    label: "legacy recovery",
+    kind: "legacy" as const,
+    schema: LEGACY_OPERATION_SCHEMA_SQL,
+    backupTable: "reset_credit_operations_legacy_v1",
+  },
+  {
+    label: "prior manual",
+    kind: "prior" as const,
+    schema: PRIOR_OPERATION_SCHEMA_SQL,
+    backupTable: "reset_credit_operations_legacy_v2",
+  },
+] as const;
+const MIGRATION_REJECTION_CASES = ["malformed row", "duplicate operation id", "over capacity"] as const;
+
+function seedRejectedMigration(
+  kind: "legacy" | "prior",
+  rejection: (typeof MIGRATION_REJECTION_CASES)[number],
+): Record<string, unknown>[] {
+  const database = new Database(databasePath(), { create: true });
+  try {
+    database.exec(kind === "legacy" ? LEGACY_OPERATION_SCHEMA_SQL : PRIOR_OPERATION_SCHEMA_SQL);
+    const insert = kind === "legacy"
+      ? database.prepare(`
+          INSERT INTO reset_credit_operations VALUES (?, ?, ?, ?, 'pending', NULL, 1, 1)
+        `)
+      : database.prepare(`
+          INSERT INTO reset_credit_operations VALUES (
+            ?, 'manual', NULL, NULL, ?, 'pending', NULL, 1, 1
+          )
+        `);
+    const rowCount = rejection === "over capacity"
+      ? MAX_RESET_CREDIT_OPERATION_ACCOUNTS + 1
+      : rejection === "duplicate operation id" ? 2 : 1;
+    const duplicatedOperationId = fixtureOperationId(0x22000);
+    database.exec("BEGIN IMMEDIATE");
+    for (let index = 0; index < rowCount; index += 1) {
+      const key = createHash("sha256")
+        .update(`migration-rejection-${kind}-${rejection}-${index}`)
+        .digest("hex");
+      const operationId = rejection === "malformed row"
+        ? "not-a-uuid"
+        : rejection === "duplicate operation id"
+          ? duplicatedOperationId
+          : fixtureOperationId(0x23000 + index);
+      if (kind === "legacy") {
+        insert.run(key, GENERATION.credentialGeneration, GENERATION.exhaustionGeneration, operationId);
+      } else {
+        insert.run(key, operationId);
+      }
+    }
+    database.exec("COMMIT");
+    return database.query<Record<string, unknown>, []>(
+      "SELECT * FROM reset_credit_operations ORDER BY account_key",
+    ).all();
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* preserve the fixture error */ }
+    throw error;
+  } finally {
+    database.close();
+  }
+}
+
 async function waitForPath(path: string): Promise<void> {
   const deadline = Date.now() + CHILD_READY_TIMEOUT_MS;
   while (!existsSync(path)) {
@@ -168,6 +232,8 @@ beforeEach(() => {
     database.exec(`
       DROP TABLE IF EXISTS reset_credit_manual_operation_ids;
       DROP TABLE IF EXISTS reset_credit_operations;
+      DROP TABLE IF EXISTS reset_credit_operations_legacy_v1;
+      DROP TABLE IF EXISTS reset_credit_operations_legacy_v2;
     `);
   }
   finally { database.close(); }
@@ -384,6 +450,40 @@ describe("Codex reset-credit operation ledger", () => {
       migrated.close();
     }
   });
+
+  for (const fixture of MIGRATION_REJECTION_FIXTURES) {
+    for (const rejection of MIGRATION_REJECTION_CASES) {
+      test(`refuses ${fixture.label} migration with ${rejection} without rewriting state`, () => {
+        const before = seedRejectedMigration(fixture.kind, rejection);
+        const result = fixture.kind === "legacy"
+          ? openResetCreditOperation({ ...GENERATION, accountId: "pool-migration-probe" }, 300)
+          : openManualResetCreditOperation({
+              accountId: "pool-migration-probe",
+              chatgptAccountId: "chatgpt-migration-probe",
+              operationId: fixtureOperationId(0x24000),
+            }, 300);
+        expect(result).toEqual({ kind: "unavailable" });
+
+        const verifier = new Database(databasePath(), { readonly: true });
+        try {
+          expect(schemaHash(verifier.query<{ sql: string }, []>(`
+            SELECT sql FROM main.sqlite_schema
+             WHERE type = 'table' AND name = 'reset_credit_operations'
+          `).get()?.sql)).toBe(schemaHash(fixture.schema));
+          expect(verifier.query<Record<string, unknown>, []>(
+            "SELECT * FROM reset_credit_operations ORDER BY account_key",
+          ).all()).toEqual(before);
+          expect(verifier.query<{ name: string }, [string, string]>(`
+            SELECT name FROM main.sqlite_schema
+             WHERE name = ? OR name = ?
+             ORDER BY name
+          `).all(fixture.backupTable, "reset_credit_manual_operation_ids")).toEqual([]);
+        } finally {
+          verifier.close();
+        }
+      });
+    }
+  }
 
   test("manual operations resume one intent and short-circuit its terminal result", () => {
     const identity = {
@@ -795,6 +895,55 @@ describe("Codex reset-credit operation ledger", () => {
       .toEqual({ kind: "unavailable" });
   });
 
+  test("isolates recovery validation from unrelated manual history but rejects cross-table id reuse", () => {
+    const manual = {
+      accountId: "pool-manual-isolation",
+      chatgptAccountId: "chatgpt-manual-isolation",
+      operationId: fixtureOperationId(0x25000),
+    };
+    expect(openManualResetCreditOperation(manual, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(manual, "no_credit", 200)).toEqual({ kind: "updated" });
+
+    const database = new Database(databasePath());
+    try {
+      const unrelated = fixtureOperationId(0x25001);
+      database.prepare(`
+        INSERT INTO reset_credit_manual_operation_ids (
+          operation_id, account_key, canonical_operation_id,
+          terminal_code, created_at, updated_at
+        ) VALUES (?, ?, ?, 'no_credit', 1, 1)
+      `).run(
+        unrelated,
+        createHash("sha256").update("unrelated-corrupt-manual-history").digest("hex"),
+        fixtureOperationId(0x25002),
+      );
+    } finally {
+      database.close();
+    }
+
+    const generation = { ...GENERATION, accountId: "pool-recovery-isolation" };
+    const opened = openResetCreditOperation(generation, 300);
+    expect(opened).toMatchObject({ kind: "execute", resumed: false });
+    if (opened.kind !== "execute") throw new Error("recovery reservation failed");
+
+    const duplicate = new Database(databasePath());
+    try {
+      duplicate.prepare(`
+        INSERT INTO reset_credit_manual_operation_ids (
+          operation_id, account_key, canonical_operation_id,
+          terminal_code, created_at, updated_at
+        ) VALUES (?, ?, ?, 'no_credit', 1, 1)
+      `).run(
+        opened.operationId,
+        createHash("sha256").update("cross-table-duplicate-recovery-id").digest("hex"),
+        opened.operationId,
+      );
+    } finally {
+      duplicate.close();
+    }
+    expect(openResetCreditOperation(generation, 400)).toEqual({ kind: "unavailable" });
+  });
+
   test("refuses a trigger without replacing the terminal reservation", () => {
     const first = openResetCreditOperation(GENERATION, 100);
     if (first.kind !== "execute") throw new Error("reservation failed");
@@ -907,6 +1056,10 @@ describe("Codex reset-credit operation ledger", () => {
       ...first,
       operationId: fixtureOperationId(15000),
     }, 400)).toEqual({ kind: "capacity" });
+    expect(openResetCreditOperation({
+      ...GENERATION,
+      accountId: "pool-recovery-at-manual-history-cap",
+    }, 500)).toMatchObject({ kind: "execute", resumed: false });
     const verifier = new Database(databasePath(), { readonly: true });
     try {
       expect(verifier.query<{ count: number }, []>(
