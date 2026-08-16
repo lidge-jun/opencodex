@@ -203,7 +203,9 @@ const RESET_ELIGIBLE_CODES = {
   insufficient_quota: true,
 } as const satisfies Record<CodexResetEligibleExhaustionCode, true>;
 
-function snapshotGeneration(input: unknown): CodexResetCreditRecoveryGeneration {
+export function snapshotCodexResetCreditRecoveryGeneration(
+  input: unknown,
+): CodexResetCreditRecoveryGeneration {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("generation must be an object");
   }
@@ -523,7 +525,7 @@ export class CodexResetCreditRecoveryCoordinator {
     let requestSignal: AbortSignal | undefined;
     try {
       requestSignal = snapshotRequestSignal(options);
-      generationSnapshot = snapshotGeneration(generation);
+      generationSnapshot = snapshotCodexResetCreditRecoveryGeneration(generation);
     } catch (error) {
       rejectAttempt(error);
       return attempt;

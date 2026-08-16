@@ -6,6 +6,7 @@ import { initializeConfigGeneration } from "./generation";
 import {
   compareCodexResetCreditRecoveryGenerationOrder,
   isCodexResetCreditOperationId,
+  snapshotCodexResetCreditRecoveryGeneration,
   type CodexResetCreditConsumeCode,
   type CodexResetCreditRecoveryGeneration,
   type CodexReservedOperationId,
@@ -337,14 +338,6 @@ function manualPhysicalAccountKey(chatgptAccountId: string): string {
 
 function isGenerationNumber(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
-}
-
-function validateGeneration(generation: CodexResetCreditRecoveryGeneration): void {
-  if ((generation.accountId !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(generation.accountId))
-    || !isGenerationNumber(generation.credentialGeneration)
-    || !isGenerationNumber(generation.exhaustionGeneration)) {
-    throw new TypeError("invalid reset-credit recovery generation");
-  }
 }
 
 function parseRecord(row: ResetCreditOperationRow | null): ResetCreditOperationRecord | undefined {
@@ -910,17 +903,17 @@ export function openResetCreditOperation(
   generation: CodexResetCreditRecoveryGeneration,
   now = Date.now(),
 ): OpenResetCreditOperationResult {
-  validateGeneration(generation);
+  const generationSnapshot = snapshotCodexResetCreditRecoveryGeneration(generation);
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
     return withLedger((database, recordCount) => {
-      const key = accountKey(generation.accountId);
+      const key = accountKey(generationSnapshot.accountId);
       const current = readRecord(database, key);
       if (current) {
         if (current.operationKind !== "recovery") {
           return Object.freeze({ kind: "unresolved-prior-generation" as const });
         }
-        const comparison = compareGeneration(current, generation);
+        const comparison = compareGeneration(current, generationSnapshot);
         if (comparison > 0) return Object.freeze({ kind: "stale-generation" as const });
         if (comparison === 0) {
           if (isTerminal(current)) {
@@ -945,8 +938,8 @@ export function openResetCreditOperation(
       if (!isCodexResetCreditOperationId(operationId)) throw new Error("runtime generated invalid UUID");
       const values = [
         "recovery",
-        generation.credentialGeneration,
-        generation.exhaustionGeneration,
+        generationSnapshot.credentialGeneration,
+        generationSnapshot.exhaustionGeneration,
         operationId,
         null,
         "pending",
@@ -961,8 +954,8 @@ export function openResetCreditOperation(
       assertStoredRecord(database, Object.freeze({
         accountKey: key,
         operationKind: "recovery",
-        credentialGeneration: generation.credentialGeneration,
-        exhaustionGeneration: generation.exhaustionGeneration,
+        credentialGeneration: generationSnapshot.credentialGeneration,
+        exhaustionGeneration: generationSnapshot.exhaustionGeneration,
         operationId,
         state: "pending",
         createdAt: now,
@@ -1035,12 +1028,12 @@ export function markResetCreditOperationAmbiguous(
   now = Date.now(),
 ): UpdateResetCreditOperationResult {
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
-  validateGeneration(generation);
+  const generationSnapshot = snapshotCodexResetCreditRecoveryGeneration(generation);
   return updateOperation({
-    accountKey: accountKey(generation.accountId),
+    accountKey: accountKey(generationSnapshot.accountId),
     operationKind: "recovery",
-    credentialGeneration: generation.credentialGeneration,
-    exhaustionGeneration: generation.exhaustionGeneration,
+    credentialGeneration: generationSnapshot.credentialGeneration,
+    exhaustionGeneration: generationSnapshot.exhaustionGeneration,
   }, operationId, record => {
     if (isTerminal(record)) return undefined;
     return Object.freeze({
@@ -1067,12 +1060,12 @@ export function settleResetCreditOperation(
   if (!Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)) {
     return Object.freeze({ kind: "mismatch" });
   }
-  validateGeneration(generation);
+  const generationSnapshot = snapshotCodexResetCreditRecoveryGeneration(generation);
   return updateOperation({
-    accountKey: accountKey(generation.accountId),
+    accountKey: accountKey(generationSnapshot.accountId),
     operationKind: "recovery",
-    credentialGeneration: generation.credentialGeneration,
-    exhaustionGeneration: generation.exhaustionGeneration,
+    credentialGeneration: generationSnapshot.credentialGeneration,
+    exhaustionGeneration: generationSnapshot.exhaustionGeneration,
   }, operationId, record => {
     if (isTerminal(record)) return record.code === code ? record : undefined;
     return Object.freeze({
@@ -1084,14 +1077,35 @@ export function settleResetCreditOperation(
   });
 }
 
-function validateManualIdentity(identity: ManualResetCreditOperationIdentity): {
+function snapshotManualIdentity(identity: ManualResetCreditOperationIdentity): {
   accountKey: string;
+  operationId: string;
 } {
-  if (!isCodexResetCreditOperationId(identity.operationId)) {
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    throw new TypeError("manual reset-credit identity must be an object");
+  }
+  const value = identity as unknown as Record<string, unknown>;
+  const hasOwn = Object.prototype.hasOwnProperty;
+  if (!hasOwn.call(value, "accountId")
+    || !hasOwn.call(value, "chatgptAccountId")
+    || !hasOwn.call(value, "operationId")) {
+    throw new TypeError("manual reset-credit identity fields must be own properties");
+  }
+  const accountId = value.accountId;
+  const chatgptAccountId = value.chatgptAccountId;
+  const operationId = value.operationId;
+  if (!isCodexResetCreditOperationId(operationId)) {
     throw new TypeError("invalid manual reset-credit operation id");
   }
-  validateManualAccountId(identity.accountId);
-  return { accountKey: manualPhysicalAccountKey(identity.chatgptAccountId) };
+  if (typeof accountId !== "string") throw new TypeError("invalid manual reset-credit account");
+  validateManualAccountId(accountId);
+  if (typeof chatgptAccountId !== "string") {
+    throw new TypeError("invalid manual reset-credit credential identity");
+  }
+  return Object.freeze({
+    accountKey: manualPhysicalAccountKey(chatgptAccountId),
+    operationId,
+  });
 }
 
 /**
@@ -1104,7 +1118,7 @@ export function openManualResetCreditOperation(
   identity: ManualResetCreditOperationIdentity,
   now = Date.now(),
 ): OpenManualResetCreditOperationResult {
-  const owner = validateManualIdentity(identity);
+  const owner = snapshotManualIdentity(identity);
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
     return withLedger((database, recordCount, manualIdCount) => {
@@ -1113,7 +1127,7 @@ export function openManualResetCreditOperation(
         if (manualIdCount >= MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
           return Object.freeze({ kind: "capacity" as const });
         }
-        const existingOwner = operationOwner(database, identity.operationId);
+        const existingOwner = operationOwner(database, owner.operationId);
         if (existingOwner !== undefined) {
           return Object.freeze({
             kind: existingOwner === owner.accountKey ? "unavailable" as const : "identity-mismatch" as const,
@@ -1129,7 +1143,7 @@ export function openManualResetCreditOperation(
         const record: ResetCreditOperationRecord = Object.freeze({
           accountKey: owner.accountKey,
           operationKind: "manual",
-          operationId: identity.operationId,
+          operationId: owner.operationId,
           state: "pending",
           createdAt: now,
           updatedAt: now,
@@ -1138,7 +1152,7 @@ export function openManualResetCreditOperation(
           "manual",
           null,
           null,
-          identity.operationId,
+          owner.operationId,
           null,
           "pending",
           null,
@@ -1151,20 +1165,20 @@ export function openManualResetCreditOperation(
         if (result.changes !== 1) throw new Error("manual reset-credit reservation lost ownership");
         assertStoredRecord(database, record);
         insertManualIdRecord(database, Object.freeze({
-          operationId: identity.operationId,
+          operationId: owner.operationId,
           accountKey: owner.accountKey,
-          canonicalOperationId: identity.operationId,
+          canonicalOperationId: owner.operationId,
           createdAt: now,
           updatedAt: now,
         }));
         return Object.freeze({
           kind: "execute" as const,
-          operationId: identity.operationId as CodexReservedOperationId,
+          operationId: owner.operationId as CodexReservedOperationId,
           resumed: false,
         });
       };
 
-      const knownIdentity = readManualIdRecord(database, identity.operationId);
+      const knownIdentity = readManualIdRecord(database, owner.operationId);
       if (knownIdentity) {
         if (knownIdentity.accountKey !== owner.accountKey) {
           return Object.freeze({ kind: "identity-mismatch" as const });
@@ -1197,7 +1211,7 @@ export function openManualResetCreditOperation(
           const rejected = admitNewCallerId();
           if (rejected) return rejected;
           insertManualIdRecord(database, Object.freeze({
-            operationId: identity.operationId,
+            operationId: owner.operationId,
             accountKey: owner.accountKey,
             canonicalOperationId: current.operationId,
             createdAt: now,
@@ -1206,13 +1220,13 @@ export function openManualResetCreditOperation(
           const joined: ResetCreditOperationRecord = Object.freeze({
             ...current,
             ...(current.joinedOperationId === undefined
-              ? { joinedOperationId: identity.operationId }
+              ? { joinedOperationId: owner.operationId }
               : {}),
             updatedAt: Math.max(current.updatedAt, now),
           });
           const result = current.joinedOperationId === undefined
             ? database.query(JOIN_MANUAL_OPERATION).run(
-                identity.operationId,
+                owner.operationId,
                 joined.updatedAt,
                 owner.accountKey,
                 current.operationId,
@@ -1261,9 +1275,9 @@ export function markManualResetCreditOperationAmbiguous(
   identity: ManualResetCreditOperationIdentity,
   now = Date.now(),
 ): UpdateResetCreditOperationResult {
-  const owner = validateManualIdentity(identity);
+  const owner = snapshotManualIdentity(identity);
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
-  return updateOperation({ ...owner, operationKind: "manual" }, identity.operationId, record => {
+  return updateOperation({ accountKey: owner.accountKey, operationKind: "manual" }, owner.operationId, record => {
     if (isTerminal(record)) return undefined;
     return Object.freeze({ ...record, state: "ambiguous", code: undefined, updatedAt: Math.max(record.updatedAt, now) });
   });
@@ -1280,12 +1294,12 @@ export function settleManualResetCreditOperation(
   code: CodexResetCreditConsumeCode,
   now = Date.now(),
 ): UpdateResetCreditOperationResult {
-  const owner = validateManualIdentity(identity);
+  const owner = snapshotManualIdentity(identity);
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   if (!Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)) {
     return Object.freeze({ kind: "mismatch" });
   }
-  return updateOperation({ ...owner, operationKind: "manual" }, identity.operationId, record => {
+  return updateOperation({ accountKey: owner.accountKey, operationKind: "manual" }, owner.operationId, record => {
     if (isTerminal(record)) return record.code === code ? record : undefined;
     return Object.freeze({
       ...record,
@@ -1298,7 +1312,7 @@ export function settleManualResetCreditOperation(
       code,
       updated.updatedAt,
       owner.accountKey,
-      identity.operationId,
+      owner.operationId,
       code,
     );
     if (result.changes < 1) {
@@ -1306,14 +1320,14 @@ export function settleManualResetCreditOperation(
     }
     const rows = database.query<ManualResetCreditOperationIdRow, [string, string]>(
       SELECT_MANUAL_IDS_BY_CANONICAL,
-    ).all(owner.accountKey, identity.operationId);
+    ).all(owner.accountKey, owner.operationId);
     if (rows.length < 1 || rows.length > MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
       throw new Error("invalid manual reset-credit terminal identity set");
     }
     for (const row of rows) {
       const stored = parseManualIdRecord(row);
       if (!stored || stored.accountKey !== owner.accountKey
-        || stored.canonicalOperationId !== identity.operationId
+        || stored.canonicalOperationId !== owner.operationId
         || stored.terminalCode !== code
         || stored.updatedAt !== updated.updatedAt) {
         throw new Error("manual reset-credit terminal identity write did not persist");
