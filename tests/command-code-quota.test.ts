@@ -118,12 +118,17 @@ describe("Command Code provider quota", () => {
     expect(JSON.stringify(result)).not.toContain("commandcode-secret");
   });
 
-  test("falls back to unscoped calls when whoami and summary fail", async () => {
+  test("keeps rolling windows when whoami and usage summary fail", async () => {
     const seen: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       seen.push(url);
       if (url.includes("/alpha/whoami")) return new Response("down", { status: 500 });
+      if (url.includes("/alpha/billing/subscriptions")) {
+        return new Response(JSON.stringify({
+          data: { currentPeriodStart: "2026-08-01T00:00:00.000Z" },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (url.includes("/alpha/usage/summary")) return new Response("down", { status: 500 });
       return new Response(JSON.stringify({
         credits: { monthlyCredits: 20 },
@@ -138,6 +143,7 @@ describe("Command Code provider quota", () => {
       updatedAt: expect.any(Number),
     });
     expect(seen[1]).toBe("https://api.commandcode.ai/alpha/billing/credits");
+    expect(seen.some(url => url.includes("/alpha/usage/summary"))).toBe(true);
   });
 
   test("omits creditsUsd when the billing period cannot be established", async () => {
