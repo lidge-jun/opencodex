@@ -245,7 +245,13 @@ function hasGuiOverride({ comments = [] }) {
  * fenced code blocks. Image syntax there is literal text, not evidence.
  */
 function stripNonRenderedRegions(body) {
-  return body.replace(HTML_COMMENT_RE, "").replace(FENCED_CODE_RE, "");
+  // Fenced code MUST be removed first. GFM treats fence contents as literal
+  // text, so a `<!--` inside a fence never opens an HTML comment. Stripping
+  // comments first let an unclosed comment-like literal in a code sample run
+  // through EOF and swallow the real body after it, which rejected valid
+  // descriptions: a GUI PR whose screenshot followed such an example lost its
+  // evidence, and an issue lost the sections it was validated on.
+  return body.replace(FENCED_CODE_RE, "").replace(HTML_COMMENT_RE, "");
 }
 
 /**

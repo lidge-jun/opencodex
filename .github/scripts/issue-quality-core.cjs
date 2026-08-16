@@ -422,9 +422,34 @@ function isMediaOnly(text) {
 /**
  * Strip HTML comments, placeholder-only values, and trim whitespace.
  */
+function stripHtmlCommentsOutsideCode(raw) {
+  const fences = [];
+  // Mask fenced blocks and inline code spans, strip comments from what is left,
+  // then restore. GitHub renders neither region as HTML, so a comment opener
+  // inside them is literal text -- but the text itself is real content.
+  const masked = String(raw)
+    .replace(
+      /(?:^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*(?=\n|$)/gm,
+      (block) => `\u0000F${fences.push(block) - 1}\u0000`,
+    )
+    .replace(/`[^`\n]*`/g, (span) => `\u0000F${fences.push(span) - 1}\u0000`);
+  return masked
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(/\u0000F(\d+)\u0000/g, (_, i) => fences[Number(i)] ?? "");
+}
+
+/**
+ * Strip HTML comments, placeholder-only values, and trim whitespace.
+ */
 function clean(raw) {
   if (typeof raw !== "string") return "";
-  let s = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+  // Comment stripping must not reach inside fenced code. GFM treats fence
+  // contents as literal text, so a `<!--` in a code sample never opens a
+  // comment; letting an unclosed one run through EOF swallowed the rest of the
+  // section and rejected valid issues as "too vague to act on". Fence contents
+  // are preserved, not deleted -- they are legitimate reproduction evidence
+  // that emptiness and duplicate detection still need to see.
+  let s = stripHtmlCommentsOutsideCode(raw);
   // Media-only sections (a lone screenshot or embed) carry no reportable
   // text. Strip the media tokens so the section participates in emptiness and
   // duplicate detection like any other blank section. This closes the

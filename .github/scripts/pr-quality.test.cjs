@@ -1076,3 +1076,28 @@ describe("collectPrQualityFailures", () => {
     assert.ok(!failures.some((f) => f.code === "missing_ui_screenshot"));
   });
 });
+
+describe("comment stripping respects fenced code (regression)", () => {
+  it("keeps a screenshot that follows a comment-like literal in a fence", () => {
+    // GFM treats fence contents as literal text, so `<!--` inside a code sample
+    // never opens an HTML comment. Stripping comments before fences let the
+    // unclosed literal run to EOF and swallow the real screenshot below it,
+    // rejecting a valid GUI PR.
+    const body = [
+      "Example of a raw HTML comment:",
+      "",
+      "```html",
+      "<!-- literal unclosed-comment example",
+      "```",
+      "",
+      "![after](https://example.invalid/after.png)",
+    ].join("\n");
+
+    assert.equal(hasScreenshotEvidence(body), true);
+  });
+
+  it("still ignores a screenshot inside a real HTML comment", () => {
+    const body = ["<!--", "![hidden](https://example.invalid/hidden.png)", "-->"].join("\n");
+    assert.equal(hasScreenshotEvidence(body), false);
+  });
+});

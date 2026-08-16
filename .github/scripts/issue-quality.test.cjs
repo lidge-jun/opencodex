@@ -2094,3 +2094,24 @@ describe("detectAreaLabels", () => {
     assert.ok(labels.includes("streaming"), `got ${labels.join(",")}`);
   });
 });
+
+describe("clean() respects fenced code (regression)", () => {
+  it("keeps section text that follows a comment-like literal in a fence", () => {
+    // A `<!--` inside a code sample is literal text under GFM. Stripping
+    // comments before fences let it run to EOF and swallow the rest of the
+    // section, so a valid issue was rejected as too vague to act on.
+    const goal = [
+      "```html",
+      "<!-- literal unclosed-comment example",
+      "```",
+      "",
+      "The provider catalog fails to load on startup and blocks routing.",
+    ].join("\n");
+
+    assert.ok(clean(goal).includes("provider catalog fails to load"));
+  });
+
+  it("still strips a real HTML comment outside code", () => {
+    assert.equal(clean("<!-- hidden -->").trim(), "");
+  });
+});
