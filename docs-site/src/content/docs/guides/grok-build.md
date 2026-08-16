@@ -75,8 +75,9 @@ just like they do in Codex.
 Models with an empty tier list keep no effort control, matching Codex behavior. Native
 GPT-5.6 entries are separate: they preserve and expose their pinned upstream reasoning
 ladders rather than provider-configured routed metadata. Valid Grok rungs, including
-`none` and `minimal`, are preserved when advertised. Codex-only `ultra` is omitted from
-the file, keeping every emitted picker option selectable.
+`none` and `minimal`, are preserved when advertised. Unsupported or duplicate rungs,
+including Codex-only `ultra`, are omitted from the file, keeping every emitted picker
+option selectable.
 
 Grok Build talks to opencodex over Chat Completions and sends `reasoning_effort` when
 the ladder is advertised. The Chat Completions inbound translator defaults the internal
