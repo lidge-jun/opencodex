@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { getLoginStatus, getValidAccessToken, UnsupportedOAuthProviderError } from "../src/oauth";
 import { saveCredential } from "../src/oauth/store";
+import { handleResponses } from "../src/server/responses";
+import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-status-privacy-test");
 let previousOpencodexHome: string | undefined;
@@ -156,6 +158,37 @@ describe("OAuth status privacy", () => {
     });
 
     await expect(getValidAccessToken("removed-provider")).rejects.toBeInstanceOf(UnsupportedOAuthProviderError);
+  });
+
+  test("stale OAuth provider responses do not disclose the config path", async () => {
+    await saveCredential("removed-provider", {
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+    });
+    const config = {
+      defaultProvider: "removed-provider",
+      providers: {
+        "removed-provider": {
+          adapter: "openai-responses",
+          authMode: "oauth",
+          baseUrl: "https://provider.example/v1",
+        },
+      },
+    } as OcxConfig;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "test-model", input: "hello", stream: false }),
+    }), config, { model: "", provider: "" });
+    const body = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(body).toContain("Unsupported OAuth provider");
+    expect(body).toContain("Remove or reconfigure provider 'removed-provider'");
+    expect(body).not.toContain(TEST_DIR);
+    expect(body).not.toContain("config.json");
   });
 
   test("malformed oauth token store is backed up before a new credential save overwrites it", async () => {
