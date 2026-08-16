@@ -332,23 +332,36 @@ export function extractModelEnvelopeRows(
 
 /** Validate, bound, deduplicate, and declaratively filter OpenAI `{data:[...]}` or top-level arrays (Together `#617`). */
 /**
- * Enrich `data[]` rows with metadata a sibling `models[]` array carries for the
- * SAME model id (#1797).
+ * Metadata a sibling `models[]` array may contribute to an ALREADY-ADMITTED
+ * `data[]` row (#1797).
  *
- * Deliberately conservative, because `models` is exactly the key catalog
- * discovery refuses to trust as a source of models:
- * - membership is decided entirely by `data[]`; a sibling-only entry is dropped,
- * - matching is exact id equality (`id`, or Ollama's `model`/`name`), never fuzzy,
- * - an ambiguous id appearing twice in the sibling array is skipped rather than guessed,
- * - only keys ABSENT from the `data[]` row are filled, so `data[]` always wins,
- * - the sibling array is bounded by the same limit as the primary envelope.
+ * llama.cpp serves a dual-envelope body: an Ollama-style `models[]` array
+ * carrying `capabilities` alongside the OpenAI-style `data[]` array carrying
+ * `meta`, so the two halves of one model's metadata never meet and a server
+ * that truthfully advertises "multimodal" produced an image-blind row.
+ *
+ * Two boundaries make this safe, and both were added after review found the
+ * first attempt unsound:
+ *
+ * 1. It runs AFTER admission filtering. Enriching first let a sibling supply
+ *    the exact field a provider filter requires — reproduced against the real
+ *    Chutes policy, where a row lacking `supported_features: ["tools"]` was
+ *    admitted once a same-id sibling provided it. Enrichment may change what is
+ *    KNOWN about a model, never WHICH models are published.
+ * 2. Only the capability keys #1797 needs are copied. A blanket "fill every
+ *    absent key" made a key the untrusted `models[]` array could reach into any
+ *    field the pipeline consumes.
  */
-function mergeSiblingModelMetadata(value: unknown, data: unknown[], limit: number): unknown[] {
+const SIBLING_ENRICHABLE_KEYS = new Set(["capabilities", "features", "supported_features", "modalities", "input_modalities"]);
+
+type SiblingIndex = Map<string, Record<string, unknown> | null>;
+
+function buildSiblingIndex(value: unknown, limit: number): SiblingIndex | null {
   const record = plainObject(value);
   const sibling = record?.models;
-  if (!Array.isArray(sibling) || sibling.length === 0 || sibling.length > limit) return data;
+  if (!Array.isArray(sibling) || sibling.length === 0 || sibling.length > limit) return null;
 
-  const byId = new Map<string, Record<string, unknown> | null>();
+  const byId: SiblingIndex = new Map();
   for (const raw of sibling) {
     const entry = plainObject(raw);
     if (!entry) continue;
@@ -360,19 +373,19 @@ function mergeSiblingModelMetadata(value: unknown, data: unknown[], limit: numbe
       byId.set(id, byId.has(id) && byId.get(id) !== entry ? null : entry);
     }
   }
-  if (byId.size === 0) return data;
+  return byId.size > 0 ? byId : null;
+}
 
-  return data.map(raw => {
-    const row = plainObject(raw);
-    if (!row || typeof row.id !== "string") return raw;
-    const extra = byId.get(row.id);
-    if (!extra) return raw;
-    const merged: Record<string, unknown> = { ...row };
-    for (const [key, val] of Object.entries(extra)) {
-      if (!(key in merged)) merged[key] = val;
-    }
-    return merged;
-  });
+function enrichAdmittedModel(item: ProviderModelsApiItem, siblings: SiblingIndex): ProviderModelsApiItem {
+  const extra = siblings.get(item.id);
+  if (!extra) return item;
+  let merged: Record<string, unknown> | null = null;
+  for (const key of SIBLING_ENRICHABLE_KEYS) {
+    if (!(key in extra) || key in item) continue;
+    merged ??= { ...(item as Record<string, unknown>) };
+    merged[key] = extra[key];
+  }
+  return (merged ?? item) as ProviderModelsApiItem;
 }
 
 function plainObject(value: unknown): Record<string, unknown> | null {
@@ -380,13 +393,13 @@ function plainObject(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown>
     : null;
 }
-
 export function extractProviderModelItems(
   value: unknown,
   discovery: ResolvedProviderModelDiscovery,
 ): ProviderModelItemsResult {
   const limit = positiveIntegerAtMost(discovery.maxModels, MODEL_DISCOVERY_MAX_MODELS);
   let data: unknown[];
+  let siblings: SiblingIndex | null = null;
   if (Array.isArray(value)) {
     // Together-style top-level /models arrays. Catalog discovery must not treat a stray
     // `models` key on openai-chat responses as valid — only `data` envelopes or top-level arrays.
@@ -396,18 +409,7 @@ export function extractProviderModelItems(
     const envelope = extractModelEnvelopeRows(value, discovery.maxModels, ["data"]);
     if (!envelope.ok) return envelope;
     data = envelope.rows;
-    // llama.cpp serves a dual-envelope body: an Ollama-style `models[]` array
-    // carrying `capabilities` alongside the OpenAI-style `data[]` array carrying
-    // `meta`. The two halves of one model's metadata therefore never meet, and a
-    // server that truthfully advertises "multimodal" still produced an
-    // image-blind row (#1797).
-    //
-    // The existing refusal to trust a stray `models` key stays intact: this does
-    // NOT add `models` as an envelope source, and a row present only there is
-    // still ignored. It enriches a row `data[]` ALREADY published, matching on
-    // exact id, and fills only keys the `data[]` row does not define — so an
-    // authoritative `data[]` entry can never be overridden.
-    data = mergeSiblingModelMetadata(value, data, limit);
+    siblings = buildSiblingIndex(value, limit);
   }
 
   const items: ProviderModelsApiItem[] = [];
@@ -425,9 +427,15 @@ export function extractProviderModelItems(
       if (!isValidModelDiscoveryModelId(finalId)) continue;
     }
     const item = finalId === id ? raw as ProviderModelsApiItem : { ...(raw as ProviderModelsApiItem), id: finalId };
+    // Admission is decided on the ORIGINAL `data[]` row, before any sibling
+    // enrichment. Merging first let a `models[]` entry supply the very field a
+    // provider filter requires — reproduced against the real Chutes policy,
+    // where a row lacking `supported_features: ["tools"]` was admitted once a
+    // same-id sibling provided it. Enrichment must never change WHICH models
+    // are published, only what is known about an already-admitted one.
     if (!providerModelMatchesDiscoveryFilter(item, discovery.spec?.filter) || seen.has(finalId)) continue;
     seen.add(finalId);
-    items.push(item);
+    items.push(siblings ? enrichAdmittedModel(item, siblings) : item);
   }
   return { ok: true, items, rawCount: data.length };
 }

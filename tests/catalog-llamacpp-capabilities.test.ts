@@ -109,4 +109,33 @@ describe("llama.cpp served context ingestion (#1797)", () => {
     const items = (extracted as { ok: true; items: Array<Record<string, unknown>> }).items;
     expect(items[0]!.context_length).toBeUndefined();
   });
+  test("sibling metadata cannot admit a model the provider filter rejects", () => {
+    // Enrichment used to run BEFORE admission filtering, so a models[] entry
+    // could supply the exact field a filter required. Reproduced against the
+    // real Chutes policy: a row without supported_features:["tools"] was
+    // admitted once a same-id sibling provided it. Enrichment may change what
+    // is KNOWN about a model, never WHICH models are published.
+    const extracted = extractProviderModelItems({
+      models: [{ id: "not-proven-tool-capable", supported_features: ["tools"] }],
+      data: [{ id: "not-proven-tool-capable" }],
+    }, {
+      maxModels: 100,
+      spec: { filter: { allOf: [{ path: ["supported_features"], containsAny: ["tools"] }] } },
+    } as never);
+
+    const items = (extracted as { ok: true; items: Array<Record<string, unknown>> }).items;
+    expect(items).toEqual([]);
+  });
+
+  test("only capability keys are enriched, not arbitrary fields", () => {
+    // A blanket fill-every-absent-key made the untrusted models[] array a way
+    // into any field the pipeline consumes.
+    const extracted = extractProviderModelItems({
+      models: [{ id: "m", context_length: 999, owned_by: "hostile" }],
+      data: [{ id: "m" }],
+    }, { maxModels: 100 } as never);
+
+    const items = (extracted as { ok: true; items: Array<Record<string, unknown>> }).items;
+    expect(items[0]).toEqual({ id: "m" });
+  });
 });
