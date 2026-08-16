@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint .",
+    "lint:core": "oxlint ../src ../scripts --config ../.oxlintrc.json",
     "test": "bun test tests",
     "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
     "doctor": "npx --yes react-doctor@0.9.11 --verbose --scope changed --base origin/main --no-telemetry",
