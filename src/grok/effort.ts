@@ -3,17 +3,27 @@
  *
  * Official settings reference documents the two scalars (`supports_reasoning_effort`,
  * `reasoning_effort`). The picker menu is the working `[[model.<id>.reasoning_efforts]]`
- * shape (id / value / label / description / default). Canonical CLI levels include
- * `max`; Codex-only `ultra` sits outside that set. Omitting it keeps every generated
- * picker option executable and preserves the effort menu.
+ * shape (id / value / label / description / default). Model-specific menus may include
+ * `none` and `minimal`; Codex-only `ultra` sits outside Grok's accepted set. Omitting it
+ * keeps every generated picker option executable and preserves the effort menu.
  */
-export const GROK_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const GROK_REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type GrokReasoningEffort = typeof GROK_REASONING_EFFORTS[number];
 
 const GROK_REASONING_SET = new Set<string>(GROK_REASONING_EFFORTS);
 
 /** Picker copy proven in a live `~/.grok/config.toml` `[[model.*.reasoning_efforts]]` menu. */
 const GROK_EFFORT_OPTIONS: Record<GrokReasoningEffort, { label: string; description: string }> = {
+  none: { label: "None", description: "No reasoning" },
+  minimal: { label: "Minimal", description: "Minimal reasoning" },
   low: { label: "Low", description: "Quick, fast implementations" },
   medium: { label: "Medium", description: "Balanced effort" },
   high: { label: "High", description: "Highest quality with extensive reasoning" },

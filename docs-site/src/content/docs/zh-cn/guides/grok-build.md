@@ -56,8 +56,8 @@ opencodex 会映射已配置的提供方档位（`reasoningEfforts` /
 `modelReasoningEfforts`，以及 `modelDefaultReasoningEfforts` 中的默认值）。这些元数据
 描述代理配置的路由档位；适配器可以模拟推理，或将档位映射到提供方专用字段。档位列表
 为空的模型不会显示 effort 控件。原生 GPT-5.6 条目会保留固定的上游推理档位。
-`ultra` 等 Codex 专用档位会从文件中省略，因为 Grok CLI 的标准档位最高为 `max`，
-从而确保写出的每个选项都可执行。
+模型声明的有效 Grok 档位（包括 `none` 和 `minimal`）都会保留。只有 Codex 专用的
+`ultra` 会从文件中省略，从而确保写出的每个选项都可执行。
 
 Grok Build 通过 Chat Completions 与 opencodex 通信，并在声明档位时发送
 `reasoning_effort`。在这种情况下，Chat Completions 入站转换器会将内部 Responses 的
