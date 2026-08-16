@@ -1,0 +1,26 @@
+{
+  "$schema": "./gui/node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./gui/.eslint/anti-slop/index.mjs"
+    }
+  ],
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "builtin": true,
+    "node": true
+  },
+  "rules": {
+    "anti-slop/no-chained-type-assertions": "warn",
+    "anti-slop/no-known-value-widening": "warn",
+    "anti-slop/no-object-parameters": "warn",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-widen-then-assert": "warn",
+    "anti-slop/require-safety-comment-for-type-assertion": "warn"
+  }
+}
