@@ -44,7 +44,7 @@ default = true
 - **Supprimé à l’arrêt :** `ocx stop`, `ocx eject`, `ocx uninstall` et l’arrêt normal
   du démon hors service suppriment le bloc délimité et restaurent votre fichier
   octet pour octet. Sous un gestionnaire de service, le démontage passe par `ocx stop`/`ocx
-  uninstall` (les processus en mode service maintiennent intentionnellement le blocage lors des réapparitions).
+  uninstall` (les processus en mode service conservent intentionnellement le bloc lors des relancements).
 - **Les alias en conflit** déjà définis dans vos propres tables `[model.*]` sont respectés
   (opencodex ajoute un suffixe à ses propres entrées) ; un bloc délimité endommagé (marqueur de début sans marqueur de fin)
   refuse tout changement automatique et demande une réparation manuelle.
@@ -90,26 +90,25 @@ Grok Build exige une clé API non vide pour les modèles personnalisés, même s
 injectées contiennent une valeur fictive (`opencodex-loopback`) ; opencodex ignore les clés d’admission pour les
 connexions de bouclage, de sorte qu’aucun véritable secret n’est utilisé.
 
-**L’enregistrement automatique est réservé au bouclage.** Lorsque opencodex se lie à un hôte hors bouclage, y compris
-les caractères génériques `0.0.0.0` et `::`, qui exposent chaque interface — les requêtes ont besoin de votre réel
-jeton d’admission, et un bloc géré ne peut pas en transporter un en toute sécurité. Écrire le jeton littéral
-mettez votre secret dans `~/.grok/config.toml` et écrasez tout ce que vous y avez défini lors du prochain
-`ocx start`/`ensure`/`restart`. Donc opencodex n’écrit rien du tout dans ce cas (et supprime
-tout bloc restant d'une liaison de bouclage précédente), et vous configurez les modèles vous-même
-en dehors des marqueurs gérés, où rien de ce que opencodex fait ne peut les écraser. Voir
-[Recette manuelle](#recette-manuelle-sans-enregistrement-automatique) pour le tableau exact et réglez les deux
-`base_url` (un hôte réellement accessible à partir de l'endroit où vous exécutez `grok`) et `api_key`
-(votre `OPENCODEX_API_AUTH_TOKEN`).
+**L’enregistrement automatique est réservé au bouclage.** Lorsque opencodex écoute sur une adresse qui n’est pas
+de bouclage — y compris les caractères génériques `0.0.0.0` et `::`, qui exposent toutes les interfaces — les
+requêtes doivent présenter votre véritable jeton d’admission, qu’un bloc géré ne peut pas transporter en toute
+sécurité. Inscrire ce jeton en clair stockerait votre secret dans `~/.grok/config.toml` et écraserait toute valeur
+que vous y auriez définie lors du prochain `ocx start`/`ensure`/`restart`. Dans ce cas, opencodex n’écrit donc rien
+(et supprime tout bloc laissé par une ancienne liaison de bouclage) ; vous configurez vous-même les modèles en
+dehors des marqueurs gérés, où aucune opération opencodex ne peut les écraser. Consultez la
+[recette manuelle](#recette-manuelle-sans-enregistrement-automatique) pour obtenir la table exacte, puis définissez
+`base_url` (une adresse réellement accessible depuis l’endroit où vous exécutez `grok`) et `api_key` (votre
+`OPENCODEX_API_AUTH_TOKEN`).
 
-Ne remplacez pas `api_key` par `env_key` ici. Sans `model_provider` défini, un `env_key`
-qui ne parvient pas à résoudre n'arrête pas la demande — Grok passe à votre xAI session
-et l'envoie à n'importe quel `base_url` nom d'entrée, ce qui pour un LAN déploiement est un
-texte en clair HTTP point de terminaison qui n'est pas xAI.
+Ne remplacez pas `api_key` par `env_key` ici. En l’absence de `model_provider`, un `env_key` qui ne peut pas être
+résolu n’interrompt pas la requête : Grok utilise alors votre jeton de session xAI et l’envoie à l’adresse
+`base_url` indiquée par l’entrée. Pour un déploiement sur le réseau local, cette adresse est un point de terminaison
+HTTP en clair qui n’appartient pas à xAI.
 
-Le modèle injecté `api_key` se trouve en premier dans la chaîne d'informations d'identification de Grok pour ces modèles,
-donc les tours contre opencodex n'ont pas besoin de connexion Grok supplémentaire. Gardez votre `grok login` /
-`XAI_API_KEY` configuration pour les modèles Grok natifs et toutes les fonctionnalités de harnais qui contactent xAI
-directement.
+La valeur `api_key` injectée pour chaque modèle se trouve en tête de la chaîne d’identifiants de Grok. Les requêtes
+adressées à opencodex ne nécessitent donc aucune connexion Grok supplémentaire. Conservez votre configuration
+habituelle `grok login` / `XAI_API_KEY` pour les modèles Grok natifs et les fonctions qui contactent directement xAI.
 
 ## Recette manuelle (sans enregistrement automatique)
 
