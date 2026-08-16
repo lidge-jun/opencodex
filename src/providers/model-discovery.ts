@@ -331,6 +331,56 @@ export function extractModelEnvelopeRows(
 }
 
 /** Validate, bound, deduplicate, and declaratively filter OpenAI `{data:[...]}` or top-level arrays (Together `#617`). */
+/**
+ * Enrich `data[]` rows with metadata a sibling `models[]` array carries for the
+ * SAME model id (#1797).
+ *
+ * Deliberately conservative, because `models` is exactly the key catalog
+ * discovery refuses to trust as a source of models:
+ * - membership is decided entirely by `data[]`; a sibling-only entry is dropped,
+ * - matching is exact id equality (`id`, or Ollama's `model`/`name`), never fuzzy,
+ * - an ambiguous id appearing twice in the sibling array is skipped rather than guessed,
+ * - only keys ABSENT from the `data[]` row are filled, so `data[]` always wins,
+ * - the sibling array is bounded by the same limit as the primary envelope.
+ */
+function mergeSiblingModelMetadata(value: unknown, data: unknown[], limit: number): unknown[] {
+  const record = plainObject(value);
+  const sibling = record?.models;
+  if (!Array.isArray(sibling) || sibling.length === 0 || sibling.length > limit) return data;
+
+  const byId = new Map<string, Record<string, unknown> | null>();
+  for (const raw of sibling) {
+    const entry = plainObject(raw);
+    if (!entry) continue;
+    for (const key of ["id", "model", "name"]) {
+      const id = entry[key];
+      if (typeof id !== "string" || id.length === 0) continue;
+      // `null` marks an ambiguous id: two sibling entries claim it, so neither
+      // can be attributed with confidence and both are ignored.
+      byId.set(id, byId.has(id) && byId.get(id) !== entry ? null : entry);
+    }
+  }
+  if (byId.size === 0) return data;
+
+  return data.map(raw => {
+    const row = plainObject(raw);
+    if (!row || typeof row.id !== "string") return raw;
+    const extra = byId.get(row.id);
+    if (!extra) return raw;
+    const merged: Record<string, unknown> = { ...row };
+    for (const [key, val] of Object.entries(extra)) {
+      if (!(key in merged)) merged[key] = val;
+    }
+    return merged;
+  });
+}
+
+function plainObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 export function extractProviderModelItems(
   value: unknown,
   discovery: ResolvedProviderModelDiscovery,
@@ -346,6 +396,18 @@ export function extractProviderModelItems(
     const envelope = extractModelEnvelopeRows(value, discovery.maxModels, ["data"]);
     if (!envelope.ok) return envelope;
     data = envelope.rows;
+    // llama.cpp serves a dual-envelope body: an Ollama-style `models[]` array
+    // carrying `capabilities` alongside the OpenAI-style `data[]` array carrying
+    // `meta`. The two halves of one model's metadata therefore never meet, and a
+    // server that truthfully advertises "multimodal" still produced an
+    // image-blind row (#1797).
+    //
+    // The existing refusal to trust a stray `models` key stays intact: this does
+    // NOT add `models` as an envelope source, and a row present only there is
+    // still ignored. It enriches a row `data[]` ALREADY published, matching on
+    // exact id, and fills only keys the `data[]` row does not define — so an
+    // authoritative `data[]` entry can never be overridden.
+    data = mergeSiblingModelMetadata(value, data, limit);
   }
 
   const items: ProviderModelsApiItem[] = [];

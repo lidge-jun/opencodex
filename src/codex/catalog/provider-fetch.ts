@@ -990,6 +990,11 @@ function modelInputModalities(
   if (capabilityRecord?.vision === false) return ["text"];
   if (capabilityRecord?.vision === true || capabilities?.some(value => (
     value === "vision" || value === "image-input" || value === "image_input"
+    // llama.cpp and Ollama-compatible servers report vision as "multimodal" —
+    // it is the only image signal those servers emit (#1797). Mapped to the
+    // closed `text|image` enum rather than passed through: an out-of-enum
+    // modality makes Codex reject the entire catalog file.
+    || value === "multimodal"
   ))) {
     return ["text", "image"];
   }

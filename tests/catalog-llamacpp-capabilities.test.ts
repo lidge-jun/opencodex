@@ -62,9 +62,10 @@ describe("llama.cpp served context ingestion (#1797)", () => {
     expect(hints.contextWindow).toBe(32768);
   });
 
-  test("the dual-envelope body yields context but still no image evidence", () => {
-    // Characterization of the KNOWN remaining gap in #1797, so the follow-up fix
-    // has a live witness and a test to flip rather than a prose claim.
+  test("the dual-envelope body now yields BOTH context and image evidence", () => {
+    // Was a characterization of the #1797 gap: the multimodal token lived in
+    // models[] while discovery read only data[], so the row stayed image-blind.
+    // Both halves are now joined on exact id, and multimodal maps to image.
     const extracted = extractProviderModelItems(VERBATIM_LLAMACPP_BODY, {
       maxModels: 100,
     } as never);
@@ -74,7 +75,38 @@ describe("llama.cpp served context ingestion (#1797)", () => {
 
     const hints = catalogHintsFromModelsApiItem("lidge", items[0] as never);
     expect(hints.contextWindow).toBe(262144);
-    // The "multimodal" token was discarded with models[]; unknown, never false.
-    expect(hints.inputModalities).toBeUndefined();
+    expect(hints.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("a data[] value is never overridden by its sibling", () => {
+    // models[] is exactly the key discovery refuses to trust as a source of
+    // models. Enrichment fills only ABSENT keys, so an authoritative data[]
+    // entry always wins.
+    const extracted = extractProviderModelItems({
+      models: [{ id: "m", context_length: 999 }],
+      data: [{ id: "m", context_length: 111 }],
+    }, { maxModels: 100 } as never);
+    const items = (extracted as { ok: true; items: Array<Record<string, unknown>> }).items;
+    expect(items[0]!.context_length).toBe(111);
+  });
+
+  test("a model present only in the sibling array is still ignored", () => {
+    // Membership is decided entirely by data[]; the conservative boundary that
+    // refuses a stray models key is preserved.
+    const extracted = extractProviderModelItems({
+      models: [{ id: "ghost" }],
+      data: [{ id: "real" }],
+    }, { maxModels: 100 } as never);
+    const items = (extracted as { ok: true; items: Array<Record<string, unknown>> }).items;
+    expect(items.map(i => i.id)).toEqual(["real"]);
+  });
+
+  test("an ambiguous sibling id is skipped rather than guessed", () => {
+    const extracted = extractProviderModelItems({
+      models: [{ id: "m", context_length: 999 }, { id: "m", context_length: 555 }],
+      data: [{ id: "m" }],
+    }, { maxModels: 100 } as never);
+    const items = (extracted as { ok: true; items: Array<Record<string, unknown>> }).items;
+    expect(items[0]!.context_length).toBeUndefined();
   });
 });
