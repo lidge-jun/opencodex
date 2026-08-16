@@ -2115,3 +2115,29 @@ describe("clean() respects fenced code (regression)", () => {
     assert.equal(clean("<!-- hidden -->").trim(), "");
   });
 });
+
+describe("code-region scanning is GFM-correct and linear (regression)", () => {
+  it("honors a closing fence longer than its opener", () => {
+    // GFM allows the closing fence to be longer. Requiring an exact-length
+    // match left the block unterminated, so the comment inside it ran to EOF
+    // and swallowed the visible section below.
+    const goal = ["```html", "<!-- literal example", "````", "", "The catalog fails to load."].join("\n");
+    assert.ok(clean(goal).includes("The catalog fails to load."));
+  });
+
+  it("honors a code span containing a line ending", () => {
+    const goal = ["`first", "second`", "", "The catalog fails to load."].join("\n");
+    assert.ok(clean(goal).includes("The catalog fails to load."));
+  });
+
+  it("stays linear on adversarial input", () => {
+    // The previous masker combined a variable-length delimiter capture, a lazy
+    // whole-input scan and a backreference. A 60k-character body took ~10.5s
+    // inside an automation trust boundary anyone can post to.
+    const started = Date.now();
+    clean("```html\n" + "x".repeat(60000) + "\n");
+    clean("`a`".repeat(20000));
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2000, `code-region scan took ${elapsed}ms; expected a linear scan`);
+  });
+});

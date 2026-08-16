@@ -423,21 +423,113 @@ function isMediaOnly(text) {
  * Strip HTML comments, placeholder-only values, and trim whitespace.
  */
 function stripHtmlCommentsOutsideCode(raw) {
-  const fences = [];
-  // Mask fenced blocks and inline code spans, strip comments from what is left,
-  // then restore. GitHub renders neither region as HTML, so a comment opener
-  // inside them is literal text -- but the text itself is real content.
-  const masked = String(raw)
-    .replace(
-      /(?:^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*(?=\n|$)/gm,
-      (block) => `\u0000F${fences.push(block) - 1}\u0000`,
-    )
-    .replace(/`[^`\n]*`/g, (span) => `\u0000F${fences.push(span) - 1}\u0000`);
-  return masked
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-    .replace(/\u0000F(\d+)\u0000/g, (_, i) => fences[Number(i)] ?? "");
+  const text = String(raw);
+  // Linear scanner, deliberately not a regex. The previous masker combined a
+  // variable-length delimiter capture, a lazy whole-input scan and a
+  // backreference, which backtracks catastrophically on adversarial input: a
+  // 60k-character issue body took ~10.5s, inside an automation trust boundary
+  // that anyone can post to. This walks the string once.
+  //
+  // It also fixes two GFM cases the regex got wrong: a closing fence may be
+  // LONGER than its opener, and a code span may contain a line ending.
+  let out = "";
+  let i = 0;
+  let atLineStart = true;
+
+  const lineEnd = (from) => {
+    const nl = text.indexOf("\n", from);
+    return nl === -1 ? text.length : nl;
+  };
+
+  while (i < text.length) {
+    const ch = text[i];
+
+    // Fenced block: at most three leading spaces, then >= 3 backticks or tildes.
+    if (atLineStart && (ch === "`" || ch === "~" || ch === " " || ch === "\t")) {
+      let j = i;
+      let indent = 0;
+      while (j < text.length && (text[j] === " " || text[j] === "\t") && indent < 4) { j++; indent++; }
+      const marker = text[j];
+      if (indent < 4 && (marker === "`" || marker === "~")) {
+        let run = 0;
+        while (text[j + run] === marker) run++;
+        if (run >= 3) {
+          // Copy the opening line verbatim, then everything up to a closing
+          // fence of the SAME character and AT LEAST the same length.
+          // `cursor` is the index of the newline ending the current line, so the
+          // next line starts at cursor + 1.
+          let cursor = lineEnd(j + run);
+          let closed = false;
+          while (cursor < text.length) {
+            const start = cursor + 1;
+            let p = start;
+            let ind = 0;
+            while (p < text.length && (text[p] === " " || text[p] === "\t") && ind < 4) { p++; ind++; }
+            let closeRun = 0;
+            while (text[p + closeRun] === marker) closeRun++;
+            const after = p + closeRun;
+            const rest = text.slice(after, lineEnd(after));
+            if (ind < 4 && closeRun >= run && rest.trim() === "") {
+              const end = lineEnd(after);
+              out += text.slice(i, end);
+              i = end;
+              closed = true;
+              break;
+            }
+            const next = lineEnd(start);
+            if (next <= cursor) break;
+            cursor = next;
+          }
+          if (closed) { atLineStart = true; continue; }
+          // Unclosed fence runs to end of input, per GFM.
+          out += text.slice(i);
+          return out;
+        }
+      }
+    }
+
+    // Inline code span: a run of N backticks closed by the next run of exactly N.
+    if (ch === "`") {
+      let run = 0;
+      while (text[i + run] === "`") run++;
+      let p = i + run;
+      let close = -1;
+      while (p < text.length) {
+        if (text[p] === "`") {
+          let r = 0;
+          while (text[p + r] === "`") r++;
+          if (r === run) { close = p + r; break; }
+          p += r;
+          continue;
+        }
+        p++;
+      }
+      if (close !== -1) {
+        out += text.slice(i, close);
+        atLineStart = false;
+        i = close;
+        continue;
+      }
+    }
+
+    // HTML comment outside any code region. An unclosed one runs to EOF.
+    if (ch === "<" && text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      if (end === -1) return out;
+      i = end + 3;
+      continue;
+    }
+
+    out += ch;
+    atLineStart = ch === "\n";
+    i++;
+  }
+  return out;
 }
 
+/**
+ * Strip HTML comments, placeholder-only values, and trim whitespace.
+ */
 /**
  * Strip HTML comments, placeholder-only values, and trim whitespace.
  */
