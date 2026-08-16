@@ -42,11 +42,20 @@ const SPECIFIC_FAILURE_EVIDENCE_RE = new RegExp([
   "(?:^|[\\s(`])(?:~?/|[A-Za-z]:\\\\)[^\\s)`]+",
   "\\b[\\w.-]+\\.(?:json|toml|yaml|yml|log|conf|env|sqlite|db)\\b",
   // Structured field path (`config.providers.baseUrl`). The negative lookahead
-  // keeps purely numeric dotted tokens out: a semantic version like `2.19.0`
-  // is not a discriminator, and two unrelated reports that merely name the
-  // same release would otherwise qualify as an exact shared signature and be
-  // auto-closed as duplicates.
-  "\\b(?![\\d.]+\\b)[\\w-]+(?:\\.[\\w-]+){2,}\\b",
+  // excludes SEMANTIC VERSIONS specifically, in both bare and v-prefixed form
+  // (`2.19.0`, `v2.19.0`, `2.19.0-preview.1`): naming the same release is not a
+  // discriminator, so two unrelated reports sharing only a version would
+  // otherwise qualify as an exact shared signature and be auto-closed.
+  //
+  // It is deliberately narrower than "any numeric dotted token": an IPv4
+  // address IS a real discriminator, and is matched by its own alternative
+  // below so this exclusion cannot swallow it.
+  // The leading `(?<![\w.-])` anchor matters: without it the scan could start
+  // mid-version and match the tail of a prerelease (`19.0-preview.1` inside
+  // `2.19.0-preview.1`), re-admitting the very token being excluded.
+  "(?<![\\w.-])(?!v?\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?(?![\\w.-]))[\\w-]+(?:\\.[\\w-]+){2,}(?![\\w.-])",
+  // Exact IPv4 literal: a specific host/endpoint is legitimate shared evidence.
+  "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b",
   "\\b[A-Za-z][A-Za-z0-9_.-]*(?:Error|Exception)\\b",
 ].join("|"), "i");
 

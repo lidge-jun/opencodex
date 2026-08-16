@@ -51,21 +51,33 @@ describe("deterministic duplicate auto-close", () => {
   });
 
   it("does not treat a semantic version as a structured field path", () => {
-    // A release number is not a discriminator. Two unrelated reports that merely
-    // name the same version were qualifying as an exact shared signature, so the
-    // gate auto-closed issues that had nothing else in common.
-    const current =
-      "Codex sync did not complete in version 2.19.0 after updating the local provider configuration.";
-    const candidate =
-      "Codex sync did not complete in version 2.19.0 after updating the remote provider configuration.";
+    // IDENTICAL lines on both issues: exact whole-line equality already holds,
+    // so the ONLY thing deciding the outcome is whether the version counts as
+    // specific evidence. An earlier version of this test used two different
+    // sentences, which returned null for the wrong reason and proved nothing.
+    for (const version of ["2.19.0", "v2.19.0", "V2.19.0", "2.19.0-preview.1"]) {
+      const line =
+        `Codex sync did not complete in version ${version} after updating the provider configuration.`;
+      const match = selectStrongDuplicateMatch({
+        currentIssue: { number: 2101, title: "new", body: line },
+        candidateIssues: [{ number: 1801, title: "old", body: line }],
+        duplicateNumbers: ["1801"],
+      });
+      assert.equal(match, null, `version ${version} must not qualify as a discriminator`);
+    }
+  });
 
+  it("still accepts an exact IPv4 address as a discriminator", () => {
+    // Excluding SemVer must not become "reject every numeric dotted token":
+    // a specific host is legitimate shared evidence.
+    const line =
+      "The sync command failed while connecting to 192.168.1.10 during provider startup here.";
     const match = selectStrongDuplicateMatch({
-      currentIssue: { number: 2101, title: "new", body: current },
-      candidateIssues: [{ number: 1801, title: "old", body: candidate }],
-      duplicateNumbers: ["1801"],
+      currentIssue: { number: 2104, title: "new", body: line },
+      candidateIssues: [{ number: 1804, title: "old", body: line }],
+      duplicateNumbers: ["1804"],
     });
-
-    assert.equal(match, null);
+    assert.deepEqual(match, { number: "1804", signature: line });
   });
 
   it("keeps case-distinct file paths distinct", () => {
