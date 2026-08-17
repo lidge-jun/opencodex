@@ -54,8 +54,14 @@ describe("#820 memory recall soak probe helpers", () => {
     for (let index = 0; index < 128; index++) {
       const session = `session-${index}`;
       expect(stableHash(session, 7)).toBe(stableHash(session, 7));
-      expect(deterministicToolCount(session, index % 10, 7)).toBeWithin(1, 8);
-      expect(deterministicPercent(session, "slow", 7)).toBeWithin(0, 99);
+
+      const toolCount = deterministicToolCount(session, index % 10, 7);
+      expect(toolCount).toBeGreaterThanOrEqual(1);
+      expect(toolCount).toBeLessThanOrEqual(8);
+
+      const percent = deterministicPercent(session, "slow", 7);
+      expect(percent).toBeGreaterThanOrEqual(0);
+      expect(percent).toBeLessThanOrEqual(99);
     }
   });
 
