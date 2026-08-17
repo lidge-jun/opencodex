@@ -98,6 +98,64 @@ describe("Cursor live-model discovery hardening", () => {
     });
   });
 
+  test("HTTP/1.1 discovery uses fetch with Bun's protocol pin", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "claude-opus-5" })],
+    }));
+    let seenUrl = "";
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seenUrl = String(input);
+      seenInit = init;
+      return new Response(body, { status: 200, headers: { "content-type": "application/proto" } });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({ ok: true, models: ["claude-opus-5"] });
+    expect(seenUrl).toBe("https://api2.cursor.sh/agent.v1.AgentService/GetUsableModels");
+    expect(seenInit?.method).toBe("POST");
+    expect((seenInit as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
+    expect(new Headers(seenInit?.headers).get("authorization")).toBe("Bearer test-token");
+  });
+
+  test("Cursor catalog propagates the provider HTTP/1.1 pin to discovery", async () => {
+    const providerName = "cursor-http1-discovery";
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "claude-opus-5" })],
+    }));
+    let seenProtocol: string | undefined;
+    const fetchImpl = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seenProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      return new Response(body, { status: 200, headers: { "content-type": "application/proto" } });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [providerName]: {
+            adapter: "cursor",
+            baseUrl: "https://api2.cursor.sh",
+            apiKey: "test-token",
+            upstreamHttpVersion: "http1.1",
+            models: ["claude-opus-5"],
+            fetch: fetchImpl,
+          } as Parameters<typeof gatherRoutedModels>[0]["providers"][string] & { fetch: typeof fetch },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toContain(`${providerName}/claude-opus-5`);
+      expect(seenProtocol).toBe("http1.1");
+    } finally {
+      clearModelCache(providerName);
+    }
+  });
+
   test("classifies authentication failures", async () => {
     const result = await withDiscoveryServer(respond(401), baseUrl =>
       fetchCursorUsableModels({ apiKey: "bad-token", baseUrl }));

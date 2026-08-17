@@ -222,6 +222,10 @@ affinity。这些策略不能规避 provider enforcement。
 
 Cursor 桥接是实验性的。执行 `ocx login cursor` 之后，添加或编辑 `providers.cursor`。Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择器无法渲染 Cursor 特定的模型参数：
 
+如果代理无法承载 Cursor 默认的 HTTP/2 stream，请将 `upstreamHttpVersion` 设置为
+`"http1.1"`。推理会切换到 Cursor 的 `RunSSE` + `BidiAppend` 兼容传输，`GetUsableModels`
+实时发现也会使用 HTTP/1.1。保持未设置或使用 `"auto"`，则继续使用现有 HTTP/2 行为。
+
 | Codex model | Cursor Router mode |
 | --- | --- |
 | `cursor/auto` | Team/account default |
@@ -245,6 +249,7 @@ Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用�
       "baseUrl": "https://api2.cursor.sh",
       "authMode": "oauth",
       "defaultModel": "auto",
+      "upstreamHttpVersion": "http1.1",
       "nativeLocalExec": "off"
     }
   }

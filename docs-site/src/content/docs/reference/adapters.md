@@ -186,7 +186,10 @@ advertised effort control on those models as proof of upstream-native reasoning 
 
 ## `cursor`
 
-**Targets:** Cursor's `agent.v1.AgentService/Run` over HTTP/2 Connect streaming at `api2.cursor.sh`.
+**Targets:** Cursor's `agent.v1.AgentService/Run` over HTTP/2 Connect streaming at `api2.cursor.sh`
+by default. With `upstreamHttpVersion: "http1.1"` (or `"h1"`), uses Cursor's HTTP/1.1
+compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
+`aiserver.v1.BidiService/BidiAppend` for client messages.
 **Auth:** Cursor OAuth/access token from `provider.apiKey` or the forwarded authorization header.
 
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests, server events, tool arguments,
@@ -195,6 +198,8 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Replays conversation state through content-addressed blobs, maps server tool calls back to Codex,
   discovers live Cursor models through the protobuf `GetUsableModels` RPC, and retries only before a
   run request is committed to the wire.
+- Honors `upstreamHttpVersion` for both live model discovery and inference. `auto`, `http2`, and `h2`
+  preserve the existing HTTP/2 transport; only `http1.1` and `h1` select compatibility mode.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
   `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.

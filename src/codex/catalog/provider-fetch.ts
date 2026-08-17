@@ -1214,7 +1214,13 @@ async function fetchProviderModelsWithAuth(
         "degraded",
       );
     }
-    const liveResult = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    const cursorFetch = (prov as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
+    const liveResult = await fetchCursorUsableModels({
+      apiKey,
+      baseUrl: prov.baseUrl,
+      upstreamHttpVersion: prov.upstreamHttpVersion,
+      ...(cursorFetch ? { fetch: cursorFetch } : {}),
+    });
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
       const result = available.length > 0 ? available : configured;
