@@ -12,7 +12,7 @@ import {
   publicOAuthAuthenticationErrorMessage,
   UnsupportedOAuthProviderError,
 } from "../src/oauth";
-import { saveCredential } from "../src/oauth/store";
+import { OAuthMutationBusyError, saveCredential } from "../src/oauth/store";
 import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
@@ -258,6 +258,15 @@ describe("OAuth status privacy", () => {
     expect(publicOAuthAuthenticationErrorMessage(new OAuthTokenRefreshStaleError())).toBe(
       "OAuth token refresh owner became stale",
     );
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthMutationBusyError())).toBe(
+      "OAuth mutation queue is busy",
+    );
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthMutationBusyError("OAuth mutation queue wait timed out"))).toBe(
+      "OAuth mutation queue wait timed out",
+    );
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthMutationBusyError(PUBLIC_ERROR_CANARY))).toBe(
+      "OAuth mutation queue is busy",
+    );
   });
 
   test("management OAuth login does not return raw provider or filesystem errors", async () => {
@@ -364,6 +373,10 @@ describe("OAuth status privacy", () => {
       {
         error: new OAuthTokenRefreshStaleError(),
         expected: "OAuth token refresh owner became stale",
+      },
+      {
+        error: new OAuthMutationBusyError(),
+        expected: "OAuth mutation queue is busy",
       },
     ];
     const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;

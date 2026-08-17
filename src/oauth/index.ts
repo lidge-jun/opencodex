@@ -303,6 +303,11 @@ export class OAuthLoginRequiredError extends Error {
 
 /** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
 export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
+  if (error instanceof OAuthMutationBusyError) {
+    return error.message === "OAuth mutation queue wait timed out"
+      ? "OAuth mutation queue wait timed out"
+      : "OAuth mutation queue is busy";
+  }
   if (
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
     || error instanceof OAuthTokenRefreshBusyError
