@@ -745,17 +745,20 @@ describe("platform termination ladder", () => {
 
   test("a failing taskkill falls back to the previous behavior", () => {
     // The branch that keeps a Windows regression from being worse than the code
-    // it replaced.
+    // it replaced, while preserving the caller's final identity gate.
+    const guarded: number[] = [];
     const signals: Array<{ pid: number; signal: string }> = [];
     restartCodexAppServers([target], {
       platform: "win32",
       listSnapshots: snapshots,
+      beforeSignal: pid => { guarded.push(pid); },
       execFile: () => { throw new Error("taskkill unavailable"); },
       processKill: (pid, signal) => { signals.push({ pid, signal }); },
       isAlive: () => false,
       waitExit: () => true,
     });
 
+    expect(guarded).toEqual([4242, 4242]);
     expect(signals).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
   });
 

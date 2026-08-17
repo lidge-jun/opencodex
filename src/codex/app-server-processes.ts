@@ -773,8 +773,10 @@ function defaultKillCodexAppServer(
   try {
     exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(pid), "/T", "/F"]);
   } catch {
-    // Fall back to the previous behavior rather than reporting a failure the old
-    // code would not have reported.
+    // taskkill may have raced with process exit and PID reuse before returning
+    // an error. Re-run the caller's identity gate immediately before the
+    // single-process fallback so a replacement process is never terminated.
+    io.beforeSignal?.(pid, signal);
     signalProcess(pid, signal);
   }
 }

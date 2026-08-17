@@ -713,6 +713,49 @@ describe("last-moment identity gate (through the real restart helper)", () => {
     }
   });
 
+  test("a failed taskkill rechecks identity before the Windows signal fallback", async () => {
+    const signals: number[] = [];
+    let startReads = 0;
+    setTrustedWindowsElevationExecutablesForTests({
+      taskkill: "C:\\Windows\\System32\\taskkill.exe",
+    });
+    try {
+      const result = await performCodexRestart({
+        syncCatalog: async () => true,
+        listenPort: () => 41999,
+        resetStateCache: () => {},
+        collectState: stale,
+        listProcesses: () => [proc(4242)],
+        readStartMs: pids => {
+          startReads += 1;
+          const startedAtMs = startReads < 3 ? 1_000 : 2_000;
+          return new Map(pids.map(pid => [pid, startedAtMs]));
+        },
+        processIo: {
+          platform: "win32",
+          listSnapshots: () => [proc(4242)],
+          execFile: () => { throw new Error("taskkill unavailable"); },
+          processKill: pid => { signals.push(pid); },
+          isAlive: () => true,
+          waitExit: () => false,
+        },
+      });
+
+      expect(startReads).toBe(3);
+      expect(signals).toEqual([]);
+      expect(result).toMatchObject({
+        success: false,
+        code: "partially_stopped",
+        requested: [4242],
+        stopped: [],
+        surviving: [4242],
+        failed: [4242],
+      });
+    } finally {
+      setTrustedWindowsElevationExecutablesForTests(null);
+    }
+  });
+
   test("an unreadable start time at signal time refuses the signal", async () => {
     const killed: number[] = [];
     let startReads = 0;
