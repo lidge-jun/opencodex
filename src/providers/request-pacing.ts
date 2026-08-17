@@ -35,7 +35,7 @@ interface Waiter {
   modelIntervalMs: number;
   queuedAt: number;
   signal?: AbortSignal;
-  resolve: () => void;
+  start: () => void;
   reject: (reason: unknown) => void;
   abort?: () => void;
 }
@@ -190,19 +190,29 @@ function runQueue(providerName: string, state: ProviderPacer): void {
   if (waiter.modelId && waiter.modelIntervalMs > 0) {
     state.modelNextStartAt.set(waiter.modelId, startedAt + waiter.modelIntervalMs);
   }
-  waiter.resolve();
+  // Start the caller-owned transport synchronously in the granted slot. Resolving a
+  // waiter first would let an async continuation drift later while the next slot
+  // remained anchored to this earlier bookkeeping timestamp.
+  waiter.start();
   runtime.enqueueMicrotask(() => runQueue(providerName, state));
 }
 
-export async function waitForProviderRequestSlot(
+export function runWithProviderRequestSlot<T>(
   providerName: string,
   provider: OcxProviderConfig,
-  modelId?: string,
-  signal?: AbortSignal,
-): Promise<void> {
+  modelId: string | undefined,
+  signal: AbortSignal | undefined,
+  start: () => T | PromiseLike<T>,
+): Promise<T> {
   const intervals = requestPacingIntervals(provider, modelId);
-  if (Math.max(intervals.providerIntervalMs, intervals.modelIntervalMs) <= 0) return;
-  if (signal?.aborted) throw abortReason(signal);
+  if (signal?.aborted) return Promise.reject(abortReason(signal));
+  if (Math.max(intervals.providerIntervalMs, intervals.modelIntervalMs) <= 0) {
+    try {
+      return Promise.resolve(start());
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
 
   const state = pacers.get(providerName) ?? {
     queue: [], providerNextStartAt: 0, modelNextStartAt: new Map<string, number>(),
@@ -218,15 +228,28 @@ export async function waitForProviderRequestSlot(
   }
   runQueue(providerName, state);
   if (state.queue.length >= maxQueueDepth) {
-    throw new RequestPacingQueueOverloadError(
+    return Promise.reject(new RequestPacingQueueOverloadError(
       providerName,
       "queue_full",
       pacingRetryAfterSeconds(state, modelId, runtime.now()),
-    );
+    ));
   }
 
-  await new Promise<void>((resolve, reject) => {
-    const waiter: Waiter = { modelId, ...intervals, queuedAt: runtime.now(), signal, resolve, reject };
+  return new Promise<T>((resolve, reject) => {
+    const waiter: Waiter = {
+      modelId,
+      ...intervals,
+      queuedAt: runtime.now(),
+      signal,
+      reject,
+      start: () => {
+        try {
+          resolve(start());
+        } catch (error) {
+          reject(error);
+        }
+      },
+    };
     waiter.abort = () => {
       const index = state.queue.indexOf(waiter);
       if (index >= 0) state.queue.splice(index, 1);
@@ -250,6 +273,15 @@ export async function waitForProviderRequestSlot(
     }
     runQueue(providerName, state);
   });
+}
+
+export function waitForProviderRequestSlot(
+  providerName: string,
+  provider: OcxProviderConfig,
+  modelId?: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return runWithProviderRequestSlot(providerName, provider, modelId, signal, () => undefined);
 }
 
 export function providerRequestPacingStatus(
