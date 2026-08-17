@@ -239,22 +239,28 @@ for (const mutator of mutators) {
     expect(readFileSync(path, "utf8")).toBe("new bytes\n");
     // Restriction is asserted in two halves, because it is enforced in two ways.
     //
-    // Every mutator must ask its I/O to harden what it publishes; that half of the
-    // contract holds on every platform, so assert it unconditionally.
-    expect(effects.some(effect => effect.startsWith("harden:"))).toBe(true);
-    // The resulting mode only carries the claim where POSIX modes do. Windows has
-    // no mode bits to set: `chmodSync` there moves the read-only flag and nothing
-    // else, so `statSync` keeps reporting 0o666 however the file was written, and
-    // this assertion could never pass. Real restriction on Windows comes from the
-    // per-user NTFS ACL `defaultBackupWriteIO` applies through `hardenSecretPath`
-    // — machinery these doubles deliberately leave out, so there is nothing here
-    // for a mode check to observe either way.
+    // The platform-independent half: the mutator must harden the exact bytes it
+    // is about to install. Tying all three effects to one temp path is what makes
+    // that a claim about this file — "some temp was written, some path was
+    // hardened, something was published" would hold even if they were different
+    // files. Hardening lands on the temp, never the destination, because the
+    // publish step is what puts an already-restricted file in place.
+    const tempEffect = effects.find(effect => effect.startsWith("temp:"));
+    expect(tempEffect).toBeDefined();
+    const tempPath = tempEffect!.slice("temp:".length);
+    expect(effects).toContain(`harden:${tempPath}`);
+    expect(effects).toContain(`${isBackup ? "publish" : "rename"}:${tempPath}->${path}`);
+    // The other half is the resulting mode, which only carries the claim where
+    // POSIX modes do. Windows has no mode bits to set: `chmodSync` there moves the
+    // read-only flag and nothing else, so `statSync` keeps reporting 0o666 however
+    // the file was written, and this assertion could never pass. Real restriction
+    // on Windows comes from the per-user NTFS ACL `defaultBackupWriteIO` applies
+    // through `hardenSecretPath` — machinery these doubles deliberately leave out,
+    // so there is nothing here for a mode check to observe either way.
     if (process.platform !== "win32") {
       expect(statSync(path).mode & 0o777).toBe(0o600);
     }
     expect(readdirSync(targetDir).filter(name => name.endsWith(".tmp"))).toEqual([]);
-    expect(effects.some(effect => effect.startsWith("temp:"))).toBe(true);
-    expect(effects.some(effect => effect.startsWith(isBackup ? "publish:" : "rename:"))).toBe(true);
     if (isBackup) expect(result).toBe("written");
   });
 }
