@@ -7,7 +7,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const COPILOT_RUNNER = 'node .github/scripts/run-copilot-inference.cjs';
 const CLI_INSTALL = 'bash .github/scripts/install-copilot-cli.sh';
 const SETUP_NODE = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e';
-const TOKEN_FALLBACK = 'GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || github.token }}';
+const TOKEN_FALLBACK = 'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || github.token }}';
 const COPILOT_VERSION = 'COPILOT_VERSION="v1.0.74"';
 const COPILOT_SHA256 = 'COPILOT_SHA256="4a708b0a1cbaef4c2ca5c546a622f887a3b70e8a0432bc3cee0d386704816650"';
 
@@ -41,7 +41,6 @@ test('issue automation streams prompts through the digest-pinned Copilot CLI wit
   assert.match(installer, /sha256sum --check --status/);
   assert.match(installer, /releases\/download\/\$\{COPILOT_VERSION\}\/\$\{COPILOT_ASSET\}/);
 
-  assert.doesNotMatch(combined, /COPILOT_GITHUB_TOKEN: \$\{\{/);
   assert.doesNotMatch(combined, /npm install --global @github\/copilot/);
   assert.doesNotMatch(combined, /actions\/ai-inference@/);
   assert.doesNotMatch(combined, /\bmodels:\s*read\b/);
