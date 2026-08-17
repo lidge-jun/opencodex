@@ -42,4 +42,4 @@ event until the bounded inspection completes.
 
 ## Commit
 
-Pending until the Task 5 changes are committed.
+`3b48b9802` — `feat(antigravity): always-SSE unary, host failover, and account cooldowns`
