@@ -167,7 +167,15 @@ describe("DSH coordinated mutations", () => {
     const seams = immediateLock(() => { acquisitions += 1; });
     expect((await applyIntegrationCoordinated(writeInput(), { lockSeams: seams })).ok).toBe(true);
     const configPath = INTEGRATION_CLIENTS.dsh.configPath({}, home);
-    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    // "Owner-only" is a mode on POSIX and an ACL on Windows: the write goes
+    // through `atomicWriteFile`, which applies 0600 plus Windows ACL hardening.
+    // Only the POSIX half is observable through `statSync`, which reports 0o666
+    // on Windows whatever chmod did, so assert the file exists there instead and
+    // leave the ACL to tests/windows-secret-acl.test.ts.
+    expect(existsSync(configPath)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    }
     const second = await applyIntegrationCoordinated(writeInput(), { lockSeams: seams });
     expect(second).toMatchObject({ ok: true, changed: false, state: "current" });
     expect(acquisitions).toBe(2);

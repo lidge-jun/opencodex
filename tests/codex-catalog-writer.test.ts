@@ -237,7 +237,21 @@ for (const mutator of mutators) {
     );
 
     expect(readFileSync(path, "utf8")).toBe("new bytes\n");
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Restriction is asserted in two halves, because it is enforced in two ways.
+    //
+    // Every mutator must ask its I/O to harden what it publishes; that half of the
+    // contract holds on every platform, so assert it unconditionally.
+    expect(effects.some(effect => effect.startsWith("harden:"))).toBe(true);
+    // The resulting mode only carries the claim where POSIX modes do. Windows has
+    // no mode bits to set: `chmodSync` there moves the read-only flag and nothing
+    // else, so `statSync` keeps reporting 0o666 however the file was written, and
+    // this assertion could never pass. Real restriction on Windows comes from the
+    // per-user NTFS ACL `defaultBackupWriteIO` applies through `hardenSecretPath`
+    // — machinery these doubles deliberately leave out, so there is nothing here
+    // for a mode check to observe either way.
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
     expect(readdirSync(targetDir).filter(name => name.endsWith(".tmp"))).toEqual([]);
     expect(effects.some(effect => effect.startsWith("temp:"))).toBe(true);
     expect(effects.some(effect => effect.startsWith(isBackup ? "publish:" : "rename:"))).toBe(true);

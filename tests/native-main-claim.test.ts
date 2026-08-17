@@ -169,8 +169,13 @@ describe("the default hardener is actually reached from a claim", () => {
    * left behind. On POSIX that is the mode; the Windows branch is proven
    * separately in tests/windows-secret-acl.test.ts, where the ACL runner can be
    * observed.
+   *
+   * Hence the skip: the paragraph above already scopes this to POSIX, but the
+   * test ran everywhere and failed on Windows, where `chmodSync` moves only the
+   * read-only flag and `statSync` reports 0o666 regardless — so neither the
+   * 0o644 setup nor the 0o600 conclusion can hold there.
    */
-  test("a shared claim narrows a permissive claim database to 0600", async () => {
+  test.skipIf(process.platform === "win32")("a shared claim narrows a permissive claim database to 0600", async () => {
     const context = fixture();
     const path = nativeMainClaimPath(context);
     mkdirSync(join(context.codexHome), { recursive: true });
