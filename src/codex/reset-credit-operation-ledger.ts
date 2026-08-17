@@ -584,7 +584,9 @@ function isExactPriorSchema(database: Database, schema: SchemaObjectRow): boolea
   }
 }
 
-function assertCanonicalTable(database: Database): void {
+type PrimaryTableInitialization = "created" | "migrated" | "existing";
+
+function assertCanonicalTable(database: Database): PrimaryTableInitialization {
   const schemaRows = database.query<SchemaObjectRow, [string, string]>(`
     SELECT type, name, tbl_name, sql
       FROM main.sqlite_schema
@@ -592,24 +594,31 @@ function assertCanonicalTable(database: Database): void {
      ORDER BY type, name
      LIMIT 4
   `).all(TABLE_NAME, TABLE_NAME);
+  let initialization: PrimaryTableInitialization;
   if (schemaRows.length === 0) {
     database.exec(CREATE_TABLE);
+    initialization = "created";
   } else if (schemaRows.length === 1 && isExactLegacySchema(database, schemaRows[0]!)) {
     migrateLegacyTable(database);
+    initialization = "migrated";
   } else if (schemaRows.length === 1 && isExactPriorSchema(database, schemaRows[0]!)) {
     migratePriorTable(database);
+    initialization = "migrated";
   } else if (schemaRows.length !== 1
     || schemaRows[0]?.type !== "table"
     || schemaRows[0]?.name !== TABLE_NAME
     || schemaRows[0]?.tbl_name !== TABLE_NAME
     || schemaRows[0]?.sql !== EXPECTED_SCHEMA_SQL) {
     throw new Error("invalid reset-credit operation ledger schema");
+  } else {
+    initialization = "existing";
   }
   assertColumnLayout(database, TABLE_NAME, EXPECTED_COLUMNS);
   assertNoLedgerTriggers(database, TABLE_NAME);
+  return initialization;
 }
 
-function ensureManualIdTable(database: Database): boolean {
+function ensureManualIdTable(database: Database, allowCreate: boolean): boolean {
   const schemaRows = database.query<SchemaObjectRow, [string, string]>(`
     SELECT type, name, tbl_name, sql
       FROM main.sqlite_schema
@@ -619,6 +628,9 @@ function ensureManualIdTable(database: Database): boolean {
   `).all(MANUAL_ID_TABLE_NAME, MANUAL_ID_TABLE_NAME);
   let created = false;
   if (schemaRows.length === 0) {
+    if (!allowCreate) {
+      throw new Error("missing manual reset-credit operation identity schema");
+    }
     database.exec(CREATE_MANUAL_ID_TABLE);
     created = true;
   } else if (schemaRows.length !== 1
@@ -640,7 +652,16 @@ function initializeTable(
   recordCount: number;
   manualIdCount: number;
 }> {
-  assertCanonicalTable(database);
+  const manualSchemaPresentBefore = database.query<{ present: number }, [string, string]>(`
+    SELECT 1 AS present
+      FROM main.sqlite_schema
+     WHERE name = ? COLLATE NOCASE OR tbl_name = ? COLLATE NOCASE
+     LIMIT 1
+  `).get(MANUAL_ID_TABLE_NAME, MANUAL_ID_TABLE_NAME) !== null;
+  const primaryInitialization = assertCanonicalTable(database);
+  if (primaryInitialization !== "existing" && manualSchemaPresentBefore) {
+    throw new Error("invalid partial reset-credit operation ledger schema");
+  }
   const rows = database.query<ResetCreditOperationRow, []>(SELECT_ALL).all();
   if (rows.length > MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
     throw new Error("invalid reset-credit operation ledger capacity");
@@ -659,7 +680,7 @@ function initializeTable(
     for (const id of ids) operationIds.add(id);
   }
 
-  const manualTableCreated = ensureManualIdTable(database);
+  const manualTableCreated = ensureManualIdTable(database, primaryInitialization !== "existing");
   if (manualTableCreated) {
     for (const record of records.values()) {
       if (record.operationKind !== "manual") continue;
