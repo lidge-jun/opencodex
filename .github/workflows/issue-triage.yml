@@ -112,7 +112,7 @@ jobs:
         id: copilot
         if: steps.node.outcome == 'success'
         continue-on-error: true
-        run: npm install --global @github/copilot@1.0.74
+        run: bash .github/scripts/install-copilot-cli.sh
 
       - name: Run inference
         id: infer
