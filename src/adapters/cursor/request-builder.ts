@@ -25,6 +25,7 @@ import {
   isCursorWaitTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
+import { formatToolResultToWireText } from "./tool-result-compaction";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -216,14 +217,7 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
 }
 
 function toolResultToText(message: OcxToolResultMessage): string {
-  return [
-    "[tool_result]",
-    `call_id: ${message.toolCallId}`,
-    `name: ${namespacedToolName(message.toolNamespace, message.toolName)}`,
-    `is_error: ${message.isError}`,
-    "output:",
-    contentToText(message.content),
-  ].join("\n");
+  return formatToolResultToWireText(message).wireOutput;
 }
 
 function contentToText(content: string | readonly (OcxContentPart | OcxAssistantContentPart)[]): string {

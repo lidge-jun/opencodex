@@ -51,6 +51,11 @@ import {
   CURSOR_SHELL_ALIAS_SYSTEM_NOTE,
   OCX_RESPONSES_TOOL_PROVIDER,
 } from "./tool-definitions";
+import {
+  CURSOR_TRUNCATION_MARKER,
+  compactComputerUsePayload,
+  formatToolResultToWireText,
+} from "./tool-result-compaction";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -122,7 +127,19 @@ function rootBlobCandidate(
 function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): RootBlobCandidate | null {
   if (entry.byteLength <= maxBytes) return entry;
   if (entry.role !== "toolResult" || entry.text === undefined) return null;
-  const marker = "\n…[truncated for Cursor external replay budget]";
+  const marker = CURSOR_TRUNCATION_MARKER;
+
+  // 1. Try structured compaction first for Computer Use / large payloads
+  const compacted = compactComputerUsePayload(entry.text, maxBytes);
+  if (compacted !== entry.text) {
+    const candidate = rootBlobCandidate(
+      { role: "user", content: [{ type: "text", text: compacted }] },
+      "toolResult",
+      { messageIndex: entry.messageIndex, text: compacted },
+    );
+    if (candidate.byteLength <= maxBytes) return candidate;
+  }
+
   const encoded = encoder.encode(entry.text);
   // Leave headroom for JSON envelope (`role`/`content` wrapper) around the truncated text.
   let keepBytes = Math.min(encoded.byteLength, Math.max(0, maxBytes - encoder.encode(marker).byteLength - 96));
@@ -226,8 +243,9 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       }
       // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
     } else if (message.role === "toolResult") {
-      const prefix = message.isError ? "[Tool Error]" : "[Tool Result]";
-      const text = `${prefix}\n${toolResultToText(message)}`;
+      const { wireOutput, isError } = formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT });
+      const prefix = isError ? "[Tool Error]" : "[Tool Result]";
+      const text = `${prefix}\n${wireOutput}`;
       entries.push(rootBlobCandidate(
         { role: "user", content: [{ type: "text", text }] },
         "toolResult",
@@ -246,8 +264,8 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes);
 
     // Retain the active trailing tool-result block when it fits (may truncate text).
-    // If even a truncation marker cannot fit the remaining budget, omit it rather than
-    // emitting an oversized root blob.
+    // If even a truncation marker cannot fit the remaining budget, retain a minimal marker
+    // rather than dropping the active tool result completely (#1866).
     let activeStart = history.length;
     while (activeStart > 0 && history[activeStart - 1]?.role === "toolResult") activeStart -= 1;
     const active = history
@@ -265,8 +283,30 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
         active[0] = truncated;
         activeBytes = truncated.byteLength;
       } else {
-        active.length = 0;
-        activeBytes = 0;
+        const minimal = rootBlobCandidate(
+          { role: "user", content: [{ type: "text", text: `[Tool Result]\n${CURSOR_TRUNCATION_MARKER.trimStart()}` }] },
+          "toolResult",
+          { messageIndex: active[0].messageIndex, text: `[Tool Result]\n${CURSOR_TRUNCATION_MARKER.trimStart()}` },
+        );
+        if (minimal.byteLength <= historyBudget) {
+          active[0] = minimal;
+          activeBytes = minimal.byteLength;
+        } else {
+          active.length = 0;
+          activeBytes = 0;
+        }
+      }
+    } else if (active.length === 0 && history.length > activeStart) {
+      const lastActive = history[history.length - 1];
+      if (lastActive) {
+        const minimal = rootBlobCandidate(
+          { role: "user", content: [{ type: "text", text: `[Tool Result]\n${CURSOR_TRUNCATION_MARKER.trimStart()}` }] },
+          "toolResult",
+          { messageIndex: lastActive.messageIndex, text: `[Tool Result]\n${CURSOR_TRUNCATION_MARKER.trimStart()}` },
+        );
+        if (minimal.byteLength <= historyBudget) {
+          active.push(minimal);
+        }
       }
     }
 
@@ -333,14 +373,7 @@ function contentToText(content: OcxToolResultMessage["content"]): string {
 }
 
 function toolResultToText(message: OcxToolResultMessage): string {
-  return [
-    "[tool_result]",
-    `call_id: ${message.toolCallId}`,
-    `name: ${namespacedToolName(message.toolNamespace, message.toolName)}`,
-    `is_error: ${message.isError}`,
-    "output:",
-    contentToText(message.content),
-  ].join("\n");
+  return formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT }).wireOutput;
 }
 
 function argBytes(value: unknown): Uint8Array {
@@ -382,13 +415,14 @@ function toolCallStep(
 }
 
 function toolResultPart(message: OcxToolResultMessage) {
+  const formatted = formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT });
   return create(McpToolResultSchema, {
     result: {
       case: "success",
       value: create(McpSuccessSchema, {
-        isError: message.isError,
+        isError: formatted.isError,
         content: [create(McpToolResultContentItemSchema, {
-          content: { case: "text", value: create(McpTextContentSchema, { text: contentToText(message.content) }) },
+          content: { case: "text", value: create(McpTextContentSchema, { text: formatted.text }) },
         })],
       }),
     },
@@ -480,12 +514,13 @@ function conversationTurns(
     }
     if (message.role === "toolResult") {
       if (!current) continue;
+      const formatted = formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT });
       if (externalModel) {
-        const prefix = message.isError ? "[Tool Error]" : "[Tool Result]";
+        const prefix = formatted.isError ? "[Tool Error]" : "[Tool Result]";
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
             case: "assistantMessage",
-            value: create(AssistantMessageSchema, { text: `${prefix}\n${contentToText(message.content)}` }),
+            value: create(AssistantMessageSchema, { text: `${prefix}\n${formatted.text}` }),
           },
         })), requestScope));
         continue;
@@ -498,7 +533,7 @@ function conversationTurns(
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
             case: "assistantMessage",
-            value: create(AssistantMessageSchema, { text: toolResultToText(message) }),
+            value: create(AssistantMessageSchema, { text: formatted.wireOutput }),
           },
         })), requestScope));
       }
