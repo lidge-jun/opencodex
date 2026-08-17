@@ -1234,6 +1234,42 @@ test("CCA image fallback preserves upstream 429 status", async () => {
   }
 });
 
+test("CCA image fallback does not retry a transport failure on the peer host", async () => {
+  let calls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const hostname = new URL(requestUrl).hostname;
+    if (hostname === "daily-cloudcode-pa.googleapis.com") {
+      calls += 1;
+      throw new TypeError("fetch failed: connection reset after acceptance");
+    }
+    if (hostname === "cloudcode-pa.googleapis.com") {
+      calls += 1;
+      return Response.json({
+        response: {
+          candidates: [{
+            content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] },
+          }],
+        },
+      });
+    }
+    return originalFetch(input);
+  }) as typeof fetch;
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const request = new Request("http://localhost:0/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "a cat" }),
+  });
+  const response = await handleImages(request, ccaConfig(), "generations", { model: "", provider: "" } as never);
+
+  expect(response.status).toBe(502);
+  expect(calls).toBe(1);
+});
+
 test("CCA fallback does not serve image edits", async () => {
   saveConfig(ccaConfig());
   await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });

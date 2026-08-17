@@ -20,7 +20,7 @@ import {
 const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
-const CCA_STREAM_PROBE_MAX_BYTES = 100 * 1024 * 1024;
+export const CCA_STREAM_PROBE_MAX_BYTES = 100 * 1024 * 1024;
 
 function isAntigravitySseRequest(request: AdapterRequest): boolean {
   return request.url.includes("/v1internal:streamGenerateContent?alt=sse");
@@ -45,7 +45,7 @@ function retryAfterMs(value: string | null, now = Date.now()): number | undefine
   return Number.isFinite(timestamp) && timestamp > now ? timestamp - now : undefined;
 }
 
-type CcaSseProbe = "empty" | "candidate" | "unavailable" | "terminal";
+type CcaSseProbe = "empty" | "candidate" | "unavailable" | "quota_exhausted" | "geo_blocked" | "terminal";
 
 function probeCcaSseEvent(bytes: Uint8Array): CcaSseProbe {
   const text = new TextDecoder().decode(bytes);
@@ -73,6 +73,9 @@ function probeCcaSseEvent(bytes: Uint8Array): CcaSseProbe {
       if (status === "UNAVAILABLE" || status === "503" || code === 503 || code === "503") {
         return "unavailable";
       }
+      const serialized = JSON.stringify(frame);
+      if (isQuotaExhaustedBody(serialized)) return "quota_exhausted";
+      if (isAntigravityGeoBlockedBody(serialized)) return "geo_blocked";
       return "terminal";
     }
     const response = record.response;
@@ -83,20 +86,17 @@ function probeCcaSseEvent(bytes: Uint8Array): CcaSseProbe {
   return sawData ? "empty" : "empty";
 }
 
-class CcaProbeBuffer {
+export class CcaProbeBuffer {
   private storage = new Uint8Array(64 * 1024);
   length = 0;
 
-  append(next: Uint8Array): void {
+  append(next: Uint8Array): boolean {
     const required = this.length + next.byteLength;
+    if (required > CCA_STREAM_PROBE_MAX_BYTES) return false;
     if (required > this.storage.byteLength) {
       let capacity = this.storage.byteLength;
       while (capacity < required) {
         const grownCapacity = Math.min(CCA_STREAM_PROBE_MAX_BYTES, capacity * 2);
-        if (grownCapacity === capacity) {
-          capacity = required;
-          break;
-        }
         capacity = grownCapacity;
       }
       const grown = new Uint8Array(capacity);
@@ -105,6 +105,7 @@ class CcaProbeBuffer {
     }
     this.storage.set(next, this.length);
     this.length = required;
+    return true;
   }
 
   view(): Uint8Array {
@@ -128,12 +129,15 @@ function responseWithBufferedBody(
   response: Response,
   buffered: Uint8Array,
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  pending?: Uint8Array,
+  status = response.status,
 ): Response {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       void (async () => {
         try {
           if (buffered.byteLength > 0) controller.enqueue(buffered);
+          if (pending?.byteLength) controller.enqueue(pending);
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -152,7 +156,7 @@ function responseWithBufferedBody(
     },
   });
   return new Response(body, {
-    status: response.status,
+    status,
     statusText: response.statusText,
     headers: response.headers,
   });
@@ -161,6 +165,7 @@ function responseWithBufferedBody(
 async function prepareCcaSseResponse(
   response: Response,
   fetchPeer: () => Promise<Response>,
+  accountId?: string,
 ): Promise<Response> {
   if (!response.body) return fetchPeer();
   const reader = response.body.getReader();
@@ -182,27 +187,53 @@ async function prepareCcaSseResponse(
             reader.releaseLock();
             return fetchPeer();
           }
+          if (probe === "quota_exhausted" || probe === "geo_blocked") {
+            const status = probe === "quota_exhausted" ? 429 : 403;
+            if (accountId) {
+              recordAntigravityCooldown(
+                accountId,
+                probe === "quota_exhausted" ? "quota_exhausted" : "geo_blocked",
+              );
+            }
+            return responseWithBufferedBody(response, buffered, reader, undefined, status);
+          }
         }
         await reader.cancel().catch(() => {});
         reader.releaseLock();
         return fetchPeer();
       }
       if (!value?.byteLength) continue;
-      probeBuffer.append(value);
+      const available = CCA_STREAM_PROBE_MAX_BYTES - probeBuffer.length;
+      const overflow = value.byteLength > available ? value.subarray(available) : undefined;
+      probeBuffer.append(overflow ? value.subarray(0, available) : value);
       const buffered = probeBuffer.view();
       while (true) {
         const eventEnd = firstSseEventEnd(buffered, scanned);
         if (eventEnd === undefined) break;
         const probe = probeCcaSseEvent(buffered.subarray(scanned, eventEnd));
         scanned = eventEnd;
-        if (probe === "candidate") return responseWithBufferedBody(response, buffered, reader);
+        if (probe === "candidate") return responseWithBufferedBody(response, buffered, reader, overflow);
         if (probe === "unavailable") {
+          if (overflow?.byteLength) {
+            return responseWithBufferedBody(response, buffered, reader, overflow);
+          }
           await reader.cancel().catch(() => {});
           reader.releaseLock();
           return fetchPeer();
         }
-        if (probe === "terminal") return responseWithBufferedBody(response, buffered, reader);
+        if (probe === "quota_exhausted" || probe === "geo_blocked") {
+          const status = probe === "quota_exhausted" ? 429 : 403;
+          if (accountId) {
+            recordAntigravityCooldown(
+              accountId,
+              probe === "quota_exhausted" ? "quota_exhausted" : "geo_blocked",
+            );
+          }
+          return responseWithBufferedBody(response, buffered, reader, overflow, status);
+        }
+        if (probe === "terminal") return responseWithBufferedBody(response, buffered, reader, overflow);
       }
+      if (overflow?.byteLength) return responseWithBufferedBody(response, buffered, reader, overflow);
     }
     return responseWithBufferedBody(response, probeBuffer.view(), reader);
   } catch (error) {
@@ -281,6 +312,7 @@ async function fetchGoogleWithRetryInternal(
           return prepareCcaSseResponse(
             res,
             () => fetchGoogleWithRetryInternal(label, peerRequest, ctx, false),
+            ctx.accountId,
           );
         }
       }

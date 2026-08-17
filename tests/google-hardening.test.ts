@@ -3,7 +3,7 @@ import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/ada
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import { fetchAntigravityWithRetry } from "../src/adapters/google-http";
+import { CCA_STREAM_PROBE_MAX_BYTES, CcaProbeBuffer, fetchAntigravityWithRetry } from "../src/adapters/google-http";
 import { isAntigravityAccountInCooldown, clearAntigravityAccountCooldown } from "../src/oauth/antigravity-routing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -198,6 +198,13 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA probe buffer refuses bytes beyond its hard cap", () => {
+    const buffer = new CcaProbeBuffer();
+    expect(buffer.append(new Uint8Array(CCA_STREAM_PROBE_MAX_BYTES))).toBe(true);
+    expect(buffer.append(new Uint8Array(1))).toBe(false);
+    expect(buffer.length).toBe(CCA_STREAM_PROBE_MAX_BYTES);
+  });
+
   test("CCA peer failures use retry and final error normalization", async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
@@ -315,6 +322,40 @@ describe("google provider hardening", () => {
         accountId: "test-antigravity-account",
       });
       expect(response.status).toBe(403);
+      expect(calls).toBe(1);
+      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+      clearAntigravityAccountCooldown("test-antigravity-account");
+    }
+  });
+
+  test("CCA inline quota error becomes a cooldown-aware 429 without host failover", async () => {
+    clearAntigravityAccountCooldown("test-antigravity-account");
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return sseResponse([{
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Quota exceeded for this account",
+        },
+      }]);
+    }) as typeof fetch;
+    try {
+      const request = {
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      };
+      const response = await fetchAntigravityWithRetry(request, {
+        timeoutMs: 5_000,
+        accountId: "test-antigravity-account",
+      });
+      expect(response.status).toBe(429);
       expect(calls).toBe(1);
       expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
     } finally {

@@ -154,9 +154,11 @@ These are standalone Images API routes, not the hosted Responses `image_generati
 selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
 provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never
 falls through to another paid upstream. The relay accepts bounded JSON generation and edit requests,
-then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST receives
-one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
-existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
+then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST,
+including the Google Antigravity fallback, receives one upstream attempt; an ambiguous transport
+failure is never replayed on a peer host because the generation may already have been accepted.
+Client cancellation aborts the upstream and pool-only failures update the existing account-health
+state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
 When the OpenAI credential path is unavailable or its authentication fails, `generations` (not
 `edits`) may fall back to Google Antigravity if that provider is logged in. The fallback is
