@@ -1647,6 +1647,38 @@ describe("server combo failover 030 activation matrix", () => {
     expect(backupObserved).toBeUndefined();
   });
 
+  test("combo response state deep-merges provider-private payloads generically", async () => {
+    const { previousResponseProviderState } = await import("../src/responses/state");
+    let turn = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      turn += 1;
+      emit({ type: "text_delta", text: `turn-${turn}` });
+      emit({
+        type: "done",
+        providerState: turn === 1
+          ? { future: { stable: "keep", changed: "old" } }
+          : { future: { changed: "new" } },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-owned", "https://provider-a.test/v1", "key-a"),
+    }, [{ provider: "a", model: "m1" }]);
+
+    const first = await post(config, { input: "seed future provider state" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      previous_response_id: firstJson.id,
+      input: "update future provider state",
+    });
+    expect(second.status).toBe(200);
+    const secondJson = await second.json() as { id: string };
+
+    const stored = previousResponseProviderState(secondJson.id);
+    expect(stored?.future).toEqual({ stable: "keep", changed: "new" });
+    expect(stored?.__ocxOwner?.providerName).toBe("a");
+  });
+
   test("combo child retains the local id without inheriting unbound provider state", async () => {
     const { rememberResponseState } = await import("../src/responses/state");
     rememberResponseState(

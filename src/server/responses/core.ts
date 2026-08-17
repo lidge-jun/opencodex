@@ -395,6 +395,8 @@ function providerContinuationPayload(
   if (!state) return undefined;
   const cloned = structuredClone(state);
   delete cloned.__ocxOwner;
+  // Owner metadata alone is not provider continuation. Keep the restored payload absent instead
+  // of activating an empty object when an immutable snapshot captured only the ownership fence.
   return Object.keys(cloned).length > 0 ? cloned : undefined;
 }
 
@@ -2414,22 +2416,16 @@ async function handleResponsesInner(
     const inherited = providerContinuationPayload(parsed._providerContinuation);
     const emittedPayload = providerContinuationPayload(emitted);
     if (!emittedPayload && !inherited && !cursorConversationId) return undefined;
-    const merged: OcxProviderContinuationState = {
-      ...(inherited ?? {}),
-      ...(emittedPayload ?? {}),
-      ...((inherited?.kiro || emittedPayload?.kiro)
-        ? { kiro: { ...(inherited?.kiro ?? {}), ...(emittedPayload?.kiro ?? {}) } }
-        : {}),
-      ...(cursorConversationId
-        ? {
-            cursor: {
-              ...(inherited?.cursor ?? {}),
-              ...(emittedPayload?.cursor ?? {}),
-              conversationId: cursorConversationId,
-            },
-          }
-        : {}),
-    };
+    const merged: OcxProviderContinuationState = { ...(inherited ?? {}) };
+    for (const [provider, value] of Object.entries(emittedPayload ?? {})) {
+      const prior = merged[provider];
+      merged[provider] = prior && value
+        ? { ...prior, ...value }
+        : value;
+    }
+    if (cursorConversationId) {
+      merged.cursor = { ...(merged.cursor ?? {}), conversationId: cursorConversationId };
+    }
     return parsed._providerContinuationOwner
       ? { ...merged, __ocxOwner: { ...parsed._providerContinuationOwner } }
       : merged;
