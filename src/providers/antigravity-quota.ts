@@ -1,4 +1,5 @@
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
+import { readProviderQuotaJsonForTests } from "./quota";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota";
 
 const DAILY_HOST = "https://daily-cloudcode-pa.googleapis.com";
@@ -130,12 +131,8 @@ function hostCandidates(baseUrl: string): string[] {
   return [...new Set([configured, other])];
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return JSON.parse(await response.text()) as unknown;
-  } catch {
-    return undefined;
-  }
+async function readJson(response: Response, timeoutMs: number): Promise<unknown> {
+  return await readProviderQuotaJsonForTests(response, timeoutMs);
 }
 
 async function fetchRpc(
@@ -158,7 +155,7 @@ async function fetchRpc(
     signal: AbortSignal.timeout(args.timeoutMs),
   });
   if (!response.ok) throw new Error(`Antigravity quota RPC failed: ${response.status}`);
-  return readJson(response);
+  return readJson(response, args.timeoutMs);
 }
 
 async function fetchHostQuota(

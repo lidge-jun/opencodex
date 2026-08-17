@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../src/providers/quota";
+import {
+  clearProviderQuotaCache,
+  fetchProviderQuotaReports,
+  QUOTA_RESPONSE_MAX_BYTES,
+} from "../src/providers/quota";
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 
@@ -42,6 +46,16 @@ function catalogResponse(): Response {
         quotaInfo: { remainingFraction: 0.21, resetTime: "2026-08-21T15:00:00Z" },
       },
     },
+  });
+}
+
+function oversizedJsonResponse(value: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({
+    ...value,
+    padding: "x".repeat(QUOTA_RESPONSE_MAX_BYTES),
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
   });
 }
 
@@ -130,5 +144,35 @@ describe("Antigravity live quota", () => {
         quota: { customWindows: expect.any(Array) },
       }],
     });
+  });
+
+  test("fails open to the catalog when live RPC bodies exceed the quota JSON limit", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return oversizedJsonResponse({
+          buckets: [
+            { modelId: "gemini-3.6-pro", remainingFraction: 0.01 },
+          ],
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return oversizedJsonResponse({
+          weekly: { remainingPercentage: 1 },
+        });
+      }
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(), true);
+    const report = result.reports[0];
+
+    expect(report?.source).toBe("google-antigravity:fetchAvailableModels");
+    expect(report?.quota.customWindows).toEqual([
+      { label: "Gem", percent: 36, resetAt: Date.parse("2026-08-20T14:00:00Z") },
+      { label: "Cla", percent: 79, resetAt: Date.parse("2026-08-21T15:00:00Z") },
+    ]);
+    expect(report?.quota.weeklyPercent).toBeUndefined();
   });
 });
