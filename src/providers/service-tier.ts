@@ -178,10 +178,15 @@ export function serviceTierSupportForModel(
     ? provider.adapter
     : serviceTierAdapterForModel(providerName, provider, modelId, inbound);
   if (!SERVICE_TIER_ADAPTERS.has(adapter)) return false;
+  // xAI Fast is verified only on its canonical API-key Chat transport. Keep every other xAI
+  // wire fail-closed even if it happens to use another OpenAI-compatible adapter.
+  if (isXaiPriorityProvider(providerName)) {
+    if (adapter !== "openai-chat") return false;
+    return canSerializeServiceTierForChatModel(provider, modelId, providerName) ? true : false;
+  }
   // Treat the Chat serializer decision as authoritative so catalog metadata, routing
   // evidence, fast-mode injection, and caller-tier stripping cannot claim support that the
-  // final request builder will omit. For xAI, this additionally binds Priority Processing to
-  // the canonical API-key transport; custom and OAuth/CLI destinations remain fail-closed.
+  // final request builder will omit.
   if (adapter === "openai-chat") {
     return canSerializeServiceTierForChatModel(provider, modelId, providerName) ? true : false;
   }
