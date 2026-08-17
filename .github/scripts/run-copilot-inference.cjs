@@ -22,6 +22,11 @@ const prompt = systemPrompt
   ? `${systemPrompt}\n\n${userPrompt}`
   : userPrompt;
 
+const rawTimeout = Number(process.env.COPILOT_TIMEOUT_MS || 120_000);
+const timeout = Number.isFinite(rawTimeout) && rawTimeout > 0
+  ? Math.floor(rawTimeout)
+  : 120_000;
+
 const args = [
   '-s',
   '--no-ask-user',
@@ -34,14 +39,18 @@ const result = spawnSync('copilot', args, {
   encoding: 'utf8',
   env: process.env,
   maxBuffer: 16 * 1024 * 1024,
+  timeout,
+  killSignal: 'SIGKILL',
 });
-
-if (result.error) {
-  fail(`Failed to spawn Copilot CLI: ${result.error.message}`);
-}
 
 if (result.stderr) {
   process.stderr.write(result.stderr);
+}
+
+if (result.error) {
+  const errorCode = result.error.code || 'spawn_error';
+  const signal = result.signal || 'none';
+  fail(`Copilot CLI execution failed (${errorCode}; signal=${signal}): ${result.error.message}`);
 }
 
 if (result.status !== 0) {
