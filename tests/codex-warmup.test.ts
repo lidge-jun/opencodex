@@ -82,6 +82,27 @@ describe("codex warmup", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("aborts a silent SSE body at the warmup deadline without waiting for cancellation", async () => {
+    let cancelled = false;
+    const silentBody = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    globalThis.fetch = (async () => new Response(silentBody, { status: 200 })) as typeof fetch;
+
+    const startedAt = performance.now();
+    await expect(warmCodexAccount({
+      accessToken: "a",
+      chatgptAccountId: "c",
+      timeoutMs: 20,
+    })).rejects.toMatchObject({ name: "CodexWarmupError", code: "transport" });
+
+    expect(cancelled).toBe(true);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
   test("accepts a completed SSE stream at the exact byte limit", async () => {
     const encoder = new TextEncoder();
     const terminal = 'data: {"type":"response.completed"}\n\n';
@@ -94,6 +115,39 @@ describe("codex warmup", () => {
 
     await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c" })).resolves.toBeUndefined();
   });
+
+  test("accepts mixed LF and CRLF blank-line delimiters", async () => {
+    for (const delimiter of ["\n\n", "\r\n\n", "\n\r\n", "\r\n\r\n"]) {
+      globalThis.fetch = (async () => sseResponse(
+        `data: {"type":"response.completed"}${delimiter}`,
+      )) as typeof fetch;
+      await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c" })).resolves.toBeUndefined();
+    }
+  });
+
+  test("parses a heavily fragmented unterminated frame without rescanning its prefix", async () => {
+    const bytes = new TextEncoder().encode(
+      `:${"x".repeat(256 * 1024)}\n\r\ndata: {"type":"response.completed"}\r\n\n`,
+    );
+    let offset = 0;
+    const fragmentedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= bytes.byteLength) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(bytes.subarray(offset, offset + 1));
+        offset += 1;
+      },
+    });
+    globalThis.fetch = (async () => new Response(fragmentedBody, { status: 200 })) as typeof fetch;
+
+    await expect(warmCodexAccount({
+      accessToken: "a",
+      chatgptAccountId: "c",
+      timeoutMs: 10_000,
+    })).resolves.toBeUndefined();
+  }, 15_000);
 
   test("rejects EOF before success terminal", async () => {
     globalThis.fetch = (async () => sseResponse('event: response.created\ndata: {"type":"response.created"}\n\n')) as typeof fetch;
@@ -117,7 +171,9 @@ describe("codex warmup", () => {
   });
 
   test("classifies invalid timeout options as transport failures", async () => {
-    await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c", timeoutMs: -1 }))
-      .rejects.toMatchObject({ name: "CodexWarmupError", code: "transport" });
+    for (const timeoutMs of [-1, 0x8000_0000]) {
+      await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c", timeoutMs }))
+        .rejects.toMatchObject({ name: "CodexWarmupError", code: "transport" });
+    }
   });
 });
