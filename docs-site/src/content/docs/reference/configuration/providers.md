@@ -300,7 +300,7 @@ Cursor-specific model parameters:
 If a proxy cannot carry Cursor's default HTTP/2 stream, set `upstreamHttpVersion` to `"http1.1"`.
 This switches inference to Cursor's `RunSSE` + `BidiAppend` compatibility transport and uses
 HTTP/1.1 for `GetUsableModels` discovery as well. Leave it unset or use `"auto"` for the existing
-HTTP/2 behavior.
+HTTP/2 behavior. In the dashboard choose **Providers → Cursor → Settings → Cursor transport**.
 
 | Codex model | Cursor Router mode |
 | --- | --- |
@@ -336,8 +336,8 @@ Cursor server-driven local tools are disabled by default. Codex continues using 
 }
 ```
 
-Set the field on `providers.cursor`, not at the top level. In the dashboard use **Providers → Cursor
-→ Edit JSON**, save, then restart. Legacy `unsafeAllowNativeLocalExec: true` equals
+Set `nativeLocalExec` on `providers.cursor`, not at the top level. In the dashboard use **Providers
+→ Cursor → Edit JSON**, save, then restart. Legacy `unsafeAllowNativeLocalExec: true` equals
 `nativeLocalExec: "on"` only when `nativeLocalExec` is unset. MCP, screen recording, and computer use
 are controlled separately by `mcpServers` and `desktopExecutor`.
 

@@ -366,7 +366,8 @@ adapter。若要将没有内置默认值的模型（例如 `gpt-5.4-nano`）接�
 Cursor 作为单独的实验性 adapter 进行跟踪。`adapter: "cursor"` 会作为实验性本地配置出现在
 `ocx init` 和 dashboard Add Provider picker 中，并保存 Cursor 的静态回退模型目录 metadata。配置
 Cursor access token 后，opencodex 会使用 Cursor live HTTP/2 transport。代理要求 Cursor 的
-HTTP/1.1 兼容路径时，可设置 `upstreamHttpVersion: "http1.1"`；该设置同时覆盖推理与实时模型发现。内置回退列表包含上下文为
+HTTP/1.1 兼容路径时，可设置 `upstreamHttpVersion: "http1.1"`；该设置同时覆盖推理与实时模型发现，
+并可在 **Providers → Cursor → 设置 → Cursor 传输协议** 中选择。内置回退列表包含上下文为
 1M 的 `gpt-5.6-sol` / `terra` / `luna`、上下文为 500K 的 Grok 4.5/4.6 普通与 Fast 条目，以及上下文为
 262K 的 `kimi-k3`；最终显示哪些模型由账号的实时发现结果决定。Grok 4.6 的两种形式均提供
 `low` / `medium` / `high` / `xhigh`，而 4.5 最高为 `high`。Fast 请求会发送对应的 Grok 基础模型，

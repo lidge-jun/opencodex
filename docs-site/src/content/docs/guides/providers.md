@@ -512,7 +512,8 @@ Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` app
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
 fallback model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's
 live HTTP/2 transport. Set `upstreamHttpVersion: "http1.1"` when a proxy requires Cursor's HTTP/1.1
-compatibility path; the setting covers both inference and live model discovery. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
+compatibility path; the setting covers both inference and live model discovery and is exposed at
+**Providers → Cursor → Settings → Cursor transport**. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
 regular/Fast rows for Grok 4.5 and 4.6 (500K), and `kimi-k3` (262K); live discovery decides which
 remain visible for the account. Grok 4.6 exposes `low` / `medium` / `high` / `xhigh` in both forms,
 while 4.5 stops at `high`. Fast requests send the matching base Grok model with separate `effort`
