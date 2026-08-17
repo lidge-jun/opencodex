@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   ANTIGRAVITY_IDE_VERSION,
-  ANTIGRAVITY_GOOG_API_CLIENT_UA,
   CLAUDE_CODE_HEADERS,
   antigravityUserAgent,
   claudeCodeSessionId,
@@ -40,10 +39,6 @@ describe("client fingerprint — helpers", () => {
       if (prev === undefined) delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
       else process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = prev;
     }
-  });
-
-  test("secondary google api client UA is pinned", async () => {
-    expect(ANTIGRAVITY_GOOG_API_CLIENT_UA).toMatch(/^google-api-nodejs-client\/[\d.]+$/);
   });
 
   test("claude session id is a stable v4-shaped uuid per token", async () => {

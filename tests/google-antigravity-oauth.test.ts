@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { ANTIGRAVITY_IDE_VERSION } from "../src/adapters/client-fingerprint";
 import { discoverAntigravityProject, refreshAntigravityToken } from "../src/oauth/google-antigravity";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +38,14 @@ describe("antigravity project discovery", () => {
 
   test("falls back to onboardUser poll loop (not-done then done)", async () => {
     let onboardCalls = 0;
-    routeFetch((url) => {
+    routeFetch((url, init) => {
+      if (url.includes(":onboardUser")) {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers["x-goog-api-client"]).toBeUndefined();
+        expect(headers["User-Agent"]).toMatch(/^antigravity\/ide\//);
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.metadata?.ide_version).toBe(ANTIGRAVITY_IDE_VERSION);
+      }
       if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({}), { status: 200 }); // no project
       if (url.includes(":onboardUser")) {
         onboardCalls++;

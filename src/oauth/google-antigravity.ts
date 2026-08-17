@@ -12,7 +12,7 @@
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
-import { antigravityUserAgent, ANTIGRAVITY_GOOG_API_CLIENT_UA } from "../adapters/client-fingerprint";
+import { ANTIGRAVITY_IDE_VERSION, antigravityUserAgent } from "../adapters/client-fingerprint";
 
 const CLIENT_ID = process.env.GOOGLE_ANTIGRAVITY_CLIENT_ID
   || "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
@@ -110,8 +110,8 @@ async function onboardProject(accessToken: string, signal?: AbortSignal): Promis
     if (signal?.aborted) throw signal.reason ?? new Error("Antigravity onboarding aborted");
     const response = await fetch(`${DAILY_API}/${API_VERSION}:onboardUser`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent(), "x-goog-api-client": ANTIGRAVITY_GOOG_API_CLIENT_UA },
-      body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity", ide_version: antigravityUserAgent() } }),
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent() },
+      body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity", ide_version: ANTIGRAVITY_IDE_VERSION } }),
       signal: requestSignal(signal),
     });
     if (!response.ok) {
