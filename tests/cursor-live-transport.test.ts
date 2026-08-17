@@ -106,6 +106,36 @@ describe("Cursor live transport", () => {
     await transport.close?.();
   });
 
+  test("marks the native exec context when a turn advertises code mode", async () => {
+    const transport = createLiveCursorTransport({
+      provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
+      translatorBudget: createTestTranslatorBudget(),
+      headers: new Headers(),
+    });
+    const internals = transport as unknown as {
+      execContext: { codeMode?: boolean };
+      open(): void;
+    };
+    internals.open = () => { throw new Error("stop-after-context"); };
+
+    const iterator = transport.run({
+      modelId: "composer-2.5",
+      conversationId: "code-mode-native-context",
+      system: [],
+      messages: [{ role: "user", content: "read the workspace" }],
+      tools: [{
+        name: "exec",
+        description: "Run JavaScript code to orchestrate nested tool calls.",
+        parameters: {},
+        freeform: true,
+      }],
+    })[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).rejects.toThrow("stop-after-context");
+    expect(internals.execContext.codeMode).toBe(true);
+    await transport.close?.();
+  });
+
   test("fails before network when no Cursor credential is configured", () => {
     const prev = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
     delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;

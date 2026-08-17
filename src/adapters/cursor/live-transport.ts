@@ -66,6 +66,7 @@ import { desktopDepsFromConfig } from "./native-exec-desktop";
 import {
   buildCursorToolDefinitions,
   cursorRequestAdvertisesApplyPatch,
+  cursorRequestUsesCodeMode,
   cursorRequestHasShellAlias,
   cursorToolArgNormalizeSchema,
   cursorToolWireName,
@@ -557,6 +558,7 @@ class LiveCursorTransport implements CursorTransport {
     this.execContext = {
       ...this.execContext,
       clientToolDefs,
+      codeMode: cursorRequestUsesCodeMode(request.tools, request.toolChoice),
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
       structuredEditAvailable: syntheticStructuredEditToolNames.size > 0,
     };

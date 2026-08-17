@@ -23,6 +23,7 @@ import {
 } from "./gen/agent_pb";
 import { errorText, execBytes } from "./native-exec-common";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
+import { codeModeNestedHelperGuidance } from "./native-exec-guidance";
 
 export interface CursorNativeToolDeps {
   mcp?: (args: McpArgs) => McpResult | Promise<McpResult>;
@@ -30,6 +31,12 @@ export interface CursorNativeToolDeps {
   readMcpResource?: (args: ReadMcpResourceExecArgs) => ReadMcpResourceExecResult | Promise<ReadMcpResourceExecResult>;
   computerUse?: (args: ComputerUseArgs) => ComputerUseResult | Promise<ComputerUseResult>;
   recordScreen?: (args: RecordScreenArgs) => RecordScreenResult | Promise<RecordScreenResult>;
+  codeMode?: boolean;
+}
+
+function missingMcpResourceExecutorMessage(codeMode?: boolean): string {
+  const guidance = codeModeNestedHelperGuidance(codeMode);
+  return guidance ?? "No local MCP resource executor is configured inside opencodex.";
 }
 
 export async function mcpExec(execMsg: ExecServerMessage, deps: CursorNativeToolDeps): Promise<Uint8Array> {
@@ -60,7 +67,7 @@ export async function listMcpResourcesExec(execMsg: ExecServerMessage, deps: Cur
     ? await deps.listMcpResources()
     : create(ListMcpResourcesExecResultSchema, {
         result: { case: "error", value: create(ListMcpResourcesErrorSchema, {
-          error: "No local MCP resource executor is configured inside opencodex.",
+          error: missingMcpResourceExecutorMessage(deps.codeMode),
         }) },
       });
   return execBytes(execMsg, "listMcpResourcesExecResult", result);
@@ -73,7 +80,7 @@ export async function readMcpResourceExec(execMsg: ExecServerMessage, deps: Curs
     const result = deps.readMcpResource
       ? await deps.readMcpResource(args)
       : create(ReadMcpResourceExecResultSchema, {
-        result: { case: "error", value: create(ReadMcpResourceErrorSchema, { uri: args.uri, error: "No local MCP resource executor is configured inside opencodex." }) },
+        result: { case: "error", value: create(ReadMcpResourceErrorSchema, { uri: args.uri, error: missingMcpResourceExecutorMessage(deps.codeMode) }) },
       });
     return execBytes(execMsg, "readMcpResourceExecResult", result);
   } catch (err) {

@@ -504,20 +504,20 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     }))];
   }
   if (!cursorUnsafeNativeLocalExecEnabled(deps)) {
-    if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg)];
-    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg)];
-    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg)];
-    if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg)];
-    if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg)];
-    if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg)];
-    if (execCase === "shellStreamArgs") return rejectShellStreamExecForPolicy(execMsg);
-    if (execCase === "backgroundShellSpawnArgs") return [rejectBackgroundShellSpawnExecForPolicy(execMsg)];
-    if (execCase === "writeShellStdinArgs") return [rejectWriteShellStdinExecForPolicy(execMsg)];
-    if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg)];
+    if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "shellStreamArgs") return rejectShellStreamExecForPolicy(execMsg, deps.codeMode);
+    if (execCase === "backgroundShellSpawnArgs") return [rejectBackgroundShellSpawnExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "writeShellStdinArgs") return [rejectWriteShellStdinExecForPolicy(execMsg, deps.codeMode)];
+    if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg, deps.codeMode)];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];
-  if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : writeExec(execMsg)];
-  if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : deleteExec(execMsg)];
+  if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true, deps.codeMode) : writeExec(execMsg)];
+  if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true, deps.codeMode) : deleteExec(execMsg)];
   if (execCase === "lsArgs") return [lsExec(execMsg)];
   if (execCase === "grepArgs") return [grepExec(execMsg)];
   if (execCase === "shellArgs") return [shellExec(execMsg)];

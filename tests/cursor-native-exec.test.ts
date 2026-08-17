@@ -191,6 +191,56 @@ describe("Cursor native exec bridge", () => {
     }
   });
 
+  test("routes denied native operations through the nested code-mode helpers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-code-mode-"));
+    const path = join(dir, "note.txt");
+
+    const deniedRead = decode((await handleCursorNativeExec(execMessage({
+      case: "readArgs",
+      value: create(ReadArgsSchema, { path }),
+    }), { codeMode: true }))[0]);
+    const deniedShell = decode((await handleCursorNativeExec(execMessage({
+      case: "shellArgs",
+      value: create(ShellArgsSchema, { command: "printf blocked", workingDirectory: dir }),
+    }), { codeMode: true }))[0]);
+    const deniedFetch = decode((await handleCursorNativeExec(execMessage({
+      case: "fetchArgs",
+      value: create(FetchArgsSchema, { url: "https://example.test/doc" }),
+    }), { codeMode: true }))[0]);
+    const missingResourceExecutor = decode((await handleCursorNativeExec(execMessage({
+      case: "readMcpResourceExecArgs",
+      value: create(ReadMcpResourceExecArgsSchema, { server: "fixture", uri: "memory://doc" }),
+    }), { codeMode: true }))[0]);
+
+    for (const reply of [deniedRead, deniedShell, deniedFetch]) {
+      const guidance = JSON.stringify(reply);
+      expect(guidance).toContain("top-level `exec`");
+      expect(guidance).toContain("await tools.exec_command");
+      expect(guidance).toContain("text(...)");
+      expect(guidance).toContain("Do not call `shell_command`");
+      expect(guidance).not.toContain("silently call that bridge tool");
+    }
+    const resourceGuidance = JSON.stringify(missingResourceExecutor);
+    expect(resourceGuidance).toContain("top-level `exec`");
+    expect(resourceGuidance).toContain("await tools.<helper>");
+    expect(resourceGuidance).toContain("text(...)");
+    expect(resourceGuidance).toContain("Do not call nested helper names as top-level tools");
+
+    const deniedWrite = decode((await handleCursorNativeExec(execMessage({
+      case: "writeArgs",
+      value: create(WriteArgsSchema, { path, fileText: "blocked" }),
+    }), {
+      unsafeAllowNativeLocalExec: true,
+      rejectNativeFileMutations: true,
+      codeMode: true,
+    }))[0]);
+    const writeGuidance = JSON.stringify(deniedWrite);
+    expect(writeGuidance).toContain("top-level `exec`");
+    expect(writeGuidance).toContain("await tools.apply_patch");
+    expect(writeGuidance).toContain("Do not call `apply_patch` as a top-level tool");
+    expect(existsSync(path)).toBe(false);
+  });
+
   test("writes and reads files in a temp directory with unsafe opt-in", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-exec-"));
     const path = join(dir, "note.txt");
