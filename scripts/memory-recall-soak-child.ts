@@ -30,13 +30,22 @@ try {
   console.error("memory-recall-soak-child: --upstream must be a URL");
   process.exit(2);
 }
-if (upstreamUrl.hostname !== "127.0.0.1" && upstreamUrl.hostname !== "localhost" && upstreamUrl.hostname !== "::1") {
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+if (upstreamUrl.protocol !== "http:" && upstreamUrl.protocol !== "https:") {
+  console.error("memory-recall-soak-child: --upstream must be http or https");
+  process.exit(2);
+}
+if (!LOOPBACK_HOSTNAMES.has(upstreamUrl.hostname)) {
   console.error("memory-recall-soak-child: upstream must be loopback");
   process.exit(2);
 }
 
 const home = mkdtempSync(join(tmpdir(), "ocx-memory-recall-soak-"));
 process.env.OPENCODEX_HOME = home;
+function cleanupHome(): void {
+  try { rmSync(home, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
+}
+process.on("exit", cleanupHome);
 
 const [configModule, serverModule, memoryModule, lifecycleModule, relayModule, responseStateModule] = await Promise.all([
   import("../src/config"),
@@ -94,7 +103,7 @@ async function closeAndExit(code: number): Promise<never> {
   closing = true;
   try { await proxy.stop(true); } catch { /* best-effort probe teardown */ }
   try { control?.stop(true); } catch { /* best-effort probe teardown */ }
-  try { rmSync(home, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
+  cleanupHome();
   process.exit(code);
 }
 
