@@ -344,7 +344,7 @@ async function discardChildStderr(): Promise<void> {
 }
 
 void consumeChildStdout().catch(error => rejectReady?.(error instanceof Error ? error : new Error(String(error))));
-void discardChildStderr();
+void discardChildStderr().catch(() => {});
 void child.exited.then(code => {
   if (resolveReady) rejectReady?.(new Error(`proxy child exited before readiness with code ${code}`));
 });
@@ -535,8 +535,8 @@ function appendRecallOutput(input: Array<Record<string, unknown>>, item: Record<
   input.push({ type: "function_call_output", call_id: callId, output: marker });
 }
 
-function makeSessionState(name: string, index: number): SessionState {
-  const id = `${name}-${index}`;
+function makeSessionState(workloadKey: string, index: number): SessionState {
+  const id = `${workloadKey}-${index}`;
   return {
     id,
     input: [{
@@ -621,13 +621,14 @@ async function waitForIdle(controlBase: URL): Promise<ProbeMetrics> {
 
 async function runWave(
   name: string,
+  workloadKey: string,
   sessions: number,
   rounds: number,
   proxyBase: URL,
   controlBase: URL,
 ): Promise<WaveResult> {
   const started = Date.now();
-  const states = Array.from({ length: sessions }, (_, index) => makeSessionState(name, index));
+  const states = Array.from({ length: sessions }, (_, index) => makeSessionState(workloadKey, index));
   const samples: ProbeMetrics[] = [];
   let monitoring = true;
   const monitor = (async () => {
@@ -684,6 +685,8 @@ async function runWave(
     peaks: result.peaks,
     idleRss: idle.rss,
     idleRetainedBytes: idle.appOwnedBytes.retainedBytes,
+    idleInspectionCounters: idle.inspectionCounters,
+    idleResponseState: idle.responseState,
     durationMs: result.durationMs,
     firstFailure: states.find(state => state.failure)?.failure,
   });
@@ -779,13 +782,21 @@ try {
   for (let wave = 0; wave < options.sustainedWaves; wave++) {
     sustained.push(await runWave(
       `sustained-${wave}`,
+      "sustained",
       options.sustainedSessions,
       options.sustainedRounds,
       proxyBase,
       controlBase,
     ));
   }
-  const burst = await runWave("burst", options.burstSessions, options.burstRounds, proxyBase, controlBase);
+  const burst = await runWave(
+    "burst",
+    "burst",
+    options.burstSessions,
+    options.burstRounds,
+    proxyBase,
+    controlBase,
+  );
   const faultOutcomes = await runFaultWave(proxyBase, controlBase);
   const final = await waitForIdle(controlBase);
 
@@ -812,6 +823,8 @@ try {
     finalPinnedBytes: final.appOwnedBytes.pinnedBytes,
     finalOverBudgetBytes: final.appOwnedBytes.overBudgetBytes,
     finalActiveTurnCount: final.activeTurnCount,
+    finalInspectionCounters: final.inspectionCounters,
+    finalResponseState: final.responseState,
     faultOutcomes,
     note: "Process-memory slopes are profiling evidence only; PASS is based on protocol completion and app-owned cleanup invariants.",
   });
