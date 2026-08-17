@@ -128,6 +128,24 @@ async function readJson(response: Response, timeoutMs: number): Promise<unknown>
   return await readProviderQuotaJsonForTests(response, timeoutMs);
 }
 
+class AntigravityQuotaRpcError extends Error {
+  constructor(readonly status: number) {
+    super(`Antigravity quota RPC failed: ${status}`);
+  }
+}
+
+function isHttpsHost(host: string): boolean {
+  try {
+    return new URL(host).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function shouldRetryPeer(status: number): boolean {
+  return status === 404 || status === 503;
+}
+
 async function fetchRpc(
   fetchImpl: FetchImpl,
   host: string,
@@ -147,7 +165,7 @@ async function fetchRpc(
     redirect: "error",
     signal: AbortSignal.timeout(args.timeoutMs),
   });
-  if (!response.ok) throw new Error(`Antigravity quota RPC failed: ${response.status}`);
+  if (!response.ok) throw new AntigravityQuotaRpcError(response.status);
   return readJson(response, args.timeoutMs);
 }
 
@@ -156,25 +174,33 @@ async function fetchHostQuota(
   host: string,
   args: AntigravityLiveQuotaArgs,
 ): Promise<ProviderQuota | null> {
-  try {
-    const [quotaPayload, summaryPayload] = await Promise.all([
-      fetchRpc(fetchImpl, host, "retrieveUserQuota", args),
-      fetchRpc(fetchImpl, host, "retrieveUserQuotaSummary", args),
-    ]);
-    const gem = parseGeminiWindow(quotaPayload);
-    const weekly = parseWeeklyWindow(summaryPayload);
-    if (!gem && !weekly) return null;
-    return {
-      ...(gem ? { customWindows: [gem] } : {}),
-      ...(weekly ? {
-        weeklyPercent: weekly.percent,
-        ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
-      } : {}),
-      updatedAt: Date.now(),
-    };
-  } catch {
-    return null;
+  const [quotaResult, summaryResult] = await Promise.allSettled([
+    fetchRpc(fetchImpl, host, "retrieveUserQuota", args),
+    fetchRpc(fetchImpl, host, "retrieveUserQuotaSummary", args),
+  ]);
+  for (const result of [quotaResult, summaryResult]) {
+    if (
+      result.status === "rejected"
+      && result.reason instanceof AntigravityQuotaRpcError
+      && !shouldRetryPeer(result.reason.status)
+    ) {
+      throw result.reason;
+    }
   }
+  if (quotaResult.status === "rejected" || summaryResult.status === "rejected") return null;
+  const quotaPayload = quotaResult.value;
+  const summaryPayload = summaryResult.value;
+  const gem = parseGeminiWindow(quotaPayload);
+  const weekly = parseWeeklyWindow(summaryPayload);
+  if (!gem && !weekly) return null;
+  return {
+    ...(gem ? { customWindows: [gem] } : {}),
+    ...(weekly ? {
+      weeklyPercent: weekly.percent,
+      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    updatedAt: Date.now(),
+  };
 }
 
 export async function fetchAntigravityLiveQuota(
@@ -182,8 +208,13 @@ export async function fetchAntigravityLiveQuota(
 ): Promise<ProviderQuota | null> {
   const fetchImpl = args.fetchImpl ?? fetch;
   for (const host of antigravityHostCandidates(args.baseUrl)) {
-    const quota = await fetchHostQuota(fetchImpl, host, args);
-    if (quota) return quota;
+    if (!isHttpsHost(host)) continue;
+    try {
+      const quota = await fetchHostQuota(fetchImpl, host, args);
+      if (quota) return quota;
+    } catch {
+      return null;
+    }
   }
   return null;
 }

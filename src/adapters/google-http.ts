@@ -21,6 +21,7 @@ const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
 export const CCA_STREAM_PROBE_MAX_BYTES = 100 * 1024 * 1024;
+export const CCA_STREAM_CLASSIFY_MAX_BYTES = 256 * 1024;
 
 function isAntigravitySseRequest(request: AdapterRequest): boolean {
   return request.url.includes("/v1internal:streamGenerateContent?alt=sse");
@@ -87,17 +88,21 @@ function probeCcaSseEvent(bytes: Uint8Array): CcaSseProbe {
 }
 
 export class CcaProbeBuffer {
-  private storage = new Uint8Array(64 * 1024);
+  private storage: Uint8Array;
   length = 0;
+
+  constructor(private readonly maxBytes = CCA_STREAM_PROBE_MAX_BYTES) {
+    this.storage = new Uint8Array(Math.min(64 * 1024, maxBytes));
+  }
 
   append(next: Uint8Array): boolean {
     const required = this.length + next.byteLength;
-    if (required > CCA_STREAM_PROBE_MAX_BYTES) return false;
+    if (required > this.maxBytes) return false;
     if (required > this.storage.byteLength) {
-      let capacity = this.storage.byteLength;
+      let capacity = Math.max(this.storage.byteLength, 1);
       while (capacity < required) {
-        const grownCapacity = Math.min(CCA_STREAM_PROBE_MAX_BYTES, capacity * 2);
-        capacity = grownCapacity;
+        const grownCapacity = Math.min(this.maxBytes, capacity * 2);
+        capacity = grownCapacity <= capacity ? this.maxBytes : grownCapacity;
       }
       const grown = new Uint8Array(capacity);
       grown.set(this.storage.subarray(0, this.length));
@@ -164,15 +169,26 @@ function responseWithBufferedBody(
 
 async function prepareCcaSseResponse(
   response: Response,
-  fetchPeer: () => Promise<Response>,
+  fetchPeer: (() => Promise<Response>) | undefined,
   accountId?: string,
 ): Promise<Response> {
-  if (!response.body) return fetchPeer();
+  if (!response.body) return fetchPeer ? fetchPeer() : response;
   const reader = response.body.getReader();
   const probeBuffer = new CcaProbeBuffer();
   let scanned = 0;
+  const passthrough = (pending?: Uint8Array, status = response.status) =>
+    responseWithBufferedBody(response, probeBuffer.view(), reader, pending, status);
+  const failoverOrPassthrough = async (): Promise<Response> => {
+    if (!fetchPeer) return passthrough();
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+    return fetchPeer();
+  };
   try {
     while (probeBuffer.length < CCA_STREAM_PROBE_MAX_BYTES) {
+      if (scanned >= CCA_STREAM_CLASSIFY_MAX_BYTES || probeBuffer.length >= CCA_STREAM_CLASSIFY_MAX_BYTES) {
+        return passthrough();
+      }
       const { done, value } = await reader.read();
       if (done) {
         const buffered = probeBuffer.view();
@@ -180,12 +196,10 @@ async function prepareCcaSseResponse(
         if (residual.byteLength > 0) {
           const probe = probeCcaSseEvent(residual);
           if (probe === "candidate" || probe === "terminal") {
-            return responseWithBufferedBody(response, buffered, reader);
+            return passthrough();
           }
           if (probe === "unavailable") {
-            await reader.cancel().catch(() => {});
-            reader.releaseLock();
-            return fetchPeer();
+            return failoverOrPassthrough();
           }
           if (probe === "quota_exhausted" || probe === "geo_blocked") {
             const status = probe === "quota_exhausted" ? 429 : 403;
@@ -195,12 +209,10 @@ async function prepareCcaSseResponse(
                 probe === "quota_exhausted" ? "quota_exhausted" : "geo_blocked",
               );
             }
-            return responseWithBufferedBody(response, buffered, reader, undefined, status);
+            return passthrough(undefined, status);
           }
         }
-        await reader.cancel().catch(() => {});
-        reader.releaseLock();
-        return fetchPeer();
+        return failoverOrPassthrough();
       }
       if (!value?.byteLength) continue;
       const available = CCA_STREAM_PROBE_MAX_BYTES - probeBuffer.length;
@@ -208,18 +220,17 @@ async function prepareCcaSseResponse(
       probeBuffer.append(overflow ? value.subarray(0, available) : value);
       const buffered = probeBuffer.view();
       while (true) {
+        if (scanned >= CCA_STREAM_CLASSIFY_MAX_BYTES) return passthrough(overflow);
         const eventEnd = firstSseEventEnd(buffered, scanned);
         if (eventEnd === undefined) break;
         const probe = probeCcaSseEvent(buffered.subarray(scanned, eventEnd));
         scanned = eventEnd;
-        if (probe === "candidate") return responseWithBufferedBody(response, buffered, reader, overflow);
+        if (probe === "candidate") return passthrough(overflow);
         if (probe === "unavailable") {
           if (overflow?.byteLength) {
-            return responseWithBufferedBody(response, buffered, reader, overflow);
+            return passthrough(overflow);
           }
-          await reader.cancel().catch(() => {});
-          reader.releaseLock();
-          return fetchPeer();
+          return failoverOrPassthrough();
         }
         if (probe === "quota_exhausted" || probe === "geo_blocked") {
           const status = probe === "quota_exhausted" ? 429 : 403;
@@ -229,13 +240,16 @@ async function prepareCcaSseResponse(
               probe === "quota_exhausted" ? "quota_exhausted" : "geo_blocked",
             );
           }
-          return responseWithBufferedBody(response, buffered, reader, overflow, status);
+          return passthrough(overflow, status);
         }
-        if (probe === "terminal") return responseWithBufferedBody(response, buffered, reader, overflow);
+        if (probe === "terminal") return passthrough(overflow);
       }
-      if (overflow?.byteLength) return responseWithBufferedBody(response, buffered, reader, overflow);
+      if (overflow?.byteLength) return passthrough(overflow);
+      if (scanned >= CCA_STREAM_CLASSIFY_MAX_BYTES || probeBuffer.length >= CCA_STREAM_CLASSIFY_MAX_BYTES) {
+        return passthrough();
+      }
     }
-    return responseWithBufferedBody(response, probeBuffer.view(), reader);
+    return passthrough();
   } catch (error) {
     try { await reader.cancel(error); } catch { /* cleanup only */ }
     reader.releaseLock();
@@ -307,14 +321,17 @@ async function fetchGoogleWithRetryInternal(
           activeRequest = requestForHost(request, antigravityHosts[antigravityHostIndex]!);
           continue;
         }
-        if (res.ok) {
-          const peerRequest = requestForHost(request, antigravityHosts[1]!);
-          return prepareCcaSseResponse(
-            res,
-            () => fetchGoogleWithRetryInternal(label, peerRequest, ctx, false),
-            ctx.accountId,
-          );
-        }
+      }
+      if (label === "Antigravity" && isAntigravitySseRequest(activeRequest) && res.ok) {
+        const fetchPeer = antigravityHosts.length > 1 && antigravityHostIndex === 0
+          ? () => fetchGoogleWithRetryInternal(
+            label,
+            requestForHost(request, antigravityHosts[1]!),
+            ctx,
+            false,
+          )
+          : undefined;
+        return prepareCcaSseResponse(res, fetchPeer, ctx.accountId);
       }
       if (label === "Antigravity" && (res.status === 429 || res.status === 403)) {
         const body = await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal);

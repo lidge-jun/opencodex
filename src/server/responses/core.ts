@@ -78,6 +78,7 @@ import {
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
 import {
+  bindAntigravityProject,
   isAntigravityAccountInCooldown,
   nextAntigravityAccount,
 } from "../../oauth/antigravity-routing";
@@ -2106,7 +2107,8 @@ async function handleResponsesInner(
             ...resolved,
             accountId: nextAccountId,
             accessToken,
-            ...(nextCredential?.projectId ? { projectId: nextCredential.projectId } : {}),
+            // Always replace; omitting a missing id would keep the previous account's projectId.
+            projectId: nextCredential?.projectId,
           };
           skippedAntigravityCooldown = true;
           void setActiveAccount("google-antigravity", nextAccountId).catch(() => { /* best-effort promotion */ });
@@ -2120,18 +2122,18 @@ async function handleResponsesInner(
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
         if (route.providerName === "google-antigravity" && route.provider.googleMode === "cloud-code-assist") {
           antigravityAccountId = resolved.accountId;
+          // Always overwrite `project` from the credential in use. A missing id fails closed
+          // so a rotated account cannot inherit the previous account's Cloud Code Assist project.
+          const bound = bindAntigravityProject(route.provider, resolved.projectId);
+          if (!bound.ok) {
+            return formatErrorResponse(bound.status, bound.type, bound.message);
+          }
+          route.provider = bound.provider;
         }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
-        }
-        // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-        // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
-        // a fresh token with project metadata re-read from a different credential generation.
-        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-          const projectId = resolved.projectId;
-          if (projectId) route.provider = { ...route.provider, project: projectId };
         }
       }
     } catch (err) {
@@ -3902,13 +3904,16 @@ async function handleResponsesInner(
         try {
           const accessToken = await getValidAccessTokenForAccount("google-antigravity", nextAccountId);
           const nextCredential = getAccountCredential("google-antigravity", nextAccountId);
+          const bound = bindAntigravityProject(
+            { ...route.provider, apiKey: accessToken },
+            nextCredential?.projectId,
+          );
+          if (!bound.ok) {
+            return formatErrorResponse(bound.status, bound.type, bound.message);
+          }
           antigravityAccountId = nextAccountId;
           antigravityFailovers += 1;
-          route.provider = {
-            ...route.provider,
-            apiKey: accessToken,
-            ...(nextCredential?.projectId ? { project: nextCredential.projectId } : {}),
-          };
+          route.provider = bound.provider;
           replayOAuthCredentialSnapshot = undefined;
           invalidateSameTargetRequest();
           activeAdapter = resolveAdapter(

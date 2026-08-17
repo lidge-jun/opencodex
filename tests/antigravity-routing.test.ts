@@ -43,6 +43,15 @@ describe("Antigravity account cooldowns", () => {
     expect(isAntigravityAccountInCooldown("account-a", NOW + resetDurationMs)).toBe(false);
   });
 
+  test("caps quota-exhausted Retry-After at 7 days", () => {
+    const tenYearsMs = 10 * 365 * 24 * 60 * 60_000;
+    const sevenDaysMs = 7 * 24 * 60 * 60_000;
+    recordAntigravityCooldown("account-a", "quota_exhausted", tenYearsMs, NOW);
+
+    expect(isAntigravityAccountInCooldown("account-a", NOW + sevenDaysMs - 1)).toBe(true);
+    expect(isAntigravityAccountInCooldown("account-a", NOW + sevenDaysMs)).toBe(false);
+  });
+
   test("skips cooled accounts when selecting the next account", () => {
     recordAntigravityCooldown("account-b", "rate_limited", undefined, NOW);
 

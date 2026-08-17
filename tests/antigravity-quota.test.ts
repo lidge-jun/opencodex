@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fetchAntigravityLiveQuota } from "../src/providers/antigravity-quota";
 import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
@@ -15,8 +16,23 @@ const previousOpencodexHome = process.env.OPENCODEX_HOME;
 let opencodexHome: string;
 
 const DAILY_HOST = "https://daily-cloudcode-pa.googleapis.com";
+const PROD_HOST = "https://cloudcode-pa.googleapis.com";
 const TOKEN = "antigravity-access-token";
 const PROJECT = "antigravity-project";
+
+function liveGeminiQuota(): Response {
+  return jsonResponse({
+    buckets: [
+      { modelId: "gemini-3.6-pro", remainingFraction: 0.4, resetTime: "2026-08-19T12:00:00Z" },
+    ],
+  });
+}
+
+function liveWeeklySummary(): Response {
+  return jsonResponse({
+    weekly: { remainingPercentage: 75, resetTime: "2026-08-25T00:00:00Z" },
+  });
+}
 
 function config(baseUrl = DAILY_HOST): OcxConfig {
   return {
@@ -111,6 +127,25 @@ describe("Antigravity live quota", () => {
     expect(report?.quota.weeklyResetAt).toBe(Date.parse("2026-08-25T00:00:00Z"));
   });
 
+  test("retries the production host after daily retrieveUserQuota returns 404", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.startsWith(DAILY_HOST) && url.includes(":retrieveUserQuota")) return jsonResponse({}, 404);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(), true);
+
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
+    expect(requested).toContain(`${PROD_HOST}/v1internal:retrieveUserQuota`);
+    expect(result.reports[0]?.source).toBe("google-antigravity:retrieveUserQuota");
+  });
+
   test("falls back to the catalog when both live RPCs return 404", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -174,5 +209,93 @@ describe("Antigravity live quota", () => {
       { label: "Cla", percent: 79, resetAt: Date.parse("2026-08-21T15:00:00Z") },
     ]);
     expect(report?.quota.weeklyPercent).toBeUndefined();
+  });
+
+  test("does not fetch the production host after daily retrieveUserQuota returns 401", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === `${DAILY_HOST}/v1internal:retrieveUserQuota`) return jsonResponse({}, 401);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(), true);
+
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
+    expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
+    expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
+  });
+
+  test("does not fetch the production host when daily retrieveUserQuota 401 races a 404 summary", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === `${DAILY_HOST}/v1internal:retrieveUserQuota`) {
+        await Bun.sleep(20);
+        return jsonResponse({}, 401);
+      }
+      if (url === `${DAILY_HOST}/v1internal:retrieveUserQuotaSummary`) return jsonResponse({}, 404);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(), true);
+
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
+    expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
+    expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
+  });
+
+  test("does not fetch the production host after daily retrieveUserQuota returns 429", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === `${DAILY_HOST}/v1internal:retrieveUserQuota`) return jsonResponse({}, 429);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(), true);
+
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
+    expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
+    expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
+  });
+
+  test("does not POST retrieveUserQuota or retrieveUserQuotaSummary to an http host", async () => {
+    const httpHost = "http://daily-cloudcode-pa.googleapis.com";
+    const requested: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const quota = await fetchAntigravityLiveQuota({
+      accessToken: TOKEN,
+      projectId: PROJECT,
+      baseUrl: httpHost,
+      timeoutMs: 8_000,
+      fetchImpl,
+    });
+
+    expect(requested.filter(url => url.startsWith("http://"))).toEqual([]);
+    expect(requested).not.toContain(`${httpHost}/v1internal:retrieveUserQuota`);
+    expect(requested).not.toContain(`${httpHost}/v1internal:retrieveUserQuotaSummary`);
+    expect(quota?.customWindows).toEqual([
+      { label: "Gem", percent: 60, resetAt: Date.parse("2026-08-19T12:00:00Z") },
+    ]);
   });
 });

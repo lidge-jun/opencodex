@@ -3,7 +3,12 @@ import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/ada
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import { CCA_STREAM_PROBE_MAX_BYTES, CcaProbeBuffer, fetchAntigravityWithRetry } from "../src/adapters/google-http";
+import {
+  CCA_STREAM_CLASSIFY_MAX_BYTES,
+  CCA_STREAM_PROBE_MAX_BYTES,
+  CcaProbeBuffer,
+  fetchAntigravityWithRetry,
+} from "../src/adapters/google-http";
 import { isAntigravityAccountInCooldown, clearAntigravityAccountCooldown } from "../src/oauth/antigravity-routing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -199,10 +204,67 @@ describe("google provider hardening", () => {
   });
 
   test("CCA probe buffer refuses bytes beyond its hard cap", () => {
-    const buffer = new CcaProbeBuffer();
-    expect(buffer.append(new Uint8Array(CCA_STREAM_PROBE_MAX_BYTES))).toBe(true);
+    const cap = 16;
+    const buffer = new CcaProbeBuffer(cap);
+    expect(CCA_STREAM_PROBE_MAX_BYTES).toBe(100 * 1024 * 1024);
+    expect(buffer.append(new Uint8Array(cap))).toBe(true);
     expect(buffer.append(new Uint8Array(1))).toBe(false);
-    expect(buffer.length).toBe(CCA_STREAM_PROBE_MAX_BYTES);
+    expect(buffer.length).toBe(cap);
+  });
+
+  test("CCA open empty SSE stream passes through at the classify cap without buffering 100 MiB", async () => {
+    expect(CCA_STREAM_CLASSIFY_MAX_BYTES).toBe(256 * 1024);
+    const encoder = new TextEncoder();
+    const emptyFrame = encoder.encode("data:\n\n");
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let enqueuedBytes = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return new Response(new ReadableStream<Uint8Array>({
+        start(streamController) {
+          controller = streamController;
+        },
+        pull(streamController) {
+          // Keep the stream open so this is not the EOF-empty failover path, but stop
+          // enqueueing well below the 100 MiB hard cap so the test itself never allocates it.
+          if (enqueuedBytes >= CCA_STREAM_CLASSIFY_MAX_BYTES * 2) return;
+          streamController.enqueue(emptyFrame);
+          enqueuedBytes += emptyFrame.byteLength;
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const abortController = new AbortController();
+    try {
+      const request = {
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      };
+      const response = await Promise.race([
+        fetchAntigravityWithRetry(request, {
+          timeoutMs: 5_000,
+          abortSignal: abortController.signal,
+          stream: true,
+        }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("CCA classification hung past the classify cap")), 2_000);
+        }),
+      ]);
+      expect(response.status).toBe(200);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+      expect(enqueuedBytes).toBeGreaterThanOrEqual(CCA_STREAM_CLASSIFY_MAX_BYTES);
+      expect(enqueuedBytes).toBeLessThan(CCA_STREAM_PROBE_MAX_BYTES);
+      await response.body?.cancel();
+    } finally {
+      abortController.abort();
+      try { controller?.close(); } catch { /* already closed */ }
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("CCA peer failures use retry and final error normalization", async () => {
@@ -357,6 +419,85 @@ describe("google provider hardening", () => {
       });
       expect(response.status).toBe(429);
       expect(calls).toBe(1);
+      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+      clearAntigravityAccountCooldown("test-antigravity-account");
+    }
+  });
+
+  test("CCA peer HTTP 200 RESOURCE_EXHAUSTED after first-host 404 becomes a cooldown-aware 429", async () => {
+    clearAntigravityAccountCooldown("test-antigravity-account");
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      if (String(input).includes("daily-cloudcode-pa.googleapis.com")) {
+        return new Response("not found", { status: 404 });
+      }
+      return sseResponse([{
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Quota exceeded for this account",
+        },
+      }]);
+    }) as typeof fetch;
+    try {
+      const request = {
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      };
+      const response = await fetchAntigravityWithRetry(request, {
+        timeoutMs: 5_000,
+        accountId: "test-antigravity-account",
+      });
+      expect(response.status).toBe(429);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+      clearAntigravityAccountCooldown("test-antigravity-account");
+    }
+  });
+
+  test("CCA peer HTTP 200 geoblock after first-host 503 records cooldown without a third host", async () => {
+    clearAntigravityAccountCooldown("test-antigravity-account");
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      if (String(input).includes("daily-cloudcode-pa.googleapis.com")) {
+        return new Response("unavailable", { status: 503 });
+      }
+      return sseResponse([{
+        error: {
+          status: "PERMISSION_DENIED",
+          message: "user location is not supported for the api use",
+        },
+      }]);
+    }) as typeof fetch;
+    try {
+      const request = {
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      };
+      const response = await fetchAntigravityWithRetry(request, {
+        timeoutMs: 5_000,
+        accountId: "test-antigravity-account",
+      });
+      expect(response.status).toBe(403);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
       expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
