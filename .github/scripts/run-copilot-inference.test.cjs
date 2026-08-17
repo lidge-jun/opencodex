@@ -85,3 +85,33 @@ test('surfaces Copilot stderr and preserves a non-zero exit code', () => {
   assert.match(result.stderr, /copilot auth failed: test diagnostic/);
   assert.equal(fs.readFileSync(outputFile, 'utf8'), '');
 });
+
+test('kills a hung Copilot process at the configured timeout', () => {
+  const fake = makeFakeCopilot(`
+    process.stderr.write('copilot started\\n');
+    setInterval(() => {}, 1000);
+  `);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-runner-test-'));
+  const promptFile = path.join(dir, 'prompt.txt');
+  const outputFile = path.join(dir, 'output.txt');
+  fs.writeFileSync(promptFile, 'hello');
+  fs.writeFileSync(outputFile, '');
+
+  const result = spawnSync(process.execPath, [RUNNER, promptFile], {
+    encoding: 'utf8',
+    timeout: 5000,
+    env: {
+      ...process.env,
+      PATH: `${fake.dir}${path.delimiter}${process.env.PATH}`,
+      GITHUB_OUTPUT: outputFile,
+      COPILOT_SYSTEM_PROMPT: 'system instruction',
+      COPILOT_GITHUB_TOKEN: 'test-token',
+      COPILOT_TIMEOUT_MS: '75',
+    },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ETIMEDOUT/);
+  assert.match(result.stderr, /SIGKILL/);
+  assert.equal(fs.readFileSync(outputFile, 'utf8'), '');
+});
