@@ -34,10 +34,16 @@ const args = [
   '--no-auto-update',
 ];
 
+const copilotEnv = { ...process.env };
+if (copilotEnv.COPILOT_GITHUB_TOKEN) {
+  // Copilot CLI v1.0.74 authenticates from GH_TOKEN or GITHUB_TOKEN.
+  copilotEnv.GITHUB_TOKEN = copilotEnv.COPILOT_GITHUB_TOKEN;
+}
+
 const result = spawnSync('copilot', args, {
   input: prompt,
   encoding: 'utf8',
-  env: process.env,
+  env: copilotEnv,
   maxBuffer: 16 * 1024 * 1024,
   timeout,
   killSignal: 'SIGKILL',
