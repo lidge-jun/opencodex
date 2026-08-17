@@ -44,12 +44,21 @@ describe("#820 memory recall soak probe helpers", () => {
     expect(() => parseMemoryRecallSoakOptions(["--slow-percent", "101"])).toThrow();
     expect(() => parseMemoryRecallSoakOptions(["--unknown"])).toThrow();
     expect(() => parseMemoryRecallSoakOptions(["positional"])).toThrow();
+    expect(() => parseMemoryRecallSoakOptions(["--sessions"])).toThrow();
+    expect(() => parseMemoryRecallSoakOptions(["--sessions", "--rounds", "2"])).toThrow();
   });
 
   test("seeded workload decisions are reproducible and remain in bounds", () => {
     const first = mulberry32(820_001);
     const second = mulberry32(820_001);
     expect(Array.from({ length: 8 }, () => first())).toEqual(Array.from({ length: 8 }, () => second()));
+
+    const ranged = mulberry32(1);
+    for (let index = 0; index < 64; index++) {
+      const value = ranged();
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThan(1);
+    }
 
     for (let index = 0; index < 128; index++) {
       const session = `session-${index}`;
