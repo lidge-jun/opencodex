@@ -13,8 +13,7 @@ export type CapturedServiceTierAdapterAuthority = Readonly<Record<string, string
  * xai preset opts into chatServiceTier, but that opt-in must only arm when the effective
  * transport is the canonical API-key path (issue #1875).
  */
-const XAI_CHAT_PRIORITY_PROVIDER = "xai";
-
+const XAI_CHAT_PRIORITY_PROVIDERS = new Set(["xai", "x.ai", "x-ai"]);
 
 const capturedAdapterAuthority = new WeakMap<object, CapturedServiceTierAdapterAuthority>();
 
@@ -22,6 +21,11 @@ type ServiceTierCapabilityProvider = Pick<
   OcxProviderConfig,
   "adapter" | "supportsServiceTier" | "modelSupportsServiceTier" | "modelAdapters" | "baseUrl" | "authMode" | "chatServiceTier"
 >;
+
+type ChatServiceTierProvider = Pick<
+  OcxProviderConfig,
+  "supportsServiceTier" | "modelSupportsServiceTier" | "chatServiceTier"
+> & Partial<Pick<OcxProviderConfig, "adapter" | "baseUrl" | "authMode">>;
 
 /**
  * Read a model map by exact model identity. Service-tier capability is deliberately
@@ -43,6 +47,32 @@ function exactModelValue<T>(
   return undefined;
 }
 
+function isXaiPriorityProvider(providerName: string | undefined): boolean {
+  return typeof providerName === "string"
+    && XAI_CHAT_PRIORITY_PROVIDERS.has(providerName.trim().toLowerCase());
+}
+
+function isCanonicalXaiPriorityTransport(provider: ChatServiceTierProvider): boolean {
+  if (provider.authMode !== "key") return false;
+  if (typeof provider.adapter === "string" && provider.adapter.trim().toLowerCase() !== "openai-chat") {
+    return false;
+  }
+  if (typeof provider.baseUrl !== "string") return false;
+  try {
+    const url = new URL(provider.baseUrl.trim());
+    return url.protocol === "https:"
+      && url.username === ""
+      && url.password === ""
+      && url.hostname.toLowerCase() === "api.x.ai"
+      && url.port === ""
+      && (url.pathname === "/v1" || url.pathname === "/v1/")
+      && url.search === ""
+      && url.hash === "";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Resolve the declared provider/model capability. An explicit provider-level false is a
  * fail-closed boundary and cannot be reopened by a model map. Otherwise an exact model
@@ -59,13 +89,19 @@ export function supportsServiceTierForModel(
     ?? provider.supportsServiceTier;
 }
 
-/** Whether the Chat serializer may emit a tier for this exact model. */
+/** Whether the Chat serializer may emit a tier for this exact model and effective transport. */
 export function canSerializeServiceTierForChatModel(
-  provider: Pick<OcxProviderConfig, "supportsServiceTier" | "modelSupportsServiceTier" | "chatServiceTier">,
+  provider: ChatServiceTierProvider,
   modelId: string,
+  providerName?: string,
 ): boolean {
   const exact = exactModelValue(provider.modelSupportsServiceTier, modelId);
-  if (provider.supportsServiceTier === false || exact === false) return false;
+  if (provider.supportsServiceTier === false || provider.chatServiceTier === false || exact === false) {
+    return false;
+  }
+  if (isXaiPriorityProvider(providerName) && !isCanonicalXaiPriorityTransport(provider)) {
+    return false;
+  }
   return provider.chatServiceTier === true || exact === true;
 }
 
@@ -144,18 +180,12 @@ export function serviceTierSupportForModel(
     ? provider.adapter
     : serviceTierAdapterForModel(providerName, provider, modelId, inbound);
   if (!SERVICE_TIER_ADAPTERS.has(adapter)) return false;
-  // xAI transport gate (issue #1875): the Chat opt-in is transport-sensitive. Only the
-  // canonical API-key transport is verified for Priority Processing, so it is supported
-  // (true); the OAuth/CLI transport stays unadvertised and uninjected (false). An exact
-  // model denial or a provider-wide supportsServiceTier: false still wins.
-  if (providerName === XAI_CHAT_PRIORITY_PROVIDER && adapter === "openai-chat") {
-    if (provider.supportsServiceTier === false) return false;
-    if (exactModelValue(provider.modelSupportsServiceTier, modelId) === false) return false;
-    return provider.authMode === "key" ? true : false;
-  }
   // Treat the Chat serializer decision as authoritative so catalog metadata, routing
   // evidence, fast-mode injection, and caller-tier stripping cannot claim support that the
-  // final request builder will omit. A provider-wide false and an exact false stay closed.
-  if (adapter === "openai-chat" && !canSerializeServiceTierForChatModel(provider, modelId)) return false;
+  // final request builder will omit. For xAI, this additionally binds Priority Processing to
+  // the canonical API-key transport; custom and OAuth/CLI destinations remain fail-closed.
+  if (adapter === "openai-chat") {
+    return canSerializeServiceTierForChatModel(provider, modelId, providerName) ? true : false;
+  }
   return supportsServiceTierForModel(provider, modelId);
 }
