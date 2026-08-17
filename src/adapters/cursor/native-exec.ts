@@ -78,6 +78,16 @@ export function cursorUnsafeNativeLocalExecEnabled(input: Pick<CursorNativeExecC
   return input.unsafeAllowNativeLocalExec === true;
 }
 
+function advertisedClientToolNames(deps: CursorNativeExecContext): string[] {
+  return (deps.clientToolDefs ?? [])
+    .map(tool => tool.toolName || tool.name)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+}
+
+function nativeExecBridgeCatalog(deps: CursorNativeExecContext) {
+  return { clientToolNames: advertisedClientToolNames(deps) };
+}
+
 /**
  * Content-addressed blob store shared across streams. Bounded: without eviction a long-running
  * proxy accumulates every conversation's prompt blobs forever (unbounded memory) and any stale
@@ -504,16 +514,16 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     }))];
   }
   if (!cursorUnsafeNativeLocalExecEnabled(deps)) {
-    if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg)];
-    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg)];
-    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg)];
-    if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg)];
-    if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg)];
-    if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg)];
-    if (execCase === "shellStreamArgs") return rejectShellStreamExecForPolicy(execMsg);
-    if (execCase === "backgroundShellSpawnArgs") return [rejectBackgroundShellSpawnExecForPolicy(execMsg)];
-    if (execCase === "writeShellStdinArgs") return [rejectWriteShellStdinExecForPolicy(execMsg)];
-    if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg)];
+    if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "shellStreamArgs") return rejectShellStreamExecForPolicy(execMsg, nativeExecBridgeCatalog(deps));
+    if (execCase === "backgroundShellSpawnArgs") return [rejectBackgroundShellSpawnExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "writeShellStdinArgs") return [rejectWriteShellStdinExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
+    if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg, nativeExecBridgeCatalog(deps))];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];
   if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : writeExec(execMsg)];

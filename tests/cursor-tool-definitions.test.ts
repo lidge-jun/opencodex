@@ -447,6 +447,8 @@ describe("Cursor code mode tool guidance", () => {
     expect(note).toContain("await tools.exec_command({cmd: " + "\"" + "ls" + "\"" + "})");
     expect(note).toContain("text(...)");
     expect(note).toContain("There is no `require`");
+    expect(note).toContain("silently retry through `exec`");
+    expect(note).toContain("Do not invent a top-level `shell_command` / `exec_command` call");
 
     // The flat-catalog shell-bridge guidance must NOT appear: naming a top-level
     // `exec_command` in code mode sends the model after a tool that does not exist.

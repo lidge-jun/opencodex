@@ -519,7 +519,7 @@ and `fast=true` `requested_model` parameters; flattened `cursor-grok-{version}-{
 are discovery and picker identities only. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
 `cursor/kimi-k3` exposes a `low` / `high` / `max` ladder and defaults to `max`, matching the
 model's documented API default. Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution
-is disabled by default because it bypasses Codex's approval and sandbox path; set
+is disabled by default because it bypasses Codex's approval and sandbox path. Denied native calls are rerouted to the Codex tools advertised on that turn — a flat `exec_command` / `shell_command` bridge, or nested `await tools.exec_command(...)` helpers inside Desktop code-mode `exec`. Set
 `unsafeAllowNativeLocalExec: true` on the `providers.cursor` object in `~/.opencodex/config.json`
 only for trusted local experiments (or via **Providers → Cursor → Edit JSON** in the dashboard).
 See the [Configuration reference](/reference/configuration/#cursor-provider-adapter-cursor)

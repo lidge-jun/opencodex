@@ -34,6 +34,7 @@ import {
   type GrepArgs,
 } from "./gen/agent_pb";
 import { errorText, execBytes, lineCount, textDecoder, textEncoder } from "./native-exec-common";
+import { nativeFilesystemDisabledMessage, type CursorNativeExecBridgeCatalog } from "./native-exec-bridge";
 
 const MAX_GREP_FILES = 500;
 const MAX_GREP_RESULTS = 200;
@@ -46,14 +47,15 @@ function codexNativeMutationRefusal(operation: "write" | "delete", structuredEdi
   return `Cursor-native ${operation} is disabled for this Codex request because apply_patch is available.${structuredHint} No file was changed.`;
 }
 
-const NATIVE_LOCAL_EXEC_DISABLED =
-  "Route filesystem work through the Codex Responses bridge shell tool (`shell_command` / `exec_command`, or the listed `mcp_opencodex-responses_*` display alias) with equivalent shell commands (cat, head, ls, rg, grep), or `apply_patch` for file edits. Do not tell the user shell or read access is blocked, disabled, or denied — silently call that bridge tool.";
+function nativeLocalExecDisabled(catalog?: CursorNativeExecBridgeCatalog): string {
+  return nativeFilesystemDisabledMessage(catalog);
+}
 
-export function rejectReadExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectReadExecForPolicy(execMsg: ExecServerMessage, catalog?: CursorNativeExecBridgeCatalog): Uint8Array {
   if (execMsg.message.case !== "readArgs") throw new Error("invalid read exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "readResult", create(ReadResultSchema, {
-    result: { case: "error", value: create(ReadErrorSchema, { path, error: NATIVE_LOCAL_EXEC_DISABLED }) },
+    result: { case: "error", value: create(ReadErrorSchema, { path, error: nativeLocalExecDisabled(catalog) }) },
   }));
 }
 
@@ -98,13 +100,13 @@ export function rejectWriteExecForApplyPatch(execMsg: ExecServerMessage, structu
   }));
 }
 
-export function rejectWriteExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectWriteExecForPolicy(execMsg: ExecServerMessage, catalog?: CursorNativeExecBridgeCatalog): Uint8Array {
   if (execMsg.message.case !== "writeArgs") throw new Error("invalid write exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "writeResult", create(WriteResultSchema, {
     result: {
       case: "rejected",
-      value: create(WriteRejectedSchema, { path, reason: `${NATIVE_LOCAL_EXEC_DISABLED} No file was changed.` }),
+      value: create(WriteRejectedSchema, { path, reason: `${nativeLocalExecDisabled(catalog)} No file was changed.` }),
     },
   }));
 }
@@ -147,13 +149,13 @@ export function rejectDeleteExecForApplyPatch(execMsg: ExecServerMessage, struct
   }));
 }
 
-export function rejectDeleteExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectDeleteExecForPolicy(execMsg: ExecServerMessage, catalog?: CursorNativeExecBridgeCatalog): Uint8Array {
   if (execMsg.message.case !== "deleteArgs") throw new Error("invalid delete exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "deleteResult", create(DeleteResultSchema, {
     result: {
       case: "rejected",
-      value: create(DeleteRejectedSchema, { path, reason: `${NATIVE_LOCAL_EXEC_DISABLED} No file was changed.` }),
+      value: create(DeleteRejectedSchema, { path, reason: `${nativeLocalExecDisabled(catalog)} No file was changed.` }),
     },
   }));
 }
@@ -188,11 +190,11 @@ export function deleteExec(execMsg: ExecServerMessage): Uint8Array {
   }
 }
 
-export function rejectLsExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectLsExecForPolicy(execMsg: ExecServerMessage, catalog?: CursorNativeExecBridgeCatalog): Uint8Array {
   if (execMsg.message.case !== "lsArgs") throw new Error("invalid ls exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "lsResult", create(LsResultSchema, {
-    result: { case: "error", value: create(LsErrorSchema, { path, error: NATIVE_LOCAL_EXEC_DISABLED }) },
+    result: { case: "error", value: create(LsErrorSchema, { path, error: nativeLocalExecDisabled(catalog) }) },
   }));
 }
 
@@ -256,8 +258,8 @@ function grepError(execMsg: ExecServerMessage, error: string): Uint8Array {
   }));
 }
 
-export function rejectGrepExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
-  return grepError(execMsg, NATIVE_LOCAL_EXEC_DISABLED);
+export function rejectGrepExecForPolicy(execMsg: ExecServerMessage, catalog?: CursorNativeExecBridgeCatalog): Uint8Array {
+  return grepError(execMsg, nativeLocalExecDisabled(catalog));
 }
 
 export function grepExec(execMsg: ExecServerMessage): Uint8Array {

@@ -14,6 +14,7 @@ import {
   BackgroundShellSpawnArgsSchema,
   ExecServerMessageSchema,
   FetchArgsSchema,
+  McpToolDefinitionSchema,
   ReadArgsSchema,
   ShellArgsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
@@ -377,6 +378,40 @@ describe("Cursor native exec sandbox policy", () => {
     expect(reply.message.case).toBe("backgroundShellSpawnResult");
     expect(reply.message.value.result.case).toBe("error");
     expect(spawnCalls).toBe(1);
+  });
+
+  test("code-mode catalog reroutes denied native exec into nested exec helpers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-code-mode-"));
+    const path = join(dir, "grounding.txt");
+    writeFileSync(path, "should-not-read");
+    const catalog = {
+      clientToolDefs: [create(McpToolDefinitionSchema, {
+        name: "exec",
+        toolName: "exec",
+        providerIdentifier: "opencodex-responses",
+        description: "Run JavaScript",
+        inputSchema: new TextEncoder().encode("{}"),
+      })],
+    };
+
+    const denied = decode((await handleCursorNativeExec(execMessage({
+      case: "readArgs",
+      value: create(ReadArgsSchema, { path }),
+    }), catalog))[0]);
+    const deniedText = stringify(denied);
+    expect(deniedText).toContain("await tools.exec_command");
+    expect(deniedText).toContain("Do not invent a top-level");
+    expect(deniedText).toContain("silently call");
+    expect(deniedText).not.toContain("mcp_opencodex-responses_*");
+
+    const deniedShell = decode((await handleCursorNativeExec(execMessage({
+      case: "shellArgs",
+      value: create(ShellArgsSchema, { command: "printf SHOULD_NOT_RUN", workingDirectory: dir, hardTimeout: 2000 }),
+    }), catalog))[0]);
+    const deniedShellText = stringify(deniedShell);
+    expect(deniedShellText).toContain("await tools.exec_command");
+    expect(deniedShellText).toContain("Do not invent a top-level");
+    expect(deniedShellText).toContain("silently call");
   });
 
 });

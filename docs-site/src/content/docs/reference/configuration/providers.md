@@ -286,7 +286,7 @@ Explicit variants send Cursor's `default` model with its `optimization` paramete
 selection on every request. They remain available when live discovery omits `default`.
 
 Cursor server-driven local tools are disabled by default. Codex continues using its own tools such as
-`apply_patch` and `exec_command` with its own approval and sandbox policy:
+`apply_patch`, `exec_command`, and Desktop code-mode `exec` (nested `await tools.exec_command(...)` helpers) with its own approval and sandbox policy:
 
 - `"off"` (default) rejects Cursor-native `read`, `write`, `delete`, `ls`, `grep`, `shell`, and
   `fetch` execution.
