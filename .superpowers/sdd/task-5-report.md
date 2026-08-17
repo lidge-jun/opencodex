@@ -15,11 +15,6 @@ wire-up. The existing AI Studio and Vertex unary paths remain on
   - passed
 - `git diff --check`
   - passed
-- `bun run privacy:scan`
-  - passed
-- Documentation build was attempted twice; `bun install --frozen-lockfile`
-  stopped before `astro build` with Bun's
-  `FileNotFound extracting tarball from stream-replace-string` error.
 
 ## Coverage
 
@@ -57,4 +52,19 @@ event until the bounded inspection completes.
 - `bun run typecheck`
   - passed
 - `git diff --check`
+  - passed
+
+## Re-review fixes
+
+- EOF-residual CCA terminal frames now stay on the original host; only empty
+  residuals and retryable `UNAVAILABLE` residuals invoke peer failover.
+- Peer fallback now re-enters the shared Google retry, quota classification,
+  compatibility replay, and final error-normalization path with host failover
+  disabled for the peer leg.
+
+## Re-review validation
+
+- `bun test tests/google-antigravity-wire.test.ts tests/google-hardening.test.ts tests/antigravity-routing.test.ts tests/antigravity-quota.test.ts`
+  - 109 passed, 0 failed
+- `bun run typecheck`
   - passed

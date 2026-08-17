@@ -172,8 +172,16 @@ async function prepareCcaSseResponse(
       if (done) {
         const buffered = probeBuffer.view();
         const residual = buffered.subarray(scanned);
-        if (residual.byteLength > 0 && probeCcaSseEvent(residual) === "candidate") {
-          return responseWithBufferedBody(response, buffered, reader);
+        if (residual.byteLength > 0) {
+          const probe = probeCcaSseEvent(residual);
+          if (probe === "candidate" || probe === "terminal") {
+            return responseWithBufferedBody(response, buffered, reader);
+          }
+          if (probe === "unavailable") {
+            await reader.cancel().catch(() => {});
+            reader.releaseLock();
+            return fetchPeer();
+          }
         }
         await reader.cancel().catch(() => {});
         reader.releaseLock();
@@ -238,9 +246,14 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
  * errors, `Retry-After` honoring, jittered exponential backoff, and a classified + redacted final
  * error body. `label` is the provider-facing prefix used in error messages.
  */
-export async function fetchGoogleWithRetry(label: string, request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
+async function fetchGoogleWithRetryInternal(
+  label: string,
+  request: AdapterRequest,
+  ctx: AdapterFetchContext,
+  allowAntigravityHostFailover: boolean,
+): Promise<Response> {
   const timeoutMs = ctx.timeoutMs ?? 200_000;
-  const antigravityHosts = label === "Antigravity" && isAntigravitySseRequest(request)
+  const antigravityHosts = allowAntigravityHostFailover && label === "Antigravity" && isAntigravitySseRequest(request)
     ? antigravityHostCandidates(new URL(request.url).origin)
     : [];
   let antigravityHostIndex = 0;
@@ -265,11 +278,10 @@ export async function fetchGoogleWithRetry(label: string, request: AdapterReques
         }
         if (res.ok) {
           const peerRequest = requestForHost(request, antigravityHosts[1]!);
-          return prepareCcaSseResponse(res, () => fetchWithAttemptDeadline(peerRequest.url, {
-            method: peerRequest.method,
-            headers: peerRequest.headers,
-            body: peerRequest.body,
-          }, timeoutMs, ctx.abortSignal, ctx.stream));
+          return prepareCcaSseResponse(
+            res,
+            () => fetchGoogleWithRetryInternal(label, peerRequest, ctx, false),
+          );
         }
       }
       if (label === "Antigravity" && (res.status === 429 || res.status === 403)) {
@@ -328,6 +340,10 @@ export async function fetchGoogleWithRetry(label: string, request: AdapterReques
     }
   }
   throw lastError ?? new Error(`${label} fetch failed`);
+}
+
+export function fetchGoogleWithRetry(label: string, request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
+  return fetchGoogleWithRetryInternal(label, request, ctx, true);
 }
 
 /** Vertex AI retry wrapper. */

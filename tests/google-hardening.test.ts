@@ -149,6 +149,31 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA EOF terminal error does not fail over to the second host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return new Response(
+        'data: {"error":{"status":"UNAUTHENTICATED","message":"bad token"}}',
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as typeof fetch;
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(false));
+      const response = await adapter.fetchResponse!(request, { timeoutMs: 5_000, stream: false });
+
+      expect(response.status).toBe(200);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+      expect(await response.text()).toContain("UNAUTHENTICATED");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("CCA valid oversized SSE output stays on the first host", async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
@@ -168,6 +193,37 @@ describe("google provider hardening", () => {
       expect(calls).toHaveLength(1);
       expect(events).toContainEqual({ type: "text_delta", text: largeText });
       expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("CCA peer failures use retry and final error normalization", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      if (calls.length === 1) {
+        return sseResponse([{ error: { status: "UNAVAILABLE", message: "try another host" } }]);
+      }
+      return new Response(
+        JSON.stringify({ error: { status: "UNAVAILABLE", message: "peer overloaded" } }),
+        { status: 503, headers: { "retry-after": "0" } },
+      );
+    }) as typeof fetch;
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(false));
+      const response = await adapter.fetchResponse!(request, { timeoutMs: 5_000, stream: false });
+
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("Antigravity server overloaded: peer overloaded");
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
     } finally {
       globalThis.fetch = realFetch;
     }
