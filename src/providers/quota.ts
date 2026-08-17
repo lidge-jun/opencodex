@@ -237,19 +237,25 @@ function providerLabel(providerId: string): string {
 }
 
 function normalizeResetAt(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value > 10_000_000_000 ? value : value * 1000;
+  if (typeof value === "number" && Number.isFinite(value)) return epochMillis(value);
   if (typeof value === "string" && value.trim()) {
     const trimmed = value.trim();
     // Cursor Connect RPC returns billingCycleEnd as a unix-ms decimal string ("1771077734000").
     // Date.parse treats that as invalid; numeric epoch strings must be handled explicitly.
-    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    if (/^[+-]?\d+(\.\d+)?$/.test(trimmed)) {
       const numeric = Number(trimmed);
-      if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+      return epochMillis(numeric);
     }
     const parsed = Date.parse(trimmed);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
   }
   return undefined;
+}
+
+/** Unix 0 / negative values are sentinels, not reset clocks (Command Code fiveHour.resetAt: 0). */
+function epochMillis(value: number): number | undefined {
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return value > 10_000_000_000 ? value : value * 1000;
 }
 
 function toFiniteNumber(value: unknown): number | undefined {

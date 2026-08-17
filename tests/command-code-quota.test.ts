@@ -118,6 +118,66 @@ describe("Command Code provider quota", () => {
     expect(JSON.stringify(result)).not.toContain("commandcode-secret");
   });
 
+  test("omits a zero Command Code window reset instead of treating it as the Unix epoch", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://api.commandcode.ai/alpha/whoami"
+        || url === "https://api.commandcode.ai/alpha/billing/subscriptions"
+        || url === "https://api.commandcode.ai/alpha/usage/summary") {
+        return new Response("down", { status: 500 });
+      }
+      if (url !== "https://api.commandcode.ai/alpha/billing/credits") {
+        throw new Error(`unexpected Command Code quota probe: ${url}`);
+      }
+      return new Response(JSON.stringify({
+        windowLimits: {
+          fiveHour: { cap: 14, used: 0, resetAt: 0 },
+          weekly: { cap: 35, used: 34.9522404823, resetAt: 1_787_184_801_319 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(commandCodeConfig(), true);
+
+    expect(result.reports[0]?.quota).toEqual({
+      fiveHourPercent: 0,
+      weeklyPercent: 99.86354423514285,
+      weeklyResetAt: 1_787_184_801_319,
+      updatedAt: expect.any(Number),
+    });
+    expect(result.reports[0]?.quota).not.toHaveProperty("fiveHourResetAt");
+  });
+
+  test("omits a signed numeric Command Code window reset instead of Date.parse-ing it", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://api.commandcode.ai/alpha/whoami"
+        || url === "https://api.commandcode.ai/alpha/billing/subscriptions"
+        || url === "https://api.commandcode.ai/alpha/usage/summary") {
+        return new Response("down", { status: 500 });
+      }
+      if (url !== "https://api.commandcode.ai/alpha/billing/credits") {
+        throw new Error(`unexpected Command Code quota probe: ${url}`);
+      }
+      return new Response(JSON.stringify({
+        windowLimits: {
+          fiveHour: { cap: 14, used: 0, resetAt: "-1" },
+          weekly: { cap: 35, used: 34.9522404823, resetAt: 1_787_184_801_319 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(commandCodeConfig(), true);
+
+    expect(result.reports[0]?.quota).toEqual({
+      fiveHourPercent: 0,
+      weeklyPercent: 99.86354423514285,
+      weeklyResetAt: 1_787_184_801_319,
+      updatedAt: expect.any(Number),
+    });
+    expect(result.reports[0]?.quota).not.toHaveProperty("fiveHourResetAt");
+  });
+
   test("keeps rolling windows when whoami and usage summary fail", async () => {
     const seen: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
