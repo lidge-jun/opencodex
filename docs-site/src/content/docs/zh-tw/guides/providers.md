@@ -109,6 +109,8 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 訂閱 gateway（Hermes Agent 使用相同 backend）。透過 `portal.nousresearch.com` 做 device-grant 登入；access token 是每次請求使用的 inference JWT。混合付費與 `:free` 模型 catalog（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）會從已登入帳號即時探索。Refresh token 為單次使用，每次 refresh 都會輪換。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
+
+Antigravity quota 會透過 CCA 的 `retrieveUserQuota` 與 `retrieveUserQuotaSummary` RPC 即時查詢（8 秒逾時）；即時 quota 無法使用時，會回退到維護中的 catalog。
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 

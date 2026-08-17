@@ -111,6 +111,8 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research サブスクリプションゲートウェイ（Hermes Agent と同じバックエンド）。`portal.nousresearch.com` へのデバイスグラントログイン; access トークンはリクエストごとの inference JWT。有料 + `:free` モデルの混在カタログ（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` など）はサインイン中のアカウントからライブ探索されます。Refresh トークンは単回使用で、更新のたびにローテーションされます。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
+
+Antigravity の quota は CCA の `retrieveUserQuota` および `retrieveUserQuotaSummary` RPC（8 秒タイムアウト）でライブ取得し、ライブ quota が利用できない場合は管理されたカタログにフォールバックします。
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
