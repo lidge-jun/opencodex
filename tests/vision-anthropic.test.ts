@@ -4,16 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as oauthModule from "../src/oauth";
 
-mock.module("../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "anthropic-vision-token" }));
+let oauthAccessError: Error | undefined;
+mock.module("../src/oauth", () => ({
+  ...oauthModule,
+  getValidAccessToken: async () => {
+    if (oauthAccessError) throw oauthAccessError;
+    return "anthropic-vision-token";
+  },
+}));
 
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../src/oauth/anthropic";
 import { parseRequest } from "../src/responses/parser";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import {
+  describeImagesInPlace,
   describeImageAnthropic,
   parseAnthropicVisionSSE,
   planVisionSidecar,
+  type VisionPlan,
 } from "../src/vision";
 
 const DATA_IMAGE = "data:image/png;base64,aGVsbG8=";
@@ -23,6 +32,8 @@ const anthropicProvider: OcxProviderConfig = {
   baseUrl: "https://api.anthropic.test/v1/",
 };
 const settings = { model: "claude-sonnet-5", timeoutMs: 5000 };
+const AUTH_ERROR_CANARY = "\\\\server\\share\\opencodex\\auth.json.ocx-tmp /home/alice/.opencodex/auth.json.ocx-tmp";
+const PUBLIC_OAUTH_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
 
 function sseResponse(
   frames: Array<Record<string, unknown> | string>,
@@ -56,17 +67,86 @@ function successSse(text = "A clear description"): Response {
 
 describe("Anthropic vision executor", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    oauthAccessError = undefined;
+  });
+
+  test("projects OAuth, upstream-auth, and transport failures onto safe replacement errors", async () => {
+    oauthAccessError = new Error(`credential read failed at ${AUTH_ERROR_CANARY}`);
+    const credentialFailure = await describeImageAnthropic(
+      DATA_IMAGE, "high", "", "anthropic-vision-test", anthropicProvider, settings,
+    );
+    expect(credentialFailure.error).toBe(`anthropic vision sidecar auth failed: ${PUBLIC_OAUTH_ERROR}`);
+    expect(credentialFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    oauthAccessError = undefined;
+    globalThis.fetch = (async () => new Response(AUTH_ERROR_CANARY, { status: 401 })) as typeof fetch;
+    const upstreamAuthFailure = await describeImageAnthropic(
+      DATA_IMAGE, "high", "", "anthropic-vision-test", anthropicProvider, settings,
+    );
+    expect(upstreamAuthFailure.error).toBe(`anthropic vision sidecar auth failed: ${PUBLIC_OAUTH_ERROR}`);
+    expect(upstreamAuthFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    globalThis.fetch = (async () => new Response(AUTH_ERROR_CANARY, { status: 403 })) as typeof fetch;
+    const permissionFailure = await describeImageAnthropic(
+      DATA_IMAGE, "high", "", "anthropic-vision-test", anthropicProvider, settings,
+    );
+    expect(permissionFailure.error).toBe("anthropic vision sidecar HTTP 403");
+    expect(permissionFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    globalThis.fetch = (async () => new Response(AUTH_ERROR_CANARY, { status: 500 })) as typeof fetch;
+    const upstreamFailure = await describeImageAnthropic(
+      DATA_IMAGE, "high", "", "anthropic-vision-test", anthropicProvider, settings,
+    );
+    expect(upstreamFailure.error).toBe("anthropic vision sidecar HTTP 500");
+    expect(upstreamFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    globalThis.fetch = (async () => { throw new Error(`connect failed at ${AUTH_ERROR_CANARY}`); }) as typeof fetch;
+    const transportFailure = await describeImageAnthropic(
+      DATA_IMAGE, "high", "", "anthropic-vision-test", anthropicProvider, settings,
+    );
+    expect(transportFailure.error).toBe("anthropic vision sidecar connect_error");
+    expect(transportFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    oauthAccessError = new Error(`credential read failed at ${AUTH_ERROR_CANARY}`);
+    const parsed = parseRequest({
+      model: "routed/text-only",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "describe this image" },
+          { type: "input_image", image_url: DATA_IMAGE },
+        ],
+      }],
+    });
+    const plan: VisionPlan = {
+      backend: "anthropic",
+      anthropicSidecar: { providerName: "anthropic-vision-test", provider: anthropicProvider },
+      settings,
+      maxDescriptionsPerTurn: 1,
+    };
+    await describeImagesInPlace(parsed, plan, new Headers());
+    const projectedMessages = JSON.stringify(parsed.context.messages);
+    const projectedRawBody = JSON.stringify(parsed._rawBody);
+    expect(projectedMessages).toContain(PUBLIC_OAUTH_ERROR);
+    expect(projectedRawBody).toContain(PUBLIC_OAUTH_ERROR);
+    expect(projectedMessages).not.toContain(AUTH_ERROR_CANARY);
+    expect(projectedRawBody).not.toContain(AUTH_ERROR_CANARY);
+    expect(projectedRawBody).not.toContain(DATA_IMAGE);
+  });
 
   test("a terminal stream error after partial text returns an error (never cacheable — review F1)", async () => {
     const res = sseResponse([
       { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
       { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
-      { type: "error", error: { type: "overloaded_error", message: "overloaded" } },
+      { type: "error", error: { type: "overloaded_error", message: AUTH_ERROR_CANARY } },
     ]);
     const out = await parseAnthropicVisionSSE(res);
     expect(out.text).toBe("");
-    expect(out.error).toBeDefined();
+    expect(out.error).toBe("anthropic vision sidecar stream error");
+    expect(JSON.stringify(out)).not.toContain(AUTH_ERROR_CANARY);
   });
 
   test("POSTs /v1/messages with the Claude Code OAuth fingerprint and a base64 image block", async () => {
@@ -152,7 +232,7 @@ describe("Anthropic vision executor", () => {
     const terminal = await parseAnthropicVisionSSE(sseResponse([
       { type: "error", error: { type: "overloaded_error", message: "overloaded" } },
     ], { unterminated: true }));
-    expect(terminal).toEqual({ text: "", error: "overloaded" });
+    expect(terminal).toEqual({ text: "", error: "anthropic vision sidecar stream error" });
   });
 
   test("returns graceful errors for aborts and timeouts and cancels the pending fetch", async () => {

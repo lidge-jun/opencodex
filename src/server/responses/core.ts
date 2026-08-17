@@ -61,9 +61,7 @@ import {
   getOAuthCredentialApiBaseUrl,
   getValidAccessTokenForAccount,
   getValidAccessTokenSnapshot,
-  OAuthLoginRequiredError,
-  OAuthTokenRefreshBusyError,
-  OAuthTokenRefreshStaleError,
+  publicOAuthAuthenticationErrorMessage,
   type OAuthAccessSnapshot,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
@@ -349,15 +347,6 @@ function bindRouteReasoningReplayScope(args: {
 function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {
   return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
     && authCtx.fixedAccount === true;
-}
-
-function publicOAuthAuthenticationErrorMessage(error: unknown): string {
-  if (
-    error instanceof OAuthLoginRequiredError
-    || error instanceof OAuthTokenRefreshBusyError
-    || error instanceof OAuthTokenRefreshStaleError
-  ) return error.message;
-  return "OAuth authentication failed. Check the OpenCodex account status and retry.";
 }
 
 export function usesCodexForwardPoolAuth(
@@ -2114,10 +2103,11 @@ async function handleResponsesInner(
       }
     } catch (err) {
       if (err instanceof UnsupportedOAuthProviderError) {
+        const safeProviderName = redactSecretString(route.providerName);
         return formatErrorResponse(
           400,
           "invalid_request_error",
-          `${err.message}. Remove or reconfigure provider '${route.providerName}' in the OpenCodex configuration.`,
+          `${redactSecretString(err.message)}. Remove or reconfigure provider '${safeProviderName}' in the OpenCodex configuration.`,
         );
       }
       return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));

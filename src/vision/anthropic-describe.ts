@@ -3,7 +3,7 @@ import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fin
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
-import { getValidAccessToken } from "../oauth";
+import { getValidAccessToken, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import type { DescribeOutcome, VisionSettings } from "./describe";
 
@@ -67,8 +67,8 @@ export async function parseAnthropicVisionSSE(res: Response): Promise<DescribeOu
       const delta = isRecord(data.delta) ? data.delta : {};
       if (delta.type === "text_delta" && typeof delta.text === "string") text += delta.text;
     } else if (data.type === "error") {
-      const error = isRecord(data.error) ? data.error : {};
-      terminalError = typeof error.message === "string" ? error.message : "anthropic vision sidecar stream error";
+      // Provider-authored stream errors can contain credentials, paths, or response bodies.
+      terminalError = "anthropic vision sidecar stream error";
     }
   };
 
@@ -116,7 +116,7 @@ export async function describeImageAnthropic(
   try {
     token = await getValidAccessToken(providerName);
   } catch (error) {
-    return { text: "", error: `anthropic vision sidecar auth failed: ${error instanceof Error ? error.message : String(error)}` };
+    return { text: "", error: `anthropic vision sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(error)}` };
   }
 
   const headers: Record<string, string> = {
@@ -166,7 +166,11 @@ export async function describeImageAnthropic(
     if (!res.ok) {
       const responseText = await res.text().catch(() => "");
       console.warn(`[vision] anthropic sidecar HTTP ${res.status} (${Date.now() - startedAt}ms)`);
-      return { text: "", error: `anthropic vision sidecar HTTP ${res.status}: ${responseText.slice(0, 200)}` };
+      if (res.status === 401) {
+        return { text: "", error: `anthropic vision sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(new Error(responseText))}` };
+      }
+      // Upstream bodies are untrusted and may contain credentials, paths, or provider diagnostics.
+      return { text: "", error: `anthropic vision sidecar HTTP ${res.status}` };
     }
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
@@ -177,7 +181,7 @@ export async function describeImageAnthropic(
   } catch (error) {
     const kind = error instanceof Error && error.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[vision] anthropic sidecar ${kind} (${Date.now() - startedAt}ms)`);
-    return { text: "", error: error instanceof Error ? error.message : String(error) };
+    return { text: "", error: `anthropic vision sidecar ${kind}` };
   } finally {
     sidecarExit();
     linkedSignal.cleanup();

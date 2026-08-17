@@ -3,7 +3,14 @@ import * as oauthModule from "../src/oauth";
 
 // Stub the stored-OAuth token fetch so the anthropic executor request-shape test is deterministic
 // and never touches the real credential store or network (mirrors tests/destination-policy-resolved).
-mock.module("../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "test-token-xyz" }));
+let oauthAccessError: Error | undefined;
+mock.module("../src/oauth", () => ({
+  ...oauthModule,
+  getValidAccessToken: async () => {
+    if (oauthAccessError) throw oauthAccessError;
+    return "test-token-xyz";
+  },
+}));
 
 import { parseRequest } from "../src/responses/parser";
 import {
@@ -18,6 +25,8 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
 const routedProvider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
 const forwardProvider: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" };
 const anthropicProvider: OcxProviderConfig = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" };
+const AUTH_ERROR_CANARY = "C:\\Users\\Alice\\.opencodex\\auth.json.ocx-tmp /home/alice/.opencodex/auth.json.ocx-tmp";
+const PUBLIC_OAUTH_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
 
 function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return { port: 10100, defaultProvider: "routed", providers: { routed: routedProvider, chatgpt: forwardProvider }, ...overrides };
@@ -165,7 +174,63 @@ describe("parseAnthropicSidecarSSE", () => {
 
 describe("runAnthropicWebSearch request shape", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    oauthAccessError = undefined;
+  });
+
+  test("projects OAuth, upstream-auth, and transport failures onto safe public errors", async () => {
+    oauthAccessError = new Error(`credential read failed at ${AUTH_ERROR_CANARY}`);
+    const credentialFailure = await runAnthropicWebSearch(
+      "private query",
+      "anthropic",
+      anthropicProvider,
+      { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false },
+    );
+    expect(credentialFailure.error).toBe(`anthropic sidecar auth failed: ${PUBLIC_OAUTH_ERROR}`);
+    expect(credentialFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    oauthAccessError = undefined;
+    globalThis.fetch = (async () => new Response(AUTH_ERROR_CANARY, { status: 401 })) as typeof fetch;
+    const upstreamAuthFailure = await runAnthropicWebSearch(
+      "private query",
+      "anthropic",
+      anthropicProvider,
+      { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false },
+    );
+    expect(upstreamAuthFailure.error).toBe(`anthropic sidecar auth failed: ${PUBLIC_OAUTH_ERROR}`);
+    expect(upstreamAuthFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    globalThis.fetch = (async () => new Response(AUTH_ERROR_CANARY, { status: 403 })) as typeof fetch;
+    const permissionFailure = await runAnthropicWebSearch(
+      "private query",
+      "anthropic",
+      anthropicProvider,
+      { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false },
+    );
+    expect(permissionFailure.error).toBe("sidecar HTTP 403");
+    expect(permissionFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    globalThis.fetch = (async () => new Response(AUTH_ERROR_CANARY, { status: 500 })) as typeof fetch;
+    const upstreamFailure = await runAnthropicWebSearch(
+      "private query",
+      "anthropic",
+      anthropicProvider,
+      { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false },
+    );
+    expect(upstreamFailure.error).toBe("sidecar HTTP 500");
+    expect(upstreamFailure.error).not.toContain(AUTH_ERROR_CANARY);
+
+    globalThis.fetch = (async () => { throw new Error(`connect failed at ${AUTH_ERROR_CANARY}`); }) as typeof fetch;
+    const transportFailure = await runAnthropicWebSearch(
+      "private query",
+      "anthropic",
+      anthropicProvider,
+      { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false },
+    );
+    expect(transportFailure.error).toBe("anthropic sidecar connect_error");
+    expect(transportFailure.error).not.toContain(AUTH_ERROR_CANARY);
+  });
 
   test("POSTs /v1/messages with the OAuth fingerprint, disabled thinking, and the web_search tool", async () => {
     let captured: { url: string; headers: Record<string, string>; body: Record<string, unknown> } | null = null;

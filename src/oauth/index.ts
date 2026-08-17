@@ -292,10 +292,23 @@ export class UnsupportedOAuthProviderError extends Error {
 }
 
 export class OAuthLoginRequiredError extends Error {
+  readonly provider: string;
+
   constructor(provider: string) {
     super(`Not logged in to ${provider}. Run: ocx login ${provider}`);
     this.name = "OAuthLoginRequiredError";
+    this.provider = provider;
   }
+}
+
+/** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
+export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
+  if (
+    (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
+    || error instanceof OAuthTokenRefreshBusyError
+    || error instanceof OAuthTokenRefreshStaleError
+  ) return error.message;
+  return "OAuth authentication failed. Check the OpenCodex account status and retry.";
 }
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {

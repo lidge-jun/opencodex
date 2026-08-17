@@ -1,16 +1,31 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getLoginStatus, getValidAccessToken, UnsupportedOAuthProviderError } from "../src/oauth";
+import {
+  clearLoginState,
+  getLoginStatus,
+  getValidAccessToken,
+  OAuthLoginRequiredError,
+  OAuthTokenRefreshBusyError,
+  OAuthTokenRefreshStaleError,
+  OAUTH_PROVIDERS,
+  publicOAuthAuthenticationErrorMessage,
+  UnsupportedOAuthProviderError,
+} from "../src/oauth";
 import { saveCredential } from "../src/oauth/store";
+import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import { ManagementRequest } from "./helpers/management-auth";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-oauth-status-privacy-test");
+const TEST_DIR = join(import.meta.dir, `.tmp-oauth-status-privacy-test-${process.pid}`);
+const PUBLIC_OAUTH_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
+const PUBLIC_ERROR_CANARY = "C:\\Users\\Alice\\.opencodex\\auth.json.ocx-tmp \\\\server\\share\\auth.json /home/alice/.opencodex/auth.json";
 let previousOpencodexHome: string | undefined;
 
 describe("OAuth status privacy", () => {
   beforeEach(() => {
+    clearLoginState("xai");
     previousOpencodexHome = process.env.OPENCODEX_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
@@ -18,6 +33,7 @@ describe("OAuth status privacy", () => {
   });
 
   afterEach(() => {
+    clearLoginState("xai");
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -189,6 +205,118 @@ describe("OAuth status privacy", () => {
     expect(body).toContain("Remove or reconfigure provider 'removed-provider'");
     expect(body).not.toContain(TEST_DIR);
     expect(body).not.toContain("config.json");
+  });
+
+  test("OAuth responses redact token-shaped custom provider names", async () => {
+    const providerName = "sk-secret-provider-key";
+    const config = {
+      defaultProvider: providerName,
+      providers: {
+        [providerName]: {
+          adapter: "openai-responses",
+          authMode: "oauth",
+          baseUrl: "https://provider.example/v1",
+        },
+      },
+    } as OcxConfig;
+
+    const request = () => new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "test-model", input: "hello", stream: false }),
+    });
+    const missingCredential = await handleResponses(request(), config, { model: "", provider: "" });
+    const missingCredentialBody = await missingCredential.text();
+
+    expect(missingCredential.status).toBe(401);
+    expect(missingCredentialBody).toContain(PUBLIC_OAUTH_ERROR);
+    expect(missingCredentialBody).not.toContain(providerName);
+
+    await saveCredential(providerName, {
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+    });
+    const unsupportedProvider = await handleResponses(request(), config, { model: "", provider: "" });
+    const unsupportedProviderBody = await unsupportedProvider.text();
+
+    expect(unsupportedProvider.status).toBe(400);
+    expect(unsupportedProviderBody).toContain("Unsupported OAuth provider");
+    expect(unsupportedProviderBody).not.toContain(providerName);
+  });
+
+  test("public OAuth errors preserve only the fixed operational allowlist", () => {
+    expect(publicOAuthAuthenticationErrorMessage(new Error(PUBLIC_ERROR_CANARY))).toBe(PUBLIC_OAUTH_ERROR);
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthLoginRequiredError("xai"))).toBe(
+      "Not logged in to xai. Run: ocx login xai",
+    );
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthLoginRequiredError(PUBLIC_ERROR_CANARY)))
+      .toBe(PUBLIC_OAUTH_ERROR);
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthTokenRefreshBusyError())).toBe(
+      "OAuth token refresh capacity reached",
+    );
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthTokenRefreshStaleError())).toBe(
+      "OAuth token refresh owner became stale",
+    );
+  });
+
+  test("management OAuth login does not return raw provider or filesystem errors", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    OAUTH_PROVIDERS.xai.login = async () => {
+      throw new Error(`provider login failed at ${PUBLIC_ERROR_CANARY}`);
+    };
+    try {
+      const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
+      const request = new ManagementRequest("http://localhost/api/oauth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "xai" }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), config);
+      const body = await response?.json() as { error?: string };
+
+      expect(response?.status).toBe(409);
+      expect(body.error).toBe(PUBLIC_OAUTH_ERROR);
+      expect(JSON.stringify(body)).not.toContain(PUBLIC_ERROR_CANARY);
+    } finally {
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+      clearLoginState("xai");
+    }
+  });
+
+  test("management OAuth status does not return late provider or filesystem errors", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    OAUTH_PROVIDERS.xai.login = async (controller) => {
+      controller.onAuth({ url: "https://auth.example.test/authorize" });
+      throw new Error(`late provider login failure at ${PUBLIC_ERROR_CANARY}`);
+    };
+    try {
+      const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
+      const startRequest = new ManagementRequest("http://localhost/api/oauth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "xai" }),
+      });
+      const startResponse = await handleManagementAPI(startRequest, new URL(startRequest.url), config);
+      expect(startResponse?.status).toBe(200);
+
+      const deadline = Date.now() + 2_000;
+      let statusBody: { done?: boolean; error?: string } = {};
+      do {
+        const statusRequest = new ManagementRequest("http://localhost/api/oauth/status?provider=xai");
+        const statusResponse = await handleManagementAPI(statusRequest, new URL(statusRequest.url), config);
+        expect(statusResponse?.status).toBe(200);
+        statusBody = await statusResponse?.json() as typeof statusBody;
+        if (!statusBody.done) await Bun.sleep(10);
+      } while (!statusBody.done && Date.now() < deadline);
+
+      expect(statusBody.done).toBe(true);
+      expect(statusBody.error).toBe(PUBLIC_OAUTH_ERROR);
+      expect(JSON.stringify(statusBody)).not.toContain(PUBLIC_ERROR_CANARY);
+    } finally {
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+      clearLoginState("xai");
+    }
   });
 
   test("malformed oauth token store is backed up before a new credential save overwrites it", async () => {

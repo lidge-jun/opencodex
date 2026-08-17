@@ -1791,7 +1791,7 @@ export async function handleCodexAuthAPI(
     const loginOwner: CodexLoginStateRow = { status: "starting", startedAt: Date.now() };
     codexAuthLoginState.set(flowId, loginOwner);
     try {
-      const { startLoginFlow, getLoginStatus } = await import("../oauth");
+      const { startLoginFlow, getLoginStatus, publicOAuthAuthenticationErrorMessage } = await import("../oauth");
       const result = await startLoginFlow("chatgpt", { forceLogin: true });
 
       // Open the browser server-side (same pattern as /api/oauth/login in management-api.ts).
@@ -1993,7 +1993,11 @@ export async function handleCodexAuthAPI(
               break;
             }
             if (st.done && st.error) {
-              setCodexLoginState(flowId, { status: "error", error: st.error, doneAt: Date.now() });
+              setCodexLoginState(flowId, {
+                status: "error",
+                error: publicOAuthAuthenticationErrorMessage(new Error(st.error)),
+                doneAt: Date.now(),
+              });
               completed = true;
               break;
             }
@@ -2011,7 +2015,7 @@ export async function handleCodexAuthAPI(
             ? "Configuration is busy; retry login shortly."
             : error instanceof CodexCredentialRefreshBusyError || error instanceof CodexCredentialRefreshStaleError
               ? "Credential refresh is busy; retry login shortly."
-            : error instanceof Error ? error.message : String(error);
+            : publicOAuthAuthenticationErrorMessage(error);
           setCodexLoginState(flowId, {
             status: "error",
             error: message,
@@ -2028,7 +2032,7 @@ export async function handleCodexAuthAPI(
     } catch (e) {
       if (codexAuthLoginState.get(flowId) === loginOwner) codexAuthLoginState.delete(flowId);
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("already in progress")) {
+      if (msg === "A login for chatgpt is already in progress") {
         return jsonResponse({ error: msg, status: "pending" }, 409);
       }
       if (e instanceof CodexCredentialRefreshBusyError || e instanceof CodexCredentialRefreshStaleError) {
@@ -2036,7 +2040,7 @@ export async function handleCodexAuthAPI(
         response.headers.set("Retry-After", "1");
         return response;
       }
-      return jsonResponse({ error: msg }, 500);
+      return jsonResponse({ error: "OAuth authentication failed. Check the OpenCodex account status and retry." }, 500);
     }
   }
 
