@@ -302,9 +302,11 @@ export class OAuthLoginRequiredError extends Error {
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
   // Email is not an immutable upstream subject: multiple accounts may share or later reuse it.
-  // Fail closed unless the provider supplied its stable account id.
+  // Fail closed unless the provider supplied its stable account id. Preserve the exact stored
+  // subject because the credential store also matches it exactly; trimming only here would make
+  // two distinct slots share one continuation owner.
   const stableCredentialSubject = cred.accountId?.trim()
-    ? ["account-id", cred.accountId.trim()]
+    ? ["account-id", cred.accountId]
     : undefined;
   const storedKiroRouting = {
     ...(cred.kiro?.profileArn ? { profileArn: cred.kiro.profileArn } : {}),

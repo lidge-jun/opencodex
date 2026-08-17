@@ -86,6 +86,7 @@ import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenA
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
+import { resolveCursorToken } from "../../adapters/cursor/live-transport";
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCooldownError,
@@ -458,6 +459,46 @@ function bindRouteReasoningReplayScope(args: {
     credentialIdentity = reasoningReplayKeyCredentialIdentity(provider);
   }
   const providerDestinationIdentity = reasoningReplayDestinationIdentity(provider.baseUrl);
+  const continuationOwner = providerContinuationOwnerForRoute(args);
+  if (adapterName === "cursor") {
+    let cursorCredentialIdentity = continuationOwner?.credentialIdentity ?? credentialIdentity;
+    if (!cursorCredentialIdentity) {
+      try {
+        cursorCredentialIdentity = `cursor-token:${continuationIdentity(
+          "cursor-route-token",
+          resolveCursorToken(provider, args.forwardHeaders),
+        )}`;
+      } catch {
+        // Keep the adapter's existing missing-token failure path. In particular, do not
+        // collapse ownerless local routes into a shared deterministic conversation scope.
+        delete parsed._cursorIdentityScope;
+      }
+    }
+    // Cursor derives a stable conversation id from the client thread. Namespace that derivation
+    // by the final physical route owner, not merely the token, so rejecting a stored continuation
+    // cannot recreate the same provider-private id for another destination/model/account.
+    if (cursorCredentialIdentity) {
+      const owner = continuationOwner ?? {
+        version: 1,
+        providerName,
+        providerDestinationIdentity: providerDestinationIdentity ?? "unbound-destination",
+        adapterName,
+        modelId: parsed.modelId,
+        credentialIdentity: cursorCredentialIdentity,
+      } satisfies OcxProviderContinuationOwner;
+      parsed._cursorIdentityScope = `cursor-route:${continuationIdentity(
+        "cursor-route-owner",
+        JSON.stringify([
+          owner.version,
+          owner.providerName,
+          owner.providerDestinationIdentity,
+          owner.adapterName,
+          owner.modelId,
+          owner.credentialIdentity,
+        ]),
+      )}`;
+    }
+  }
   bindReasoningReplayScope(
     parsed._reasoningReplayScope,
     credentialIdentity && providerDestinationIdentity
@@ -470,7 +511,7 @@ function bindRouteReasoningReplayScope(args: {
         }
       : undefined,
   );
-  bindProviderContinuationForRoute(parsed, providerContinuationOwnerForRoute(args));
+  bindProviderContinuationForRoute(parsed, continuationOwner);
 }
 
 function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {

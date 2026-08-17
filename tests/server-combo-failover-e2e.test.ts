@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "./helpers/logs-api";
 import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,6 +29,13 @@ import {
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
+import {
+  clearResponseStateForTests,
+  flushResponseState,
+  responseStatePersistPendingForTests,
+} from "../src/responses/state";
+import { clearCursorThreadContinuityForTests } from "../src/adapters/cursor/thread-continuity";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -139,19 +146,25 @@ beforeEach(() => {
   customUsageEstimate = undefined;
   customCursorTransportFactory = undefined;
   clearRequestLogsForTests();
+  clearResponseStateForTests();
+  clearCursorThreadContinuityForTests();
 });
 
 afterEach(async () => {
+  for (const server of servers.splice(0)) await server.stop(true);
+  await flushResponseState();
+  expect(responseStatePersistPendingForTests()).toBe(false);
+  clearResponseStateForTests();
+  clearCursorThreadContinuityForTests();
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
-  for (const server of servers.splice(0)) await server.stop(true);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousCursorToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
   else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorToken;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
   clearComboSelectionState();
   clearComboTargetCooldowns();
   clearCodexUpstreamHealth();
@@ -1980,6 +1993,53 @@ describe("server combo failover 030 activation matrix", () => {
     expect(seen).toEqual([undefined, "kiro-oauth-conversation", undefined, undefined]);
   });
 
+  test("OAuth continuation owners distinguish exact stored account ids", async () => {
+    const seen: Array<string | undefined> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push(conversationId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({
+        type: "done",
+        providerState: { kiro: { conversationId: conversationId ?? "exact-oauth-subject" } },
+      });
+    };
+    const config = comboConfig({
+      xai: provider("openai-chat", "https://api.x.ai/v1", "unused", {
+        authMode: "oauth",
+        note: "test-kiro-oauth",
+      }),
+    }, [{ provider: "xai", model: "m1" }]);
+
+    await saveCredential("xai", {
+      access: "exact-subject-access-one",
+      refresh: "exact-subject-refresh-one",
+      expires: Date.now() + 3_600_000,
+      accountId: "acct-exact-subject",
+      source: "oauth",
+    });
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+
+    await saveCredential("xai", {
+      access: "exact-subject-access-two",
+      refresh: "exact-subject-refresh-two",
+      expires: Date.now() + 3_600_000,
+      accountId: " acct-exact-subject ",
+      source: "oauth",
+    });
+    expect(getAccountSet("xai")?.accounts).toHaveLength(2);
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
   test("OAuth credentials without immutable account ids do not inherit provider continuation state", async () => {
     const seen: Array<string | undefined> = [];
     const {
@@ -2649,10 +2709,19 @@ describe("cursor conversation continuity across store:false chains", () => {
     });
   }
 
-  async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
+  async function postCursor(
+    config: OcxConfig,
+    raw: Record<string, unknown>,
+    clientThreadId?: string,
+    bearerToken?: string,
+  ): Promise<Response> {
     return handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(clientThreadId ? { "x-codex-parent-thread-id": clientThreadId } : {}),
+        ...(bearerToken ? { authorization: `Bearer ${bearerToken}` } : {}),
+      },
       body: JSON.stringify({ stream: false, store: false, ...raw }),
     }), config, { model: "", provider: "" }, {});
   }
@@ -2716,6 +2785,102 @@ describe("cursor conversation continuity across store:false chains", () => {
     // Cursor conversation instead of minting a fresh id (which would miss the
     // context-usage carry-forward and report output-delta-sized totals).
     expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("owner mismatch rekeys Cursor parent-thread continuity to the new route", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const threadId = "cursor-route-owner-thread";
+
+    const first = await postCursor(config, {
+      model: "cursortest/composer-2",
+      input: "first",
+    }, threadId);
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+
+    config.providers.cursortest!.baseUrl = "https://cursor-other.example/v1";
+    const second = await postCursor(config, {
+      model: "cursortest/composer-2",
+      previous_response_id: firstJson.id,
+      input: "second",
+    }, threadId);
+    expect(second.status).toBe(200);
+
+    const third = await postCursor(config, {
+      model: "cursortest/composer-2",
+      input: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "third" },
+      ],
+    }, threadId);
+    expect(third.status).toBe(200);
+
+    expect(seen).toHaveLength(3);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(seen[2]).toBe(seen[1]);
+  });
+
+  test("ownerless local Cursor parent-thread continuity is scoped by route and bearer token", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    config.providers.cursortest = {
+      ...config.providers.cursortest!,
+      authMode: "local",
+    };
+    delete config.providers.cursortest.apiKey;
+    const threadId = "cursor-ownerless-token-thread";
+
+    const first = await postCursor(config, {
+      model: "cursortest/composer-2",
+      input: "first",
+    }, threadId, "cursor-token-a");
+    expect(first.status).toBe(200);
+
+    config.providers.cursortest!.baseUrl = "https://cursor-local-other.example/v1";
+    const second = await postCursor(config, {
+      model: "cursortest/composer-2",
+      input: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "second" },
+      ],
+    }, threadId, "cursor-token-a");
+    expect(second.status).toBe(200);
+
+    const third = await postCursor(config, {
+      model: "cursortest/composer-2",
+      input: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "second" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "third" },
+      ],
+    }, threadId, "cursor-token-b");
+    expect(third.status).toBe(200);
+
+    const fourth = await postCursor(config, {
+      model: "cursortest/composer-2",
+      input: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "second" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "third" },
+        { role: "assistant", content: "cursor ok" },
+        { role: "user", content: "fourth" },
+      ],
+    }, threadId, "cursor-token-b");
+    expect(fourth.status).toBe(200);
+
+    expect(seen).toHaveLength(4);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(seen[2]).not.toBe(seen[1]);
+    expect(seen[3]).toBe(seen[2]);
   });
 
   test("external-model toolResult continuation preserves and persists the same id", async () => {
