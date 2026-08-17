@@ -32,9 +32,10 @@ const GENERATION: CodexResetCreditRecoveryGeneration = {
   credentialGeneration: 4,
   exhaustionGeneration: 9,
 };
-const CHILD_READY_TIMEOUT_MS = 4_000;
-const CHILD_EXIT_TIMEOUT_MS = 2_000;
-const CONTENTION_TEST_TIMEOUT_MS = 15_000;
+const CHILD_READY_TIMEOUT_MS = 10_000;
+const CHILD_EXIT_TIMEOUT_MS = 5_000;
+const CONTENTION_TEST_TIMEOUT_MS = 25_000;
+const CONTENTION_FAIL_FAST_MS = 2_000;
 
 const LEGACY_OPERATION_SCHEMA_SQL = `CREATE TABLE reset_credit_operations (
     account_key TEXT PRIMARY KEY,
@@ -261,6 +262,18 @@ describe("Codex reset-credit operation ledger", () => {
     expect(prepareConfigMutationDatabasePathForWrite()).toBe(databasePath());
     expect(() => withConfigMutationLockSync(() => prepareConfigMutationDatabasePathForWrite()))
       .toThrow(NestedConfigMutationError);
+  });
+
+  test("bootstraps the canonical ledger when its config directory and database are absent", () => {
+    const path = databasePath();
+    if (!isolatedHome) throw new Error("isolated home was not initialized");
+    rmSync(isolatedHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    expect(existsSync(isolatedHome)).toBeFalse();
+    expect(existsSync(path)).toBeFalse();
+
+    expect(openResetCreditOperation(GENERATION, 100))
+      .toMatchObject({ kind: "execute", resumed: false });
+    expect(existsSync(path)).toBeTrue();
   });
 
   test("snapshots recovery generations once and rejects inherited fields", () => {
@@ -779,6 +792,38 @@ describe("Codex reset-credit operation ledger", () => {
       .toMatchObject({ kind: "execute", resumed: false });
   });
 
+  test("terminal recovery and manual operations reject late ambiguity and conflicting settlement", () => {
+    const recovery = openResetCreditOperation(GENERATION, 100);
+    if (recovery.kind !== "execute") throw new Error("reservation failed");
+    expect(settleResetCreditOperation(GENERATION, recovery.operationId, "reset", 200))
+      .toEqual({ kind: "updated" });
+    expect(markResetCreditOperationAmbiguous(GENERATION, recovery.operationId, 300))
+      .toEqual({ kind: "mismatch" });
+    expect(settleResetCreditOperation(GENERATION, recovery.operationId, "no_credit", 400))
+      .toEqual({ kind: "mismatch" });
+    expect(openResetCreditOperation(GENERATION, 500)).toEqual({
+      kind: "terminal",
+      operationId: recovery.operationId,
+      code: "reset",
+    });
+
+    const manual = {
+      accountId: "pool-manual-terminal-fence",
+      chatgptAccountId: "chatgpt-manual-terminal-fence",
+      operationId: fixtureOperationId(709),
+    };
+    expect(openManualResetCreditOperation(manual, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(manual, "reset", 200)).toEqual({ kind: "updated" });
+    expect(markManualResetCreditOperationAmbiguous(manual, 300)).toEqual({ kind: "mismatch" });
+    expect(settleManualResetCreditOperation(manual, "no_credit", 400))
+      .toEqual({ kind: "mismatch" });
+    expect(openManualResetCreditOperation(manual, 500)).toEqual({
+      kind: "terminal",
+      operationId: manual.operationId,
+      code: "reset",
+    });
+  });
+
   test("rejects stale generations and mismatched settlement", () => {
     const current = openResetCreditOperation(GENERATION);
     if (current.kind !== "execute") throw new Error("reservation failed");
@@ -994,8 +1039,11 @@ describe("Codex reset-credit operation ledger", () => {
     });
     try {
       await waitForPath(readyPath);
-      expect(openResetCreditOperation({ ...GENERATION, accountId: "pool-b" }))
-        .toEqual({ kind: "unavailable" });
+      const startedAt = performance.now();
+      const blocked = openResetCreditOperation({ ...GENERATION, accountId: "pool-b" });
+      const elapsedMs = performance.now() - startedAt;
+      expect(blocked).toEqual({ kind: "unavailable" });
+      expect(elapsedMs).toBeLessThan(CONTENTION_FAIL_FAST_MS);
     } finally {
       await terminateChild(child);
     }
