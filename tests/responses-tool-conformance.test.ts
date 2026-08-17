@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
+import { cursorRequestUsesCodeMode } from "../src/adapters/cursor/tool-definitions";
 import type { AdapterEvent } from "../src/types";
 import { jsonItemTypes, jsonToolItems, streamedView } from "./helpers/responses-conformance";
 
@@ -62,6 +63,39 @@ describe("Responses Lite additional_tools declaration merge", () => {
     // Namespaced children keep their BARE name; the namespace rides alongside on the tool.
     expect(toolNames(parsed)).toEqual(["read_file", "search", "apply_patch"]);
     expect(parsed.context.tools?.find(tool => tool.name === "search")?.namespace).toBe("github");
+  });
+
+  it("flattens Codex 0.147 built-in functions and preserves nested custom exec", () => {
+    const parsed = parseRequest(request([
+      {
+        type: "additional_tools",
+        role: "developer",
+        tools: [
+          {
+            type: "namespace",
+            name: "functions",
+            tools: [
+              { type: "custom", name: "exec", description: "Run JavaScript with nested helpers." },
+              { type: "function", name: "wait", parameters: { type: "object", properties: {} } },
+            ],
+          },
+          {
+            type: "namespace",
+            name: "collaboration",
+            tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object", properties: {} } }],
+          },
+        ],
+      },
+    ]));
+
+    const exec = parsed.context.tools?.find(tool => tool.name === "exec");
+    const wait = parsed.context.tools?.find(tool => tool.name === "wait");
+    const spawn = parsed.context.tools?.find(tool => tool.name === "spawn_agent");
+    expect(exec).toMatchObject({ name: "exec", freeform: true });
+    expect(exec?.namespace).toBeUndefined();
+    expect(wait?.namespace).toBeUndefined();
+    expect(spawn?.namespace).toBe("collaboration");
+    expect(cursorRequestUsesCodeMode(parsed.context.tools)).toBe(true);
   });
 
   it("preserves wire order across multiple additional_tools groups", () => {
