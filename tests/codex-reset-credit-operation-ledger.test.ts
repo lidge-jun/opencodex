@@ -276,6 +276,54 @@ describe("Codex reset-credit operation ledger", () => {
     expect(existsSync(path)).toBeTrue();
   });
 
+  test("fails closed when the primary ledger table is missing but manual identity state remains", () => {
+    const opened = openResetCreditOperation(GENERATION, 100);
+    if (opened.kind !== "execute") throw new Error("reservation failed");
+    const database = new Database(databasePath());
+    try {
+      database.exec("DROP TABLE reset_credit_operations");
+    } finally {
+      database.close();
+    }
+
+    expect(openResetCreditOperation(GENERATION, 200)).toEqual({ kind: "unavailable" });
+    const verifier = new Database(databasePath(), { readonly: true });
+    try {
+      expect(verifier.query<{ name: string }, []>(`
+        SELECT name FROM main.sqlite_schema
+         WHERE type = 'table' AND name LIKE 'reset_credit_%'
+         ORDER BY name
+      `).all()).toEqual([{ name: "reset_credit_manual_operation_ids" }]);
+    } finally {
+      verifier.close();
+    }
+  });
+
+  test("fails closed when the manual identity table is missing from an existing ledger", () => {
+    const opened = openResetCreditOperation(GENERATION, 100);
+    if (opened.kind !== "execute") throw new Error("reservation failed");
+    const database = new Database(databasePath());
+    try {
+      database.exec("DROP TABLE reset_credit_manual_operation_ids");
+    } finally {
+      database.close();
+    }
+
+    expect(openResetCreditOperation(GENERATION, 200)).toEqual({ kind: "unavailable" });
+    const verifier = new Database(databasePath(), { readonly: true });
+    try {
+      expect(verifier.query<{ operation_id: string }, []>(
+        "SELECT operation_id FROM reset_credit_operations",
+      ).get()?.operation_id).toBe(opened.operationId);
+      expect(verifier.query<{ name: string }, []>(`
+        SELECT name FROM main.sqlite_schema
+         WHERE type = 'table' AND name = 'reset_credit_manual_operation_ids'
+      `).get()).toBeNull();
+    } finally {
+      verifier.close();
+    }
+  });
+
   test("snapshots recovery generations once and rejects inherited fields", () => {
     let credentialReads = 0;
     const accessorGeneration = {
@@ -792,6 +840,25 @@ describe("Codex reset-credit operation ledger", () => {
       .toMatchObject({ kind: "execute", resumed: false });
   });
 
+  test("persists every recovery terminal code without reopening execution", () => {
+    for (const [index, code] of (["nothing_to_reset", "no_credit"] as const).entries()) {
+      const generation = {
+        accountId: `pool-terminal-code-${index}`,
+        credentialGeneration: 1,
+        exhaustionGeneration: 1,
+      };
+      const opened = openResetCreditOperation(generation, 100);
+      if (opened.kind !== "execute") throw new Error("reservation failed");
+      expect(settleResetCreditOperation(generation, opened.operationId, code, 200))
+        .toEqual({ kind: "updated" });
+      expect(openResetCreditOperation(generation, 300)).toEqual({
+        kind: "terminal",
+        operationId: opened.operationId,
+        code,
+      });
+    }
+  });
+
   test("terminal recovery and manual operations reject late ambiguity and conflicting settlement", () => {
     const recovery = openResetCreditOperation(GENERATION, 100);
     if (recovery.kind !== "execute") throw new Error("reservation failed");
@@ -829,6 +896,17 @@ describe("Codex reset-credit operation ledger", () => {
     if (current.kind !== "execute") throw new Error("reservation failed");
     expect(openResetCreditOperation({ ...GENERATION, exhaustionGeneration: 8 }))
       .toEqual({ kind: "stale-generation" });
+    const reauthenticated = {
+      ...GENERATION,
+      credentialGeneration: GENERATION.credentialGeneration + 1,
+      exhaustionGeneration: 0,
+    };
+    expect(openResetCreditOperation(reauthenticated))
+      .toEqual({ kind: "unresolved-prior-generation" });
+    expect(markResetCreditOperationAmbiguous(reauthenticated, current.operationId))
+      .toEqual({ kind: "mismatch" });
+    expect(settleResetCreditOperation(reauthenticated, current.operationId, "reset"))
+      .toEqual({ kind: "mismatch" });
     expect(settleResetCreditOperation(GENERATION, "00000000-0000-4000-8000-000000000999", "reset"))
       .toEqual({ kind: "mismatch" });
   });
