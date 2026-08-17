@@ -84,10 +84,12 @@ describe("requestPacingIntervalMs", () => {
 });
 
 describe("provider request pacing queue", () => {
-  test("spaces concurrent starts in one provider FIFO and exposes queue state", async () => {
+  test("anchors concurrent pacing to actual transport starts and exposes queue state", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
     const starts: number[] = [];
     const fetchImpl = Object.assign(async () => {
-      starts.push(Date.now());
+      starts.push(clock.now());
       return new Response("ok");
     }, { preconnect() {} }) as typeof globalThis.fetch;
     const configured = {
@@ -96,12 +98,17 @@ describe("provider request pacing queue", () => {
     } as OcxProviderConfig & { fetch: typeof globalThis.fetch };
     const send = providerFetch(configured, undefined, { providerName: "demo", modelId: "model-a" });
     const pending = [send("https://example.test/v1/chat/completions"), send("https://example.test/v1/chat/completions"), send("https://example.test/v1/chat/completions")];
-    await Bun.sleep(10);
+
+    expect(starts).toEqual([0]);
     expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    clock.advanceBy(99);
+    expect(starts).toEqual([0]);
+    clock.advanceBy(1);
+    expect(starts).toEqual([0, 100]);
+    clock.advanceBy(100);
+    expect(starts).toEqual([0, 100, 200]);
+
     await Promise.all(pending);
-    expect(starts).toHaveLength(3);
-    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(85);
-    expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(85);
     const status = providerRequestPacingStatus("demo", configured);
     expect(status.queued).toBe(0);
     expect(status.lastModelId).toBe("model-a");
