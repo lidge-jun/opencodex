@@ -40,7 +40,12 @@ async function drainErrorBody(res: Response, signal: AbortSignal): Promise<void>
       maxBytes: MAX_ERROR_BODY_BYTES,
       fatalUtf8: true,
     });
-  } catch {
+  } catch (error) {
+    if (signal.aborted) {
+      throw new CodexWarmupError("transport", "Codex warmup request failed", {
+        cause: error,
+      });
+    }
     // The bounded reader owns cancellation for oversized, invalid, or stalled bodies.
   }
 }

@@ -103,6 +103,32 @@ describe("codex warmup", () => {
     expect(performance.now() - startedAt).toBeLessThan(1_000);
   });
 
+  test("does not retry a fallback after the deadline expires while draining a 400 body", async () => {
+    let fetchCalls = 0;
+    let cancellations = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      const silentBody = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancellations += 1;
+          return new Promise<void>(() => {});
+        },
+      });
+      return new Response(silentBody, { status: 400 });
+    }) as typeof fetch;
+
+    const startedAt = performance.now();
+    await expect(warmCodexAccount({
+      accessToken: "a",
+      chatgptAccountId: "c",
+      timeoutMs: 20,
+    })).rejects.toMatchObject({ name: "CodexWarmupError", code: "transport" });
+
+    expect(fetchCalls).toBe(1);
+    expect(cancellations).toBe(1);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
   test("accepts a completed SSE stream at the exact byte limit", async () => {
     const encoder = new TextEncoder();
     const terminal = 'data: {"type":"response.completed"}\n\n';
