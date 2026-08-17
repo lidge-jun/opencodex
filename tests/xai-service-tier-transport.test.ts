@@ -89,14 +89,27 @@ describe("xAI transport gate on the live Responses path", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
 
-  async function responsesBody(
+  type CapturedRequest = {
+    url: string;
+    body: Record<string, unknown>;
+  };
+
+  async function responsesRequest(
     provider: OcxProviderConfig,
     rawBody: Record<string, unknown> = {},
     fastMode?: boolean,
-  ): Promise<Record<string, unknown>> {
-    const bodies: Record<string, unknown>[] = [];
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+  ): Promise<CapturedRequest> {
+    const requests: CapturedRequest[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request
+        ? input.url
+        : input instanceof URL
+          ? input.toString()
+          : String(input);
+      requests.push({
+        url,
+        body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      });
       return new Response("data: [DONE]\n\n", {
         status: 200,
         headers: { "content-type": "text/event-stream" },
@@ -122,20 +135,26 @@ describe("xAI transport gate on the live Responses path", () => {
       { model: "", provider: "" },
       {},
     );
-    return bodies[0] ?? {};
+    return requests[0] ?? { url: "", body: {} };
   }
 
-  test("a custom xAI key endpoint neither receives Fast injection nor a caller tier", async () => {
-    const custom = xaiProvider({ baseUrl: "https://relay.example.test/v1" });
-    expect(await responsesBody(custom, {}, true)).not.toHaveProperty("service_tier");
-    expect(await responsesBody(custom, { service_tier: "priority" })).not.toHaveProperty("service_tier");
+  test("a same-named xAI baseUrl override is pinned canonical before Fast gating", async () => {
+    const configured = xaiProvider({ baseUrl: "https://relay.example.test/v1" });
+
+    const fast = await responsesRequest(configured, {}, true);
+    expect(fast.url).toBe("https://api.x.ai/v1/chat/completions");
+    expect(fast.body.service_tier).toBe("priority");
+
+    const caller = await responsesRequest(configured, { service_tier: "priority" });
+    expect(caller.url).toBe("https://api.x.ai/v1/chat/completions");
+    expect(caller.body.service_tier).toBe("priority");
   });
 
   test("canonical xAI opt-outs strip Fast before the request is serialized", async () => {
     const chatOptOut = xaiProvider({ chatServiceTier: false });
-    expect(await responsesBody(chatOptOut, {}, true)).not.toHaveProperty("service_tier");
+    expect((await responsesRequest(chatOptOut, {}, true)).body).not.toHaveProperty("service_tier");
 
     const modelOptOut = xaiProvider({ modelSupportsServiceTier: { [MODEL_ID]: false } });
-    expect(await responsesBody(modelOptOut, { service_tier: "priority" }, true)).not.toHaveProperty("service_tier");
+    expect((await responsesRequest(modelOptOut, { service_tier: "priority" }, true)).body).not.toHaveProperty("service_tier");
   });
 });
