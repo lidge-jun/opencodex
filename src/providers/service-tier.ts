@@ -13,7 +13,7 @@ export type CapturedServiceTierAdapterAuthority = Readonly<Record<string, string
  * xai preset opts into chatServiceTier, but that opt-in must only arm when the effective
  * transport is the canonical API-key path (issue #1875).
  */
-const XAI_CHAT_PRIORITY_PROVIDERS = new Set(["xai", "x.ai", "x-ai"]);
+const XAI_CHAT_PRIORITY_PROVIDER = "xai";
 
 const capturedAdapterAuthority = new WeakMap<object, CapturedServiceTierAdapterAuthority>();
 
@@ -48,8 +48,7 @@ function exactModelValue<T>(
 }
 
 function isXaiPriorityProvider(providerName: string | undefined): boolean {
-  return typeof providerName === "string"
-    && XAI_CHAT_PRIORITY_PROVIDERS.has(providerName.trim().toLowerCase());
+  return providerName?.trim().toLowerCase() === XAI_CHAT_PRIORITY_PROVIDER;
 }
 
 function isCanonicalXaiPriorityTransport(provider: ChatServiceTierProvider): boolean {
