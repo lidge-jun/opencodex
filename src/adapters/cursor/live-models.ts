@@ -129,8 +129,16 @@ function decodeCursorUsableModels(bytes: Uint8Array): CursorUsableModelsResult {
 }
 
 async function fetchCursorUsableModelsHttp1Once(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
-  const baseUrl = (opts.baseUrl ?? "https://api2.cursor.sh").replace(/\/+$/, "");
-  const requestUrl = `${baseUrl}${CURSOR_GET_USABLE_MODELS_PATH}`;
+  let requestUrl: string;
+  try {
+    const parsed = new URL(CURSOR_GET_USABLE_MODELS_PATH, opts.baseUrl ?? "https://api2.cursor.sh");
+    if (parsed.protocol !== "https:") {
+      return { ok: false, error: "transport", detail: "Cursor HTTP/1.1 discovery requires HTTPS" };
+    }
+    requestUrl = parsed.toString();
+  } catch {
+    return { ok: false, error: "transport", detail: "Cursor HTTP/1.1 discovery base URL is invalid" };
+  }
   const timeoutMs = opts.timeoutMs ?? 8000;
   const controller = new AbortController();
   let timedOut = false;

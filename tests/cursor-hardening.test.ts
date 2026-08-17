@@ -124,6 +124,24 @@ describe("Cursor live-model discovery hardening", () => {
     expect(new Headers(seenInit?.headers).get("authorization")).toBe("Bearer test-token");
   });
 
+  test("HTTP/1.1 discovery rejects cleartext before exposing the Bearer token", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "must-not-leave-process",
+      baseUrl: "http://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "transport", detail: expect.stringContaining("requires HTTPS") });
+    expect(fetchCalls).toBe(0);
+  });
+
   test("Cursor catalog propagates the provider HTTP/1.1 pin to discovery", async () => {
     const providerName = "cursor-http1-discovery";
     const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {

@@ -75,6 +75,33 @@ function hexBytes(value: string): Uint8Array {
     Number.parseInt(value.slice(index * 2, index * 2 + 2), 16));
 }
 
+function cursorProvider(
+  fetchImpl: typeof fetch,
+  baseUrl = "https://api2.cursor.sh",
+): OcxProviderConfig & { fetch: typeof fetch } {
+  return {
+    adapter: "cursor",
+    baseUrl,
+    apiKey: "test-token",
+    upstreamHttpVersion: "http1.1",
+    fetch: fetchImpl,
+  };
+}
+
+function heldRunSseResponse(signal: AbortSignal | null | undefined): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const abort = () => controller.error(signal?.reason ?? new DOMException("aborted", "AbortError"));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/connect+proto" },
+  });
+}
+
 describe("Cursor HTTP/1.1 compatibility transport", () => {
   test("encodes the Cursor BidiAppend hex fallback wire shape", () => {
     const payload = Uint8Array.of(0xde, 0xad, 0xbe, 0xef);
@@ -126,15 +153,8 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
       throw new Error(`unexpected Cursor compatibility endpoint ${url.pathname}`);
     }) as typeof fetch;
 
-    const provider = {
-      adapter: "cursor",
-      baseUrl: "https://api2.cursor.sh",
-      apiKey: "test-token",
-      upstreamHttpVersion: "http1.1",
-      fetch: fetchImpl,
-    } as OcxProviderConfig & { fetch: typeof fetch };
     const transport = createLiveCursorTransport({
-      provider,
+      provider: cursorProvider(fetchImpl),
       translatorBudget: createTestTranslatorBudget(),
       firstFrameTimeoutMs: 2_000,
     });
@@ -164,6 +184,88 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
     expect(appends[0]?.data).not.toBe("");
     expect(fromBinary(AgentClientMessageSchema, hexBytes(appends[0]!.data)).message.case).toBe("runRequest");
     expect(transport.requestCommitted?.()).toBe(true);
+  });
+
+  test("keeps a proven pre-connect BidiAppend failure uncommitted", async () => {
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/agent.v1.AgentService/RunSSE") return heldRunSseResponse(init?.signal);
+      throw Object.assign(new Error("fixture append connect failed"), { code: "ECONNREFUSED" });
+    }) as typeof fetch;
+    const transport = createLiveCursorTransport({
+      provider: cursorProvider(fetchImpl),
+      translatorBudget: createTestTranslatorBudget(),
+      firstFrameTimeoutMs: 2_000,
+    });
+
+    try {
+      await expect((async () => {
+        for await (const _message of transport.run({
+          modelId: "claude-opus-5",
+          conversationId: "cursor_http1_preconnect_failure",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) { /* drain */ }
+      })()).rejects.toThrow("fixture append connect failed");
+      expect(transport.requestCommitted?.()).toBe(false);
+    } finally {
+      await transport.close?.();
+    }
+  });
+
+  test("keeps ambiguous BidiAppend failures committed to prevent replay", async () => {
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/agent.v1.AgentService/RunSSE") return heldRunSseResponse(init?.signal);
+      throw new Error("fixture ambiguous append failure");
+    }) as typeof fetch;
+    const transport = createLiveCursorTransport({
+      provider: cursorProvider(fetchImpl),
+      translatorBudget: createTestTranslatorBudget(),
+      firstFrameTimeoutMs: 2_000,
+    });
+
+    try {
+      await expect((async () => {
+        for await (const _message of transport.run({
+          modelId: "claude-opus-5",
+          conversationId: "cursor_http1_ambiguous_failure",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) { /* drain */ }
+      })()).rejects.toThrow("fixture ambiguous append failure");
+      expect(transport.requestCommitted?.()).toBe(true);
+    } finally {
+      await transport.close?.();
+    }
+  });
+
+  test("rejects a cleartext HTTP/1.1 transport before invoking fetch", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run");
+    }) as typeof fetch;
+    const transport = createLiveCursorTransport({
+      provider: cursorProvider(fetchImpl, "http://api2.cursor.sh"),
+      translatorBudget: createTestTranslatorBudget(),
+      firstFrameTimeoutMs: 2_000,
+    });
+
+    try {
+      await expect((async () => {
+        for await (const _message of transport.run({
+          modelId: "claude-opus-5",
+          conversationId: "cursor_http1_cleartext",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) { /* drain */ }
+      })()).rejects.toThrow("requires an HTTPS base URL");
+      expect(fetchCalls).toBe(0);
+      expect(transport.requestCommitted?.()).toBe(false);
+    } finally {
+      await transport.close?.();
+    }
   });
 
   test("preserves the proto3 zero and later append sequence values", () => {

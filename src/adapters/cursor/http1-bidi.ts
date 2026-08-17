@@ -3,6 +3,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES } from "../../lib/translator-budget";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { withUpstreamHttpVersionValue } from "../../lib/upstream-http-version";
+import { isPreConnectReachabilityError } from "../../lib/upstream-reachability";
 import { BidiRequestIdSchema } from "./gen/agent_pb";
 import { consumeConnectFrames, encodeConnectFrame } from "./framing";
 
@@ -212,11 +213,21 @@ export class CursorHttp1BidiConnection {
   }
 
   private requestUrl(path: string): string {
-    return new URL(path, this.options.baseUrl).toString();
+    const url = new URL(path, this.options.baseUrl);
+    if (url.protocol !== "https:") {
+      throw new Error("Cursor HTTP/1.1 transport requires an HTTPS base URL");
+    }
+    return url.toString();
   }
 
   private http1Init(url: string, init: RequestInit): RequestInit {
     return withUpstreamHttpVersionValue(url, init, "http1.1") ?? init;
+  }
+
+  private markCommitted(): void {
+    if (this.committed) return;
+    this.committed = true;
+    this.options.callbacks.onCommitted();
   }
 
   private async runSse(): Promise<void> {
@@ -270,22 +281,27 @@ export class CursorHttp1BidiConnection {
       pending.rawBytesCharged = false;
       this.options.translatorBudget.releaseRetained(pending.payload.byteLength, { kind: "request_copies" });
     }
-    if (!this.committed) {
-      this.committed = true;
-      this.options.callbacks.onCommitted();
-    }
-
-    const url = this.requestUrl(CURSOR_BIDI_APPEND_PATH);
-    const timeout = AbortSignal.timeout(CURSOR_HTTP1_APPEND_TIMEOUT_MS);
-    const signal = AbortSignal.any([this.abortController.signal, timeout]);
     try {
-      const response = await this.fetchImpl(url, this.http1Init(url, {
-        method: "POST",
-        headers: this.commonHeaders("application/proto"),
-        body: bunFetchBody(body),
-        redirect: "manual",
-        signal,
-      }));
+      const url = this.requestUrl(CURSOR_BIDI_APPEND_PATH);
+      const timeout = AbortSignal.timeout(CURSOR_HTTP1_APPEND_TIMEOUT_MS);
+      const signal = AbortSignal.any([this.abortController.signal, timeout]);
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, this.http1Init(url, {
+          method: "POST",
+          headers: this.commonHeaders("application/proto"),
+          body: bunFetchBody(body),
+          redirect: "manual",
+          signal,
+        }));
+      } catch (error) {
+        // A proven DNS/TCP pre-connect failure means no append bytes reached Cursor and replay is
+        // safe. Every ambiguous rejection stays conservative: the server may have accepted the
+        // append before the response path failed, so suppress replay exactly as the h2 path does.
+        if (!isPreConnectReachabilityError(error)) this.markCommitted();
+        throw error;
+      }
+      this.markCommitted();
       if (response.status !== 200) {
         void response.body?.cancel().catch(() => undefined);
         throw cursorHttp1Error("BidiAppend", response.status);
