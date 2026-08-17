@@ -5,9 +5,11 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const COPILOT_RUNNER = 'node .github/scripts/run-copilot-inference.cjs';
-const CLI_INSTALL = 'npm install --global @github/copilot@1.0.74';
+const CLI_INSTALL = 'bash .github/scripts/install-copilot-cli.sh';
 const SETUP_NODE = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e';
 const TOKEN_FALLBACK = 'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || github.token }}';
+const COPILOT_VERSION = 'COPILOT_VERSION="v1.0.74"';
+const COPILOT_SHA256 = 'COPILOT_SHA256="4a708b0a1cbaef4c2ca5c546a622f887a3b70e8a0432bc3cee0d386704816650"';
 
 function readWorkflow(name) {
   return fs.readFileSync(path.join(ROOT, '.github', 'workflows', name), 'utf8');
@@ -17,10 +19,11 @@ function count(text, fragment) {
   return text.split(fragment).length - 1;
 }
 
-test('issue automation streams prompts through the pinned Copilot CLI without tool access', () => {
+test('issue automation streams prompts through the digest-pinned Copilot CLI without tool access', () => {
   const quality = readWorkflow('enforce-issue-quality.yml');
   const triage = readWorkflow('issue-triage.yml');
   const combined = quality + '\n' + triage;
+  const installer = fs.readFileSync(path.join(ROOT, '.github', 'scripts', 'install-copilot-cli.sh'), 'utf8');
 
   assert.equal(count(quality, COPILOT_RUNNER), 2);
   assert.equal(count(triage, COPILOT_RUNNER), 1);
@@ -33,6 +36,12 @@ test('issue automation streams prompts through the pinned Copilot CLI without to
   assert.equal(count(quality, TOKEN_FALLBACK), 2);
   assert.equal(count(triage, TOKEN_FALLBACK), 1);
 
+  assert.match(installer, new RegExp(COPILOT_VERSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(installer, new RegExp(COPILOT_SHA256.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(installer, /sha256sum --check --status/);
+  assert.match(installer, /releases\/download\/\$\{COPILOT_VERSION\}\/\$\{COPILOT_ASSET\}/);
+
+  assert.doesNotMatch(combined, /npm install --global @github\/copilot/);
   assert.doesNotMatch(combined, /actions\/ai-inference@/);
   assert.doesNotMatch(combined, /\bmodels:\s*read\b/);
   assert.doesNotMatch(combined, /max-tokens:/);
