@@ -35,6 +35,14 @@ describe("Antigravity account cooldowns", () => {
     expect(isAntigravityAccountInCooldown("account-b", NOW + 30_000)).toBe(false);
   });
 
+  test("honors a quota reset longer than 24 hours", () => {
+    const resetDurationMs = 48 * 60 * 60_000;
+    recordAntigravityCooldown("account-a", "quota_exhausted", resetDurationMs, NOW);
+
+    expect(isAntigravityAccountInCooldown("account-a", NOW + 24 * 60 * 60_000 + 1)).toBe(true);
+    expect(isAntigravityAccountInCooldown("account-a", NOW + resetDurationMs)).toBe(false);
+  });
+
   test("skips cooled accounts when selecting the next account", () => {
     recordAntigravityCooldown("account-b", "rate_limited", undefined, NOW);
 

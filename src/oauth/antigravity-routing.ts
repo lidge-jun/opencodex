@@ -14,12 +14,12 @@ const accountHealth = new Map<string, AntigravityAccountHealth>();
 function positiveDurationOrDefault(
   durationMs: number | undefined,
   defaultMs: number,
-  maxMs: number,
+  maxMs?: number,
 ): number {
   if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
     return defaultMs;
   }
-  return Math.min(durationMs, maxMs);
+  return maxMs === undefined ? durationMs : Math.min(durationMs, maxMs);
 }
 
 function cooldownDurationMs(
@@ -36,7 +36,6 @@ function cooldownDurationMs(
     case "quota_exhausted":
       return positiveDurationOrDefault(
         retryAfterMs,
-        DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_MS,
         DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_MS,
       );
     case "geo_blocked":
