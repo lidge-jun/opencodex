@@ -22,7 +22,7 @@ api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
-context_window = 372000
+context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
 
