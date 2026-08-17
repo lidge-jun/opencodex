@@ -47,7 +47,7 @@ const [configModule, serverModule, memoryModule, lifecycleModule, relayModule, r
   import("../src/responses/state"),
 ]);
 
-const config: OcxConfig = {
+const config = {
   port: 0,
   defaultProvider: "mock",
   providers: {
@@ -58,7 +58,7 @@ const config: OcxConfig = {
       allowPrivateNetwork: true,
     },
   },
-};
+} as OcxConfig;
 configModule.saveConfig(config);
 const proxy = serverModule.startServer(0);
 
@@ -84,7 +84,7 @@ function metrics() {
 }
 
 let closing = false;
-let control: ReturnType<typeof Bun.serve>;
+let control: ReturnType<typeof Bun.serve> | undefined;
 
 async function closeAndExit(code: number): Promise<never> {
   if (closing) {
