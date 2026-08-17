@@ -54,9 +54,7 @@ function isXaiPriorityProvider(providerName: string | undefined): boolean {
 
 function isCanonicalXaiPriorityTransport(provider: ChatServiceTierProvider): boolean {
   if (provider.authMode !== "key") return false;
-  if (typeof provider.adapter === "string" && provider.adapter.trim().toLowerCase() !== "openai-chat") {
-    return false;
-  }
+  if (provider.adapter?.trim().toLowerCase() !== "openai-chat") return false;
   if (typeof provider.baseUrl !== "string") return false;
   try {
     const url = new URL(provider.baseUrl.trim());
