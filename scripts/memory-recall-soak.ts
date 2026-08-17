@@ -5,16 +5,17 @@
  * owns the mock provider and load generator; a child process owns the real
  * OpenCodex proxy so RSS samples do not include the clients that create load.
  *
- * Full defaults exercise 32 sustained independent sessions for 10 recall rounds,
- * three identical waves, a 64-session burst, slow consumers, and a fault wave.
- * RSS is evidence only: cleanup assertions are made against OpenCodex-owned
- * counters, while RSS slope is reported for leak-vs-allocator-retention analysis.
+ * Full defaults exercise 32 sustained independent sessions for 10 barrier-
+ * synchronized recall rounds, three identical waves, a 64-session burst, slow
+ * consumers, parallel tool latency, and a fault wave. RSS is evidence only:
+ * cleanup assertions use OpenCodex-owned counters, while process-memory slopes
+ * are reported for leak-vs-allocator-retention analysis.
  */
+import { join } from "node:path";
 import {
   deterministicPercent,
   deterministicToolCount,
   linearSlope,
-  maxFinite,
   memoryRecallSoakUsage,
   parseMemoryRecallSoakOptions,
   stableHash,
@@ -52,6 +53,18 @@ interface ProbeMetrics {
   responseState: Record<string, number>;
 }
 
+interface MetricPeaks {
+  rss: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  activeTurnCount: number;
+  retainedBytes: number;
+  observedInFlightBytes: number;
+  observedInFlightHighWaterBytes: number;
+}
+
 interface WaveResult {
   name: string;
   sessions: number;
@@ -60,9 +73,18 @@ interface WaveResult {
   failedSessions: number;
   requestCount: number;
   toolCallCount: number;
-  peak: ProbeMetrics;
+  peaks: MetricPeaks;
   idle: ProbeMetrics;
   durationMs: number;
+}
+
+interface SessionState {
+  id: string;
+  input: Array<Record<string, unknown>>;
+  slow: boolean;
+  requests: number;
+  toolCalls: number;
+  failure?: string;
 }
 
 type FaultKind = "cancel" | "http_429" | "http_503" | "pre_first_byte_stream_error";
@@ -71,11 +93,6 @@ type CompletedResponse = {
   id?: string;
   status?: string;
   output?: Array<Record<string, unknown>>;
-};
-
-type SessionResult = {
-  requests: number;
-  toolCalls: number;
 };
 
 const encoder = new TextEncoder();
@@ -96,10 +113,6 @@ try {
 
 function emit(event: Record<string, unknown>): void {
   console.log(JSON.stringify(event));
-}
-
-function boundedTail(current: string, chunk: string): string {
-  return (current + chunk).slice(-16_384);
 }
 
 function sessionMarker(sessionId: string): string {
@@ -162,7 +175,11 @@ function faultKind(sessionId: string): FaultKind {
   return remainder === 0 ? "http_429" : remainder === 1 ? "http_503" : "pre_first_byte_stream_error";
 }
 
-function streamFrames(frames: readonly string[], jitterSeed: number): ReadableStream<Uint8Array> {
+function streamFrames(
+  frames: readonly string[],
+  jitterSeed: number,
+  minimumDelayMs = 0,
+): ReadableStream<Uint8Array> {
   let index = 0;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -170,7 +187,8 @@ function streamFrames(frames: readonly string[], jitterSeed: number): ReadableSt
         controller.close();
         return;
       }
-      if (((jitterSeed + index) & 3) === 0) await Bun.sleep(1);
+      const jitterMs = ((jitterSeed + index) & 3) === 0 ? 1 : 0;
+      if (minimumDelayMs + jitterMs > 0) await Bun.sleep(minimumDelayMs + jitterMs);
       controller.enqueue(encoder.encode(frames[index++]));
     },
   });
@@ -188,8 +206,8 @@ function buildToolFrames(body: Record<string, unknown>): string[] {
 
   for (let index = 0; index < selected.length; index++) {
     const name = selected[index];
-    const args = toolArguments(name, sessionId, round, index);
-    const split = Math.max(1, Math.floor(args.length / 2));
+    const toolArgs = toolArguments(name, sessionId, round, index);
+    const split = Math.max(1, Math.floor(toolArgs.length / 2));
     starts.push(`data: ${JSON.stringify({
       choices: [{
         index: 0,
@@ -198,7 +216,7 @@ function buildToolFrames(body: Record<string, unknown>): string[] {
             index,
             id: `call_${stableHash(`${sessionId}:${round}:${index}`, options.seed).toString(16)}`,
             type: "function",
-            function: { name, arguments: args.slice(0, split) },
+            function: { name, arguments: toolArgs.slice(0, split) },
           }],
         },
       }],
@@ -206,7 +224,7 @@ function buildToolFrames(body: Record<string, unknown>): string[] {
     finishes.unshift(`data: ${JSON.stringify({
       choices: [{
         index: 0,
-        delta: { tool_calls: [{ index, function: { arguments: args.slice(split) } }] },
+        delta: { tool_calls: [{ index, function: { arguments: toolArgs.slice(split) } }] },
       }],
     })}\n\n`);
   }
@@ -216,6 +234,21 @@ function buildToolFrames(body: Record<string, unknown>): string[] {
     `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`,
     "data: [DONE]\n\n",
   ];
+}
+
+function buildCancelFrames(sessionId: string): string[] {
+  const frames = Array.from({ length: 128 }, (_, index) => `data: ${JSON.stringify({
+    choices: [{
+      index: 0,
+      delta: {
+        ...(index === 0 ? { role: "assistant" } : {}),
+        content: `${sessionId}:${index}:${"x".repeat(2 * 1024)}`,
+      },
+    }],
+  })}\n\n`);
+  frames.push(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+  frames.push("data: [DONE]\n\n");
+  return frames;
 }
 
 const upstream = Bun.serve({
@@ -248,6 +281,9 @@ const upstream = Bun.serve({
           },
         }), { headers: { "content-type": "text/event-stream" } });
       }
+      return new Response(streamFrames(buildCancelFrames(sessionId), stableHash(sessionId, options.seed), 10), {
+        headers: { "content-type": "text/event-stream" },
+      });
     }
     const frames = buildToolFrames(body);
     return new Response(streamFrames(frames, stableHash(sessionId, options.seed)), {
@@ -256,16 +292,14 @@ const upstream = Bun.serve({
   },
 });
 
-let childStdoutTail = "";
-let childStderrTail = "";
 const child = Bun.spawn({
   cmd: [
     process.execPath,
-    `${import.meta.dir}/memory-recall-soak-child.ts`,
+    join(import.meta.dir, "memory-recall-soak-child.ts"),
     "--upstream",
     upstream.url.toString().replace(/\/$/, ""),
   ],
-  cwd: `${import.meta.dir}/..`,
+  cwd: join(import.meta.dir, ".."),
   stdout: "pipe",
   stderr: "pipe",
 });
@@ -284,9 +318,8 @@ async function consumeChildStdout(): Promise<void> {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    const text = decoder.decode(value, { stream: true });
-    childStdoutTail = boundedTail(childStdoutTail, text);
-    pending += text;
+    pending += decoder.decode(value, { stream: true });
+    if (pending.length > 16_384) pending = pending.slice(-16_384);
     for (;;) {
       const newline = pending.indexOf("\n");
       if (newline < 0) break;
@@ -300,23 +333,18 @@ async function consumeChildStdout(): Promise<void> {
           resolveReady = null;
           rejectReady = null;
         }
-      } catch { /* bounded tail remains available on failure */ }
+      } catch { /* child runtime logs are deliberately discarded */ }
     }
   }
 }
 
-async function consumeChildStderr(): Promise<void> {
+async function discardChildStderr(): Promise<void> {
   const reader = child.stderr.getReader();
-  const decoder = new TextDecoder();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    childStderrTail = boundedTail(childStderrTail, decoder.decode(value, { stream: true }));
-  }
+  while (!(await reader.read()).done) { /* drain without retaining local paths or payloads */ }
 }
 
 void consumeChildStdout().catch(error => rejectReady?.(error instanceof Error ? error : new Error(String(error))));
-void consumeChildStderr();
+void discardChildStderr();
 void child.exited.then(code => {
   if (resolveReady) rejectReady?.(new Error(`proxy child exited before readiness with code ${code}`));
 });
@@ -335,32 +363,62 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
-const ready = await withTimeout(readyPromise, 30_000, "proxy child readiness");
-const proxyBase = new URL(ready.proxyUrl);
-const controlBase = new URL(ready.controlUrl);
-
-async function sampleMetrics(): Promise<ProbeMetrics> {
-  const response = await fetch(new URL("/metrics", controlBase), { cache: "no-store" });
-  if (!response.ok) throw new Error(`metrics endpoint returned ${response.status}`);
-  return await response.json() as ProbeMetrics;
+function observedCurrentBytes(metrics: ProbeMetrics): number {
+  return Object.values(metrics.appOwnedBytes.observedInFlight)
+    .reduce((sum, row) => sum + row.currentBytes, 0);
 }
 
-function idleInvariant(metrics: ProbeMetrics): boolean {
-  if (metrics.activeTurnCount !== 0) return false;
-  return Object.values(metrics.appOwnedBytes.observedInFlight).every(row => row.currentBytes === 0 && row.active === 0);
+function observedHighWaterBytes(metrics: ProbeMetrics): number {
+  return Object.values(metrics.appOwnedBytes.observedInFlight)
+    .reduce((sum, row) => sum + row.highWaterBytes, 0);
 }
 
-async function waitForIdle(): Promise<ProbeMetrics> {
-  const deadline = Date.now() + options.idleDeadlineMs;
-  let latest = await sampleMetrics();
-  while (!idleInvariant(latest) && Date.now() < deadline) {
-    await Bun.sleep(Math.min(100, options.sampleIntervalMs));
-    latest = await sampleMetrics();
+function metricPeaks(samples: readonly ProbeMetrics[]): MetricPeaks {
+  if (samples.length === 0) throw new Error("wave collected no memory samples");
+  const peaks: MetricPeaks = {
+    rss: 0,
+    heapUsed: 0,
+    heapTotal: 0,
+    external: 0,
+    arrayBuffers: 0,
+    activeTurnCount: 0,
+    retainedBytes: 0,
+    observedInFlightBytes: 0,
+    observedInFlightHighWaterBytes: 0,
+  };
+  for (const sample of samples) {
+    peaks.rss = Math.max(peaks.rss, sample.rss);
+    peaks.heapUsed = Math.max(peaks.heapUsed, sample.heapUsed);
+    peaks.heapTotal = Math.max(peaks.heapTotal, sample.heapTotal);
+    peaks.external = Math.max(peaks.external, sample.external);
+    peaks.arrayBuffers = Math.max(peaks.arrayBuffers, sample.arrayBuffers);
+    peaks.activeTurnCount = Math.max(peaks.activeTurnCount, sample.activeTurnCount);
+    peaks.retainedBytes = Math.max(peaks.retainedBytes, sample.appOwnedBytes.retainedBytes);
+    peaks.observedInFlightBytes = Math.max(peaks.observedInFlightBytes, observedCurrentBytes(sample));
+    peaks.observedInFlightHighWaterBytes = Math.max(
+      peaks.observedInFlightHighWaterBytes,
+      observedHighWaterBytes(sample),
+    );
   }
-  if (!idleInvariant(latest)) {
-    throw new Error(`proxy did not return to app-owned idle invariants within ${options.idleDeadlineMs} ms`);
-  }
-  return latest;
+  return peaks;
+}
+
+function mergePeaks(peaks: readonly MetricPeaks[]): MetricPeaks {
+  if (peaks.length === 0) throw new Error("no wave peaks recorded");
+  return peaks.reduce<MetricPeaks>((merged, current) => ({
+    rss: Math.max(merged.rss, current.rss),
+    heapUsed: Math.max(merged.heapUsed, current.heapUsed),
+    heapTotal: Math.max(merged.heapTotal, current.heapTotal),
+    external: Math.max(merged.external, current.external),
+    arrayBuffers: Math.max(merged.arrayBuffers, current.arrayBuffers),
+    activeTurnCount: Math.max(merged.activeTurnCount, current.activeTurnCount),
+    retainedBytes: Math.max(merged.retainedBytes, current.retainedBytes),
+    observedInFlightBytes: Math.max(merged.observedInFlightBytes, current.observedInFlightBytes),
+    observedInFlightHighWaterBytes: Math.max(
+      merged.observedInFlightHighWaterBytes,
+      current.observedInFlightHighWaterBytes,
+    ),
+  }));
 }
 
 function tools(): Array<Record<string, unknown>> {
@@ -477,89 +535,140 @@ function appendRecallOutput(input: Array<Record<string, unknown>>, item: Record<
   input.push({ type: "function_call_output", call_id: callId, output: marker });
 }
 
-async function runSession(sessionId: string, rounds: number, slow: boolean): Promise<SessionResult> {
-  const input: Array<Record<string, unknown>> = [{
-    type: "message",
-    role: "user",
-    content: [{ type: "input_text", text: `${sessionMarker(sessionId)} run the synthetic tools` }],
-  }];
-  let toolCalls = 0;
+function makeSessionState(name: string, index: number): SessionState {
+  const id = `${name}-${index}`;
+  return {
+    id,
+    input: [{
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: `${sessionMarker(id)} run the synthetic tools` }],
+    }],
+    slow: deterministicPercent(id, "slow", options.seed) < options.slowConsumerPercent,
+    requests: 0,
+    toolCalls: 0,
+  };
+}
 
-  for (let round = 0; round < rounds; round++) {
-    const response = await fetch(new URL("/v1/responses", proxyBase), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "mock/test-model",
-        stream: true,
-        store: false,
-        input,
-        tools: tools(),
-        tool_choice: "auto",
-      }),
-    });
-    if (response.status !== 200) {
-      const detail = (await response.text()).slice(0, 240);
-      throw new Error(`round ${round} returned HTTP ${response.status}: ${detail}`);
-    }
-    const text = await readResponseText(response, slow);
-    const completed = completedResponseFromSse(text);
-    if (!completed || completed.status !== "completed" || !Array.isArray(completed.output)) {
-      throw new Error(`round ${round} did not produce response.completed`);
-    }
-    const calls = callableItems(completed.output);
-    const expected = deterministicToolCount(sessionId, round, options.seed);
-    if (calls.length !== expected) {
-      throw new Error(`round ${round} completed ${calls.length} tool calls; expected ${expected}`);
-    }
-    const callIds = new Set(calls.map(item => item.call_id));
-    if (callIds.size !== calls.length || callIds.has(undefined)) {
-      throw new Error(`round ${round} produced missing or duplicate call ids`);
-    }
-    toolCalls += calls.length;
-    for (const item of calls) appendRecallOutput(input, item, round);
+async function runSessionRound(state: SessionState, round: number, proxyBase: URL): Promise<void> {
+  state.requests += 1;
+  const response = await fetch(new URL("/v1/responses", proxyBase), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "mock/test-model",
+      stream: true,
+      store: false,
+      input: state.input,
+      tools: tools(),
+      tool_choice: "auto",
+    }),
+  });
+  if (response.status !== 200) {
+    const detail = (await response.text()).slice(0, 240);
+    throw new Error(`round ${round} returned HTTP ${response.status}: ${detail}`);
   }
-  return { requests: rounds, toolCalls };
+  const text = await readResponseText(response, state.slow);
+  const completed = completedResponseFromSse(text);
+  if (!completed || completed.status !== "completed" || !Array.isArray(completed.output)) {
+    throw new Error(`round ${round} did not produce response.completed`);
+  }
+  const calls = callableItems(completed.output);
+  const expected = deterministicToolCount(state.id, round, options.seed);
+  if (calls.length !== expected) {
+    throw new Error(`round ${round} completed ${calls.length} tool calls; expected ${expected}`);
+  }
+  const callIds = new Set(calls.map(item => item.call_id));
+  if (callIds.size !== calls.length || callIds.has(undefined)) {
+    throw new Error(`round ${round} produced missing or duplicate call ids`);
+  }
+  state.toolCalls += calls.length;
+  for (const item of calls) appendRecallOutput(state.input, item, round);
+
+  // Tool execution is external to OpenCodex. Model 1..N parallel tool calls by
+  // delaying the recall by the slowest deterministic synthetic tool in this round.
+  const parallelToolLatencyMs = calls.reduce((maximum, _item, index) => Math.max(
+    maximum,
+    10 + (stableHash(`tool-latency:${state.id}:${round}:${index}`, options.seed) % 491),
+  ), 0);
+  if (parallelToolLatencyMs > 0) await Bun.sleep(parallelToolLatencyMs);
 }
 
-function peakMetrics(samples: readonly ProbeMetrics[]): ProbeMetrics {
-  if (samples.length === 0) throw new Error("wave collected no memory samples");
-  return samples.reduce((peak, sample) => sample.rss > peak.rss ? sample : peak);
+async function sampleMetrics(controlBase: URL): Promise<ProbeMetrics> {
+  const response = await fetch(new URL("/metrics", controlBase), { cache: "no-store" });
+  if (!response.ok) throw new Error(`metrics endpoint returned ${response.status}`);
+  return await response.json() as ProbeMetrics;
 }
 
-async function runWave(name: string, sessions: number, rounds: number): Promise<WaveResult> {
+function idleInvariant(metrics: ProbeMetrics): boolean {
+  if (metrics.activeTurnCount !== 0) return false;
+  return Object.values(metrics.appOwnedBytes.observedInFlight)
+    .every(row => row.currentBytes === 0 && row.active === 0);
+}
+
+async function waitForIdle(controlBase: URL): Promise<ProbeMetrics> {
+  const deadline = Date.now() + options.idleDeadlineMs;
+  let latest = await sampleMetrics(controlBase);
+  while (!idleInvariant(latest) && Date.now() < deadline) {
+    await Bun.sleep(Math.min(100, options.sampleIntervalMs));
+    latest = await sampleMetrics(controlBase);
+  }
+  if (!idleInvariant(latest)) {
+    throw new Error(`proxy did not return to app-owned idle invariants within ${options.idleDeadlineMs} ms`);
+  }
+  return latest;
+}
+
+async function runWave(
+  name: string,
+  sessions: number,
+  rounds: number,
+  proxyBase: URL,
+  controlBase: URL,
+): Promise<WaveResult> {
   const started = Date.now();
+  const states = Array.from({ length: sessions }, (_, index) => makeSessionState(name, index));
   const samples: ProbeMetrics[] = [];
   let monitoring = true;
   const monitor = (async () => {
     while (monitoring) {
-      try { samples.push(await sampleMetrics()); } catch { /* main wave outcome remains authoritative */ }
+      try { samples.push(await sampleMetrics(controlBase)); } catch { /* wave outcome remains authoritative */ }
       if (monitoring) await Bun.sleep(options.sampleIntervalMs);
     }
   })();
 
-  const settled = await Promise.allSettled(Array.from({ length: sessions }, (_, index) => {
-    const sessionId = `${name}-${index}`;
-    const slow = deterministicPercent(sessionId, "slow", options.seed) < options.slowConsumerPercent;
-    return runSession(sessionId, rounds, slow);
-  }));
+  // The outer round loop is the barrier: every still-healthy session completes
+  // its model stream plus external-tool latency before the next recall wave starts.
+  for (let round = 0; round < rounds; round++) {
+    const active = states.filter(state => state.failure === undefined);
+    if (active.length === 0) break;
+    const settled = await Promise.allSettled(active.map(state => runSessionRound(state, round, proxyBase)));
+    for (let index = 0; index < settled.length; index++) {
+      const outcome = settled[index];
+      if (outcome.status === "rejected") {
+        active[index].failure = String(
+          outcome.reason instanceof Error ? outcome.reason.message : outcome.reason,
+        ).slice(0, 240);
+      }
+    }
+  }
+
   monitoring = false;
   await monitor;
-  samples.push(await sampleMetrics());
-
-  const failures = settled.filter(result => result.status === "rejected");
-  const successes = settled.filter((result): result is PromiseFulfilledResult<SessionResult> => result.status === "fulfilled");
-  const idle = await waitForIdle();
+  samples.push(await sampleMetrics(controlBase));
+  const idle = await waitForIdle(controlBase);
   samples.push(idle);
+  const completedSessions = states.filter(state => state.failure === undefined && state.requests === rounds).length;
+  const failedSessions = states.length - completedSessions;
   const result: WaveResult = {
     name,
     sessions,
     rounds,
-    completedSessions: successes.length,
-    failedSessions: failures.length,
-    requestCount: successes.reduce((sum, result) => sum + result.value.requests, 0),
-    toolCallCount: successes.reduce((sum, result) => sum + result.value.toolCalls, 0),
-    peak: peakMetrics(samples),
+    completedSessions,
+    failedSessions,
+    requestCount: states.reduce((sum, state) => sum + state.requests, 0),
+    toolCallCount: states.reduce((sum, state) => sum + state.toolCalls, 0),
+    peaks: metricPeaks(samples),
     idle,
     durationMs: Date.now() - started,
   };
@@ -568,22 +677,20 @@ async function runWave(name: string, sessions: number, rounds: number): Promise<
     name,
     sessions,
     rounds,
-    completedSessions: result.completedSessions,
-    failedSessions: result.failedSessions,
+    completedSessions,
+    failedSessions,
     requestCount: result.requestCount,
     toolCallCount: result.toolCallCount,
-    peakRss: result.peak.rss,
+    peaks: result.peaks,
     idleRss: idle.rss,
     idleRetainedBytes: idle.appOwnedBytes.retainedBytes,
     durationMs: result.durationMs,
-    firstFailure: failures[0]?.status === "rejected"
-      ? String(failures[0].reason instanceof Error ? failures[0].reason.message : failures[0].reason).slice(0, 240)
-      : undefined,
+    firstFailure: states.find(state => state.failure)?.failure,
   });
   return result;
 }
 
-async function cancelOneResponse(sessionId: string): Promise<string> {
+async function cancelOneResponse(sessionId: string, proxyBase: URL): Promise<string> {
   const controller = new AbortController();
   const response = await fetch(new URL("/v1/responses", proxyBase), {
     method: "POST",
@@ -609,10 +716,10 @@ async function cancelOneResponse(sessionId: string): Promise<string> {
   return "cancelled";
 }
 
-async function runFaultSession(index: number): Promise<{ kind: FaultKind; outcome: string }> {
+async function runFaultSession(index: number, proxyBase: URL): Promise<{ kind: FaultKind; outcome: string }> {
   const sessionId = `fault-${index}`;
   const kind = faultKind(sessionId);
-  if (kind === "cancel") return { kind, outcome: await cancelOneResponse(sessionId) };
+  if (kind === "cancel") return { kind, outcome: await cancelOneResponse(sessionId, proxyBase) };
 
   try {
     const response = await fetch(new URL("/v1/responses", proxyBase), {
@@ -635,22 +742,29 @@ async function runFaultSession(index: number): Promise<{ kind: FaultKind; outcom
   }
 }
 
-async function runFaultWave(): Promise<Record<string, number>> {
+async function runFaultWave(proxyBase: URL, controlBase: URL): Promise<Record<string, number>> {
   if (options.faultSessions === 0) return {};
-  const results = await Promise.all(Array.from({ length: options.faultSessions }, (_, index) => runFaultSession(index)));
+  const results = await Promise.all(
+    Array.from({ length: options.faultSessions }, (_, index) => runFaultSession(index, proxyBase)),
+  );
   const counts: Record<string, number> = {};
   for (const result of results) {
     const key = `${result.kind}:${result.outcome}`;
     counts[key] = (counts[key] ?? 0) + 1;
   }
-  await waitForIdle();
+  await waitForIdle(controlBase);
   emit({ type: "FAULT_WAVE", sessions: options.faultSessions, outcomes: counts });
   return counts;
 }
 
 let exitCode = 0;
+let ready: ChildReady | null = null;
+let controlBase: URL | null = null;
 try {
-  const initial = await waitForIdle();
+  ready = await withTimeout(readyPromise, 30_000, "proxy child readiness");
+  const proxyBase = new URL(ready.proxyUrl);
+  controlBase = new URL(ready.controlUrl);
+  const initial = await waitForIdle(controlBase);
   emit({
     type: "START",
     seed: options.seed,
@@ -663,17 +777,23 @@ try {
 
   const sustained: WaveResult[] = [];
   for (let wave = 0; wave < options.sustainedWaves; wave++) {
-    sustained.push(await runWave(`sustained-${wave}`, options.sustainedSessions, options.sustainedRounds));
+    sustained.push(await runWave(
+      `sustained-${wave}`,
+      options.sustainedSessions,
+      options.sustainedRounds,
+      proxyBase,
+      controlBase,
+    ));
   }
-  const burst = await runWave("burst", options.burstSessions, options.burstRounds);
-  const faultOutcomes = await runFaultWave();
-  const final = await waitForIdle();
+  const burst = await runWave("burst", options.burstSessions, options.burstRounds, proxyBase, controlBase);
+  const faultOutcomes = await runFaultWave(proxyBase, controlBase);
+  const final = await waitForIdle(controlBase);
 
   const failedBaselineSessions = sustained.reduce((sum, wave) => sum + wave.failedSessions, 0) + burst.failedSessions;
   const idleRss = sustained.map(wave => wave.idle.rss);
   const idleRetained = sustained.map(wave => wave.idle.appOwnedBytes.retainedBytes);
-  const peakRss = maxFinite([...sustained.map(wave => wave.peak.rss), burst.peak.rss]);
-  const summary = {
+  const peaks = mergePeaks([...sustained.map(wave => wave.peaks), burst.peaks]);
+  emit({
     type: "SUMMARY",
     outcome: failedBaselineSessions === 0 ? "PASS" : "FAIL",
     seed: options.seed,
@@ -683,7 +803,7 @@ try {
     bunRevision: ready.bunRevision,
     sustainedWaves: options.sustainedWaves,
     failedBaselineSessions,
-    peakRss,
+    peaks,
     initialRss: initial.rss,
     finalRss: final.rss,
     rssIdleSlopeBytesPerWave: linearSlope(idleRss),
@@ -693,9 +813,8 @@ try {
     finalOverBudgetBytes: final.appOwnedBytes.overBudgetBytes,
     finalActiveTurnCount: final.activeTurnCount,
     faultOutcomes,
-    note: "RSS slope is profiling evidence only; PASS is based on protocol completion and app-owned cleanup invariants.",
-  };
-  emit(summary);
+    note: "Process-memory slopes are profiling evidence only; PASS is based on protocol completion and app-owned cleanup invariants.",
+  });
   if (failedBaselineSessions !== 0) exitCode = 1;
 } catch (error) {
   exitCode = 1;
@@ -705,17 +824,16 @@ try {
     classification: "probe-error",
     seed: options.seed,
     failure: error instanceof Error ? error.message : String(error),
-    childStdoutTail,
-    childStderrTail,
+    childExitCode: child.exitCode,
   });
 } finally {
-  try {
-    await fetch(new URL("/shutdown", controlBase), { method: "POST" });
-  } catch { /* child may already have exited */ }
-  upstream.stop(true);
+  if (controlBase) {
+    try { await fetch(new URL("/shutdown", controlBase), { method: "POST" }); } catch { /* child may already be gone */ }
+  }
+  await upstream.stop(true);
   const childExit = await Promise.race([child.exited, Bun.sleep(2_000).then(() => null)]);
   if (childExit === null) {
-    try { child.kill("SIGKILL"); } catch { /* already exited */ }
+    try { child.kill(); } catch { /* already exited */ }
   }
 }
 
