@@ -2042,7 +2042,8 @@ export async function handleCodexAuthAPI(
         response.headers.set("Retry-After", "1");
         return response;
       }
-      return jsonResponse({ error: "OAuth authentication failed. Check the OpenCodex account status and retry." }, 500);
+      const { publicOAuthAuthenticationErrorMessage } = await import("../oauth");
+      return jsonResponse({ error: publicOAuthAuthenticationErrorMessage(e) }, 500);
     }
   }
 

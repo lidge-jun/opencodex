@@ -3388,6 +3388,42 @@ describe("codex-auth API", () => {
     }
   });
 
+  test("Codex OAuth login responses preserve actionable OAuth errors", async () => {
+    const oauth = await import("../src/oauth");
+    const startSpy = spyOn(oauth, "startLoginFlow");
+    const cases: Array<{ error: Error; expected: string }> = [
+      {
+        error: new oauth.OAuthLoginRequiredError("chatgpt"),
+        expected: "Not logged in to chatgpt. Run: ocx login chatgpt",
+      },
+      {
+        error: new oauth.OAuthTokenRefreshBusyError(),
+        expected: "OAuth token refresh capacity reached",
+      },
+      {
+        error: new oauth.OAuthTokenRefreshStaleError(),
+        expected: "OAuth token refresh owner became stale",
+      },
+    ];
+    try {
+      for (const { error, expected } of cases) {
+        startSpy.mockRejectedValueOnce(error);
+        const req = new Request("http://localhost/api/codex-auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        const response = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+        const body = await response!.json() as { error?: string };
+
+        expect(response!.status).toBe(500);
+        expect(body.error).toBe(expected);
+      }
+    } finally {
+      startSpy.mockRestore();
+    }
+  });
+
   test("Codex OAuth login status projects late provider errors", async () => {
     const oauth = await import("../src/oauth");
     const openUrlMod = await import("../src/lib/open-url");
