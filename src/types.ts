@@ -335,6 +335,8 @@ export interface OcxProviderContinuationState {
   cursor?: {
     conversationId?: string;
     checkpointUsable?: boolean;
+    /** Opaque process-local Cursor ConversationStateStructure snapshot ref. Never raw protobuf. */
+    checkpointRef?: string;
   };
   kiro?: {
     conversationId?: string;

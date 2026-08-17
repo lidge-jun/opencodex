@@ -798,9 +798,69 @@ function buildPreparedCursorRunRequest(
           }),
         },
   });
-  const rootPromptMessagesState = rootPromptMessages(request, requestScope);
-  const rootPromptMessageIds = rootPromptMessagesState.ids;
-  const turnIds = conversationTurns(request, requestScope, rootPromptMessagesState.historyMessageStart);
+  let continuationMode: "full-replay" | "checkpoint" = "full-replay";
+  let checkpointInvalidationReason = request.checkpointInvalidationReason;
+  let conversationState;
+  let rootPromptMessagesState: ReturnType<typeof rootPromptMessages> | undefined;
+  if (request.checkpointBytes && request.checkpointBytes.byteLength > 0) {
+    try {
+      conversationState = fromBinary(ConversationStateStructureSchema, request.checkpointBytes);
+      continuationMode = "checkpoint";
+      const suffixStart = request.checkpointSuffixStart;
+      if (
+        typeof suffixStart === "number"
+        && Number.isSafeInteger(suffixStart)
+        && suffixStart >= 0
+        && request.rawMessages
+        && suffixStart < request.rawMessages.length
+      ) {
+        const suffixRequest: CursorRunRequest = {
+          ...request,
+          rawMessages: request.rawMessages.slice(suffixStart),
+        };
+        const suffixRoots = rootPromptMessages(suffixRequest, requestScope);
+        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart);
+        const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
+        const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);
+        const suffixHistorySerialized = suffixRoots.serialized.slice(suffixSystemCount);
+        conversationState = create(ConversationStateStructureSchema, {
+          ...conversationState,
+          rootPromptMessagesJson: [
+            ...conversationState.rootPromptMessagesJson,
+            ...suffixHistoryIds,
+          ],
+          turns: [
+            ...conversationState.turns,
+            ...suffixTurns,
+          ],
+        });
+        rootPromptMessagesState = {
+          ids: suffixHistoryIds,
+          byteLength: suffixRoots.byteLength,
+          historyMessageStart: suffixRoots.historyMessageStart,
+          serialized: suffixHistorySerialized,
+        };
+      }
+    } catch {
+      checkpointInvalidationReason = "decode_failed";
+    }
+  }
+  if (!conversationState) {
+    rootPromptMessagesState = rootPromptMessages(request, requestScope);
+    conversationState = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: rootPromptMessagesState.ids,
+      turns: conversationTurns(request, requestScope, rootPromptMessagesState.historyMessageStart),
+      todos: [],
+      pendingToolCalls: [],
+      previousWorkspaceUris: [],
+      fileStates: {},
+      fileStatesV2: {},
+      summaryArchives: [],
+      turnTimings: [],
+      subagentStates: {},
+      readPaths: [],
+    });
+  }
   // Hoisted out of the mcp_tools spread below so the estimate can read the same
   // filtered definitions the wire carries. Both helpers are pure.
   const visibleTools = cursorToolsForActivePrompt(request.tools, rawText, request.toolChoice);
@@ -812,9 +872,13 @@ function buildPreparedCursorRunRequest(
     turnType: lastRawIsToolResult ? "tool-continuation" : "initial",
     externalModel: isCursorExternalWireModel(request.modelId),
     rawMessages: request.rawMessages?.length ?? 0,
-    rootBlobs: rootPromptMessageIds.length,
-    rootBytes: rootPromptMessagesState.byteLength,
-    turnBlobs: turnIds.length,
+    continuationMode,
+    checkpointPresent: continuationMode === "checkpoint",
+    checkpointBytes: continuationMode === "checkpoint" ? request.checkpointBytes?.byteLength : undefined,
+    checkpointInvalidationReason,
+    rootBlobs: conversationState.rootPromptMessagesJson.length,
+    rootBytes: rootPromptMessagesState?.byteLength ?? 0,
+    turnBlobs: conversationState.turns.length,
     tools: request.tools?.length ?? 0,
   });
 
@@ -825,19 +889,7 @@ function buildPreparedCursorRunRequest(
   const hasExplicitModelParameters = (request.requestedModelParameters?.length ?? 0) > 0;
   const runRequest = create(AgentRunRequestSchema, {
     conversationId: request.conversationId,
-    conversationState: create(ConversationStateStructureSchema, {
-      rootPromptMessagesJson: rootPromptMessageIds,
-      turns: turnIds,
-      todos: [],
-      pendingToolCalls: [],
-      previousWorkspaceUris: [],
-      fileStates: {},
-      fileStatesV2: {},
-      summaryArchives: [],
-      turnTimings: [],
-      subagentStates: {},
-      readPaths: [],
-    }),
+    conversationState,
     action,
     // Explicit model-picker parameters follow current Cursor clients and use requested_model alone.
     // Keep legacy model_details for flat model ids and the already-live Router path; sending both for
@@ -884,7 +936,7 @@ function buildPreparedCursorRunRequest(
   // Same instances that produced `bytes`, so the estimate cannot count history or
   // tools the payload dropped — the defect that blocked PR #376.
   const modelVisibleParts = [
-    ...rootPromptMessagesState.serialized,
+    ...(rootPromptMessagesState?.serialized ?? []),
     ...(actionCase === "userMessageAction" ? [actionText] : []),
     ...mcpToolDefs.map(modelVisibleToolText),
   ];
