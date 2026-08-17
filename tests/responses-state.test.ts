@@ -1759,6 +1759,37 @@ describe("Responses previous_response_id state", () => {
     expect(previousResponseConversationId(first.id as string)).toBe("cursor_conversation_1");
   });
 
+  test("persists an opaque Cursor checkpoint ref without raw protobuf bytes", async () => {
+    const first = buildResponseJSON([
+      { type: "text_delta", text: "answer", phase: "final_answer" },
+      { type: "done", endTurn: true },
+    ], "cursor/auto");
+    rememberResponseState(
+      { model: "cursor/auto", input: "hello" },
+      first,
+      {
+        cursor: {
+          conversationId: "cursor_conversation_ref",
+          checkpointUsable: true,
+          checkpointRef: "opaque-checkpoint-ref",
+        },
+      },
+    );
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    expect(previousResponseProviderState(first.id as string)).toEqual({
+      cursor: {
+        conversationId: "cursor_conversation_ref",
+        checkpointUsable: true,
+        checkpointRef: "opaque-checkpoint-ref",
+      },
+    });
+    const snapshot = readFileSync(join(home, "responses-state.json"), "utf8");
+    expect(snapshot).toContain("opaque-checkpoint-ref");
+    expect(snapshot).not.toContain("rootPromptMessagesJson");
+  });
+
   test("preserves provider conversation id after a client tool-call response (multi-turn continuation)", () => {
     const firstBody = { model: "cursor/auto", input: "use ping" };
     const first = buildResponseJSON([

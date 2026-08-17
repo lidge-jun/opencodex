@@ -508,6 +508,26 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
 
+## Cursor conversation checkpoint reuse
+
+After a successful no-tool turn, the Cursor adapter keeps the returned ConversationStateStructure in
+a process-local store and reuses that snapshot on the next validated linear continuation instead of
+rebuilding rootPromptMessagesJson and conversationTurns. Tool-result turns reuse the last completed
+checkpoint plus only the uncovered suffix. Compaction, helper/shadow isolation, account or model
+mismatch, missing refs, decode failures, and invalid_argument recovery keep the existing full-replay
+path. previous_response_id may select a branch's opaque checkpointRef; it is never a Cursor
+conversation ownership key. Cursor Connect still does not expose authoritative cache_read_tokens.
+
+```text
+[Decision Log]
+- 목적과 의도: Reuse Cursor's returned ConversationStateStructure on validated linear continuations so OpenCodex does not rebuild the full root history every turn.
+- 기존 구현 및 제약 조건: Stable conversation ids already exist (#366), but every turn still reconstructed rootPromptMessagesJson and conversationTurns. Cursor Connect still reports only usedTokens/maxTokens, so cache_read_tokens cannot be treated as authoritative (#275).
+- 검토한 주요 대안: Keep full replay; copy Pi's live MCP bridge immediately; store raw protobuf in Responses JSON; key checkpoints only by conversation id.
+- 선택한 방식: Keep an opaque process-local checkpointRef on OcxProviderContinuationState.cursor, bind the snapshot to conversation/account/model affinity, pin referenced blobs for the checkpoint lifetime, and fall back to the existing full-replay path for isolation, compaction, restart, missing refs, and invalid_argument recovery. Tool-result turns reuse the last completed checkpoint plus an uncovered suffix. previous_response_id is a branch anchor, never a Cursor conversation ownership key.
+- 다른 대안 대신 이 방식을 선택한 이유: It removes avoidable replay cost without claiming cache-hit rates, without changing OAuth, and without collapsing helper/compaction isolation or tool-call replay safety.
+- 장점, 단점 및 영향: Validated no-tool follow-ups stop growing local rootBytes with history; a process restart or missing blob lease falls back to full replay; large-context 429 / premature-completion acceptance for #1527 is still unproven; a stateful live MCP bridge remains out of scope.
+```
+
 ## Google thought-text visibility boundary
 
 Google-family responses may represent model-internal reasoning as a text-bearing part with
@@ -851,7 +871,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
 | Anthropic image ingress | `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts` | Oversized or unsupported images are normalized or rejected before reaching upstream. |
 | Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |
-| Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts` | Thread continuity is the point: a retry must not start a new Cursor thread. |
+| Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts`, `src/adapters/cursor/checkpoint-store.ts` | Thread continuity is the point: a retry must not start a new Cursor thread, and a validated checkpoint must not rebuild the full root history. |
 | Claude Messages | `src/server/claude-messages.ts` | Routed translation, a native Anthropic passthrough branch, and `count_tokens`. |
 | Chat Completions inbound | `src/server/chat-completions.ts`, `src/chat/` | Inbound translation onto the same routing pipeline. |
 | Hosted search relay | `src/server/search.ts` | Direct relay; distinct from the web-search sidecar loop below. |

@@ -12,6 +12,11 @@ export interface CursorTransport {
    * accepted is never replayed. Absent (undefined) is treated as "committed" — safe by default.
    */
   requestCommitted?(): boolean;
+  /**
+   * Last ConversationStateStructure captured from conversationCheckpointUpdate on this transport.
+   * Test and adapter seams use this instead of reaching into LiveCursorTransport.
+   */
+  capturedConversationCheckpoint?(): Uint8Array | undefined;
 }
 
 export interface CursorTransportFactoryInput {

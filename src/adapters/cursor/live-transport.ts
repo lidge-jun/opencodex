@@ -33,6 +33,7 @@ import {
   CreatePlanRequestResponseSchema,
   CreatePlanResultSchema,
   CreatePlanSuccessSchema,
+  ConversationStateStructureSchema,
   ExaFetchRequestResponseSchema,
   ExaFetchRequestResponse_ApprovedSchema,
   ExaSearchRequestResponseSchema,
@@ -429,9 +430,10 @@ class LiveCursorTransport implements CursorTransport {
   private turnStartedAt = 0;
   private framesReceived = 0;
  private firstFrameAt?: number;
- private firstFrameLogged = false;
+  private firstFrameLogged = false;
   /** Stable session identifier sent as x-session-id; mirrors IDE session semantics. */
   private readonly sessionId = crypto.randomUUID();
+  private capturedCheckpointBytes?: Uint8Array;
 
   constructor(private readonly input: CursorTransportFactoryInput) {
     this.translatorBudget = input.translatorBudget;
@@ -1046,6 +1048,10 @@ class LiveCursorTransport implements CursorTransport {
     }, HEARTBEAT_MS);
   }
 
+  capturedConversationCheckpoint(): Uint8Array | undefined {
+    return this.capturedCheckpointBytes;
+  }
+
   private async handleServerMessage(
     message: AgentServerMessage,
     state: ReturnType<typeof createCursorProtobufEventState>,
@@ -1053,6 +1059,13 @@ class LiveCursorTransport implements CursorTransport {
   ): Promise<void> {
     if (!this.stream) return;
     debugProviderDiagnostic("cursor", "frame", describeCursorServerFrame(message));
+    if (message.message.case === "conversationCheckpointUpdate") {
+      try {
+        this.capturedCheckpointBytes = toBinary(ConversationStateStructureSchema, message.message.value);
+      } catch {
+        this.capturedCheckpointBytes = undefined;
+      }
+    }
     if (message.message.case === "kvServerMessage") {
       this.stream.write(encodeConnectFrame(handleCursorNativeKv(message.message.value, this.blobRequestScope)));
       return;
@@ -1257,4 +1270,8 @@ function cursorConnectErrorCode(payload: Uint8Array): string | undefined {
 
 export function createLiveCursorTransport(input: CursorTransportFactoryInput): CursorTransport {
   return new LiveCursorTransport(input);
+}
+
+export function capturedCursorCheckpointBytes(transport: CursorTransport): Uint8Array | undefined {
+  return transport.capturedConversationCheckpoint?.();
 }

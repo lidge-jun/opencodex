@@ -9,7 +9,7 @@ import type {
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRequestedModelParameter, CursorRunRequest } from "./types";
-import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
+import { cursorCheckpointModelAffinityId, cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorEffortSuffix, cursorRequestWireModelIdWithEffort } from "./effort-map";
 import {
   cursorMcpToolEncodedSize,
@@ -25,6 +25,10 @@ import {
   isCursorWaitTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
+import {
+  getCursorCheckpoint,
+  type CursorCheckpointInvalidationReason,
+} from "./checkpoint-store";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -295,6 +299,37 @@ export interface CreateCursorRequestOptions {
   forceFreshConversation?: boolean;
 }
 
+function checkpointInvalidationReason(
+  parsed: OcxParsedRequest,
+  request: CursorRunRequest,
+  options: CreateCursorRequestOptions,
+): CursorCheckpointInvalidationReason | undefined {
+  if (options.forceFreshConversation === true) return "force_fresh";
+  if (parsed._cursorIsolateConversation === true) return "isolated_turn";
+  if (parsed._compactionRequest === true || parsed._contextCompactionBoundary === true) return "compaction";
+  const cursorState = parsed._providerContinuation?.cursor;
+  const ref = cursorState?.checkpointRef;
+  if (!ref) return "missing_ref";
+  const snapshot = getCursorCheckpoint(ref);
+  if (!snapshot) return "expired";
+  if (snapshot.conversationId !== request.conversationId) return "conversation_changed";
+  const identityScope = parsed._cursorIdentityScope?.trim() || "local";
+  if (snapshot.identityScope !== identityScope) return "identity_changed";
+  if (cursorCheckpointModelAffinityId(snapshot.modelId) !== cursorCheckpointModelAffinityId(request.modelId)) {
+    return "model_changed";
+  }
+  const lastRole = parsed.context.messages.at(-1)?.role;
+  if (lastRole === "toolResult") {
+    if (snapshot.coveredMessageCount === undefined) return "trailing_tool_result";
+    if (snapshot.coveredMessageCount < 0 || snapshot.coveredMessageCount >= parsed.context.messages.length) {
+      return "trailing_tool_result";
+    }
+  } else if (cursorState?.checkpointUsable === false) {
+    return "trailing_tool_result";
+  }
+  return undefined;
+}
+
 export function createCursorRequest(
   parsed: OcxParsedRequest,
   options: CreateCursorRequestOptions = {},
@@ -307,7 +342,7 @@ export function createCursorRequest(
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
   const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning);
-  return {
+  const request: CursorRunRequest = {
     modelId: model.modelId,
     ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
@@ -321,4 +356,22 @@ export function createCursorRequest(
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };
+  const invalidation = checkpointInvalidationReason(parsed, request, options);
+  if (invalidation) {
+    request.continuationMode = "full-replay";
+    request.checkpointInvalidationReason = invalidation;
+    return request;
+  }
+  const snapshot = getCursorCheckpoint(parsed._providerContinuation?.cursor?.checkpointRef);
+  if (!snapshot) {
+    request.continuationMode = "full-replay";
+    request.checkpointInvalidationReason = "missing_ref";
+    return request;
+  }
+  request.checkpointBytes = snapshot.checkpointBytes;
+  request.continuationMode = "checkpoint";
+  if (parsed.context.messages.at(-1)?.role === "toolResult" && snapshot.coveredMessageCount !== undefined) {
+    request.checkpointSuffixStart = snapshot.coveredMessageCount;
+  }
+  return request;
 }

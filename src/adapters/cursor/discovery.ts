@@ -155,6 +155,13 @@ function stripCursorEffortSuffix(wireModelId: string): string {
   return wireModelId;
 }
 
+/** Compare Cursor wire models without effort suffix or the grok cursor- request prefix. */
+export function cursorCheckpointModelAffinityId(modelId: string): string {
+  const wire = cursorCodexToWireModelId(modelId).trim().toLowerCase();
+  const withoutPrefix = wire.startsWith("cursor-") ? wire.slice("cursor-".length) : wire;
+  return stripCursorEffortSuffix(withoutPrefix);
+}
+
 export function isCursorRouterModelId(modelId: string): boolean {
   return (CURSOR_ROUTER_MODEL_IDS as readonly string[]).includes(modelId);
 }

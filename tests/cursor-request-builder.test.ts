@@ -1,4 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { create, toBinary } from "@bufbuild/protobuf";
+import { ConversationStateStructureSchema } from "../src/adapters/cursor/gen/agent_pb";
+import {
+  clearCursorCheckpointsForTests,
+  commitCursorCheckpoint,
+  getCursorCheckpoint,
+} from "../src/adapters/cursor/checkpoint-store";
 import {
   applyCursorToolBudget,
   createCursorRequest,
@@ -692,5 +699,185 @@ describe("Cursor request builder", () => {
 
     expect(request.conversationId).not.toBe("cursor_force_me");
     expect(request.conversationId.startsWith("cursor_")).toBe(true);
+  });
+
+  test("reuses a validated checkpoint and ignores it for isolation or uncovered tool results", () => {
+    clearCursorCheckpointsForTests();
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["builder-fixture"],
+    }));
+    const checkpointRef = commitCursorCheckpoint({
+      conversationId: "cursor_stable",
+      identityScope: "acct-1",
+      modelId: "default",
+      checkpointBytes,
+      coveredMessageCount: 2,
+    });
+    expect(checkpointRef).toBeDefined();
+
+    const reused = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+      context: { messages: [{ role: "user", content: "continue", timestamp: 1 }] },
+    });
+    expect(reused.continuationMode).toBe("checkpoint");
+    expect(reused.checkpointBytes?.byteLength).toBe(checkpointBytes.byteLength);
+
+    const isolated = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _cursorIsolateConversation: true,
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+    });
+    expect(isolated.continuationMode).toBe("full-replay");
+    expect(isolated.checkpointInvalidationReason).toBe("isolated_turn");
+    expect(isolated.checkpointBytes).toBeUndefined();
+
+    const toolResult = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: false, checkpointRef },
+      },
+      context: {
+        messages: [
+          { role: "user", content: "read", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "calling" }], timestamp: 2 },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "ok",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+    expect(toolResult.continuationMode).toBe("checkpoint");
+    expect(toolResult.checkpointSuffixStart).toBe(2);
+
+    const uncovered = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: false, checkpointRef },
+      },
+      context: {
+        messages: [{
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read_file",
+          content: "ok",
+          isError: false,
+          timestamp: 2,
+        }],
+      },
+    });
+    expect(uncovered.continuationMode).toBe("full-replay");
+    expect(uncovered.checkpointInvalidationReason).toBe("trailing_tool_result");
+    clearCursorCheckpointsForTests();
+  });
+
+  test("falls back to full replay when the checkpoint identity no longer matches", () => {
+    clearCursorCheckpointsForTests();
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["identity-fixture"],
+    }));
+    const checkpointRef = commitCursorCheckpoint({
+      conversationId: "cursor_stable",
+      identityScope: "acct-1",
+      modelId: "grok-4.6",
+      checkpointBytes,
+    });
+    expect(checkpointRef).toBeDefined();
+
+    const missing = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+    });
+    expect(missing.continuationMode).toBe("full-replay");
+    expect(missing.checkpointInvalidationReason).toBe("missing_ref");
+
+    const expired = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef: "missing-ref" },
+      },
+    });
+    expect(expired.continuationMode).toBe("full-replay");
+    expect(expired.checkpointInvalidationReason).toBe("expired");
+
+    const modelChanged = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+    });
+    expect(modelChanged.continuationMode).toBe("full-replay");
+    expect(modelChanged.checkpointInvalidationReason).toBe("model_changed");
+
+    const identityChanged = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-2",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+    });
+    expect(identityChanged.continuationMode).toBe("full-replay");
+    expect(identityChanged.checkpointInvalidationReason).toBe("identity_changed");
+
+    const conversationChanged = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_other",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+    });
+    expect(conversationChanged.continuationMode).toBe("full-replay");
+    expect(conversationChanged.checkpointInvalidationReason).toBe("conversation_changed");
+
+    const forceFresh = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+    }, { forceFreshConversation: true });
+    expect(forceFresh.continuationMode).toBe("full-replay");
+    expect(forceFresh.checkpointInvalidationReason).toBe("force_fresh");
+
+    const compaction = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+      _compactionRequest: true,
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
+      },
+    });
+    expect(compaction.continuationMode).toBe("full-replay");
+    expect(compaction.checkpointInvalidationReason).toBe("compaction");
+    expect(compaction.checkpointBytes).toBeUndefined();
+    expect(getCursorCheckpoint(checkpointRef)?.ref).toBe(checkpointRef);
+    clearCursorCheckpointsForTests();
   });
 });

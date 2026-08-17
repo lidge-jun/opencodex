@@ -7,6 +7,13 @@ import {
   clearCursorThreadContinuityForTests,
   lookupCursorThreadConversation,
 } from "../src/adapters/cursor/thread-continuity";
+import {
+  clearCursorCheckpointsForTests,
+  commitCursorCheckpoint,
+  getCursorCheckpoint,
+} from "../src/adapters/cursor/checkpoint-store";
+import { create, toBinary } from "@bufbuild/protobuf";
+import { ConversationStateStructureSchema } from "../src/adapters/cursor/gen/agent_pb";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -84,11 +91,9 @@ describe("Cursor adapter live transport", () => {
     expect(requests[0]?.modelId).toBe("default");
     expect(requests[0]?.routingLevel).toBeUndefined();
     expect(writes).toEqual([]);
-    expect(events).toEqual([
-      { type: "thinking_delta", thinking: "검토 중" },
-      { type: "text_delta", text: "안녕하세요" },
-      { type: "done", usage: { inputTokens: 3, outputTokens: 5 } },
-    ]);
+    expect(events[0]).toEqual({ type: "thinking_delta", thinking: "검토 중" });
+    expect(events[1]).toEqual({ type: "text_delta", text: "안녕하세요" });
+    expect(events[2]).toMatchObject({ type: "done", usage: { inputTokens: 3, outputTokens: 5 } });
   });
 
   test("runTurn preserves explicit Cursor Router optimization levels", async () => {
@@ -501,5 +506,93 @@ describe("Cursor adapter live transport", () => {
     expect(attempts).toBe(1);
     expect(events.some(event => event.type === "text_delta")).toBe(true);
     expect(events.some(event => event.type === "error")).toBe(true);
+  });
+
+  test("attaches a committed checkpoint ref on done so stream persist can reuse it", async () => {
+    clearCursorCheckpointsForTests();
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["stream-fixture"],
+    }));
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          yield { type: "text", text: "remembered" } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+        capturedConversationCheckpoint() {
+          return checkpointBytes;
+        },
+      }),
+    });
+
+    const events: AdapterEvent[] = [];
+    const body: OcxParsedRequest = {
+      ...parsed,
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _cursorConversationId: "cursor_stream_persist",
+      _cursorIdentityScope: "acct-stream",
+    };
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    const done = events.find(event => event.type === "done");
+    expect(done?.type).toBe("done");
+    if (done?.type !== "done") throw new Error("expected done");
+    expect(done.providerState?.cursor?.checkpointRef).toBeDefined();
+    expect(done.providerState?.cursor?.checkpointUsable).toBe(true);
+    expect(getCursorCheckpoint(done.providerState?.cursor?.checkpointRef)?.conversationId).toBe("cursor_stream_persist");
+    expect(body._providerContinuation?.cursor?.checkpointRef).toBe(done.providerState?.cursor?.checkpointRef);
+    clearCursorCheckpointsForTests();
+  });
+
+  test("isolated helper turns do not inherit or invalidate a parent checkpoint ref", async () => {
+    clearCursorCheckpointsForTests();
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["isolate-fixture"],
+    }));
+    const parentRef = commitCursorCheckpoint({
+      conversationId: "cursor_parent_real",
+      identityScope: "acct-isolate-test",
+      modelId: "default",
+      checkpointBytes,
+      coveredMessageCount: 1,
+    });
+    expect(parentRef).toBeDefined();
+
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+    const body: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: { messages: [{ role: "user", content: "summarize", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_parent_real",
+      _cursorIsolateConversation: true,
+      _cursorIdentityScope: "acct-isolate-test",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_parent_real", checkpointUsable: true, checkpointRef: parentRef },
+      },
+    };
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+    expect(body._providerContinuation?.cursor?.checkpointRef).toBeUndefined();
+    const done = events.find(event => event.type === "done");
+    expect(done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined).toBeUndefined();
+    clearCursorCheckpointsForTests();
   });
 });
