@@ -992,6 +992,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     oauthId: "xai",
     jawcodeBundle: "xai",
     note: "Log in with your Grok account",
+    // xAI Priority Processing is documented on the canonical API-key transport
+    // (https://api.x.ai/v1). The OAuth/CLI transport (https://cli-chat-proxy.grok.com/v1)
+    // is not established by public docs, so this opt-in is gated by auth mode in
+    // serviceTierSupportForModel (issue #1875): Fast is advertised/forwarded only in
+    // key mode, never on the unverified OAuth transport.
+    chatServiceTier: true,
     // Parallel tool calls: officially supported and default-on per docs.x.ai function-calling
     // (verified 260709, devlog/_plan/260709_parallel_tool_calls). Streamed calls arrive whole
     // per chunk, so the buffered parser assembles them losslessly.

@@ -6,6 +6,15 @@ import { getProviderRegistryEntry, providerModelWireDefault, type InboundWire } 
 export const SERVICE_TIER_ADAPTERS = new Set(["openai-chat", "openai-responses"]);
 
 export type CapturedServiceTierAdapterAuthority = Readonly<Record<string, string>>;
+/**
+ * xAI multiplexes two transports under one provider id: an API-key mode that stays on
+ * https://api.x.ai/v1 (where Priority Processing is documented) and an OAuth/CLI mode that
+ * resolves to https://cli-chat-proxy.grok.com/v1 (unverified by public docs). The built-in
+ * xai preset opts into chatServiceTier, but that opt-in must only arm when the effective
+ * transport is the canonical API-key path (issue #1875).
+ */
+const XAI_CHAT_PRIORITY_PROVIDER = "xai";
+
 
 const capturedAdapterAuthority = new WeakMap<object, CapturedServiceTierAdapterAuthority>();
 
@@ -135,6 +144,15 @@ export function serviceTierSupportForModel(
     ? provider.adapter
     : serviceTierAdapterForModel(providerName, provider, modelId, inbound);
   if (!SERVICE_TIER_ADAPTERS.has(adapter)) return false;
+  // xAI transport gate (issue #1875): the Chat opt-in is transport-sensitive. Only the
+  // canonical API-key transport is verified for Priority Processing, so it is supported
+  // (true); the OAuth/CLI transport stays unadvertised and uninjected (false). An exact
+  // model denial or a provider-wide supportsServiceTier: false still wins.
+  if (providerName === XAI_CHAT_PRIORITY_PROVIDER && adapter === "openai-chat") {
+    if (provider.supportsServiceTier === false) return false;
+    if (exactModelValue(provider.modelSupportsServiceTier, modelId) === false) return false;
+    return provider.authMode === "key" ? true : false;
+  }
   // Treat the Chat serializer decision as authoritative so catalog metadata, routing
   // evidence, fast-mode injection, and caller-tier stripping cannot claim support that the
   // final request builder will omit. A provider-wide false and an exact false stay closed.

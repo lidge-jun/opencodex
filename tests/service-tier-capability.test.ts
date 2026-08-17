@@ -11,7 +11,7 @@ import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { RequestLogContext } from "../src/server/request-log";
 import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
-import { canForwardServiceTierForModel, supportsServiceTierForModel } from "../src/providers/service-tier";
+import { canForwardServiceTierForModel, serviceTierSupportForModel, supportsServiceTierForModel } from "../src/providers/service-tier";
 import { serviceTierAdapterForModel } from "../src/providers/service-tier";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
 import { resolveProductionBehaviorValues } from "../src/routing/compatibility/behavior";
@@ -309,5 +309,45 @@ describe("the gate fires on the live handleResponses path", () => {
     expect(blocked).not.toHaveProperty("service_tier");
     const undeclared = await drive("custom-chat", custom(), "undeclared-model", { service_tier: "priority" });
     expect(undeclared).not.toHaveProperty("service_tier");
+  });
+
+  test("xai API-key transport injects priority with fastMode and strips it when disabled", async () => {
+    const xaiKey = (): OcxProviderConfig => ({ ...providerConfigSeed(getProviderRegistryEntry("xai")!), apiKey: "sk-test", authMode: "key" });
+    const on = await drive("xai", xaiKey(), "grok-4.6", {}, true);
+    expect(on.service_tier).toBe("priority");
+    const off = await drive("xai", xaiKey(), "grok-4.6", { service_tier: "priority" }, false);
+    expect(off).not.toHaveProperty("service_tier");
+  });
+
+  test("xai OAuth transport never receives service_tier", async () => {
+    const xaiOauth = (): OcxProviderConfig => ({ ...providerConfigSeed(getProviderRegistryEntry("xai")!), apiKey: "sk-test", authMode: "oauth" });
+    const injected = await drive("xai", xaiOauth(), "grok-4.6", {}, true);
+    expect(injected).not.toHaveProperty("service_tier");
+    const caller = await drive("xai", xaiOauth(), "grok-4.6", { service_tier: "priority" });
+    expect(caller).not.toHaveProperty("service_tier");
+  });
+});
+
+describe("xai Priority (Fast) is transport-sensitive (issue #1875)", () => {
+  const xaiKey = (): OcxProviderConfig =>
+    ({ ...providerConfigSeed(getProviderRegistryEntry("xai")!), apiKey: "sk-test", authMode: "key" });
+  const xaiOauth = (): OcxProviderConfig =>
+    ({ ...providerConfigSeed(getProviderRegistryEntry("xai")!), apiKey: "sk-test", authMode: "oauth" });
+
+  test("API-key transport arms the Chat opt-in and forwards priority", () => {
+    const provider = xaiKey();
+    expect(serviceTierSupportForModel(provider, "grok-4.6", "xai")).toBe(true);
+    expect(canForwardServiceTierForModel(provider, "grok-4.6", "xai")).toBe(true);
+  });
+
+  test("OAuth/CLI transport stays unarmed despite the static registry flag", () => {
+    const provider = xaiOauth();
+    expect(serviceTierSupportForModel(provider, "grok-4.6", "xai")).toBe(false);
+    expect(canForwardServiceTierForModel(provider, "grok-4.6", "xai")).toBe(false);
+  });
+
+  test("an exact model denial still wins over the API-key transport", () => {
+    const provider = { ...xaiKey(), modelSupportsServiceTier: { "grok-4.6": false } };
+    expect(serviceTierSupportForModel(provider, "grok-4.6", "xai")).toBe(false);
   });
 });
