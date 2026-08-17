@@ -21,6 +21,7 @@ import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
+import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "./google-antigravity-tools";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
@@ -160,9 +161,10 @@ function messagesToGeminiFormat(
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
+  const messages = repairGoogleToolPairs(parsed.context.messages);
 
   const callIds = createToolCallIdAllocator();
-  for (const msg of parsed.context.messages) {
+  for (const msg of messages) {
     if (msg.role === "assistant") {
       for (const part of (msg as OcxAssistantMessage).content) {
         if (part.type === "toolCall") callIds.reserve((part as OcxToolCall).id);
@@ -171,7 +173,7 @@ function messagesToGeminiFormat(
       callIds.reserve((msg as OcxToolResultMessage).toolCallId);
     }
   }
-  for (const msg of parsed.context.messages) {
+  for (const msg of messages) {
     switch (msg.role) {
       case "user":
       case "developer": {
@@ -466,6 +468,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // nested) — matching CLIProxyAPI `generateStableSessionID`. An extra top-level/snake_case
         // spelling is a non-first-party key, so we send the single canonical location.
         const draftRequest: Record<string, unknown> = { ...body, sessionId };
+        if (systemInstruction) {
+          draftRequest.preambleConfig = { mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" };
+        }
         // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
         if (/claude/i.test(wireModelId)) {
           // VALIDATED would defeat a client's tool_choice "none": honor it by dropping the
@@ -480,10 +485,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         const compiled = compileGoogleWireBody(draftRequest);
         const request = compiled.body;
+        if (systemInstruction) {
+          request.preambleConfig = { mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" };
+        }
         restoreGoogleToolName = compiled.restoreToolName;
         // Compile names before replay: signatures are keyed by the exact provider-visible name.
         if (Array.isArray((request as { contents?: unknown[] }).contents)) {
           const contents = (request as { contents: unknown[] }).contents;
+          if (/claude/i.test(wireModelId)) stripTrailingClaudePrefill(contents);
           if (antigravityUsesReplayCache(wireModelId)) {
             applyAntigravityReplay(wireModelId, sessionId, contents);
           } else {
@@ -503,6 +512,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         };
         headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
         headers["Authorization"] = `Bearer ${token}`;
+        if (/claude/i.test(wireModelId)) {
+          headers["anthropic-beta"] = "interleaved-thinking-2025-05-14";
+        }
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }
 
