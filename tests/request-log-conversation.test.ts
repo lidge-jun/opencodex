@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  clientThreadIdFromResponsesHeaders,
   conversationIdFromClaudeCacheKey,
   conversationIdFromClaudeMetadata,
   conversationIdFromResponsesRequest,
@@ -68,6 +69,20 @@ describe("sessionIdHeaderFromRequest", () => {
       session_id: "underscore",
       "session-id": "hyphen",
     }))).toBe("underscore");
+  });
+});
+describe("clientThreadIdFromResponsesHeaders", () => {
+  test("prefers Codex parent thread over session_id", () => {
+    expect(clientThreadIdFromResponsesHeaders(new Headers({
+      "x-codex-parent-thread-id": "parent",
+      session_id: "session",
+    }))).toBe("parent");
+  });
+
+  test("falls back to session_id so store:false clients reuse Cursor conversations", () => {
+    expect(clientThreadIdFromResponsesHeaders(new Headers({
+      session_id: "gjc-session",
+    }))).toBe("gjc-session");
   });
 });
 

@@ -173,6 +173,7 @@ import {
   type RequestLogContext,
 } from "../request-log";
 import {
+  clientThreadIdFromResponsesHeaders,
   conversationIdFromResponsesRequest,
   normalizeLogConversationId,
   sessionIdHeaderFromRequest,
@@ -1654,7 +1655,7 @@ async function handleResponsesInner(
   let unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
   );
-  const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const inboundClientThreadId = clientThreadIdFromResponsesHeaders(req.headers);
   const originalBody = body;
   body = expandPreviousResponseInput(body, inboundClientThreadId);
   if (previousResponseScopeMismatch(body)) {

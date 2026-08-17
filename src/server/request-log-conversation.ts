@@ -61,6 +61,13 @@ export function sessionIdHeaderFromRequest(headers: Headers): string | null {
   return headers.get("session_id") ?? headers.get("session-id");
 }
 
+/** Cursor conversation reuse: Codex parent thread, then Responses session headers. */
+export function clientThreadIdFromResponsesHeaders(headers: Headers): string | undefined {
+  return headers.get("x-codex-parent-thread-id")?.trim()
+    || sessionIdHeaderFromRequest(headers)?.trim()
+    || undefined;
+}
+
 export function conversationIdFromResponsesRequest(input: {
   clientThreadId?: string;
   sessionIdHeader?: string | null;
