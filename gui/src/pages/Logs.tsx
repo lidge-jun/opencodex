@@ -15,7 +15,9 @@ import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
+import { modelTitle } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
+import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
 import {
@@ -177,30 +179,6 @@ function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
   return cached;
 }
 
-function isCursorUsageProvider(provider: string): boolean {
-  return provider === "cursor" || provider.startsWith("cursor-");
-}
-
-function tokensTitle(log: LogEntry, t: TFn): string | undefined {
-  if (!log.usage) return undefined;
-  const split = cacheSplit(log);
-  const parts = [
-    `${t("logs.tokens.input")}=${log.usage.inputTokens}`,
-    `${t("logs.tokens.output")}=${log.usage.outputTokens}`,
-  ];
-  if (split.read !== undefined) parts.push(`${t("logs.tokens.cacheRead")}=${split.read}`);
-  if (split.write !== undefined) parts.push(`${t("logs.tokens.cacheWrite")}=${split.write}`);
-  if (typeof log.usage.contextTotalTokens === "number") {
-    parts.push(`${t("logs.tokens.contextTotal")}=${log.usage.contextTotalTokens}`);
-  }
-  if (typeof log.usage.reasoningOutputTokens === "number") parts.push(`${t("logs.tokens.reasoning")}=${log.usage.reasoningOutputTokens}`);
-  if (log.usageStatus === "estimated") parts.push(t("logs.tokens.estimatedNote"));
-  if (log.usageStatus === "estimated" && split.read === undefined && split.write === undefined) {
-    parts.push(t(isCursorUsageProvider(log.provider) ? "logs.tokens.noCacheCursorNote" : "logs.tokens.noCacheNote"));
-  }
-  return parts.join(" \xC2\xB7 ");
-}
-
 function displayTokenTotal(log: LogEntry): number | undefined {
   if (!log.usage) return typeof log.totalTokens === "number" ? log.totalTokens : undefined;
   // inputTokens is inclusive of cache read/write (canonical convention, devlog 070);
@@ -225,19 +203,6 @@ function displayContextTokenTotal(log: LogEntry): number | undefined {
   const contextTotal = log.usage?.contextTotalTokens;
   if (typeof contextTotal !== "number") return base;
   return Math.max(base ?? 0, contextTotal) || undefined;
-}
-
-/** Cache read/write split; recovers reads from legacy rows that stored read+write combined. */
-function cacheSplit(log: LogEntry): { read?: number; write?: number } {
-  const u = log.usage;
-  if (!u) return {};
-  const write = typeof u.cacheCreationInputTokens === "number" ? u.cacheCreationInputTokens : undefined;
-  const read = typeof u.cacheReadInputTokens === "number"
-    ? u.cacheReadInputTokens
-    : typeof u.cachedInputTokens === "number" && write !== undefined
-      ? Math.max(0, u.cachedInputTokens - write)
-      : u.cachedInputTokens;
-  return { read, write };
 }
 
 interface ReasoningLogFields {
@@ -374,18 +339,6 @@ function formatLogDateParts(ts: number, localeTag?: string, timeZone?: string): 
 function formatLogDateTime(ts: number, localeTag?: string, timeZone?: string): string {
   const { date, time } = formatLogDateParts(ts, localeTag, timeZone);
   return `${date} ${time}`;
-}
-
-function modelTitle(log: LogEntry): string {
-  const details = [
-    `model=${log.model}`,
-    log.resolvedModel ? `resolved=${log.resolvedModel}` : undefined,
-    log.requestedServiceTier ? `requestedTier=${log.requestedServiceTier}` : undefined,
-    log.configuredServiceTier ? `configuredTier=${log.configuredServiceTier}` : undefined,
-    log.responseServiceTier ? `responseTier=${log.responseServiceTier}` : undefined,
-    log.modelSupportsServiceTier !== undefined ? `supportsTier=${log.modelSupportsServiceTier}` : undefined,
-  ].filter(Boolean);
-  return details.join(" \xC2\xB7 ");
 }
 
 function summarizeFilteredLogs(entries: LogEntry[]): {
