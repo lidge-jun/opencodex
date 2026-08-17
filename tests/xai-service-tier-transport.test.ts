@@ -45,6 +45,7 @@ describe("xAI Priority Processing transport boundary", () => {
       xaiProvider({ baseUrl: "https://relay.example.test/v1" }),
       xaiProvider({ baseUrl: "https://api.x.ai.evil.example/v1" }),
       xaiProvider({ baseUrl: "https://api.x.ai/v1?proxy=1" }),
+      xaiProvider({ adapter: "openai-responses" }),
     ]) {
       expect(canSerializeServiceTierForChatModel(provider, MODEL_ID, "xai")).toBe(false);
       expect(serviceTierSupportForModel(provider, MODEL_ID, "xai")).toBe(false);
@@ -52,7 +53,10 @@ describe("xAI Priority Processing transport boundary", () => {
   });
 
   test("explicit provider and model opt-outs remain fail-closed on canonical xAI", () => {
-    const chatOptOut = xaiProvider({ chatServiceTier: false });
+    const chatOptOut = xaiProvider({
+      chatServiceTier: false,
+      modelSupportsServiceTier: { [MODEL_ID]: true },
+    });
     expect(canSerializeServiceTierForChatModel(chatOptOut, MODEL_ID, "xai")).toBe(false);
     expect(serviceTierSupportForModel(chatOptOut, MODEL_ID, "xai")).toBe(false);
 
