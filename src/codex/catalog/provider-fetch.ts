@@ -645,6 +645,8 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
+  const preserveExactReasoningRungs = modelRecordValue(prov.modelPreserveExactReasoningRungs, model.id)
+    ?? prov.preserveExactReasoningRungs;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const supportsServiceTier = serviceTierSupportForModel(prov, model.id, name);
   const { supportsServiceTier: _staleServiceTier, ...modelWithoutServiceTier } = model;
@@ -667,6 +669,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       }
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(preserveExactReasoningRungs === true ? { preserveExactReasoningRungs: true } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),

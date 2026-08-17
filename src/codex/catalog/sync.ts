@@ -285,6 +285,12 @@ export function deriveEntry(
   const codexForwardNativeCapabilityAlias = model?.codexForwardNativeCapabilityAlias === true
     ? upstreamNativeEntry(model.id)
     : null;
+  // Exact-combo rows and the ChatGPT forward surface already advertise the real ladder;
+  // `preserveExactReasoningRungs` extends that to ordinary routed models whose configured
+  // ladder omits the synthetic `max`/`ultra` top rungs (#1870).
+  const preserveExactReasoningRungs = preserveExact
+    || codexForwardNativeCapabilityAlias !== null
+    || model?.preserveExactReasoningRungs === true;
   const isRouted = model !== undefined;
   if (!isRouted && !slug.includes("/")) {
     // Supported native slug covered by the upstream snapshot: use the REAL entry (exact
@@ -326,7 +332,7 @@ export function deriveEntry(
         e,
         model?.reasoningEfforts,
         model?.defaultReasoningEffort,
-        preserveExact || codexForwardNativeCapabilityAlias !== null,
+        preserveExactReasoningRungs,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -374,7 +380,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoningRungs);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

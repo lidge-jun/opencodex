@@ -1535,6 +1535,25 @@ const configSchema = z.object({
         message: reasoningSummariesError,
       });
     }
+    const preserveExactReasoningRungsError = booleanRecordConfigError(
+      (provider as { modelPreserveExactReasoningRungs?: unknown }).modelPreserveExactReasoningRungs,
+      "modelPreserveExactReasoningRungs",
+    );
+    if (preserveExactReasoningRungsError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelPreserveExactReasoningRungs"],
+        message: preserveExactReasoningRungsError,
+      });
+    }
+    if ((provider as { preserveExactReasoningRungs?: unknown }).preserveExactReasoningRungs !== undefined
+      && typeof (provider as { preserveExactReasoningRungs?: unknown }).preserveExactReasoningRungs !== "boolean") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "preserveExactReasoningRungs"],
+        message: "preserveExactReasoningRungs must be a boolean",
+      });
+    }
     const serviceTierModelsError = booleanRecordConfigError(
       (provider as { modelSupportsServiceTier?: unknown }).modelSupportsServiceTier,
       "modelSupportsServiceTier",
