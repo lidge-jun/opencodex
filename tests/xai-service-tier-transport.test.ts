@@ -33,7 +33,7 @@ function directChatBody(provider: OcxProviderConfig): Record<string, unknown> {
 }
 
 describe("xAI Priority Processing transport boundary", () => {
-  test("canonical API-key transport is the only xAI Chat transport that advertises Fast", () => {
+  test("canonical API-key transport is the only built-in xAI Chat transport that advertises Fast", () => {
     const canonical = xaiProvider();
     expect(canSerializeServiceTierForChatModel(canonical, MODEL_ID, "xai")).toBe(true);
     expect(serviceTierSupportForModel(canonical, MODEL_ID, "xai")).toBe(true);
@@ -51,6 +51,12 @@ describe("xAI Priority Processing transport boundary", () => {
       expect(canSerializeServiceTierForChatModel(provider, MODEL_ID, "xai")).toBe(false);
       expect(serviceTierSupportForModel(provider, MODEL_ID, "xai")).toBe(false);
     }
+  });
+
+  test("xAI-like custom provider ids retain the generic explicit Chat capability contract", () => {
+    const custom = xaiProvider({ baseUrl: "https://relay.example.test/v1" });
+    expect(canSerializeServiceTierForChatModel(custom, MODEL_ID, "x-ai")).toBe(true);
+    expect(serviceTierSupportForModel(custom, MODEL_ID, "x-ai")).toBe(true);
   });
 
   test("explicit provider and model opt-outs remain fail-closed on canonical xAI", () => {
