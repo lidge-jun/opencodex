@@ -1,9 +1,8 @@
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
+import { antigravityHostCandidates } from "../adapters/google-antigravity-hosts";
 import { readProviderQuotaJsonForTests } from "./quota";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota";
 
-const DAILY_HOST = "https://daily-cloudcode-pa.googleapis.com";
-const PROD_HOST = "https://cloudcode-pa.googleapis.com";
 const LIVE_QUOTA_PATH = "/v1internal:retrieveUserQuota";
 const LIVE_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary";
 
@@ -125,12 +124,6 @@ function parseWeeklyWindow(payload: unknown): { percent: number; resetAt?: numbe
   return undefined;
 }
 
-function hostCandidates(baseUrl: string): string[] {
-  const configured = baseUrl.replace(/\/+$/, "");
-  const other = configured === DAILY_HOST ? PROD_HOST : DAILY_HOST;
-  return [...new Set([configured, other])];
-}
-
 async function readJson(response: Response, timeoutMs: number): Promise<unknown> {
   return await readProviderQuotaJsonForTests(response, timeoutMs);
 }
@@ -188,7 +181,7 @@ export async function fetchAntigravityLiveQuota(
   args: AntigravityLiveQuotaArgs,
 ): Promise<ProviderQuota | null> {
   const fetchImpl = args.fetchImpl ?? fetch;
-  for (const host of hostCandidates(args.baseUrl)) {
+  for (const host of antigravityHostCandidates(args.baseUrl)) {
     const quota = await fetchHostQuota(fetchImpl, host, args);
     if (quota) return quota;
   }

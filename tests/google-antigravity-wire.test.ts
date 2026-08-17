@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
+import { antigravityHostCandidates } from "../src/adapters/google-antigravity-hosts";
 import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "../src/adapters/google-antigravity-tools";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels, resolveAntigravityEffortWireModel, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
@@ -45,7 +46,7 @@ describe("antigravity CCA envelope", () => {
   test("wraps the gemini body in the CCA envelope with project/userAgent/requestType/requestId/sessionId", async () => {
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     const env = JSON.parse(req.body);
-    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
+    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
     expect(env.model).toBe("gemini-3-pro");
     // The envelope BODY userAgent is the protocol constant; the versioned CLI UA rides in the header.
     expect(env.userAgent).toBe("antigravity");
@@ -75,6 +76,17 @@ describe("antigravity CCA envelope", () => {
   test("stream uses :streamGenerateContent?alt=sse", async () => {
     const req = await createGoogleAdapter(provider).buildRequest(parsed("x", true));
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+  });
+
+  test("host candidates keep the configured host first and use only daily/prod", () => {
+    expect(antigravityHostCandidates("https://daily-cloudcode-pa.googleapis.com")).toEqual([
+      "https://daily-cloudcode-pa.googleapis.com",
+      "https://cloudcode-pa.googleapis.com",
+    ]);
+    expect(antigravityHostCandidates("https://cloudcode-pa.googleapis.com/")).toEqual([
+      "https://cloudcode-pa.googleapis.com",
+      "https://daily-cloudcode-pa.googleapis.com",
+    ]);
   });
 
   test("Claude CCA adds the interleaved-thinking beta header and preamble mode", async () => {
@@ -646,10 +658,20 @@ describe("antigravity parseStream unwraps response", () => {
 });
 
 describe("antigravity parseResponse unwraps response (non-streaming)", () => {
+  test("buffers CCA SSE frames for unary callers", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const events = await adapter.parseResponse!(sseResponse([
+      { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }] } },
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]));
+    expect(events).toContainEqual({ type: "text_delta", text: "hello" });
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test("reads response.candidates + response.usageMetadata from the CCA envelope", async () => {
     const adapter = createGoogleAdapter(provider);
-    const body = JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "hello" }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 2, cachedContentTokenCount: 7 } } });
-    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    const body = { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 2, cachedContentTokenCount: 7 } } };
+    const events = await adapter.parseResponse!(sseResponse([body]));
     expect(events.some(e => e.type === "text_delta" && e.text === "hello")).toBe(true);
     const done = events.find(e => e.type === "done");
     expect((done as Extract<AdapterEvent, { type: "done" }>).usage?.inputTokens).toBe(9);
@@ -662,8 +684,8 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     const adapter = createGoogleAdapter(provider);
     // buildRequest first to set the per-adapter model/session, then parseResponse to observe.
     await adapter.buildRequest(parsed("hello world"));
-    const body = JSON.stringify({ response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } });
-    await adapter.parseResponse!(new Response(body, { status: 200 }));
+    const body = { response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } };
+    await adapter.parseResponse!(sseResponse([body]));
     // A follow-up request's history should now get the signature re-injected.
     const followup = parsed("hello world");
     const contents = [{ role: "model", parts: [{ functionCall: { name: "do_x", args: { a: 1 } } }] }];
@@ -682,7 +704,7 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     __resetAntigravityReplayCache();
     const adapter = createGoogleAdapter(provider);
     await adapter.buildRequest(parsed("hello world"));
-    const body = JSON.stringify({
+    const body = {
       response: {
         candidates: [{
           content: {
@@ -693,8 +715,8 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
           },
         }],
       },
-    });
-    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    };
+    const events = await adapter.parseResponse!(sseResponse([body]));
 
     expect(events).not.toContainEqual({ type: "text_delta", text: "deciding which tool to call" });
 

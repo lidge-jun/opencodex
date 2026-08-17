@@ -37,6 +37,7 @@ import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
+import { antigravityHostCandidates } from "../adapters/google-antigravity-hosts";
 import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
@@ -223,19 +224,32 @@ async function tryCcaImageGeneration(
       sessionId: `ocx-img-${crypto.randomUUID().slice(0, 8)}`,
     },
   };
-  let upstream: Response;
+  let upstream: Response | undefined;
   try {
     try {
-      upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-          "User-Agent": ANTIGRAVITY_REQUEST_UA,
-        },
-        body: JSON.stringify(envelope),
-        signal: linkedSignal.signal,
-      });
+      for (const [index, host] of antigravityHostCandidates(baseUrl).entries()) {
+        try {
+          upstream = await fetch(`${host}/v1internal:generateContent`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${token}`,
+              "User-Agent": ANTIGRAVITY_REQUEST_UA,
+            },
+            body: JSON.stringify(envelope),
+            signal: linkedSignal.signal,
+          });
+        } catch (err) {
+          if (index === 0) continue;
+          throw err;
+        }
+        if (index === 0 && (upstream.status === 404 || upstream.status === 503)) {
+          cancelUnlockedResponseBody(upstream);
+          continue;
+        }
+        break;
+      }
+      if (!upstream) throw new Error("CCA image generation failed without an upstream response");
     } catch (err) {
       if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
       if (err instanceof Error && err.name === "TimeoutError") {

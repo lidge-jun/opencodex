@@ -436,8 +436,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
-      const method = parsed.stream ? "streamGenerateContent" : "generateContent";
-      const streamParam = parsed.stream ? "?alt=sse" : "";
+      const ccaAlwaysSse = provider.googleMode === "cloud-code-assist";
+      const method = ccaAlwaysSse || parsed.stream ? "streamGenerateContent" : "generateContent";
+      const streamParam = ccaAlwaysSse || parsed.stream ? "?alt=sse" : "";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (provider.headers) Object.assign(headers, provider.headers);
 
@@ -815,6 +816,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
+      // Cloud Code Assist exposes only the SSE transport. Unary callers still use this
+      // buffered adapter entry point, so collect the exact same events parseStream emits
+      // instead of maintaining a second CCA JSON parser.
+      if (provider.googleMode === "cloud-code-assist") {
+        const events: AdapterEvent[] = [];
+        for await (const event of this.parseStream(response, budget)) events.push(event);
+        return events;
+      }
       // Reject oversized responses before JSON parse. Prefer Content-Length when
       // present and truthful; always stream-read with a hard byte cap so a missing
       // or lying Content-Length cannot force a full in-memory buffer + parse.
@@ -885,15 +894,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const err = raw.error as { message?: string };
         return finish([{ type: "error", message: err.message ?? "upstream error" }]);
       }
-      // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.
-      let json = raw;
-      if (provider.googleMode === "cloud-code-assist") {
-        const wrapped = raw.response;
-        if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-          return finish([{ type: "error", message: "google-antigravity response missing response wrapper" }]);
-        }
-        json = wrapped as Record<string, unknown>;
-      }
+      const json = raw;
       const events: AdapterEvent[] = [];
 
       const candidates = json.candidates as { content?: { parts?: GoogleResponsePart[] }; finishReason?: string }[] | undefined;
@@ -905,10 +906,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (candidates?.[0]?.content?.parts) {
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-          && replayModel && replaySession) {
+        const replayModel = vertexReplayModel;
+        const replaySession = vertexReplaySession;
+        if (provider.googleMode === "vertex" && replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
         for (const part of candidates[0].content.parts) {
@@ -945,7 +945,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+      if (provider.googleMode === "vertex"
         && isVertexTruncatedTurn(candidates?.[0]?.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
       }

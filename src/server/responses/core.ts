@@ -77,6 +77,11 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
+import {
+  isAntigravityAccountInCooldown,
+  nextAntigravityAccount,
+} from "../../oauth/antigravity-routing";
+import { getAccountCredential, getAccountSet, setActiveAccount } from "../../oauth/store";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -2051,6 +2056,8 @@ async function handleResponsesInner(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  let antigravityAccountId: string | undefined;
+  let antigravityFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -2083,13 +2090,37 @@ async function handleResponsesInner(
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
       } else {
-        const resolved = await getValidAccessTokenSnapshot(route.providerName);
+        let resolved = await getValidAccessTokenSnapshot(route.providerName);
+        let skippedAntigravityCooldown = false;
+        if (route.providerName === "google-antigravity"
+          && route.provider.googleMode === "cloud-code-assist"
+          && isAntigravityAccountInCooldown(resolved.accountId)) {
+          const accountIds = getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
+          const nextAccountId = nextAntigravityAccount(accountIds, resolved.accountId);
+          if (!nextAccountId) {
+            return formatErrorResponse(429, "rate_limit_error", "All Google Antigravity OAuth accounts are temporarily unavailable");
+          }
+          const accessToken = await getValidAccessTokenForAccount("google-antigravity", nextAccountId);
+          const nextCredential = getAccountCredential("google-antigravity", nextAccountId);
+          resolved = {
+            ...resolved,
+            accountId: nextAccountId,
+            accessToken,
+            ...(nextCredential?.projectId ? { projectId: nextCredential.projectId } : {}),
+          };
+          skippedAntigravityCooldown = true;
+          void setActiveAccount("google-antigravity", nextAccountId).catch(() => { /* best-effort promotion */ });
+        }
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
         };
+        if (skippedAntigravityCooldown) replayOAuthCredentialSnapshot = undefined;
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        if (route.providerName === "google-antigravity" && route.provider.googleMode === "cloud-code-assist") {
+          antigravityAccountId = resolved.accountId;
+        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
@@ -3581,6 +3612,7 @@ async function handleResponsesInner(
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
         stream: parsed.stream,
+        ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
       });
     } else {
       upstreamResponse = await fetchWithResetRetry(
@@ -3671,7 +3703,12 @@ async function handleResponsesInner(
         try {
           if (activeAdapter.fetchResponse) {
             await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
-            return await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream });
+            return await activeAdapter.fetchResponse(retryRequest, {
+              abortSignal: upstream.signal,
+              timeoutMs: connectMs,
+              stream: parsed.stream,
+              ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
+            });
           }
           return await fetchWithHeaderTimeout(retryRequest.url, {
             method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
@@ -3848,6 +3885,52 @@ async function handleResponsesInner(
           break;
         }
       }
+      // Antigravity OAuth accounts use the same bounded pre-stream carousel as Anthropic, but
+      // their process-local routing module also excludes accounts cooled by quota/rate-limit
+      // responses. Geoblocked 403s intentionally never enter this loop.
+      while (
+        upstreamResponse.status === 429
+        && route.providerName === "google-antigravity"
+        && route.provider.googleMode === "cloud-code-assist"
+        && antigravityAccountId
+        && antigravityFailovers < 3
+      ) {
+        const accountIds = getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
+        const nextAccountId = nextAntigravityAccount(accountIds, antigravityAccountId);
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getValidAccessTokenForAccount("google-antigravity", nextAccountId);
+          const nextCredential = getAccountCredential("google-antigravity", nextAccountId);
+          antigravityAccountId = nextAccountId;
+          antigravityFailovers += 1;
+          route.provider = {
+            ...route.provider,
+            apiKey: accessToken,
+            ...(nextCredential?.projectId ? { project: nextCredential.projectId } : {}),
+          };
+          replayOAuthCredentialSnapshot = undefined;
+          invalidateSameTargetRequest();
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+            codexAuthContext: authCtx,
+            forwardHeaders: selectedForwardHeaders,
+          });
+          void setActiveAccount("google-antigravity", nextAccountId).catch(() => { /* best-effort promotion */ });
+          const result = await rebuildAndRefetch("rate-limit-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
       // Anthropic 413 request_too_large: rebuild once with every image one tier lower
       // (spiral guard: single attempt). The biased response re-enters the 429 check above.
       if (shouldAttemptImageTierRetry({
@@ -3997,6 +4080,7 @@ async function handleResponsesInner(
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
             stream: nextParsed.stream,
+            ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
           });
         }
         return await fetchWithResetRetry(

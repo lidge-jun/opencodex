@@ -839,6 +839,16 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
+## Antigravity transport failover
+
+Cloud Code Assist requests always use `streamGenerateContent?alt=sse`, including unary callers;
+the adapter buffers those SSE events for the unary contract. The configured daily or production
+host is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.com` or
+`cloudcode-pa.googleapis.com`) is eligible for one first-host transport, 404, `UNAVAILABLE`, or
+empty-stream retry. Authentication, geoblock, invalid-request, and exhausted-quota responses do
+not trigger host failover. Antigravity 429 cooldowns are process-local and keyed by OAuth account;
+geoblock records cooldown without starting an account carousel.
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

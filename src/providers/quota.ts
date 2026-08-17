@@ -29,6 +29,7 @@ import {
   type CodexCapacityQuota,
 } from "./codex-capacity";
 import { fetchAntigravityLiveQuota } from "./antigravity-quota";
+import { antigravityHostCandidates } from "../adapters/google-antigravity-hosts";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -2018,19 +2019,23 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
   });
 
   const windows = new Map<string, ProviderQuotaWindow>();
-  try {
-    const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": antigravityUserAgent(),
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ project: credential.projectId }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (response.ok) {
+  for (const [index, host] of antigravityHostCandidates(baseUrl).entries()) {
+    try {
+      const response = await fetch(`${host}/v1internal:fetchAvailableModels`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": antigravityUserAgent(),
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ project: credential.projectId }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        if (index === 0 && (response.status === 404 || response.status === 503)) continue;
+        break;
+      }
       const body = asRecord(await readQuotaJson(response));
       const models = asRecord(body?.models);
       if (models) {
@@ -2050,9 +2055,11 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
           }
         }
       }
+      break;
+    } catch {
+      if (index === 0) continue;
+      break;
     }
-  } catch {
-    /* Keep the live quota result if catalog discovery is unavailable. */
   }
 
   if (liveQuota) {

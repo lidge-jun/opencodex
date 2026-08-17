@@ -3,6 +3,8 @@ import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/ada
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { fetchAntigravityWithRetry } from "../src/adapters/google-http";
+import { isAntigravityAccountInCooldown, clearAntigravityAccountCooldown } from "../src/oauth/antigravity-routing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -84,13 +86,106 @@ describe("google provider hardening", () => {
     );
   });
 
+  test("CCA unary requests use the always-SSE endpoint", async () => {
+    const request = await createGoogleAdapter(antigravityProvider()).buildRequest(parsed(false));
+    expect(request.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+  });
+
+  test("AI Studio and Vertex unary requests retain generateContent", async () => {
+    const aiStudio = await createGoogleAdapter(provider()).buildRequest(parsed(false));
+    const vertex = await createGoogleAdapter(provider({
+      baseUrl: "https://aiplatform.googleapis.com",
+      googleMode: "vertex",
+      apiKey: "vertex-test-key",
+    })).buildRequest(parsed(false));
+    expect(aiStudio.url).toContain(":generateContent");
+    expect(aiStudio.url).not.toContain(":streamGenerateContent");
+    expect(vertex.url).toContain(":generateContent");
+    expect(vertex.url).not.toContain(":streamGenerateContent");
+  });
+
+  test("CCA empty first-host stream fails over to the production host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      if (calls.length === 1) return sseResponse([{ response: { candidates: [] } }]);
+      return sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: "ok" }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]);
+    }) as typeof fetch;
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(false));
+      const response = await adapter.fetchResponse!(request, { timeoutMs: 5_000, stream: false });
+      const events = await adapter.parseResponse!(response);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+      expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+      expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("CCA auth failure does not fail over to the second host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ error: { status: "UNAUTHENTICATED", message: "bad token" } }), { status: 401 });
+    }) as typeof fetch;
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(false));
+      const response = await adapter.fetchResponse!(request, { timeoutMs: 5_000, stream: false });
+      expect(response.status).toBe(401);
+      expect(calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("CCA geoblock records cooldown without account carousel", async () => {
+    clearAntigravityAccountCooldown("test-antigravity-account");
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        error: { status: "PERMISSION_DENIED", message: "user location is not supported for the api use" },
+      }), { status: 403 });
+    }) as typeof fetch;
+    try {
+      const request = {
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      };
+      const response = await fetchAntigravityWithRetry(request, {
+        timeoutMs: 5_000,
+        accountId: "test-antigravity-account",
+      });
+      expect(response.status).toBe(403);
+      expect(calls).toBe(1);
+      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+      clearAntigravityAccountCooldown("test-antigravity-account");
+    }
+  });
+
   test("Antigravity rejects flat Gemini payloads without the response wrapper", async () => {
     const adapter = createGoogleAdapter(antigravityProvider());
     const flatPayload = { candidates: [{ content: { parts: [{ text: "unexpected" }] } }] };
 
     const streamEvents = await collect(adapter.parseStream(sseResponse([flatPayload])));
     const responseEvents = await adapter.parseResponse!(
-      new Response(JSON.stringify(flatPayload), { status: 200 }),
+      sseResponse([flatPayload]),
     );
 
     const expected = [{
