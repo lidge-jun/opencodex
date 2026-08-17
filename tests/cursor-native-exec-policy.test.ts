@@ -18,8 +18,10 @@ import {
   ReadArgsSchema,
   ShellArgsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
+import { finalizeAfterDrain, planNativeExecRewrite } from "../src/adapters/cursor/live-transport";
 import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
 import { rewriteNativeExecToCodexBridge } from "../src/adapters/cursor/native-exec-bridge";
+import { createCursorProtobufEventState } from "../src/adapters/cursor/protobuf-events";
 import {
   resetBackgroundShellStateForTests,
   setBackgroundShellRuntimeForTests,
@@ -433,6 +435,54 @@ describe("Cursor native exec sandbox policy", () => {
     }
     const untouched = rewriteNativeExecToCodexBridge("shellArgs", { command: "pwd" }, { clientToolNames: ["exec_command"] });
     expect(untouched.kind).toBe("none");
+  });
+
+  test("rewritten native exec surfaces Codex exec then finalizes after drain (never cancels first)", () => {
+    const catalog = { clientToolNames: ["exec"] };
+    const rewrite = rewriteNativeExecToCodexBridge("shellArgs", { command: "pwd", toolCallId: "call_shell" }, catalog);
+    expect(rewrite.kind).toBe("exec");
+    if (rewrite.kind !== "exec") throw new Error("expected exec rewrite");
+    const state = createCursorProtobufEventState({ clientToolNames: ["exec"] });
+    const plan = planNativeExecRewrite(rewrite, state);
+
+    // Immediate cancelCursorRun() sets expectedClose and skips the grace-timer `done`, so the
+    // rewritten exec result never returns on the next /v1/responses request.
+    expect(plan.handled).toBe(true);
+    expect(plan.cancelCursorRun).toBe(false);
+    expect(plan.finalizeWhenDrained).toBe(true);
+    expect(plan.events).toEqual([
+      { type: "tool_call_start", id: "call_shell", name: "exec" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: rewrite.js }) },
+      { type: "tool_call_end", id: "call_shell" },
+    ]);
+    expect(plan.events.map(event => event.type)).not.toContain("done");
+    expect(finalizeAfterDrain(state).map(event => event.type)).toEqual(["done"]);
+  });
+
+  test("rewritten native exec defers finalize while a sibling client tool is still open", () => {
+    const rewrite = rewriteNativeExecToCodexBridge(
+      "readArgs",
+      { path: "/tmp/note.txt", toolCallId: "call_read" },
+      { clientToolNames: ["exec"] },
+    );
+    const state = createCursorProtobufEventState({ clientToolNames: ["exec", "echo_b"] });
+    state.openToolCalls.set("call_b", { name: "echo_b", args: "" });
+    const plan = planNativeExecRewrite(rewrite, state);
+
+    expect(plan.handled).toBe(true);
+    expect(plan.cancelCursorRun).toBe(false);
+    expect(plan.finalizeWhenDrained).toBe(false);
+    expect(finalizeAfterDrain(state)).toEqual([]);
+  });
+
+  test("non-code-mode native exec is not rewritten (falls through to native handling)", () => {
+    const rewrite = rewriteNativeExecToCodexBridge("shellArgs", { command: "pwd" }, { clientToolNames: ["exec_command"] });
+    const plan = planNativeExecRewrite(rewrite, createCursorProtobufEventState());
+    expect(rewrite.kind).toBe("none");
+    expect(plan.handled).toBe(false);
+    expect(plan.events).toEqual([]);
+    expect(plan.cancelCursorRun).toBe(false);
+    expect(plan.finalizeWhenDrained).toBe(false);
   });
 
 });

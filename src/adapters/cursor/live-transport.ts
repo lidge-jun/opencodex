@@ -59,7 +59,7 @@ import {
   type CursorNativeExecContext,
 } from "./native-exec";
 import { effectiveCursorNativeExecAllow } from "./exec-policy";
-import { rewriteNativeExecToCodexBridge } from "./native-exec-bridge";
+import { rewriteNativeExecToCodexBridge, type NativeExecRewrite } from "./native-exec-bridge";
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
 import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
@@ -252,6 +252,42 @@ export function planMcpArgsHandling(
   return {
     handledByResponsesBridge: true,
     events: toolEvents,
+    cancelCursorRun: false,
+    finalizeWhenDrained: state.openToolCalls.size === 0,
+  };
+}
+
+/**
+ * Decide how to surface a rewritten native Shell/Read/… exec as a Codex `exec` client tool.
+ *
+ * Same Responses-bridge contract as `planMcpArgsHandling`: emit the tool call, then end turn 1
+ * through the grace timer (`done` + cancel). Immediate `cancelCursorRun()` is wrong here — it sets
+ * `expectedClose` and makes `scheduleClientToolFinalize` a no-op, so turn 1 never emits `done`,
+ * the conversation id is dropped, and the rewritten exec result never returns on the next request.
+ *
+ * Pure (no I/O) so the decision is unit-testable. `handleServerMessage` performs the side effects.
+ */
+export interface NativeExecRewritePlan {
+  handled: boolean;
+  events: CursorServerMessage[];
+  cancelCursorRun: boolean;
+  finalizeWhenDrained: boolean;
+}
+
+export function planNativeExecRewrite(
+  rewrite: NativeExecRewrite,
+  state: ReturnType<typeof createCursorProtobufEventState>,
+): NativeExecRewritePlan {
+  if (rewrite.kind !== "exec") {
+    return { handled: false, events: [], cancelCursorRun: false, finalizeWhenDrained: false };
+  }
+  return {
+    handled: true,
+    events: [
+      { type: "tool_call_start", id: rewrite.callId, name: "exec" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: rewrite.js }) },
+      { type: "tool_call_end", id: rewrite.callId },
+    ],
     cancelCursorRun: false,
     finalizeWhenDrained: state.openToolCalls.size === 0,
   };
@@ -1075,13 +1111,12 @@ class LiveCursorTransport implements CursorTransport {
         nativeExecRewriteArgs(execMsg),
         { clientToolNames: this.execContext.clientToolDefs?.map(tool => tool.toolName || tool.name) ?? [] },
       );
-      if (rewrite.kind === "exec") {
+      const rewritePlan = planNativeExecRewrite(rewrite, state);
+      if (rewritePlan.handled) {
         this.noteClientToolActivity();
-        push({ type: "tool_call_start", id: rewrite.callId, name: "exec" });
-        push({ type: "tool_call_delta", arguments: JSON.stringify({ input: rewrite.js }) });
-        push({ type: "tool_call_end", id: rewrite.callId });
-        this.cancelCursorRun();
-        this.scheduleClientToolFinalize(state, push);
+        for (const event of rewritePlan.events) push(event);
+        if (rewritePlan.cancelCursorRun) this.cancelCursorRun();
+        else if (rewritePlan.finalizeWhenDrained) this.scheduleClientToolFinalize(state, push);
         return;
       }
       // Native exec/MCP is handled inside this transport and can mutate files/process state
