@@ -43,3 +43,18 @@ event until the bounded inspection completes.
 ## Commit
 
 `3b48b9802` — `feat(antigravity): always-SSE unary, host failover, and account cooldowns`
+
+## Review fixes
+
+- P1 streaming: replaced clone-to-EOF inspection with a bounded first-meaningful-event probe. CCA responses return as soon as a candidate or terminal frame arrives, while the consumed bytes remain attached to the response body; empty streams still fail over at EOF.
+- P1 oversized SSE: valid responses larger than the old 256 KiB inspection cap are no longer classified as empty or replayed.
+- P2 inline `UNAVAILABLE`: a 200 SSE error frame with `UNAVAILABLE` (or code 503) now uses the single daily/production peer fallback. Terminal authentication, geoblock, invalid-request, and quota errors remain non-failover cases.
+
+## Review-fix validation
+
+- `bun test tests/google-antigravity-wire.test.ts tests/google-hardening.test.ts tests/antigravity-routing.test.ts tests/antigravity-quota.test.ts`
+  - 107 passed, 0 failed
+- `bun run typecheck`
+  - passed
+- `git diff --check`
+  - passed

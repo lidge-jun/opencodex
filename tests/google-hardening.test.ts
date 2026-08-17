@@ -149,6 +149,94 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA valid oversized SSE output stays on the first host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    const largeText = "x".repeat(300 * 1024);
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: largeText }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]);
+    }) as typeof fetch;
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(false));
+      const response = await adapter.fetchResponse!(request, { timeoutMs: 5_000, stream: false });
+      const events = await adapter.parseResponse!(response);
+      expect(calls).toHaveLength(1);
+      expect(events).toContainEqual({ type: "text_delta", text: largeText });
+      expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("CCA returns the first event before an open upstream stream ends", async () => {
+    const realFetch = globalThis.fetch;
+    const encoder = new TextEncoder();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(streamController) {
+        controller = streamController;
+        streamController.enqueue(encoder.encode(
+          'data: {"response":{"candidates":[{"content":{"parts":[{"text":"first"}]}}]}}\n\n',
+        ));
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    const abortController = new AbortController();
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(true));
+      const responsePromise = adapter.fetchResponse!(request, {
+        timeoutMs: 5_000,
+        abortSignal: abortController.signal,
+        stream: true,
+      });
+      const returnedBeforeEof = await Promise.race([
+        responsePromise.then(() => true),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 100)),
+      ]);
+      expect(returnedBeforeEof).toBe(true);
+      const response = await responsePromise;
+      await response.body?.cancel();
+    } finally {
+      abortController.abort();
+      controller?.error(new Error("test stream closed"));
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("CCA inline UNAVAILABLE fails over to the production host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      if (calls.length === 1) {
+        return sseResponse([{ error: { status: "UNAVAILABLE", message: "try another host" } }]);
+      }
+      return sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: "ok" }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]);
+    }) as typeof fetch;
+    try {
+      const adapter = createGoogleAdapter(antigravityProvider());
+      const request = await adapter.buildRequest(parsed(false));
+      const response = await adapter.fetchResponse!(request, { timeoutMs: 5_000, stream: false });
+      const events = await adapter.parseResponse!(response);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+      expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+      expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("CCA geoblock records cooldown without account carousel", async () => {
     clearAntigravityAccountCooldown("test-antigravity-account");
     const realFetch = globalThis.fetch;
