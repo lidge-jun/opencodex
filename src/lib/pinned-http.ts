@@ -51,6 +51,7 @@ function pinnedHttpRequest(
     && options?.inactivityTimeoutMs === undefined;
   const firstByteTimeoutMs = options?.firstByteTimeoutMs ?? legacyIdleTimeoutMs;
   const inactivityTimeoutMs = options?.inactivityTimeoutMs ?? legacyIdleTimeoutMs;
+  const legacyFirstByteDisabled = usesLegacyIdleTimeout && legacyIdleTimeoutMs === 0;
   const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
@@ -88,6 +89,7 @@ function pinnedHttpRequest(
     };
     const startFirstByteTimer = () => {
       clearFirstByteTimer();
+      if (settled || legacyFirstByteDisabled) return;
       firstByteTimer = setTimeout(
         () => fail(new PinnedHttpError("first_byte_timeout", `${context} first byte timed out`)),
         firstByteTimeoutMs,
@@ -194,8 +196,8 @@ function pinnedHttpRequest(
 
     const requestFn = parsed.protocol === "https:" ? https.request : http.request;
     req = requestFn(requestOptions, onResponse);
+    if (usesLegacyIdleTimeout) startFirstByteTimer();
     const onAbort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
-    signal?.addEventListener("abort", onAbort, { once: true });
     req.on("socket", (socket) => {
       const connectedEvent = parsed.protocol === "https:" ? "secureConnect" : "connect";
       if (!socket.connecting) {
@@ -233,6 +235,9 @@ function pinnedHttpRequest(
       clearFirstByteTimer();
       signal?.removeEventListener("abort", onAbort);
     });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted && !settled) onAbort();
+    if (settled) return;
     req.end(body);
   });
 }
