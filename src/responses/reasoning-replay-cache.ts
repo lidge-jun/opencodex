@@ -101,6 +101,13 @@ function credentialHeaderOverrides(headers: Record<string, string> | undefined):
     ));
 }
 
+/** True when provider headers change the physical credential/account boundary. */
+export function reasoningReplayHasCredentialHeaderOverrides(
+  headers: Record<string, string> | undefined,
+): boolean {
+  return credentialHeaderOverrides(headers).length > 0;
+}
+
 /** Produce a non-reversible process-local identity for an exact upstream destination. */
 export function reasoningReplayDestinationIdentity(baseUrl: string | undefined): string | undefined {
   if (!nonEmpty(baseUrl)) return undefined;

@@ -66,6 +66,10 @@ export interface OcxParsedRequest {
   _kiroAuthContext?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
   /** Provider-private continuation metadata resolved from the Responses previous_response_id chain. */
   _providerContinuation?: OcxProviderContinuationState;
+  /** Stored continuation candidate, activated only after the physical route owner is known. */
+  _providerContinuationCandidate?: OcxProviderContinuationState;
+  /** Current physical owner attached to newly persisted provider continuation state. */
+  _providerContinuationOwner?: OcxProviderContinuationOwner;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
@@ -318,11 +322,24 @@ export interface OcxRequestOptions {
 
 export type OcxMessagePhase = "commentary" | "final_answer";
 
+/** Durable, non-secret owner of provider-private continuation state. */
+export interface OcxProviderContinuationOwner {
+  [field: string]: string | number;
+  version: 1;
+  providerName: string;
+  providerDestinationIdentity: string;
+  adapterName: string;
+  modelId: string;
+  credentialIdentity: string;
+}
+
 /**
  * Provider-private state that must follow a locally expanded `previous_response_id` chain.
  * Kept out of public Responses output and persisted only in the bounded local continuation cache.
  */
 export interface OcxProviderContinuationState {
+  /** Proxy-authored owner metadata; stripped before provider adapters receive the state. */
+  __ocxOwner?: OcxProviderContinuationOwner;
   cursor?: {
     conversationId?: string;
     checkpointUsable?: boolean;

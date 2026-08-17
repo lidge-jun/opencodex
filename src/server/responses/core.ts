@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { createHash } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import { checkInputAdmission } from "./input-admission";
@@ -12,8 +13,10 @@ import {
 import { parseRequest } from "../../responses/parser";
 import {
   bindReasoningReplayScope,
+  reasoningReplayCredentialIdentity,
   reasoningReplayCodexCredentialIdentity,
   reasoningReplayDestinationIdentity,
+  reasoningReplayHasCredentialHeaderOverrides,
   reasoningReplayKeyCredentialIdentity,
   reasoningReplayOAuthCredentialIdentity,
 } from "../../responses/reasoning-replay-cache";
@@ -57,7 +60,7 @@ import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationOwner, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -293,6 +296,139 @@ export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
 }
 
+function continuationIdentity(domain: string, material: string): string {
+  return createHash("sha256").update(domain).update("\0").update(material).digest("hex");
+}
+
+function providerContinuationOwnerForRoute(args: {
+  parsed: OcxParsedRequest;
+  providerName: string;
+  provider: OcxProviderConfig;
+  adapterName: string;
+  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation">;
+  codexAuthContext?: CodexAuthContext;
+  forwardHeaders?: Headers;
+}): OcxProviderContinuationOwner | undefined {
+  const { parsed, providerName, provider, adapterName } = args;
+  const authMode = provider.authMode ?? "key";
+  let credentialIdentity: string | undefined;
+  if (authMode === "oauth") {
+    const accountId = args.oauthCredentialSnapshot?.accountId?.trim();
+    if (!accountId) return undefined;
+    const accountMaterial = JSON.stringify([providerName, accountId]);
+    // Credential-bearing header overrides are part of the physical identity. Keep them behind
+    // the existing process-local HMAC; without overrides the non-secret account slot can remain
+    // restart-stable across ordinary access-token refreshes.
+    credentialIdentity = reasoningReplayHasCredentialHeaderOverrides(provider.headers)
+      ? reasoningReplayCredentialIdentity("oauth", accountMaterial, provider.headers)
+      : `oauth-account:${continuationIdentity("provider-continuation-oauth-account", accountMaterial)}`;
+  } else if (authMode === "forward") {
+    const poolContext = args.codexAuthContext?.kind === "pool"
+      || args.codexAuthContext?.kind === "main-pool"
+      ? args.codexAuthContext
+      : undefined;
+    // Direct-forward headers are caller controlled and expose no verified stable subject.
+    // Pool contexts are internal selections: bind both the local slot and real ChatGPT account,
+    // so __main__ profile replacement cannot retain another account's continuation.
+    if (!poolContext?.accountId?.trim() || !poolContext.chatgptAccountId?.trim()) return undefined;
+    const accountMaterial = JSON.stringify([poolContext.accountId.trim(), poolContext.chatgptAccountId.trim()]);
+    credentialIdentity = reasoningReplayHasCredentialHeaderOverrides(provider.headers)
+      ? reasoningReplayCredentialIdentity("codex", accountMaterial, provider.headers)
+      : `forward-account:${continuationIdentity("provider-continuation-forward-account", accountMaterial)}`;
+  } else if (authMode === "local") {
+    return undefined;
+  } else {
+    // Reuse the existing process-local keyed HMAC. It permits safe same-process continuation,
+    // but intentionally fails closed after restart instead of persisting a secret verifier.
+    credentialIdentity = reasoningReplayKeyCredentialIdentity(provider);
+    if (!credentialIdentity) return undefined;
+  }
+
+  if (!credentialIdentity) return undefined;
+  const canonicalBaseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
+  if (!canonicalBaseUrl) return undefined;
+  const kiroContext = parsed._kiroAuthContext;
+  const destinationMaterial = JSON.stringify([
+    canonicalBaseUrl,
+    provider.responsesPath ?? "",
+    kiroContext?.profileArn ?? "",
+    kiroContext?.apiRegion ?? "",
+    kiroContext?.ssoRegion ?? "",
+  ]);
+  return {
+    version: 1,
+    providerName,
+    providerDestinationIdentity: `destination:${continuationIdentity("provider-continuation-destination", destinationMaterial)}`,
+    adapterName,
+    modelId: parsed.modelId,
+    credentialIdentity,
+  };
+}
+
+type ContinuationOwnerRead =
+  | { kind: "missing" }
+  | { kind: "invalid" }
+  | { kind: "valid"; owner: OcxProviderContinuationOwner };
+
+function readProviderContinuationOwner(state: OcxProviderContinuationState | undefined): ContinuationOwnerRead {
+  if (!state || state.__ocxOwner === undefined) return { kind: "missing" };
+  const owner = state.__ocxOwner;
+  const bounded = (value: unknown, max: number): value is string =>
+    typeof value === "string" && value.length > 0 && value.length <= max;
+  if (
+    !owner
+    || typeof owner !== "object"
+    || Array.isArray(owner)
+    || owner.version !== 1
+    || !bounded(owner.providerName, 256)
+    || !/^destination:[0-9a-f]{64}$/.test(owner.providerDestinationIdentity)
+    || !bounded(owner.adapterName, 128)
+    || !bounded(owner.modelId, 512)
+    || !/^(key|oauth|codex|oauth-account|forward-account):[0-9a-f]{64}$/.test(owner.credentialIdentity)
+  ) return { kind: "invalid" };
+  return { kind: "valid", owner: { ...owner } };
+}
+
+function providerContinuationPayload(
+  state: OcxProviderContinuationState | undefined,
+): OcxProviderContinuationState | undefined {
+  if (!state) return undefined;
+  const cloned = structuredClone(state);
+  delete cloned.__ocxOwner;
+  return Object.keys(cloned).length > 0 ? cloned : undefined;
+}
+
+function sameProviderContinuationOwner(
+  left: OcxProviderContinuationOwner,
+  right: OcxProviderContinuationOwner,
+): boolean {
+  return left.version === right.version
+    && left.providerName === right.providerName
+    && left.providerDestinationIdentity === right.providerDestinationIdentity
+    && left.adapterName === right.adapterName
+    && left.modelId === right.modelId
+    && left.credentialIdentity === right.credentialIdentity;
+}
+
+function bindProviderContinuationForRoute(
+  parsed: OcxParsedRequest,
+  currentOwner: OcxProviderContinuationOwner | undefined,
+): void {
+  const candidate = parsed._providerContinuationCandidate;
+  const storedOwner = readProviderContinuationOwner(candidate);
+  const mayRestore = storedOwner.kind === "valid"
+    && !!currentOwner
+    && sameProviderContinuationOwner(storedOwner.owner, currentOwner);
+  const restored = mayRestore ? providerContinuationPayload(candidate) : undefined;
+  if (restored) parsed._providerContinuation = restored;
+  else delete parsed._providerContinuation;
+  const cursorConversationId = restored?.cursor?.conversationId;
+  if (cursorConversationId) parsed._cursorConversationId = cursorConversationId;
+  else delete parsed._cursorConversationId;
+  if (currentOwner) parsed._providerContinuationOwner = { ...currentOwner };
+  else delete parsed._providerContinuationOwner;
+}
+
 function bindRouteReasoningReplayScope(args: {
   parsed: OcxParsedRequest;
   providerName: string;
@@ -343,6 +479,7 @@ function bindRouteReasoningReplayScope(args: {
         }
       : undefined,
   );
+  bindProviderContinuationForRoute(parsed, providerContinuationOwnerForRoute(args));
 }
 
 function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {
@@ -812,6 +949,7 @@ export interface HandleResponsesOptions {
   comboReplaySnapshot?: {
     sourceBody: unknown;
     previousResponseInputExpanded: boolean;
+    providerContinuation: OcxProviderContinuationState | undefined;
   };
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
@@ -1305,6 +1443,9 @@ export async function handleComboResponses(
     sourceBody: body,
     previousResponseInputExpanded: body !== rawBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string",
+    providerContinuation: !scopeMismatch && body !== rawBody && requestedPreviousId
+      ? previousResponseProviderState(requestedPreviousId)
+      : undefined,
   };
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
@@ -1708,10 +1849,10 @@ async function handleResponsesInner(
     parsed = parseRequest(body);
     toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
-    if (!options.comboReplaySnapshot) {
-      parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
-      parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
-    }
+    const providerContinuationCandidate = options.comboReplaySnapshot
+      ? options.comboReplaySnapshot.providerContinuation
+      : previousResponseProviderState(parsed.previousResponseId);
+    if (providerContinuationCandidate) parsed._providerContinuationCandidate = providerContinuationCandidate;
     if (inboundClientThreadId) {
       parsed._clientThreadId = inboundClientThreadId;
       parsed._reasoningReplayScope = { clientThreadId: inboundClientThreadId };
@@ -1902,6 +2043,8 @@ async function handleResponsesInner(
           const kept: Array<keyof OcxParsedRequest> = [
             "_previousResponseInputExpanded",
             "_providerContinuation",
+            "_providerContinuationCandidate",
+            "_providerContinuationOwner",
             "_cursorConversationId",
             "_clientThreadId",
             "_reasoningReplayScope",
@@ -2168,6 +2311,9 @@ async function handleResponsesInner(
     codexAuthContext: authCtx,
     forwardHeaders: selectedForwardHeaders,
   });
+  if (!logCtx.conversationId && parsed._cursorConversationId) {
+    logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
+  }
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.
@@ -2265,24 +2411,28 @@ async function handleResponsesInner(
     emitted?: OcxProviderContinuationState,
   ): OcxProviderContinuationState | undefined => {
     const cursorConversationId = parsed._cursorConversationId;
-    const inherited = parsed._providerContinuation;
-    if (!emitted && !inherited && !cursorConversationId) return undefined;
-    return {
+    const inherited = providerContinuationPayload(parsed._providerContinuation);
+    const emittedPayload = providerContinuationPayload(emitted);
+    if (!emittedPayload && !inherited && !cursorConversationId) return undefined;
+    const merged: OcxProviderContinuationState = {
       ...(inherited ?? {}),
-      ...(emitted ?? {}),
-      ...((inherited?.kiro || emitted?.kiro)
-        ? { kiro: { ...(inherited?.kiro ?? {}), ...(emitted?.kiro ?? {}) } }
+      ...(emittedPayload ?? {}),
+      ...((inherited?.kiro || emittedPayload?.kiro)
+        ? { kiro: { ...(inherited?.kiro ?? {}), ...(emittedPayload?.kiro ?? {}) } }
         : {}),
       ...(cursorConversationId
         ? {
             cursor: {
               ...(inherited?.cursor ?? {}),
-              ...(emitted?.cursor ?? {}),
+              ...(emittedPayload?.cursor ?? {}),
               conversationId: cursorConversationId,
             },
           }
         : {}),
     };
+    return parsed._providerContinuationOwner
+      ? { ...merged, __ocxOwner: { ...parsed._providerContinuationOwner } }
+      : merged;
   };
 
   // Remote compaction v2 on a ROUTED model: Codex sent `compaction_trigger` and requires exactly
@@ -4119,6 +4269,14 @@ async function handleResponsesInner(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
+          bindRouteReasoningReplayScope({
+            parsed: nextParsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+          });
+          // Response persistence closes over the outer parsed request; keep its owner binding in
+          // sync with the terminal-guard clone that will build the rotated continuation request.
           bindRouteReasoningReplayScope({
             parsed,
             providerName: route.providerName,

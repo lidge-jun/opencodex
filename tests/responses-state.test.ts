@@ -1647,6 +1647,14 @@ describe("Responses previous_response_id state", () => {
       { model: "kiro/gpt-5.6-sol", input: "hello" },
       first,
       {
+        __ocxOwner: {
+          version: 1,
+          providerName: "kiro",
+          providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+          adapterName: "kiro",
+          modelId: "gpt-5.6-sol",
+          credentialIdentity: `oauth-account:${"b".repeat(64)}`,
+        },
         cursor: { conversationId: "cursor_conv_2" },
         kiro: { conversationId: "kiro_conv_2" },
       },
@@ -1655,6 +1663,14 @@ describe("Responses previous_response_id state", () => {
     clearResponseStateMemoryForTests();
 
     expect(previousResponseProviderState(first.id as string)).toEqual({
+      __ocxOwner: {
+        version: 1,
+        providerName: "kiro",
+        providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+        adapterName: "kiro",
+        modelId: "gpt-5.6-sol",
+        credentialIdentity: `oauth-account:${"b".repeat(64)}`,
+      },
       cursor: { conversationId: "cursor_conv_2", checkpointUsable: true },
       kiro: { conversationId: "kiro_conv_2" },
     });
