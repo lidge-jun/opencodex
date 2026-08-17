@@ -1171,7 +1171,7 @@ function contextWindowForModel(adapter: string, modelId: string | undefined): nu
     return modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
       ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, normalized);
   }
-  if (adapter === "cursor" || adapter.startsWith("cursor-")) {
+  if (adapter === "cursor" || adapter.startsWith("cursor-") || adapter === "devin") {
     return inferCursorContextWindow(modelId);
   }
   return undefined;

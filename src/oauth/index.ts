@@ -38,6 +38,7 @@ import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, Re
 import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
+import { loginDevin, refreshDevinToken } from "./devin";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
@@ -307,6 +308,13 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshCursorToken,
     providerConfig: oauthConfig("cursor"),
     defaultModel: oauthDefaultModel("cursor"),
+  },
+  devin: {
+    login: (ctrl, opts) => loginDevin(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback", forceLogin: opts?.forceLogin }),
+    refresh: refreshDevinToken,
+    providerConfig: oauthConfig("devin"),
+    defaultModel: oauthDefaultModel("devin"),
+    defaultRefreshPolicy: "disabled",
   },
   "github-copilot": {
     login: (ctrl) => loginGithubCopilot(ctrl),
