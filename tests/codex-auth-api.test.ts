@@ -3391,12 +3391,11 @@ describe("codex-auth API", () => {
   test("Codex OAuth login status projects late provider errors", async () => {
     const oauth = await import("../src/oauth");
     const openUrlMod = await import("../src/lib/open-url");
-    const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue({ url: "https://example.test/oauth" });
-    const statusSpy = spyOn(oauth, "getLoginStatus").mockReturnValue({
-      done: true,
-      loggedIn: false,
-      error: "late failure at /home/alice/.opencodex/auth.json.ocx-tmp sk-secret-provider-key",
-    } as ReturnType<typeof oauth.getLoginStatus>);
+    const originalLogin = oauth.OAUTH_PROVIDERS.chatgpt.login;
+    oauth.OAUTH_PROVIDERS.chatgpt.login = async (controller) => {
+      controller.onAuth({ url: "https://example.test/oauth" });
+      throw new Error("late failure at /home/alice/.opencodex/auth.json.ocx-tmp sk-secret-provider-key");
+    };
     const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
@@ -3435,8 +3434,71 @@ describe("codex-auth API", () => {
     } finally {
       timeoutSpy.mockRestore();
       openSpy.mockRestore();
-      statusSpy.mockRestore();
-      startSpy.mockRestore();
+      oauth.OAUTH_PROVIDERS.chatgpt.login = originalLogin;
+      oauth.clearLoginState("chatgpt");
+    }
+  });
+
+  test("Codex OAuth login status preserves actionable late OAuth errors", async () => {
+    const oauth = await import("../src/oauth");
+    const openUrlMod = await import("../src/lib/open-url");
+    const originalLogin = oauth.OAUTH_PROVIDERS.chatgpt.login;
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (delay === 2_000) queueMicrotask(() => callback(...args));
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const cases: Array<{ error: Error; expected: string }> = [
+      {
+        error: new oauth.OAuthLoginRequiredError("chatgpt"),
+        expected: "Not logged in to chatgpt. Run: ocx login chatgpt",
+      },
+      {
+        error: new oauth.OAuthTokenRefreshBusyError(),
+        expected: "OAuth token refresh capacity reached",
+      },
+      {
+        error: new oauth.OAuthTokenRefreshStaleError(),
+        expected: "OAuth token refresh owner became stale",
+      },
+    ];
+    try {
+      for (const { error, expected } of cases) {
+        oauth.OAUTH_PROVIDERS.chatgpt.login = async (controller) => {
+          controller.onAuth({ url: "https://example.test/oauth" });
+          throw error;
+        };
+        const req = new Request("http://localhost/api/codex-auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        const startResponse = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+        const started = await startResponse!.json() as { flowId: string };
+        expect(startResponse!.status).toBe(200);
+
+        let state: { status?: string; error?: string } = {};
+        for (let attempt = 0; attempt < 50 && state.status !== "error"; attempt += 1) {
+          const statusReq = new Request(
+            `http://localhost/api/codex-auth/login-status?flowId=${encodeURIComponent(started.flowId)}`,
+          );
+          const statusResponse = await handleCodexAuthAPI(statusReq, new URL(statusReq.url), makeConfig());
+          state = await statusResponse!.json() as typeof state;
+          if (state.status !== "error") await new Promise<void>(resolve => setImmediate(resolve));
+        }
+
+        expect(state).toMatchObject({ status: "error", error: expected });
+        oauth.clearLoginState("chatgpt");
+      }
+    } finally {
+      timeoutSpy.mockRestore();
+      openSpy.mockRestore();
+      oauth.OAUTH_PROVIDERS.chatgpt.login = originalLogin;
+      oauth.clearLoginState("chatgpt");
     }
   });
 

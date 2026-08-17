@@ -1416,7 +1416,7 @@ export async function startLoginFlow(
       const e = finalError;
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = publicOAuthAuthenticationErrorMessage(e);
       loginState.set(provider, { done: true, error: msg });
       if (!urlResolved) reject(e);
     };
@@ -1429,7 +1429,7 @@ export async function startLoginFlow(
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = publicOAuthAuthenticationErrorMessage(e);
       loginState.set(provider, { done: true, error: msg });
       if (!urlResolved) reject(e);
     });

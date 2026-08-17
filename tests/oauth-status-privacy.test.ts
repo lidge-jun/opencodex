@@ -284,10 +284,41 @@ describe("OAuth status privacy", () => {
     }
   });
 
+  test("management OAuth login preserves the exact duplicate-flow response", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    OAUTH_PROVIDERS.xai.login = async (controller) => {
+      controller.onAuth({ url: "" });
+      await new Promise<never>((_, reject) => {
+        controller.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
+      });
+    };
+    const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
+    const request = () => new ManagementRequest("http://localhost/api/oauth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "xai" }),
+    });
+    try {
+      const firstResponse = await handleManagementAPI(request(), new URL("http://localhost/api/oauth/login"), config);
+      expect(firstResponse?.status).toBe(200);
+
+      const duplicateResponse = await handleManagementAPI(request(), new URL("http://localhost/api/oauth/login"), config);
+      const duplicateBody = await duplicateResponse?.json() as { error?: string };
+
+      expect(duplicateResponse?.status).toBe(409);
+      expect(duplicateBody.error).toBe("A login for xai is already in progress");
+    } finally {
+      clearLoginState("xai");
+      await Bun.sleep(0);
+      clearLoginState("xai");
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+    }
+  });
+
   test("management OAuth status does not return late provider or filesystem errors", async () => {
     const originalLogin = OAUTH_PROVIDERS.xai.login;
     OAUTH_PROVIDERS.xai.login = async (controller) => {
-      controller.onAuth({ url: "https://auth.example.test/authorize" });
+      controller.onAuth({ url: "" });
       throw new Error(`late provider login failure at ${PUBLIC_ERROR_CANARY}`);
     };
     try {
@@ -313,6 +344,55 @@ describe("OAuth status privacy", () => {
       expect(statusBody.done).toBe(true);
       expect(statusBody.error).toBe(PUBLIC_OAUTH_ERROR);
       expect(JSON.stringify(statusBody)).not.toContain(PUBLIC_ERROR_CANARY);
+    } finally {
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+      clearLoginState("xai");
+    }
+  });
+
+  test("management OAuth status preserves actionable late OAuth errors", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    const cases: Array<{ error: Error; expected: string }> = [
+      {
+        error: new OAuthLoginRequiredError("xai"),
+        expected: "Not logged in to xai. Run: ocx login xai",
+      },
+      {
+        error: new OAuthTokenRefreshBusyError(),
+        expected: "OAuth token refresh capacity reached",
+      },
+      {
+        error: new OAuthTokenRefreshStaleError(),
+        expected: "OAuth token refresh owner became stale",
+      },
+    ];
+    const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
+    try {
+      for (const { error, expected } of cases) {
+        OAUTH_PROVIDERS.xai.login = async (controller) => {
+          controller.onAuth({ url: "" });
+          throw error;
+        };
+        const startRequest = new ManagementRequest("http://localhost/api/oauth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider: "xai" }),
+        });
+        const startResponse = await handleManagementAPI(startRequest, new URL(startRequest.url), config);
+        expect(startResponse?.status).toBe(200);
+
+        const deadline = Date.now() + 2_000;
+        let statusBody: { done?: boolean; error?: string } = {};
+        do {
+          const statusRequest = new ManagementRequest("http://localhost/api/oauth/status?provider=xai");
+          const statusResponse = await handleManagementAPI(statusRequest, new URL(statusRequest.url), config);
+          statusBody = await statusResponse?.json() as typeof statusBody;
+          if (!statusBody.done) await Bun.sleep(10);
+        } while (!statusBody.done && Date.now() < deadline);
+
+        expect(statusBody).toMatchObject({ done: true, error: expected });
+        clearLoginState("xai");
+      }
     } finally {
       OAUTH_PROVIDERS.xai.login = originalLogin;
       clearLoginState("xai");

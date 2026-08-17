@@ -1995,7 +1995,9 @@ export async function handleCodexAuthAPI(
             if (st.done && st.error) {
               setCodexLoginState(flowId, {
                 status: "error",
-                error: publicOAuthAuthenticationErrorMessage(new Error(st.error)),
+                // startLoginFlow projects background failures before storing login status, so
+                // fixed actionable OAuth messages retain their type-derived remediation here.
+                error: st.error,
                 doneAt: Date.now(),
               });
               completed = true;
