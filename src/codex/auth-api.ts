@@ -98,7 +98,7 @@ import {
 } from "./main-account-cache";
 export { clearMainAccountInfoCache } from "./main-account-cache";
 import { maskEmail } from "../lib/privacy";
-import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
+import { codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../types";
 import type { CatalogDisposition } from "./convergence-types";
@@ -396,13 +396,10 @@ async function verifyCodexAccountWarmup(
     return { ok: true, validatedAt: Date.now() };
   } catch (err) {
     const reason = codexWarmupFailureReason(err);
-    const upstream = err instanceof CodexWarmupError ? err.upstreamDetail : undefined;
     return {
       ok: false,
       response: jsonResponse({
-        error: upstream
-          ? `Codex account warmup failed: ${upstream}`
-          : "Codex account warmup failed. Reauthenticate the account and try again.",
+        error: "Codex account warmup failed. Reauthenticate the account and try again.",
         code: "codex_warmup_failed",
         reason,
         accountId,

@@ -18,25 +18,7 @@ afterEach(() => {
 });
 
 describe("codex warmup improvements", () => {
-  test("CodexWarmupError exposes upstreamDetail", () => {
-    const err = new CodexWarmupError("http_status", "Codex warmup was rejected", {
-      status: 400,
-      upstreamDetail: "model is not enabled",
-    });
-
-    expect(err.upstreamDetail).toBe("model is not enabled");
-  });
-
-  test("codexWarmupFailureReason includes upstream detail when present", () => {
-    const err = new CodexWarmupError("http_status", "Codex warmup was rejected", {
-      status: 400,
-      upstreamDetail: "model is not enabled",
-    });
-
-    expect(codexWarmupFailureReason(err)).toBe("http_status:400 — model is not enabled");
-  });
-
-  test("codexWarmupFailureReason preserves the old format without upstream detail", () => {
+  test("codexWarmupFailureReason preserves the public status-only format", () => {
     const err = new CodexWarmupError("http_status", "Codex warmup was rejected", {
       status: 400,
     });
@@ -44,9 +26,12 @@ describe("codex warmup improvements", () => {
     expect(codexWarmupFailureReason(err)).toBe("http_status:400");
   });
 
-  test("warmCodexAccount reports detail parsed from JSON error bodies", async () => {
+  test("warmCodexAccount never exposes token-like JSON error details", async () => {
+    // Keep the privacy scanner meaningful while still exercising a token-shaped
+    // runtime value that an upstream JSON error could echo.
+    const secret = ["Bearer", ["sk", "proj", "secret", "warmup", "token"].join("-")].join(" ");
     const fetchMock = mock(async () =>
-      new Response(JSON.stringify({ error: { message: "model gpt-5.4-mini is unavailable" } }), {
+      new Response(JSON.stringify({ error: { message: secret }, detail: secret }), {
         status: 401,
         headers: { "Content-Type": "application/json" },
       }));
@@ -59,8 +44,9 @@ describe("codex warmup improvements", () => {
       expect(err).toBeInstanceOf(CodexWarmupError);
       expect((err as CodexWarmupError).code).toBe("http_status");
       expect((err as CodexWarmupError).status).toBe(401);
-      expect((err as CodexWarmupError).upstreamDetail).toBe("model gpt-5.4-mini is unavailable");
-      expect(codexWarmupFailureReason(err)).toBe("http_status:401 — model gpt-5.4-mini is unavailable");
+      expect(codexWarmupFailureReason(err)).toBe("http_status:401");
+      expect(JSON.stringify(err)).not.toContain(secret);
+      expect((err as Error).message).not.toContain(secret);
     }
   });
 
@@ -92,7 +78,6 @@ describe("codex warmup improvements", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CodexWarmupError);
       expect((err as CodexWarmupError).code).toBe("http_status");
-      expect((err as CodexWarmupError).upstreamDetail).toBeUndefined();
       expect(codexWarmupFailureReason(err)).toBe("http_status:401");
     }
     expect(cancelled).toBe(true);

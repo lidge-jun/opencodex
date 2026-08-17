@@ -3,19 +3,16 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 export class CodexWarmupError extends Error {
   code: "http_status" | "missing_body" | "stream_failed" | "stream_incomplete" | "stream_error" | "stream_too_large" | "invalid_sse" | "no_terminal" | "transport";
   status?: number;
-  /** Upstream error detail extracted from the response body (truncated to 512 chars). */
-  upstreamDetail?: string;
 
   constructor(
     code: CodexWarmupError["code"],
     message = "Codex warmup failed",
-    options: { status?: number; cause?: unknown; upstreamDetail?: string } = {},
+    options: { status?: number; cause?: unknown } = {},
   ) {
     super(message);
     this.name = "CodexWarmupError";
     this.code = code;
     this.status = options.status;
-    this.upstreamDetail = options.upstreamDetail;
     if (options.cause !== undefined) this.cause = options.cause;
   }
 }
@@ -34,40 +31,22 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_ERROR_BODY_BYTES = 2048;
 const MAX_WARMUP_STREAM_BYTES = 1024 * 1024;
 
-/** Read the first MAX_ERROR_BODY_BYTES of a response body and extract an error message. */
-async function readErrorDetail(res: Response, signal: AbortSignal): Promise<string | undefined> {
+/** Bound and release an upstream error body without exposing provider-controlled text. */
+async function drainErrorBody(res: Response, signal: AbortSignal): Promise<void> {
   try {
-    const body = await readBoundedResponseBody(res, {
+    await readBoundedResponseBody(res, {
       signal,
       maxBytes: MAX_ERROR_BODY_BYTES,
       fatalUtf8: true,
     });
-    if (!body.displaySafe) return undefined;
-    const trimmed = body.text;
-    try {
-      const json = JSON.parse(trimmed) as Record<string, unknown>;
-      // ChatGPT backend error shape: { error: { message: "..." } } or { detail: "..." }
-      const nested = json.error;
-      if (nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).message === "string") {
-        return ((nested as Record<string, unknown>).message as string).slice(0, 512);
-      }
-      if (typeof json.detail === "string") return json.detail.slice(0, 512);
-      if (typeof json.error === "string") return (json.error as string).slice(0, 512);
-      if (typeof json.message === "string") return json.message.slice(0, 512);
-    } catch {
-      // Non-JSON response body may contain sensitive data (tokens, credentials).
-      // Only surface structured error messages, never raw text.
-    }
-    return undefined;
   } catch {
-    return undefined;
+    // The bounded reader owns cancellation for oversized, invalid, or stalled bodies.
   }
 }
 
 function safeWarmupReason(err: unknown): string {
   if (err instanceof CodexWarmupError) {
-    const base = err.status ? `${err.code}:${err.status}` : err.code;
-    return err.upstreamDetail ? `${base} — ${err.upstreamDetail}` : base;
+    return err.status ? `${err.code}:${err.status}` : err.code;
   }
   return "transport";
 }
@@ -169,10 +148,9 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
   }
 
   if (!res.ok) {
-    const upstreamDetail = await readErrorDetail(res, signal);
+    await drainErrorBody(res, signal);
     throw new CodexWarmupError("http_status", "Codex warmup was rejected", {
       status: res.status,
-      upstreamDetail,
     });
   }
   const body = res.body;
