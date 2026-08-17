@@ -4,9 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const AI_ACTION = 'actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222';
+const COPILOT_RUNNER = 'node .github/scripts/run-copilot-inference.cjs';
 const CLI_INSTALL = 'npm install --global @github/copilot@1.0.74';
 const SETUP_NODE = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e';
+const TOKEN_FALLBACK = 'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || github.token }}';
 
 function readWorkflow(name) {
   return fs.readFileSync(path.join(ROOT, '.github', 'workflows', name), 'utf8');
@@ -16,24 +17,23 @@ function count(text, fragment) {
   return text.split(fragment).length - 1;
 }
 
-test('issue automation uses pinned Copilot inference without tool access', () => {
+test('issue automation streams prompts through the pinned Copilot CLI without tool access', () => {
   const quality = readWorkflow('enforce-issue-quality.yml');
   const triage = readWorkflow('issue-triage.yml');
   const combined = quality + '\n' + triage;
 
-  assert.equal(count(quality, AI_ACTION), 2);
-  assert.equal(count(triage, AI_ACTION), 1);
+  assert.equal(count(quality, COPILOT_RUNNER), 2);
+  assert.equal(count(triage, COPILOT_RUNNER), 1);
   assert.equal(count(quality, SETUP_NODE), 2);
   assert.equal(count(triage, SETUP_NODE), 1);
   assert.equal(count(quality, CLI_INSTALL), 2);
   assert.equal(count(triage, CLI_INSTALL), 1);
   assert.equal(count(quality, 'copilot-requests: write'), 2);
   assert.equal(count(triage, 'copilot-requests: write'), 1);
-  assert.equal(count(quality, 'GITHUB_TOKEN: ${{ github.token }}'), 2);
-  assert.equal(count(triage, 'GITHUB_TOKEN: ${{ github.token }}'), 1);
-  assert.equal(count(quality, 'model: ""'), 2);
-  assert.equal(count(triage, 'model: ""'), 1);
+  assert.equal(count(quality, TOKEN_FALLBACK), 2);
+  assert.equal(count(triage, TOKEN_FALLBACK), 1);
 
+  assert.doesNotMatch(combined, /actions\/ai-inference@/);
   assert.doesNotMatch(combined, /\bmodels:\s*read\b/);
   assert.doesNotMatch(combined, /max-tokens:/);
   assert.doesNotMatch(combined, /copilot-allow-tools:/);
