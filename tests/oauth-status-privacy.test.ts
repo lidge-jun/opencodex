@@ -6,6 +6,7 @@ import {
   getLoginStatus,
   getValidAccessToken,
   OAuthLoginRequiredError,
+  OAuthProviderPublicationError,
   OAuthTokenRefreshBusyError,
   OAuthTokenRefreshStaleError,
   OAUTH_PROVIDERS,
@@ -252,6 +253,9 @@ describe("OAuth status privacy", () => {
     );
     expect(publicOAuthAuthenticationErrorMessage(new OAuthLoginRequiredError(PUBLIC_ERROR_CANARY)))
       .toBe(PUBLIC_OAUTH_ERROR);
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthProviderPublicationError())).toBe(
+      "OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.",
+    );
     expect(publicOAuthAuthenticationErrorMessage(new OAuthTokenRefreshBusyError())).toBe(
       "OAuth token refresh capacity reached",
     );

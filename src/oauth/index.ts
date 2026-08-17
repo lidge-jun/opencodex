@@ -301,6 +301,13 @@ export class OAuthLoginRequiredError extends Error {
   }
 }
 
+export class OAuthProviderPublicationError extends Error {
+  constructor() {
+    super("OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.");
+    this.name = "OAuthProviderPublicationError";
+  }
+}
+
 /** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
 export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
   if (error instanceof OAuthMutationBusyError) {
@@ -310,6 +317,7 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
   }
   if (
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
+    || error instanceof OAuthProviderPublicationError
     || error instanceof OAuthTokenRefreshBusyError
     || error instanceof OAuthTokenRefreshStaleError
   ) return error.message;
@@ -1154,10 +1162,7 @@ export async function runLogin(
         provider,
       );
       if (lateCollision) {
-        throw new Error(
-          `${lateCollision}. The credential for "${provider}" was saved, but the provider entry was not written. `
-          + "Rename the account selector, then re-run the login.",
-        );
+        throw new OAuthProviderPublicationError();
       }
       upsertOAuthProvider(latestConfig, provider);
       saveLatestConfig(latestConfig);
@@ -1399,7 +1404,16 @@ export async function startLoginFlow(
       onManualCodeInput: (expectedState?: string) => waitForManualLoginCode(provider, abort.signal, expectedState),
       signal: abort.signal,
     };
+    const abandonIfNotOwner = (error?: unknown): boolean => {
+      if (loginAbort.get(provider) === abort) return false;
+      if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
+      return true;
+    };
     const settle = async (error?: unknown): Promise<void> => {
+      // Cancellation deletes this controller and records its own terminal result. A late provider
+      // rejection (or an older flow settling after a replacement starts) must not overwrite that
+      // state or delete the replacement flow's controller/manual-code slot.
+      if (abandonIfNotOwner(error)) return;
       let finalError = error;
       try {
         await lifecycle?.onSettled?.();
@@ -1408,6 +1422,7 @@ export async function startLoginFlow(
         // runtime config. For an already-failed login, keep the original recovery error.
         if (finalError === undefined) finalError = settleError;
       }
+      if (abandonIfNotOwner(finalError)) return;
       if (finalError === undefined) {
         loginAbort.delete(provider);
         clearManualCodeSlot(provider);
@@ -1432,6 +1447,7 @@ export async function startLoginFlow(
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
+      if (abandonIfNotOwner(e)) return;
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
       const msg = publicOAuthAuthenticationErrorMessage(e);

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+  cancelLoginFlow,
   clearLoginState,
   getLoginStatus,
   isOAuthProvider,
@@ -21,6 +22,7 @@ import { armClaudeCodeBaseline, loadConfig, saveConfig, saveConfigPreservingClau
 import { isApiAuthRequired, requireApiAuth } from "../src/server/auth-cors";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-public-surface");
+const PUBLIC_OAUTH_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
 const previousHome = process.env.OPENCODEX_HOME;
 const canonical = {
   adapter: "openai-responses",
@@ -203,7 +205,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
 
     try {
       await expect(runLogin("xai", {} as OAuthController)).rejects.toThrow(
-        /credential for "xai" was saved, but the provider entry was not written/,
+        "OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.",
       );
     } finally {
       OAUTH_PROVIDERS.xai.login = originalLogin;
@@ -386,7 +388,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       });
       const status = await waitForOAuthDone("xai");
       expect(status.done).toBe(true);
-      expect(status.error).toBe("browser flow aborted");
+      expect(status.error).toBe(PUBLIC_OAUTH_ERROR);
     } finally {
       OAUTH_PROVIDERS.xai.login = originalLogin;
       clearLoginState("xai");
@@ -415,7 +417,31 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       });
       const status = await waitForOAuthDone("xai");
       expect(status.done).toBe(true);
-      expect(status.error).toBe("runtime reconciliation failed");
+      expect(status.error).toBe(PUBLIC_OAUTH_ERROR);
+    } finally {
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+      clearLoginState("xai");
+    }
+  });
+
+  test("OAuth cancellation remains terminal after the provider rejects", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    OAUTH_PROVIDERS.xai.login = async (ctrl) => {
+      ctrl.onAuth({ url: "", deviceCode: "cancel-flow-device-code" });
+      await new Promise<never>((_, reject) => {
+        ctrl.signal.addEventListener("abort", () => reject(new Error("late provider abort after cancellation")), { once: true });
+      });
+    };
+
+    try {
+      await startLoginFlow("xai");
+      expect(cancelLoginFlow("xai")).toBe(true);
+      await Bun.sleep(20);
+
+      expect(getLoginStatus("xai")).toMatchObject({
+        done: true,
+        error: "Login cancelled",
+      });
     } finally {
       OAUTH_PROVIDERS.xai.login = originalLogin;
       clearLoginState("xai");
@@ -473,7 +499,9 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
 
       const status = await waitForOAuthDone("xai");
       expect(status.loggedIn).toBe(true);
-      expect(status.error).toMatch(/credential for "xai" was saved, but the provider entry was not written/);
+      expect(status.error).toBe(
+        "OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.",
+      );
       expect(getCredential("xai")?.access).toBe("route-collision-access");
       expect(liveConfig).toMatchObject({
         defaultProvider: "concurrent",
