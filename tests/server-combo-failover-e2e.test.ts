@@ -1863,6 +1863,8 @@ describe("server combo failover 030 activation matrix", () => {
 
   test("Kiro OAuth continuation follows the account across refresh but not account replacement", async () => {
     const seen: Array<string | undefined> = [];
+    const { clearResponseStateForTests, flushResponseState } = await import("../src/responses/state");
+    clearResponseStateForTests();
     customRunTurn = async (parsed, _incoming, emit) => {
       const conversationId = parsed._providerContinuation?.kiro?.conversationId;
       seen.push(conversationId);
@@ -1891,7 +1893,6 @@ describe("server combo failover 030 activation matrix", () => {
     const first = await post(config, { store: false, input: "first" });
     expect(first.status).toBe(200);
     const firstJson = await first.json() as { id: string };
-    const { flushResponseState } = await import("../src/responses/state");
     await flushResponseState();
     const persisted = readFileSync(join(getConfigDir(), "responses-state.json"), "utf8");
     expect(persisted).not.toContain("xai-access-one");
