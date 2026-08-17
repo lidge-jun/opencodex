@@ -149,6 +149,13 @@ export function resolveKeyedWebSearchSidecar(config: OcxConfig): KeyedWebSearchS
   if (wire !== KEYED_MODEL_ADAPTER && provider.adapter !== KEYED_MODEL_ADAPTER) return undefined;
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
   if (!apiKey) return undefined;
+  // Fail closed: never attach a Bearer key to a non-HTTPS base URL.
+  try {
+    const base = new URL(provider.baseUrl);
+    if (base.protocol !== "https:") return undefined;
+  } catch {
+    return undefined;
+  }
   return { providerName, provider, apiKey, model };
 }
 

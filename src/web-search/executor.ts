@@ -135,9 +135,11 @@ export async function runKeyedWebSearch(
   settings: SidecarSettings,
   abortSignal?: AbortSignal,
 ): Promise<SidecarOutcome> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (sidecar.provider.headers) Object.assign(headers, sidecar.provider.headers);
-  headers["authorization"] = `Bearer ${sidecar.apiKey}`;
+  // Headers() normalizes casing so provider headers cannot create a second
+  // Authorization/Content-Type entry that would race with the required ones.
+  const headers = new Headers(sidecar.provider.headers);
+  headers.set("Content-Type", "application/json");
+  headers.set("Authorization", `Bearer ${sidecar.apiKey}`);
   const body = {
     model: settings.model,
     instructions: settings.describeImages ? BASE_INSTRUCTION + IMAGE_INSTRUCTION : BASE_INSTRUCTION,

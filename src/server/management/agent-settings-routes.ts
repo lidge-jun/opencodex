@@ -1050,14 +1050,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
       const section = body[field];
       if (section === undefined || section === null) continue;
-      if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
-     if (section.backend !== undefined && section.backend !== null
-       && section.backend !== "openai" && section.backend !== "anthropic" && section.backend !== "keyed") {
-        return jsonResponse({ error: `${field}.backend must be openai, anthropic, keyed, or null` }, 400);
+     if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
+      if (section.backend !== undefined && section.backend !== null) {
+        // keyed is web-search-only. Vision still only supports openai/anthropic.
+        const allowed =
+          section.backend === "openai"
+          || section.backend === "anthropic"
+          || (field === "webSearchSidecar" && section.backend === "keyed");
+        if (!allowed) {
+          return jsonResponse({
+            error: field === "webSearchSidecar"
+              ? "webSearchSidecar.backend must be openai, anthropic, keyed, or null"
+              : "visionSidecar.backend must be openai, anthropic, or null",
+          }, 400);
+        }
       }
-      if (field === "webSearchSidecar" && section.provider !== undefined && section.provider !== null
-        && (typeof section.provider !== "string" || section.provider.trim() === "")) {
-        return jsonResponse({ error: "webSearchSidecar.provider must be a nonblank provider name" }, 400);
+      if (section.provider !== undefined && section.provider !== null) {
+        // provider is a keyed-web-search field only; vision has no provider override.
+        if (field !== "webSearchSidecar") {
+          return jsonResponse({ error: "visionSidecar.provider is not supported" }, 400);
+        }
+        if (typeof section.provider !== "string" || section.provider.trim() === "") {
+          return jsonResponse({ error: "webSearchSidecar.provider must be a nonblank provider name" }, 400);
+        }
       }
       if (section.model !== undefined && typeof section.model !== "string") {
         return jsonResponse({ error: `${field}.model must be a string` }, 400);
@@ -1092,8 +1107,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const override: Record<string, unknown> = { ...next[field] };
       if (requested.backend === null) delete override.backend;
       else if (requested.backend !== undefined) override.backend = requested.backend;
-      if (requested.provider === null || requested.provider === "") delete override.provider;
-      else if (requested.provider !== undefined) override.provider = requested.provider;
+      // provider only exists on webSearchSidecar (keyed backend). Never persist it for vision.
+      if (field === "webSearchSidecar") {
+        if (requested.provider === null || requested.provider === "") delete override.provider;
+        else if (requested.provider !== undefined) override.provider = requested.provider;
+      }
       if (requested.model === "") delete override.model;
       else if (requested.model !== undefined) override.model = requested.model;
       if (Object.keys(override).length > 0) next[field] = override;

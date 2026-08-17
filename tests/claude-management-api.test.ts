@@ -469,6 +469,32 @@ test("Claude webSearchSidecar accepts keyed backend and returns provider on GET"
   }
 });
 
+test("Claude visionSidecar rejects keyed backend and provider", async () => {
+  const server = startServer(0);
+  const put = (body: unknown) => fetch(new URL("/api/claude-code", server.url), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  try {
+    // Seed a valid vision override so a rejected PUT leaves it untouched.
+    const seed = await put({ visionSidecar: { backend: "openai", model: "gpt-vision" } });
+    expect(seed.status).toBe(200);
+    const before = loadConfig().claudeCode;
+
+    for (const body of [
+      { visionSidecar: { backend: "keyed" } },
+      { visionSidecar: { provider: "opencode-go" } },
+    ]) {
+      const response = await put(body);
+      expect(response.status).toBe(400);
+      expect(loadConfig().claudeCode).toEqual(before);
+    }
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("PUT immediately restores generated agents after re-enable and roster changes", async () => {
   const server = startServer(0);
   const agentsDir = join(process.env.CLAUDE_CONFIG_DIR!, "agents");

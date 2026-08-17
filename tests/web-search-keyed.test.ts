@@ -143,6 +143,28 @@ describe("keyed web-search sidecar eligibility", () => {
       ),
     ).toBeUndefined();
   });
+
+  test("fails closed when the provider baseUrl is not HTTPS", () => {
+    expect(
+      resolveKeyedWebSearchSidecar(
+        configFor(
+          { backend: "keyed", provider: "opencode-go", model: "deepseek-v4-flash" },
+          zenProvider({ baseUrl: "http://opencode.ai/zen/go/v1" }),
+        ),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("fails closed when the provider baseUrl is not a valid URL", () => {
+    expect(
+      resolveKeyedWebSearchSidecar(
+        configFor(
+          { backend: "keyed", provider: "opencode-go", model: "deepseek-v4-flash" },
+          zenProvider({ baseUrl: "not-a-url" }),
+        ),
+      ),
+    ).toBeUndefined();
+  });
 });
 
 describe("runKeyedWebSearch request shape", () => {
@@ -302,5 +324,74 @@ describe("runKeyedWebSearch request shape", () => {
     );
     expect(out.error).toBeUndefined();
     expect(capturedUrl).toBe("https://search.example/v1/custom-responses");
+  });
+
+  test("normalizes case-variant content-type and keeps a single Authorization", async () => {
+    let captured: { headers: Record<string, string> } | null = null;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers).forEach((v, k) => {
+        headers[k] = v;
+      });
+      captured = { headers };
+      const body = [
+        "event: response.output_text.done\ndata: " +
+          JSON.stringify({ type: "response.output_text.done", text: "ok" }) +
+          "\n\n",
+        "event: response.completed\ndata: " +
+          JSON.stringify({
+            type: "response.completed",
+            response: {
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  content: [{ type: "output_text", text: "ok", annotations: [] }],
+                },
+              ],
+            },
+          }) +
+          "\n\n",
+      ].join("");
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(body));
+            c.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const out = await runKeyedWebSearch(
+      "latest bun release",
+      { type: "web_search" } as unknown as Record<string, unknown>,
+      {
+        providerName: "opencode-go",
+        provider: zenProvider({
+          headers: {
+            "content-type": "text/plain",
+            Authorization: "Bearer stale-key",
+          },
+        }),
+        apiKey: "zen-key",
+      },
+      {
+        model: "deepseek-v4-flash",
+        reasoning: "low",
+        timeoutMs: 5000,
+        describeImages: false,
+      },
+    );
+    expect(out.error).toBeUndefined();
+    const c = captured!;
+    // Headers() + set() wins over the provider's case-variant entries.
+    expect(c.headers["content-type"]).toBe("application/json");
+    expect(c.headers["authorization"]).toBe("Bearer zen-key");
+    // No second authorization key left behind by Object.assign-style merges.
+    expect(Object.keys(c.headers).filter((k) => k.toLowerCase() === "authorization")).toEqual([
+      "authorization",
+    ]);
   });
 });
