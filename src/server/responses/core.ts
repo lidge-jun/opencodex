@@ -305,7 +305,7 @@ function providerContinuationOwnerForRoute(args: {
   providerName: string;
   provider: OcxProviderConfig;
   adapterName: string;
-  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation">;
+  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation" | "credentialSubjectHash">;
   codexAuthContext?: CodexAuthContext;
   forwardHeaders?: Headers;
 }): OcxProviderContinuationOwner | undefined {
@@ -313,12 +313,12 @@ function providerContinuationOwnerForRoute(args: {
   const authMode = provider.authMode ?? "key";
   let credentialIdentity: string | undefined;
   if (authMode === "oauth") {
-    const accountId = args.oauthCredentialSnapshot?.accountId?.trim();
-    if (!accountId) return undefined;
-    const accountMaterial = JSON.stringify([providerName, accountId]);
+    const credentialSubjectHash = args.oauthCredentialSnapshot?.credentialSubjectHash?.trim();
+    if (!credentialSubjectHash) return undefined;
+    const accountMaterial = JSON.stringify([providerName, credentialSubjectHash]);
     // Credential-bearing header overrides are part of the physical identity. Keep them behind
-    // the existing process-local HMAC; without overrides the non-secret account slot can remain
-    // restart-stable across ordinary access-token refreshes.
+    // the existing process-local HMAC. Without overrides, only a verified credential subject is
+    // restart-stable across ordinary access-token refreshes; a reusable local slot is not identity.
     credentialIdentity = reasoningReplayHasCredentialHeaderOverrides(provider.headers)
       ? reasoningReplayCredentialIdentity("oauth", accountMaterial, provider.headers)
       : `oauth-account:${continuationIdentity("provider-continuation-oauth-account", accountMaterial)}`;
@@ -436,7 +436,7 @@ function bindRouteReasoningReplayScope(args: {
   providerName: string;
   provider: OcxProviderConfig;
   adapterName: string;
-  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation">;
+  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation" | "credentialSubjectHash">;
   codexAuthContext?: CodexAuthContext;
   forwardHeaders?: Headers;
 }): void {
@@ -2212,7 +2212,10 @@ async function handleResponsesInner(
   const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro")
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
-  let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
+  let replayOAuthCredentialSnapshot: Pick<
+    OAuthAccessSnapshot,
+    "accountId" | "generation" | "credentialSubjectHash"
+  > | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
@@ -2251,6 +2254,9 @@ async function handleResponsesInner(
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
+          ...(resolved.credentialSubjectHash
+            ? { credentialSubjectHash: resolved.credentialSubjectHash }
+            : {}),
         };
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
@@ -3878,6 +3884,9 @@ async function handleResponsesInner(
         replayOAuthCredentialSnapshot = {
           accountId: refreshed.accountId,
           generation: refreshed.generation,
+          ...(refreshed.credentialSubjectHash
+            ? { credentialSubjectHash: refreshed.credentialSubjectHash }
+            : {}),
         };
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };

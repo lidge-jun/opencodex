@@ -24,7 +24,7 @@ import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, i
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite, type GenerationContext } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 export {
   CODEX_HEALTH_AUTH_FAILED_NOTE,
   CODEX_HEALTH_MANAGEMENT_API_UNAVAILABLE_NOTE,
@@ -52,6 +52,8 @@ import { codexAccountNamespaceProviderCollisionError } from "../codex/account-na
 const REFRESH_SKEW_MS = 60_000;
 export interface OAuthAccessSnapshot {
   provider: string;
+  /** Stable pseudonymous subject for account-bound continuation; absent without an immutable account id. */
+  credentialSubjectHash?: string;
   accountId: string;
   generation: string;
   accessToken: string;
@@ -299,6 +301,11 @@ export class OAuthLoginRequiredError extends Error {
 }
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
+  // Email is not an immutable upstream subject: multiple accounts may share or later reuse it.
+  // Fail closed unless the provider supplied its stable account id.
+  const stableCredentialSubject = cred.accountId?.trim()
+    ? ["account-id", cred.accountId.trim()]
+    : undefined;
   const storedKiroRouting = {
     ...(cred.kiro?.profileArn ? { profileArn: cred.kiro.profileArn } : {}),
     ...(cred.kiro?.apiRegion ? { apiRegion: cred.kiro.apiRegion } : {}),
@@ -306,6 +313,16 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
   };
   return {
     provider,
+    ...(stableCredentialSubject
+      ? {
+          credentialSubjectHash: createHash("sha256")
+            .update("opencodex-oauth-credential-subject\0")
+            .update(provider)
+            .update("\0")
+            .update(JSON.stringify(stableCredentialSubject))
+            .digest("hex"),
+        }
+      : {}),
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,

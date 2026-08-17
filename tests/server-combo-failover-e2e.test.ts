@@ -12,7 +12,7 @@ import {
 import { getConfigDir, readConfigDiagnostics, saveConfig } from "../src/config";
 import type { ProviderAdapter } from "../src/adapters/base";
 import { handleManagementAPI } from "../src/server/management-api";
-import { saveCredential } from "../src/oauth/store";
+import { getAccountSet, saveCredential } from "../src/oauth/store";
 import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig, OcxProviderContinuationState } from "../src/types";
@@ -1895,7 +1895,11 @@ describe("server combo failover 030 activation matrix", () => {
 
   test("Kiro OAuth continuation follows the account across refresh but not account replacement", async () => {
     const seen: Array<string | undefined> = [];
-    const { clearResponseStateForTests, flushResponseState } = await import("../src/responses/state");
+    const {
+      clearResponseStateForTests,
+      clearResponseStateMemoryForTests,
+      flushResponseState,
+    } = await import("../src/responses/state");
     clearResponseStateForTests();
     customRunTurn = async (parsed, _incoming, emit) => {
       const conversationId = parsed._providerContinuation?.kiro?.conversationId;
@@ -1930,6 +1934,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(persisted).not.toContain("xai-access-one");
     expect(persisted).not.toContain("xai-refresh-one");
     expect(persisted).not.toContain("acct-xai-a");
+    clearResponseStateMemoryForTests();
 
     await saveCredential("xai", {
       access: "xai-access-two",
@@ -1973,6 +1978,78 @@ describe("server combo failover 030 activation matrix", () => {
 
     expect(replacedAccount.status).toBe(200);
     expect(seen).toEqual([undefined, "kiro-oauth-conversation", undefined, undefined]);
+  });
+
+  test("OAuth credentials without immutable account ids do not inherit provider continuation state", async () => {
+    const seen: Array<string | undefined> = [];
+    const {
+      clearResponseStateForTests,
+      clearResponseStateMemoryForTests,
+      flushResponseState,
+    } = await import("../src/responses/state");
+    clearResponseStateForTests();
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push(conversationId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({
+        type: "done",
+        providerState: { kiro: { conversationId: conversationId ?? "identityless-oauth-conversation" } },
+      });
+    };
+    const config = comboConfig({
+      xai: provider("openai-chat", "https://api.x.ai/v1", "unused", {
+        authMode: "oauth",
+        note: "test-kiro-oauth",
+      }),
+    }, [{ provider: "xai", model: "m1" }]);
+    const cases: Array<{ name: string; email?: string }> = [
+      { name: "identityless" },
+      { name: "email-only", email: "shared-account@example.test" },
+    ];
+    for (const testCase of cases) {
+      clearResponseStateForTests();
+      seen.length = 0;
+      await saveCredential("xai", {
+        access: `${testCase.name}-access-one`,
+        refresh: `${testCase.name}-refresh-one`,
+        expires: Date.now() + 3_600_000,
+        source: "oauth",
+        ...(testCase.email ? { email: testCase.email } : {}),
+      });
+      const firstSlotId = getAccountSet("xai")?.activeAccountId;
+      expect(firstSlotId).toBeDefined();
+
+      const first = await post(config, { store: false, input: "first" });
+      expect(first.status).toBe(200);
+      const firstJson = await first.json() as { id: string };
+      await flushResponseState();
+      clearResponseStateMemoryForTests();
+
+      await saveCredential("xai", {
+        access: `${testCase.name}-access-two`,
+        refresh: `${testCase.name}-refresh-two`,
+        expires: Date.now() + 3_600_000,
+        source: "oauth",
+        ...(testCase.email ? { email: testCase.email } : {}),
+      });
+      expect(getAccountSet("xai")?.activeAccountId).toBe(firstSlotId);
+      const second = await post(config, {
+        store: false,
+        previous_response_id: firstJson.id,
+        input: "second",
+      });
+
+      expect(second.status).toBe(200);
+      expect(seen).toEqual([undefined, undefined]);
+      await flushResponseState();
+      const persisted = readFileSync(join(getConfigDir(), "responses-state.json"), "utf8");
+      expect(persisted).not.toContain(`${testCase.name}-access-one`);
+      expect(persisted).not.toContain(`${testCase.name}-refresh-one`);
+      expect(persisted).not.toContain(`${testCase.name}-access-two`);
+      expect(persisted).not.toContain(`${testCase.name}-refresh-two`);
+      if (testCase.email) expect(persisted).not.toContain(testCase.email);
+    }
   });
 
   test("disabled image input rejects an image restored from previous_response_id before dispatch", async () => {
