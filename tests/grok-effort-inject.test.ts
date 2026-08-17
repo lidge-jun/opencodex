@@ -61,7 +61,7 @@ function parseModels(content: string): Record<string, GrokTomlModel> {
   return parsed.model!;
 }
 
-function tableByRoutedId(models: Record<string, GrokTomlModel>, id: string): GrokTomlModel {
+function tableByModelId(models: Record<string, GrokTomlModel>, id: string): GrokTomlModel {
   const table = Object.values(models).find(entry => entry.model === id);
   expect(table).toBeDefined();
   return table!;
@@ -196,7 +196,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
       const content = readFileSync(join(grokHome, "config.toml"), "utf8");
       const models = parseModels(content);
 
-      const sol = tableByRoutedId(models, NATIVE_SOL);
+      const sol = tableByModelId(models, NATIVE_SOL);
       const nativeLadder = expectedNativeEfforts(NATIVE_SOL);
       expect(nativeReasoningEfforts(NATIVE_SOL)).toContain("ultra");
       expect(nativeLadder).not.toContain("ultra");
@@ -208,7 +208,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
       expect(sol.reasoning_efforts?.filter(row => row.default)).toHaveLength(1);
       expect(sol.reasoning_efforts?.find(row => row.default)?.value).toBe(sol.reasoning_effort);
 
-      const k3 = tableByRoutedId(models, "kimi/k3");
+      const k3 = tableByModelId(models, "kimi/k3");
       expect(k3.supports_reasoning_effort).toBe(true);
       expect(k3.reasoning_effort).toBe("high");
       expect(k3.reasoning_efforts?.map(row => row.value)).toEqual(["low", "high", "max"]);
@@ -228,7 +228,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
       expect(result).toMatchObject({ ok: true, changed: true });
       const content = readFileSync(join(grokHome, "config.toml"), "utf8");
       const models = parseModels(content);
-      const plain = tableByRoutedId(models, "kimi/kimi-for-coding");
+      const plain = tableByModelId(models, "kimi/kimi-for-coding");
       expect(plain.supports_reasoning_effort).toBeUndefined();
       expect(plain.reasoning_effort).toBeUndefined();
       expect(plain.reasoning_efforts).toBeUndefined();
@@ -291,10 +291,10 @@ describe("dashboard Grok enable apply writes the same ladders", () => {
     expect(res?.status).toBe(200);
     const content = readFileSync(join(grokHome, "config.toml"), "utf8");
     const models = parseModels(content);
-    const sol = tableByRoutedId(models, NATIVE_SOL);
+    const sol = tableByModelId(models, NATIVE_SOL);
     expect(sol.supports_reasoning_effort).toBe(true);
     expect(sol.reasoning_efforts?.map(row => row.value)).toEqual(expectedNativeEfforts(NATIVE_SOL));
-    const k3 = tableByRoutedId(models, "kimi/k3");
+    const k3 = tableByModelId(models, "kimi/k3");
     expect(k3.reasoning_effort).toBe("high");
     expect(k3.reasoning_efforts?.map(row => row.value)).toEqual(["low", "high", "max"]);
   });
