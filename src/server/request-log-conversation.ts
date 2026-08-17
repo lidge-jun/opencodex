@@ -58,14 +58,21 @@ export function matchesLogConversationId(
  * parent thread header > session_id / session-id > thread-id > cursor conversation id.
  */
 export function sessionIdHeaderFromRequest(headers: Headers): string | null {
-  return headers.get("session_id") ?? headers.get("session-id");
+  return firstNonEmptyHeader(headers, "session_id", "session-id");
 }
 
 /** Cursor conversation reuse: Codex parent thread, then Responses session headers. */
 export function clientThreadIdFromResponsesHeaders(headers: Headers): string | undefined {
-  return headers.get("x-codex-parent-thread-id")?.trim()
-    || sessionIdHeaderFromRequest(headers)?.trim()
+  return firstNonEmptyHeader(headers, "x-codex-parent-thread-id", "session_id", "session-id")
     || undefined;
+}
+
+function firstNonEmptyHeader(headers: Headers, ...names: string[]): string | null {
+  for (const name of names) {
+    const value = headers.get(name)?.trim();
+    if (value) return value;
+  }
+  return null;
 }
 
 export function conversationIdFromResponsesRequest(input: {

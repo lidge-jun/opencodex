@@ -69,8 +69,13 @@ describe("sessionIdHeaderFromRequest", () => {
       session_id: "underscore",
       "session-id": "hyphen",
     }))).toBe("underscore");
+    expect(sessionIdHeaderFromRequest(new Headers({
+      session_id: "   ",
+      "session-id": "hyphen",
+    }))).toBe("hyphen");
   });
 });
+
 describe("clientThreadIdFromResponsesHeaders", () => {
   test("prefers Codex parent thread over session_id", () => {
     expect(clientThreadIdFromResponsesHeaders(new Headers({
@@ -83,6 +88,13 @@ describe("clientThreadIdFromResponsesHeaders", () => {
     expect(clientThreadIdFromResponsesHeaders(new Headers({
       session_id: "gjc-session",
     }))).toBe("gjc-session");
+  });
+
+  test("falls back to session-id when session_id is blank", () => {
+    expect(clientThreadIdFromResponsesHeaders(new Headers({
+      session_id: "   ",
+      "session-id": "hyphen-session",
+    }))).toBe("hyphen-session");
   });
 });
 

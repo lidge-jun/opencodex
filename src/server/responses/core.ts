@@ -1247,6 +1247,7 @@ export async function handleComboResponses(
   config: OcxConfig,
   logCtx: RequestLogContext,
   options: HandleResponsesOptions,
+  inboundClientThreadId = clientThreadIdFromResponsesHeaders(req.headers),
 ): Promise<Response> {
   const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
     ? (rawBody as { model: string }).model
@@ -1264,7 +1265,7 @@ export async function handleComboResponses(
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
-  const body = expandPreviousResponseInput(rawBody);
+  const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
       400,
@@ -1642,6 +1643,7 @@ async function handleResponsesInner(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  const inboundClientThreadId = clientThreadIdFromResponsesHeaders(req.headers);
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
@@ -1650,12 +1652,11 @@ async function handleResponsesInner(
       // The original request body was accepted above. Combo children are synthetic
       // replays and must not repeat the caller-owned timeout transition.
       onRequestBodyRead: undefined,
-    });
+    }, inboundClientThreadId);
   }
   let unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
   );
-  const inboundClientThreadId = clientThreadIdFromResponsesHeaders(req.headers);
   const originalBody = body;
   body = expandPreviousResponseInput(body, inboundClientThreadId);
   if (previousResponseScopeMismatch(body)) {
