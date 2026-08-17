@@ -20,6 +20,7 @@ import {
   reasoningReplayKeyCredentialIdentity,
   reasoningReplayOAuthCredentialIdentity,
 } from "../../responses/reasoning-replay-cache";
+import { isValidProviderContinuationOwner } from "../../responses/provider-continuation";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
@@ -373,19 +374,7 @@ type ContinuationOwnerRead =
 function readProviderContinuationOwner(state: OcxProviderContinuationState | undefined): ContinuationOwnerRead {
   if (!state || state.__ocxOwner === undefined) return { kind: "missing" };
   const owner = state.__ocxOwner;
-  const bounded = (value: unknown, max: number): value is string =>
-    typeof value === "string" && value.length > 0 && value.length <= max;
-  if (
-    !owner
-    || typeof owner !== "object"
-    || Array.isArray(owner)
-    || owner.version !== 1
-    || !bounded(owner.providerName, 256)
-    || !/^destination:[0-9a-f]{64}$/.test(owner.providerDestinationIdentity)
-    || !bounded(owner.adapterName, 128)
-    || !bounded(owner.modelId, 512)
-    || !/^(key|oauth|codex|oauth-account|forward-account):[0-9a-f]{64}$/.test(owner.credentialIdentity)
-  ) return { kind: "invalid" };
+  if (!isValidProviderContinuationOwner(owner)) return { kind: "invalid" };
   return { kind: "valid", owner: { ...owner } };
 }
 

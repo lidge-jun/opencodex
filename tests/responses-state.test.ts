@@ -773,6 +773,36 @@ describe("Responses previous_response_id state", () => {
     expect(expanded.input.at(-1)).toMatchObject({ type: "function_call_output", call_id: "call_1" });
   });
 
+  test("validates reserved continuation ownership separately from provider spill state", () => {
+    const owner = {
+      version: 1 as const,
+      providerName: "kiro",
+      providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+      adapterName: "kiro",
+      modelId: "gpt-5.6-sol",
+      credentialIdentity: `oauth-account:${"b".repeat(64)}`,
+    };
+    const valid = writeResponseSpillDurably("resp_valid_spill_owner", {
+      createdAt: Date.now(),
+      items: ["valid"],
+      providers: { __ocxOwner: owner, kiro: { conversationId: "kiro-valid" } },
+    });
+    expect(readResponseSpill("resp_valid_spill_owner", valid).ok).toBe(true);
+
+    const invalid = writeResponseSpillDurably("resp_invalid_spill_owner", {
+      createdAt: Date.now(),
+      items: ["invalid"],
+      providers: {
+        __ocxOwner: { ...owner, version: 2 },
+        kiro: { conversationId: "must-not-load" },
+      } as never,
+    });
+    expect(readResponseSpill("resp_invalid_spill_owner", invalid)).toEqual({
+      ok: false,
+      reason: "corrupt",
+    });
+  });
+
   test("replays a durable spill after simulated process restart", async () => {
     setResponseStateByteCapForTests(1_024);
     rememberResponseState(
