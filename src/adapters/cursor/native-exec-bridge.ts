@@ -11,8 +11,10 @@ export interface CursorNativeExecBridgeCatalog {
   clientToolNames?: readonly string[];
 }
 
+const CODE_MODE_DISPLAY_NAME = `mcp_${OCX_RESPONSES_TOOL_PROVIDER}_${CODEX_UNIFIED_EXEC_TOOL}`;
+
 const CODE_MODE_SHELL_HINT =
-  `the Codex code-mode tool \`${CODEX_UNIFIED_EXEC_TOOL}\` and call a nested helper INSIDE its JavaScript body, for example \`await tools.${CODEX_EXEC_COMMAND_TOOL}({cmd: "pwd"})\`. Do not invent a top-level \`${CODEX_SHELL_COMMAND_TOOL}\` / \`${CODEX_EXEC_COMMAND_TOOL}\` call`;
+  `the Codex code-mode tool \`${CODEX_UNIFIED_EXEC_TOOL}\` (Cursor may list it as \`${CODE_MODE_DISPLAY_NAME}\`) and call a nested helper INSIDE its JavaScript body, for example \`await tools.${CODEX_EXEC_COMMAND_TOOL}({cmd: "pwd"})\`. If the catalog shows \`${CODE_MODE_DISPLAY_NAME}\`, call that name. Do not invent a top-level \`${CODEX_SHELL_COMMAND_TOOL}\` / \`${CODEX_EXEC_COMMAND_TOOL}\` call`;
 
 const FLAT_SHELL_HINT =
   `the Codex bridge shell tool from the current catalog (\`${CODEX_SHELL_COMMAND_TOOL}\` or \`${CODEX_EXEC_COMMAND_TOOL}\`, including the long \`mcp_${OCX_RESPONSES_TOOL_PROVIDER}_*\` display name if listed)`;
@@ -91,4 +93,59 @@ export function nativeFetchDisabledMessage(catalog?: CursorNativeExecBridgeCatal
     "Route this through the Codex shell bridge tool `shell_command` (aliases: `exec_command`, `mcp_opencodex-responses_shell_command`, `mcp_opencodex-responses_exec_command`) with curl or wget. "
     + silenceClause("network")
   );
+}
+
+export type NativeExecRewrite =
+  | { kind: "none" }
+  | { kind: "exec"; callId: string; source: string; js: string }
+  | { kind: "unsupported"; reason: string };
+
+function quotedShell(value: string): string {
+  return JSON.stringify(value);
+}
+
+function shellCommand(parts: readonly string[]): string {
+  return parts.map(part => /[\s"'`$]/.test(part) ? quotedShell(part) : part).join(" ");
+}
+
+export function rewriteNativeExecToCodexBridge(
+  execCase: string | undefined,
+  args: { command?: string; path?: string; url?: string; pattern?: string; toolCallId?: string },
+  catalog?: CursorNativeExecBridgeCatalog,
+): NativeExecRewrite {
+  if (!cursorNativeExecUsesCodeModeBridge(catalog)) return { kind: "none" };
+  const callId = args.toolCallId?.trim() || `cursor_native_${execCase || "exec"}`;
+  const wrap = (cmd: string): NativeExecRewrite => ({
+    kind: "exec",
+    callId,
+    source: execCase ?? "unknown",
+    js: `const result = await tools.exec_command({cmd: ${quotedShell(cmd)}}); text(typeof result === "string" ? result : (result?.output ?? JSON.stringify(result)));`,
+  });
+  if (execCase === "shellArgs" || execCase === "shellStreamArgs" || execCase === "backgroundShellSpawnArgs") {
+    const command = args.command?.trim();
+    if (!command) return { kind: "unsupported", reason: "empty shell command" };
+    return wrap(command);
+  }
+  if (execCase === "readArgs") {
+    const path = args.path?.trim();
+    if (!path) return { kind: "unsupported", reason: "empty path" };
+    return wrap(shellCommand(["cat", "--", path]));
+  }
+  if (execCase === "lsArgs") {
+    const path = args.path?.trim();
+    if (!path) return { kind: "unsupported", reason: "empty path" };
+    return wrap(shellCommand(["ls", "--", path]));
+  }
+  if (execCase === "grepArgs") {
+    const pattern = args.pattern?.trim();
+    const path = args.path?.trim() || ".";
+    if (!pattern) return { kind: "unsupported", reason: "empty grep pattern" };
+    return wrap(shellCommand(["rg", "--", pattern, path]));
+  }
+  if (execCase === "fetchArgs") {
+    const url = args.url?.trim();
+    if (!url) return { kind: "unsupported", reason: "empty url" };
+    return wrap(shellCommand(["curl", "-fsSL", "--", url]));
+  }
+  return { kind: "none" };
 }

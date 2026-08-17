@@ -59,6 +59,7 @@ import {
   type CursorNativeExecContext,
 } from "./native-exec";
 import { effectiveCursorNativeExecAllow } from "./exec-policy";
+import { rewriteNativeExecToCodexBridge } from "./native-exec-bridge";
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
 import { buildMcpToolDefinitions, mcpDepsFromManager } from "./native-exec-mcp";
@@ -1069,6 +1070,20 @@ class LiveCursorTransport implements CursorTransport {
           return;
         }
       }
+      const rewrite = rewriteNativeExecToCodexBridge(
+        execMsg.message.case,
+        nativeExecRewriteArgs(execMsg),
+        { clientToolNames: this.execContext.clientToolDefs?.map(tool => tool.toolName || tool.name) ?? [] },
+      );
+      if (rewrite.kind === "exec") {
+        this.noteClientToolActivity();
+        push({ type: "tool_call_start", id: rewrite.callId, name: "exec" });
+        push({ type: "tool_call_delta", arguments: JSON.stringify({ input: rewrite.js }) });
+        push({ type: "tool_call_end", id: rewrite.callId });
+        this.cancelCursorRun();
+        this.scheduleClientToolFinalize(state, push);
+        return;
+      }
       // Native exec/MCP is handled inside this transport and can mutate files/process state
       // without emitting a Responses tool event. Mark the turn replay-unsafe before executing so
       // an eventual invalid_argument cannot cause the adapter's fresh-conversation fallback to
@@ -1214,6 +1229,22 @@ function isCursorProgressFrame(message: AgentServerMessage): boolean {
  * count: Cursor-native tool frames (readToolCall/editToolCall/...) are display-plane and must not
  * revoke a pending client-tool finalize. Exported for unit testing.
  */
+
+function nativeExecRewriteArgs(execMsg: { message: { case?: string; value?: unknown }; execId?: string }) {
+  const value = execMsg.message.value;
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const text = (key: string): string | undefined => {
+    const found = record[key];
+    return typeof found === "string" ? found : undefined;
+  };
+  return {
+    command: text("command"),
+    path: text("path"),
+    url: text("url"),
+    pattern: text("pattern"),
+    toolCallId: text("toolCallId") ?? execMsg.execId,
+  };
+}
 export function isClientToolFrame(message: AgentServerMessage): boolean {
   if (message.message.case !== "interactionUpdate") return false;
   const update = message.message.value.message;

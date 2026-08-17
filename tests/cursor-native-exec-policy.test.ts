@@ -19,6 +19,7 @@ import {
   ShellArgsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import { rewriteNativeExecToCodexBridge } from "../src/adapters/cursor/native-exec-bridge";
 import {
   resetBackgroundShellStateForTests,
   setBackgroundShellRuntimeForTests,
@@ -400,6 +401,7 @@ describe("Cursor native exec sandbox policy", () => {
     }), catalog))[0]);
     const deniedText = stringify(denied);
     expect(deniedText).toContain("await tools.exec_command");
+    expect(deniedText).toContain("mcp_opencodex-responses_exec");
     expect(deniedText).toContain("Do not invent a top-level");
     expect(deniedText).toContain("silently call");
     expect(deniedText).not.toContain("mcp_opencodex-responses_*");
@@ -412,6 +414,25 @@ describe("Cursor native exec sandbox policy", () => {
     expect(deniedShellText).toContain("await tools.exec_command");
     expect(deniedShellText).toContain("Do not invent a top-level");
     expect(deniedShellText).toContain("silently call");
+  });
+
+  test("rewrites denied native shell/read into a code-mode exec body", () => {
+    const catalog = { clientToolNames: ["exec"] };
+    const shell = rewriteNativeExecToCodexBridge("shellArgs", { command: "pwd", toolCallId: "call_shell" }, catalog);
+    expect(shell.kind).toBe("exec");
+    if (shell.kind === "exec") {
+      expect(shell.callId).toBe("call_shell");
+      expect(shell.js).toContain("await tools.exec_command");
+      expect(shell.js).toContain("pwd");
+    }
+    const read = rewriteNativeExecToCodexBridge("readArgs", { path: "/tmp/note.txt" }, catalog);
+    expect(read.kind).toBe("exec");
+    if (read.kind === "exec") {
+      expect(read.js).toContain("cat");
+      expect(read.js).toContain("/tmp/note.txt");
+    }
+    const untouched = rewriteNativeExecToCodexBridge("shellArgs", { command: "pwd" }, { clientToolNames: ["exec_command"] });
+    expect(untouched.kind).toBe("none");
   });
 
 });

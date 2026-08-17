@@ -442,6 +442,7 @@ describe("Cursor code mode tool guidance", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("is Codex code mode");
+    expect(note).toContain("mcp_opencodex-responses_exec");
     expect(note).toContain("V8 isolate");
     expect(note).toContain("await tools.<name>(...)");
     expect(note).toContain("await tools.exec_command({cmd: " + "\"" + "ls" + "\"" + "})");
