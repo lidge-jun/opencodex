@@ -153,6 +153,8 @@ function advertisedToolNames(body: Record<string, unknown>): string[] {
 }
 
 function orderedToolNames(names: readonly string[]): string[] {
+  // extractRound advances from markers written by function/custom outputs. Keep a
+  // marker-producing tool first so every non-empty 1..N selection advances the round.
   const ordinary = names.filter(name => !/apply_patch|tool_search/i.test(name));
   const special = names.filter(name => /apply_patch|tool_search/i.test(name));
   return [...ordinary, ...special];
@@ -475,14 +477,13 @@ function toolSearchResultTools(): Array<Record<string, unknown>> {
   }];
 }
 
-async function readResponseText(response: Response, slow: boolean, signal?: AbortSignal): Promise<string> {
+async function readResponseText(response: Response, slow: boolean): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let text = "";
   try {
     while (true) {
-      if (signal?.aborted) throw signal.reason ?? new Error("aborted");
       const { done, value } = await reader.read();
       if (done) break;
       text += decoder.decode(value, { stream: true });
@@ -554,6 +555,7 @@ async function runSessionRound(state: SessionState, round: number, proxyBase: UR
   state.requests += 1;
   const response = await fetch(new URL("/v1/responses", proxyBase), {
     method: "POST",
+    signal: AbortSignal.timeout(options.idleDeadlineMs),
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "mock/test-model",
@@ -595,7 +597,10 @@ async function runSessionRound(state: SessionState, round: number, proxyBase: UR
 }
 
 async function sampleMetrics(controlBase: URL): Promise<ProbeMetrics> {
-  const response = await fetch(new URL("/metrics", controlBase), { cache: "no-store" });
+  const response = await fetch(new URL("/metrics", controlBase), {
+    cache: "no-store",
+    signal: AbortSignal.timeout(Math.min(5_000, options.idleDeadlineMs)),
+  });
   if (!response.ok) throw new Error(`metrics endpoint returned ${response.status}`);
   return await response.json() as ProbeMetrics;
 }
@@ -695,28 +700,35 @@ async function runWave(
 
 async function cancelOneResponse(sessionId: string, proxyBase: URL): Promise<string> {
   const controller = new AbortController();
-  const response = await fetch(new URL("/v1/responses", proxyBase), {
-    method: "POST",
-    signal: controller.signal,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "mock/test-model",
-      stream: true,
-      store: false,
-      input: sessionMarker(sessionId),
-      tools: tools(),
-    }),
-  });
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("cancel probe response had no body");
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`cancel probe timed out after ${options.idleDeadlineMs} ms`));
+  }, options.idleDeadlineMs);
   try {
-    await reader.read();
-    controller.abort(new Error("synthetic client cancel"));
-    try { await reader.read(); } catch { /* cancellation is the expected outcome */ }
+    const response = await fetch(new URL("/v1/responses", proxyBase), {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        store: false,
+        input: sessionMarker(sessionId),
+        tools: tools(),
+      }),
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("cancel probe response had no body");
+    try {
+      await reader.read();
+      controller.abort(new Error("synthetic client cancel"));
+      try { await reader.read(); } catch { /* cancellation is the expected outcome */ }
+    } finally {
+      try { await reader.cancel(); } catch { /* already aborted */ }
+    }
+    return "cancelled";
   } finally {
-    try { await reader.cancel(); } catch { /* already aborted */ }
+    clearTimeout(timeout);
   }
-  return "cancelled";
 }
 
 async function runFaultSession(index: number, proxyBase: URL): Promise<{ kind: FaultKind; outcome: string }> {
@@ -727,6 +739,7 @@ async function runFaultSession(index: number, proxyBase: URL): Promise<{ kind: F
   try {
     const response = await fetch(new URL("/v1/responses", proxyBase), {
       method: "POST",
+      signal: AbortSignal.timeout(options.idleDeadlineMs),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: "mock/test-model",
@@ -841,7 +854,12 @@ try {
   });
 } finally {
   if (controlBase) {
-    try { await fetch(new URL("/shutdown", controlBase), { method: "POST" }); } catch { /* child may already be gone */ }
+    try {
+      await fetch(new URL("/shutdown", controlBase), {
+        method: "POST",
+        signal: AbortSignal.timeout(Math.min(2_000, options.idleDeadlineMs)),
+      });
+    } catch { /* child may already be gone */ }
   }
   await upstream.stop(true);
   const childExit = await Promise.race([child.exited, Bun.sleep(2_000).then(() => null)]);
