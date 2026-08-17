@@ -175,6 +175,8 @@ export interface ProviderRegistryEntry {
   modelResponsesUpstreamStreaming?: Record<string, boolean>;
   /** Registry-only repair for a model whose native Responses stream may omit its terminal. */
   modelResponsesTerminalRepair?: Record<string, ResponsesTerminalRepairPolicy>;
+  /** Registry-only capability: model ids that natively serve hosted web_search over the Responses wire. */
+  hostedWebSearchResponsesModels?: Record<string, boolean>;
   /**
    * Registry-only client-facing item-id repair policy (#938), filled onto the
    * runtime provider only when the user has no explicit policy (derive.ts);
@@ -1242,6 +1244,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
+    // #1616: OpenCode Zen natively serves hosted web_search over /zen/go/v1/responses for
+    // deepseek-v4-flash (verified 2026-08-13). Per-model and fail-closed: other models must be
+    // probed before enabling the keyed web-search sidecar on them.
+    hostedWebSearchResponsesModels: { "deepseek-v4-flash": true },
     /* [Decision Log]
     - 목적과 의도: Route GPT 5.6 Luna to the Responses endpoint that OpenCode Go documents for that exact model.
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.
@@ -1250,7 +1256,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Luna reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: { "gpt-5.6-luna": "openai-responses" },
+    modelWireDefaults: {
+      "gpt-5.6-luna": "openai-responses",
+      // #1616: deepseek-v4-flash rides the Responses wire (hosted web_search needs it).
+      "deepseek-v4-flash": "openai-responses",
+    },
     modelContextWindows: { "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW },
     modelInputModalities: { "kimi-k3": ["text", "image"] },
     modelReasoningEfforts: {
@@ -2643,6 +2653,21 @@ export function providerModelResponsesTerminalRepair(
   const graceMs = Math.floor(policy?.graceMs ?? 0);
   if (!Number.isFinite(graceMs) || graceMs <= 0) return undefined;
   return { graceMs };
+}
+
+/**
+ * True when a registry entry declares the given model natively serves hosted web_search over the
+ * Responses wire. The keyed web-search sidecar uses this as its capability gate: without it, a
+ * misconfigured provider would send its API key to an endpoint that cannot answer.
+ */
+export function providerHostsHostedWebSearchResponses(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+): boolean {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.hostedWebSearchResponsesModels || !providerMatchesRegistryTransport(id, provider)) return false;
+  return entry.hostedWebSearchResponsesModels[modelId.trim().toLowerCase()] === true;
 }
 
 /**

@@ -111,3 +111,77 @@ export async function runWebSearch(
     linkedSignal.cleanup();
   }
 }
+
+export interface KeyedWebSearchRequest {
+  /** Resolved provider name (for logs). */
+  providerName: string;
+  /** Resolved key-auth provider pointing at an openai-responses wire. */
+  provider: OcxProviderConfig;
+  /** The resolved plaintext API key (already validated present). */
+  apiKey: string;
+}
+
+/**
+ * Execute ONE web search via a key-fed openai-responses provider that natively serves hosted
+ * web_search (e.g. OpenCode Zen at https://opencode.ai/zen/go/v1). Authenticates with the provider's
+ * own API key via `Authorization: Bearer <apiKey>` — it must NEVER touch the ChatGPT forward headers
+ * or the Anthropic stored-OAuth credential, so neither ChatGPT nor Anthropic quota is consumed.
+ * Reuses the hosted web_search tool verbatim and the shared SSE parser. Never throws.
+ */
+export async function runKeyedWebSearch(
+  query: string,
+  hostedTool: Record<string, unknown>,
+  sidecar: KeyedWebSearchRequest,
+  settings: SidecarSettings,
+  abortSignal?: AbortSignal,
+): Promise<SidecarOutcome> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (sidecar.provider.headers) Object.assign(headers, sidecar.provider.headers);
+  headers["authorization"] = `Bearer ${sidecar.apiKey}`;
+  const body = {
+    model: settings.model,
+    instructions: settings.describeImages ? BASE_INSTRUCTION + IMAGE_INSTRUCTION : BASE_INSTRUCTION,
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: query }] }],
+    tools: [hostedTool],
+    tool_choice: "auto",
+    reasoning: { effort: settings.reasoning },
+    store: false,
+    stream: true,
+  };
+  const url = `${sidecar.provider.baseUrl.replace(/\/+$/, "")}/responses`;
+  const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
+  const sidecarExit = sidecarEnter("web-search");
+  const t0 = Date.now();
+  try {
+    const res = await fetchWithResetRetry(
+      () => fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: linkedSignal.signal,
+        // Credential-bearing: never follow a 3xx that could leak the API key to the redirect target.
+        redirect: "manual",
+      }),
+      { abortSignal: linkedSignal.signal, label: "web-search-sidecar-keyed" },
+    );
+    const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      detachBodyGuard();
+      console.warn(`[web-search] keyed sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
+      return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
+    }
+    try {
+      return await parseSidecarSSE(res);
+    } finally {
+      detachBodyGuard();
+    }
+  } catch (e) {
+    const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
+    console.warn(`[web-search] keyed sidecar ${kind} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
+    return { text: "", sources: [], error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    sidecarExit();
+    linkedSignal.cleanup();
+  }
+}

@@ -438,6 +438,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       webSearch: {
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        provider: ws.provider,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
       },
       vision: publicVisionSidecarSettings(config, vision),
@@ -454,7 +455,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown };
+      webSearch?: { model?: unknown; backend?: unknown; provider?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -466,7 +467,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     };
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
-      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, or null" }, 400);
+      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, keyed, or null" }, 400);
+    }
+    if (body.webSearch && body.webSearch.provider !== undefined && body.webSearch.provider !== null
+      && (typeof body.webSearch.provider !== "string" || body.webSearch.provider.trim() === "")) {
+      return jsonResponse({ error: "webSearch.provider must be a nonblank provider name" }, 400);
     }
     if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
       && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
@@ -529,8 +534,17 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else config.webSearchSidecar.model = body.webSearch.model;
       }
       if (body.webSearch.backend === null) delete config.webSearchSidecar.backend;
-      else if (body.webSearch.backend === "openai" || body.webSearch.backend === "anthropic") {
+      else if (
+        body.webSearch.backend === "openai"
+        || body.webSearch.backend === "anthropic"
+        || body.webSearch.backend === "keyed"
+      ) {
         config.webSearchSidecar.backend = body.webSearch.backend;
+      }
+      if (body.webSearch.provider === null || body.webSearch.provider === "") {
+        delete config.webSearchSidecar.provider;
+      } else if (typeof body.webSearch.provider === "string") {
+        config.webSearchSidecar.provider = body.webSearch.provider;
       }
       if (typeof body.webSearch.reasoning === "string") config.webSearchSidecar.reasoning = body.webSearch.reasoning;
       if (typeof body.webSearch.streamRoutedModelOutput === "boolean") {
@@ -573,6 +587,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       webSearch: {
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        provider: ws.provider,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
       },
       vision: publicVisionSidecarSettings(config, vision),

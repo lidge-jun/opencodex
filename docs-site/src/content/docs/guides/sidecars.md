@@ -23,8 +23,10 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
    to the routed model instead. The original hosted-tool options are retained for the sidecar call.
 2. Runs the routed model in a small **agentic loop**. When it calls `web_search`, opencodex uses the
    selected sidecar backend: OpenAI runs hosted `web_search` with `gpt-5.6-luna` by default;
-   Anthropic runs `web_search_20250305` with `claude-sonnet-5` by default. The streamed answer and
-   citations become a tool result.
+   Anthropic runs `web_search_20250305` with `claude-sonnet-5` by default; a `keyed` backend POSTs
+   hosted `web_search` to a configured key-auth `openai-responses` provider that natively serves the
+   tool (for example OpenCode Zen with `deepseek-v4-flash`). The streamed answer and citations
+   become a tool result.
 3. **Loops** until the model answers or the total real-query budget reaches `maxSearchesPerTurn`
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
@@ -38,7 +40,7 @@ Opt-in `webSearchSidecar.streamRoutedModelOutput` (default `false`) streams each
 leading text/thinking deltas live instead — the client sees output as soon as the model produces
 it, exactly like the sidecar-less path. The live window closes permanently at the first tool-call
 boundary, so the decision to intercept `web_search` stays atomic and nothing is ever delivered
-twice (the terminal replay skips what already streamed). Tradeoff: text the model emits *before*
+twice (the terminal replay skips what already streamed). Tradeoff: text the model emits _before_
 deciding to search — which buffered mode silently drops — becomes visible and may partially repeat
 in the post-search answer. The Dashboard overview page exposes this as the **Stream answers live**
 toggle on the web-search sidecar card (`PUT /api/sidecar-settings` with
@@ -72,6 +74,25 @@ relevant images in words and include their source URLs.
 `minimal` reasoning is not used because the hosted backend rejects tools at that effort. A failed
 search is returned to the routed model as a bounded error result, allowing it to answer from the
 context it already has.
+
+For the `keyed` backend, set `webSearchSidecar.provider` to an enabled key-auth provider whose model
+supports native hosted web_search over the Responses wire, and `webSearchSidecar.model` to that model:
+
+```json
+{
+  "webSearchSidecar": {
+    "enabled": true,
+    "backend": "keyed",
+    "provider": "opencode-go",
+    "model": "deepseek-v4-flash"
+  }
+}
+```
+
+Selection fails closed: if the provider is disabled, has no resolvable API key, does not use the
+Responses wire, or does not declare hosted web_search support for the configured model, the sidecar
+is not selected and the routed model takes the normal non-search path rather than borrowing
+ChatGPT/Anthropic quota.
 
 Four separate clocks apply. `stallTimeoutSec` is the base bridge event-stall budget.
 `connectTimeoutMs` (default `200000`) covers only DNS/TCP/TLS and final response headers.

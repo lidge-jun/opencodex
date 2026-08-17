@@ -3261,9 +3261,10 @@ async function handleResponsesInner(
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
-      backend: wsPlan.backend,
-      forwardProvider: wsPlan.forwardSidecar?.provider,
-      anthropicSidecar: wsPlan.anthropicSidecar,
+     backend: wsPlan.backend,
+     forwardProvider: wsPlan.forwardSidecar?.provider,
+     anthropicSidecar: wsPlan.anthropicSidecar,
+      keyedSidecar: wsPlan.keyedSidecar,
       hostedTool: wsPlan.hostedTool,
       selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
       settings: wsPlan.settings,

@@ -4,12 +4,16 @@ import { isModelTextOnly } from "../vision";
 import type { SidecarSettings } from "./executor";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { getAccountSet } from "../oauth/store";
+import { resolveEnvValue } from "../config";
+import { getProviderRegistryEntry, providerHostsHostedWebSearchResponses, providerModelWireDefault } from "../providers/registry";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../types";
 import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
 import { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
 export { runWithWebSearch } from "./loop";
 export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME };
 export { runAnthropicWebSearch, parseAnthropicSidecarSSE } from "./anthropic-executor";
+export { runKeyedWebSearch } from "./executor";
 
 const DEFAULT_SIDECAR_MODEL = "gpt-5.6-luna";
 // Default Claude model for the anthropic-backed sidecar (used when cfg.model is unset).
@@ -102,14 +106,57 @@ export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSideca
  * to the Anthropic API.
  */
 export function resolveSidecarBackend(
-  explicit: "openai" | "anthropic" | undefined,
-): "openai" | "anthropic" {
+  explicit: "openai" | "anthropic" | "keyed" | undefined,
+): WebSearchSidecarBackend {
+  if (explicit === "keyed") return "keyed";
   return explicit === "anthropic" ? "anthropic" : "openai";
+}
+
+export type WebSearchSidecarBackend = "openai" | "anthropic" | "keyed";
+
+/**
+ * A resolved key-auth web-search sidecar. Fail-closed eligibility: the provider must be enabled,
+ * key-fed with a resolvable key, use an openai-responses wire for the chosen model, and declare
+ * hosted web_search support for that model in the registry. Absent any check, the sidecar would
+ * send the provider API key to an endpoint that cannot answer.
+ */
+export interface KeyedWebSearchSidecar {
+  providerName: string;
+  provider: OcxProviderConfig;
+  apiKey: string;
+  model: string;
+}
+
+const KEYED_MODEL_ADAPTER = "openai-responses" as const;
+
+/**
+ * Resolve the keyed web-search sidecar from config, or undefined when any requirement fails.
+ * Selection must fail closed: an ineligible provider (disabled, missing capability flag, unresolvable
+ * key, or a model that does not ride the Responses wire for it) yields NO plan rather than borrowing
+ * ChatGPT/Anthropic credentials.
+ */
+export function resolveKeyedWebSearchSidecar(config: OcxConfig): KeyedWebSearchSidecar | undefined {
+  const cfg = config.webSearchSidecar ?? {};
+  const providerName = typeof cfg.provider === "string" && cfg.provider.trim() !== "" ? cfg.provider.trim() : "";
+  if (!providerName) return undefined;
+  const provider = config.providers[providerName];
+  if (!provider || provider.disabled === true) return undefined;
+  const entry = getProviderRegistryEntry(providerName);
+  const model = typeof cfg.model === "string" && cfg.model.trim() !== "" ? cfg.model.trim() : (entry?.defaultModel ?? "");
+  if (model === "") return undefined;
+  if (!providerHostsHostedWebSearchResponses(providerName, provider, model)) return undefined;
+  const wire = providerModelWireDefault(providerName, provider, model, MODEL_ADAPTER_OVERRIDE_ALLOWED, "responses");
+  if (wire !== KEYED_MODEL_ADAPTER && provider.adapter !== KEYED_MODEL_ADAPTER) return undefined;
+  const apiKey = resolveEnvValue(provider.apiKey)?.trim();
+  if (!apiKey) return undefined;
+  return { providerName, provider, apiKey, model };
 }
 
 export interface SidecarPlan {
   /** Which executor runs the search. Anthropic does not require a forward provider. */
-  backend: "openai" | "anthropic";
+  backend: WebSearchSidecarBackend;
+  /** Present for the keyed backend (key-auth openai-responses provider); undefined otherwise. */
+  keyedSidecar?: KeyedWebSearchSidecar;
   /** Present for the openai backend (ChatGPT forward path); undefined for anthropic. */
   forwardSidecar?: ResolvedOpenAiForwardSidecar;
   /** Present for the anthropic backend (stored-OAuth /v1/messages path); undefined for openai. */
@@ -158,7 +205,8 @@ export function planWebSearch(
   // Same `?? 200_000` default the server applies when threading connectTimeoutMs into the loop.
   const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
   const anthropicSidecar = findAnthropicSidecarProvider(config);
-  const backend = resolveSidecarBackend(cfg.backend);
+  const keyedSidecar = resolveKeyedWebSearchSidecar(config);
+  const backend = cfg.backend === "keyed" ? ("keyed" as const) : resolveSidecarBackend(cfg.backend);
   const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
   const stallTimeoutSec = webSearchStallTimeoutSec(
     config.stallTimeoutSec,
@@ -190,6 +238,24 @@ export function planWebSearch(
   }
 
   // OpenAI backend: needs a ChatGPT login (main) and a forward provider to reach server-side web_search.
+
+  // Keyed backend: authenticates with the provider's own API key over the Responses wire — no ChatGPT
+  // forward headers and no Anthropic stored-OAuth credential. Fails closed (no plan) when the provider is
+  // not eligible, so a misconfiguration never borrows ChatGPT/Anthropic quota.
+  if (backend === "keyed") {
+    if (!keyedSidecar) return undefined;
+    return {
+      backend: "keyed",
+      keyedSidecar,
+      hostedTool: parsed._webSearch,
+      settings: { model: keyedSidecar.model, reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
   if (!openAiSidecar) return undefined;
   return {
     backend: "openai",

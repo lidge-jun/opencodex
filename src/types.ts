@@ -550,8 +550,8 @@ export interface OcxClaudeCodeConfig {
    * definition. Unset inherits the parent session effort.
    */
   subagentEffort?: "low" | "medium" | "high" | "xhigh" | "max";
-  /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic"; model?: string };
+ /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
+  webSearchSidecar?: { backend?: "openai" | "anthropic" | "keyed"; model?: string; provider?: string };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
   visionSidecar?: { backend?: "openai" | "anthropic"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
@@ -1211,14 +1211,19 @@ export interface OcxVisionSidecarConfig {
 export interface OcxWebSearchSidecarConfig {
   /** Master switch. Default: enabled when a forward (ChatGPT) provider exists and the caller is logged in. */
   enabled?: boolean;
+ /**
+  * Which backend actually runs the server-side search. "openai" replays the hosted web_search via
+  * the ChatGPT forward provider (gpt-mini sidecar); "anthropic" runs web_search_20250305 on a Claude
+  * model authenticated by the STORED anthropic OAuth credential. Unset resolves to "anthropic" when a
+  * usable anthropic OAuth credential exists, else "openai".
+  */
+  backend?: "openai" | "anthropic" | "keyed";
   /**
-   * Which backend actually runs the server-side search. "openai" replays the hosted web_search via
-   * the ChatGPT forward provider (gpt-mini sidecar); "anthropic" runs web_search_20250305 on a Claude
-   * model authenticated by the STORED anthropic OAuth credential. Unset resolves to "anthropic" when a
-   * usable anthropic OAuth credential exists, else "openai".
+   * Provider name backing the `keyed` backend. Must name an enabled key-auth provider that uses an
+   * openai-responses wire and declares hosted web_search support via its registry capability flag.
    */
-  backend?: "openai" | "anthropic";
-  /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */
+  provider?: string;
+ /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */
   model?: string;
   /** Reasoning effort for the sidecar — "minimal" (non-thinking) keeps it fast/cheap. */
   reasoning?: string;
