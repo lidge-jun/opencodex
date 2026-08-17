@@ -26,6 +26,7 @@ import {
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
 } from "../providers/key-failover";
+import { canSerializeServiceTierForChatModel } from "../providers/service-tier";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./responses/fetch-helpers";
@@ -47,6 +48,23 @@ const MAX_NATIVE_CHAT_ERROR_BYTES = 64 * 1024;
 
 function isRec(value: unknown): value is Rec {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Bind native Chat serialization to the same provider/model/transport capability decision
+ * used by catalog projection and Responses-to-Chat translation. The passthrough builder owns
+ * field serialization, so a shallow provider view is enough to make its chatServiceTier gate
+ * reflect the resolved capability without mutating the routed provider or its auth transport.
+ */
+export function providerForNativeChatSerialization(
+  providerName: string,
+  provider: OcxProviderConfig,
+  modelId: string,
+): OcxProviderConfig {
+  const chatServiceTier = canSerializeServiceTierForChatModel(provider, modelId, providerName);
+  return provider.chatServiceTier === chatServiceTier
+    ? provider
+    : { ...provider, chatServiceTier };
 }
 
 export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boolean {
@@ -138,7 +156,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     retainedRequestBytes = bytes;
   };
   try {
-    activeRequest = buildOpenAIChatPassthroughRequest(activeProvider, options.chatBody, route.modelId, requestedStream);
+    activeRequest = buildOpenAIChatPassthroughRequest(
+      providerForNativeChatSerialization(route.providerName, activeProvider, route.modelId),
+      options.chatBody,
+      route.modelId,
+      requestedStream,
+    );
     retainRequest(activeRequest);
   } catch (error) {
     releaseRetainedRequest();
@@ -177,7 +200,6 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       request.releaseBodyObservation?.();
     }
   };
-
   let response: Response;
   try {
     response = await send(activeRequest);
@@ -205,7 +227,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       activeProvider = rotated;
       activeAdapter = createOpenAIChatAdapter(activeProvider);
       releaseRetainedRequest();
-      activeRequest = buildOpenAIChatPassthroughRequest(activeProvider, options.chatBody, route.modelId, requestedStream);
+      activeRequest = buildOpenAIChatPassthroughRequest(
+        providerForNativeChatSerialization(route.providerName, activeProvider, route.modelId),
+        options.chatBody,
+        route.modelId,
+        requestedStream,
+      );
       retainRequest(activeRequest);
       response = await send(activeRequest, "key-429");
     }
