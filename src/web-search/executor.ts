@@ -148,7 +148,9 @@ export async function runKeyedWebSearch(
     store: false,
     stream: true,
   };
-  const url = `${sidecar.provider.baseUrl.replace(/\/+$/, "")}/responses`;
+  const baseUrl = sidecar.provider.baseUrl.replace(/\/+$/, "");
+  const responsesPath = sidecar.provider.responsesPath ?? "/responses";
+  const url = `${baseUrl}${responsesPath}`;
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
   const t0 = Date.now();

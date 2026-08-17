@@ -104,4 +104,33 @@ describe("sidecar-settings webSearch.streamRoutedModelOutput", () => {
     expect(response.status).toBe(200);
     expect(config.webSearchSidecar?.streamRoutedModelOutput).toBe(true);
   });
+
+  test("PUT accepts keyed backend and provider and GET round-trips them", async () => {
+    const config = emptyConfig();
+    const put = await putSidecarSettings(config, {
+      backend: "keyed",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+    });
+    expect(put.status).toBe(200);
+    expect(config.webSearchSidecar).toMatchObject({
+      backend: "keyed",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+    });
+    expect(loadConfig().webSearchSidecar).toMatchObject({
+      backend: "keyed",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+    });
+
+    const get = await getSidecarSettings(config);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as {
+      webSearch: { backend?: string; provider?: string; model?: string };
+    };
+    expect(body.webSearch.backend).toBe("keyed");
+    expect(body.webSearch.provider).toBe("opencode-go");
+    expect(body.webSearch.model).toBe("deepseek-v4-flash");
+  });
 });

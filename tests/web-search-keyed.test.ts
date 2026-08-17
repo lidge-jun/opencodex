@@ -247,4 +247,60 @@ describe("runKeyedWebSearch request shape", () => {
     expect(c.body.model).toBe("deepseek-v4-flash");
     expect(c.body.tools).toEqual([{ type: "web_search", max_results: 5 }]);
   });
+
+  test("honors provider.responsesPath when configured", async () => {
+    let capturedUrl: string | null = null;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      capturedUrl = String(url);
+      const body = [
+        "event: response.output_text.done\ndata: " +
+          JSON.stringify({ type: "response.output_text.done", text: "ok" }) +
+          "\n\n",
+        "event: response.completed\ndata: " +
+          JSON.stringify({
+            type: "response.completed",
+            response: {
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  content: [{ type: "output_text", text: "ok", annotations: [] }],
+                },
+              ],
+            },
+          }) +
+          "\n\n",
+      ].join("");
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(body));
+            c.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const out = await runKeyedWebSearch(
+      "latest bun release",
+      { type: "web_search" } as unknown as Record<string, unknown>,
+      {
+        providerName: "custom",
+        provider: zenProvider({
+          baseUrl: "https://search.example/v1",
+          responsesPath: "/custom-responses",
+        }),
+        apiKey: "custom-key",
+      },
+      {
+        model: "deepseek-v4-flash",
+        reasoning: "low",
+        timeoutMs: 5000,
+        describeImages: false,
+      },
+    );
+    expect(out.error).toBeUndefined();
+    expect(capturedUrl).toBe("https://search.example/v1/custom-responses");
+  });
 });

@@ -466,7 +466,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       };
     };
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
-      && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
+      && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic"
+      && body.webSearch.backend !== "keyed") {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, keyed, or null" }, 400);
     }
     if (body.webSearch && body.webSearch.provider !== undefined && body.webSearch.provider !== null

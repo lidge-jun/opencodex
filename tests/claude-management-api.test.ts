@@ -436,6 +436,39 @@ test("Claude sidecar overrides round-trip, partially update, clear, and reject u
   }
 });
 
+test("Claude webSearchSidecar accepts keyed backend and returns provider on GET", async () => {
+  const server = startServer(0);
+  const put = (body: unknown) => fetch(new URL("/api/claude-code", server.url), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  try {
+    const response = await put({
+      webSearchSidecar: {
+        backend: "keyed",
+        provider: "opencode-go",
+        model: "deepseek-v4-flash",
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({
+      backend: "keyed",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+    });
+
+    const get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
+    expect(get.webSearchSidecar).toEqual({
+      backend: "keyed",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("PUT immediately restores generated agents after re-enable and roster changes", async () => {
   const server = startServer(0);
   const agentsDir = join(process.env.CLAUDE_CONFIG_DIR!, "agents");

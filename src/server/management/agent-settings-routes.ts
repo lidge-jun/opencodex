@@ -1018,7 +1018,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
       ...(webSearchOverride && Object.keys(webSearchOverride).length > 0
-        ? { webSearchSidecar: { backend: webSearchOverride.backend, model: webSearchOverride.model } }
+        ? { webSearchSidecar: { backend: webSearchOverride.backend, model: webSearchOverride.model, provider: webSearchOverride.provider } }
         : {}),
       ...(visionOverride && Object.keys(visionOverride).length > 0
         ? { visionSidecar: { backend: visionOverride.backend, model: visionOverride.model } }
@@ -1052,7 +1052,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
      if (section.backend !== undefined && section.backend !== null
-       && section.backend !== "openai" && section.backend !== "anthropic") {
+       && section.backend !== "openai" && section.backend !== "anthropic" && section.backend !== "keyed") {
         return jsonResponse({ error: `${field}.backend must be openai, anthropic, keyed, or null` }, 400);
       }
       if (field === "webSearchSidecar" && section.provider !== undefined && section.provider !== null
