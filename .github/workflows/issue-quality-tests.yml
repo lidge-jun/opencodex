@@ -24,6 +24,7 @@ on:
       - ".github/scripts/issue-translation.test.cjs"
       - ".github/scripts/issue-triage*.cjs"
       - ".github/scripts/copilot-workflows.test.cjs"
+      - ".github/scripts/run-copilot-inference*.cjs"
       - ".github/scripts/parse-issue-translation-response.cjs"
       - ".github/scripts/parse-issue-translation-response.test.cjs"
       - ".github/workflows/enforce-issue-quality.yml"
@@ -55,6 +56,7 @@ on:
       - ".github/scripts/issue-translation.test.cjs"
       - ".github/scripts/issue-triage*.cjs"
       - ".github/scripts/copilot-workflows.test.cjs"
+      - ".github/scripts/run-copilot-inference*.cjs"
       - ".github/scripts/parse-issue-translation-response.cjs"
       - ".github/scripts/parse-issue-translation-response.test.cjs"
       - ".github/workflows/enforce-issue-quality.yml"
@@ -90,6 +92,7 @@ jobs:
           node --test .github/scripts/issue-translation.test.cjs
           node --test .github/scripts/issue-triage*.test.cjs
           node --test .github/scripts/copilot-workflows.test.cjs
+          node --test .github/scripts/run-copilot-inference.test.cjs
           node --test .github/scripts/parse-issue-translation-response.test.cjs
 
       - name: Validate issue-form YAML
