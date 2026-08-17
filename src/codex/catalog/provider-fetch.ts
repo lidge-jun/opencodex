@@ -649,7 +649,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ?? prov.preserveExactReasoningRungs;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const supportsServiceTier = serviceTierSupportForModel(prov, model.id, name);
-  const { supportsServiceTier: _staleServiceTier, ...modelWithoutServiceTier } = model;
+  const { supportsServiceTier: _staleServiceTier, preserveExactReasoningRungs: _stalePreserveExactReasoningRungs, ...modelWithoutServiceTier } = model;
   const hinted = {
     ...modelWithoutServiceTier,
     ...(configuredCap !== undefined

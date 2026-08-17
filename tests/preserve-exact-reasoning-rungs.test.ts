@@ -69,4 +69,25 @@ describe("#1870 preserveExactReasoningRungs", () => {
     }));
     expect(advertisedLevels(entry)).toEqual(["low", "medium", "xhigh", "max", "ultra"]);
   });
+
+  test("re-hinting a cached model clears a stale exact-rung flag", () => {
+    const flagged = applyProviderConfigHints(
+      "alibaba-token-plan-intl",
+      provider({ preserveExactReasoningRungs: true }),
+      { id: "qwen3.8-max", provider: "alibaba-token-plan-intl" },
+    );
+    expect(flagged.preserveExactReasoningRungs).toBe(true);
+
+    // A cached model produced by an earlier hint pass still carries the flag;
+    // re-hinting with a config that resolves to false must clear it.
+    const cleared = applyProviderConfigHints(
+      "alibaba-token-plan-intl",
+      provider(),
+      flagged,
+    );
+    expect(cleared.preserveExactReasoningRungs).toBeUndefined();
+    const entries = buildCatalogEntries(nativeTemplate(), [], [cleared]);
+    const entry = entries.find(e => e.slug === "alibaba-token-plan-intl/qwen3.8-max");
+    expect(advertisedLevels(entry)).toEqual(["low", "medium", "xhigh", "max", "ultra"]);
+  });
 });
