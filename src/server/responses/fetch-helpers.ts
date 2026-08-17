@@ -102,7 +102,7 @@ import {
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
-import { waitForProviderRequestSlot } from "../../providers/request-pacing";
+import { runWithProviderRequestSlot, waitForProviderRequestSlot } from "../../providers/request-pacing";
 
 
 export function disableResponsesRequestTimeout(req: Request, server: Pick<Server<WsData>, "timeout"> | undefined): boolean {
@@ -139,6 +139,7 @@ export function safeOriginLabel(url: string): string {
 
 export interface PaceAwareFetch {
   waitForPacing?: (signal?: AbortSignal) => Promise<void>;
+  runWithPacing?: <T>(signal: AbortSignal | undefined, start: () => T | PromiseLike<T>) => Promise<T>;
   unpacedFetch?: typeof globalThis.fetch;
 }
 
@@ -199,16 +200,26 @@ export function providerFetch(
   const waitForPacing = (signal?: AbortSignal) => options.providerName
     ? waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal)
     : Promise.resolve();
-  const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    await waitForPacing(init?.signal ?? undefined);
-    return unpaced(input, init);
+  const runWithPacing = <T>(signal: AbortSignal | undefined, start: () => T | PromiseLike<T>): Promise<T> => {
+    if (options.providerName) {
+      return runWithProviderRequestSlot(options.providerName, provider, options.modelId, signal, start);
+    }
+    if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+    try {
+      return Promise.resolve(start());
+    } catch (error) {
+      return Promise.reject(error);
+    }
   };
+  const wrapped = (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+    runWithPacing(init?.signal ?? undefined, () => unpaced(input, init));
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };
   return Object.assign(wrapped, {
     preconnect,
     waitForPacing,
+    runWithPacing,
     unpacedFetch: Object.assign(unpaced, { preconnect }),
   });
 }
@@ -225,29 +236,34 @@ export async function fetchWithHeaderTimeout(
   manualRedirect = false,
 ): Promise<Response> {
   const pacing = executor as ProviderFetch;
-  await pacing.waitForPacing?.(abortSignal);
   const fetchExecutor = pacing.unpacedFetch ?? executor;
-  const timeout = new AbortController();
-  const timer = setTimeout(() => {
-    if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
-  }, timeoutMs);
-  const headers = new Headers(init.headers);
-  // Compressed SSE can be held until the decompressor has a complete block. Streaming calls
-  // default to identity for low-latency frame delivery, while an explicit caller choice wins.
-  if (preferIdentityEncoding && !headers.has("accept-encoding")) {
-    headers.set("accept-encoding", "identity");
-  }
-  try {
-    return await fetchExecutor(url, {
-      ...init,
-      headers,
-      // Credential-bearing sends opt into manual redirects so a 3xx is relayed
-      // as a Response instead of being followed into a rejection that is
-      // indistinguishable from a pre-connection failure (#914).
-      ...(manualRedirect ? { redirect: "manual" as const } : {}),
-      signal: AbortSignal.any([abortSignal, timeout.signal]),
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+  const startFetch = async (): Promise<Response> => {
+    const timeout = new AbortController();
+    const timer = setTimeout(() => {
+      if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
+    }, timeoutMs);
+    const headers = new Headers(init.headers);
+    // Compressed SSE can be held until the decompressor has a complete block. Streaming calls
+    // default to identity for low-latency frame delivery, while an explicit caller choice wins.
+    if (preferIdentityEncoding && !headers.has("accept-encoding")) {
+      headers.set("accept-encoding", "identity");
+    }
+    try {
+      return await fetchExecutor(url, {
+        ...init,
+        headers,
+        // Credential-bearing sends opt into manual redirects so a 3xx is relayed
+        // as a Response instead of being followed into a rejection that is
+        // indistinguishable from a pre-connection failure (#914).
+        ...(manualRedirect ? { redirect: "manual" as const } : {}),
+        signal: AbortSignal.any([abortSignal, timeout.signal]),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  if (pacing.runWithPacing) return pacing.runWithPacing(abortSignal, startFetch);
+  await pacing.waitForPacing?.(abortSignal);
+  return startFetch();
 }
