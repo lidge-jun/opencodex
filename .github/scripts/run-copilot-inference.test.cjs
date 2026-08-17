@@ -21,7 +21,7 @@ function outputValue(file, key) {
   return match[2];
 }
 
-test('streams a large prompt over stdin instead of process argv', () => {
+test('streams a large prompt over stdin and maps the Copilot token to GITHUB_TOKEN', () => {
   const fake = makeFakeCopilot(`
     const fs = require('node:fs');
     const input = fs.readFileSync(0, 'utf8');
@@ -30,7 +30,11 @@ test('streams a large prompt over stdin instead of process argv', () => {
       console.error('prompt leaked into argv');
       process.exit(91);
     }
-    process.stdout.write(JSON.stringify({ inputBytes: Buffer.byteLength(input), argv: process.argv.slice(2) }));
+    process.stdout.write(JSON.stringify({
+      inputBytes: Buffer.byteLength(input),
+      argv: process.argv.slice(2),
+      githubToken: process.env.GITHUB_TOKEN || '',
+    }));
   `);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-runner-test-'));
   const promptFile = path.join(dir, 'prompt.txt');
@@ -47,6 +51,7 @@ test('streams a large prompt over stdin instead of process argv', () => {
       GITHUB_OUTPUT: outputFile,
       COPILOT_SYSTEM_PROMPT: 'system instruction',
       COPILOT_GITHUB_TOKEN: 'test-token',
+      GITHUB_TOKEN: '',
     },
   });
 
@@ -54,6 +59,7 @@ test('streams a large prompt over stdin instead of process argv', () => {
   const response = JSON.parse(outputValue(outputFile, 'response'));
   assert.ok(response.inputBytes > Buffer.byteLength(prompt));
   assert.deepEqual(response.argv, ['-s', '--no-ask-user', '--no-custom-instructions', '--no-auto-update']);
+  assert.equal(response.githubToken, 'test-token');
 });
 
 test('surfaces Copilot stderr and preserves a non-zero exit code', () => {
