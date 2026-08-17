@@ -20,6 +20,7 @@ import {
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
+  copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -807,6 +808,11 @@ export interface HandleResponsesOptions {
   stripClaudeMainAuthForNoncanonicalForward?: boolean;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal combo handoff for one parent-validated continuation snapshot. */
+  comboReplaySnapshot?: {
+    sourceBody: unknown;
+    previousResponseInputExpanded: boolean;
+  };
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -1263,7 +1269,12 @@ export async function handleComboResponses(
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
-  const body = expandPreviousResponseInput(rawBody);
+  const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
+  const scopeMismatch = previousResponseScopeMismatch(body);
+  if (scopeMismatch) {
+    console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+  }
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
       400,
@@ -1290,11 +1301,11 @@ export async function handleComboResponses(
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
   }
-  // Expansion already materialised prior input. Drop the id so the child
-  // handleResponses path does not expand again and double-prepend history.
-  if (body !== rawBody && body && typeof body === "object" && !Array.isArray(body)) {
-    delete (body as Record<string, unknown>).previous_response_id;
-  }
+  const comboReplaySnapshot = {
+    sourceBody: body,
+    previousResponseInputExpanded: body !== rawBody
+      && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string",
+  };
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
     // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
@@ -1401,6 +1412,7 @@ export async function handleComboResponses(
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
         comboAttempt: true,
+        comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
@@ -1656,19 +1668,24 @@ async function handleResponsesInner(
   );
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const originalBody = body;
-  body = expandPreviousResponseInput(body, inboundClientThreadId);
-  if (previousResponseScopeMismatch(body)) {
-    console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+  if (options.comboReplaySnapshot) {
+    copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
+  } else {
+    body = expandPreviousResponseInput(body, inboundClientThreadId);
+    if (previousResponseScopeMismatch(body)) {
+      console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+    }
+    if (previousResponseReplayFailure(body)) {
+      return formatErrorResponse(
+        400,
+        "previous_response_not_found",
+        "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+      );
+    }
   }
-  if (previousResponseReplayFailure(body)) {
-    return formatErrorResponse(
-      400,
-      "previous_response_not_found",
-      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-    );
-  }
-  const previousResponseInputExpanded = body !== originalBody
-    && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string";
+  const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
+    ?? (body !== originalBody
+      && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
@@ -1691,8 +1708,10 @@ async function handleResponsesInner(
     parsed = parseRequest(body);
     toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
-    parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
-    parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
+    if (!options.comboReplaySnapshot) {
+      parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
+      parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
+    }
     if (inboundClientThreadId) {
       parsed._clientThreadId = inboundClientThreadId;
       parsed._reasoningReplayScope = { clientThreadId: inboundClientThreadId };

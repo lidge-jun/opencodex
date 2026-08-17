@@ -1396,11 +1396,241 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(bodies).toHaveLength(1);
     const child = bodies[0]!;
-    // Parent already expanded; child must not keep previous_response_id (would double-prepend).
+    // The child expands the local continuation exactly once and the Chat wire omits the local id.
     expect(child.previous_response_id).toBeUndefined();
     const inputText = JSON.stringify(child.input ?? child.messages ?? child);
     expect(inputText.split("earlier text")).toHaveLength(2);
     expect(inputText.split("next turn")).toHaveLength(2);
+  });
+
+  test("combo continuation expansion respects the client task scope", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "legacy private history" },
+      {
+        id: "resp_combo_legacy_unscoped",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "legacy reply" }],
+      },
+    );
+    rememberResponseState(
+      { model: "combo/free", input: "scoped private history" },
+      {
+        id: "resp_combo_scoped",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "scoped reply" }],
+      },
+      undefined,
+      { clientThreadId: "combo-task" },
+    );
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("continued", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") });
+    const headers = { "x-codex-parent-thread-id": "combo-task" };
+
+    const legacyResponse = await post(config, {
+      previous_response_id: "resp_combo_legacy_unscoped",
+      input: "fresh scoped input",
+    }, {}, headers);
+    const scopedResponse = await post(config, {
+      previous_response_id: "resp_combo_scoped",
+      input: "continue scoped task",
+    }, {}, headers);
+
+    expect(legacyResponse.status).toBe(200);
+    expect(scopedResponse.status).toBe(200);
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[0])).not.toContain("legacy private history");
+    expect(JSON.stringify(bodies[0])).toContain("fresh scoped input");
+    expect(JSON.stringify(bodies[1])).toContain("scoped private history");
+    expect(JSON.stringify(bodies[1])).toContain("continue scoped task");
+  });
+
+  test("combo child preserves replay provenance for compaction and generated guidance", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    const { multiAgentGuidanceText, PROACTIVE_MULTI_AGENT_MODE_TEXT } = await import("../src/server/responses/collaboration");
+    const guidance = `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
+    const tools = ["spawn_agent", "send_input"].map(name => ({
+      type: "function",
+      name,
+      namespace: "multi_agent_v1",
+      description: "Collaborate on work",
+      parameters: { type: "object", properties: {} },
+    }));
+    rememberResponseState(
+      {
+        model: "combo/free",
+        input: [
+          { type: "context_compaction" },
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: guidance }],
+          },
+          { type: "message", role: "user", content: "prior task" },
+        ],
+        reasoning: { effort: "max" },
+        tools,
+      },
+      {
+        id: "resp_combo_replay_provenance",
+        status: "completed",
+        output: [{
+          id: "msg_combo_replay_provenance",
+          type: "message",
+          role: "assistant",
+          content: "prior answer",
+        }],
+      },
+      undefined,
+      { clientThreadId: "combo-provenance-task" },
+    );
+
+    let observed: {
+      replayPrefixLength: number;
+      contextCompactionBoundary: boolean | undefined;
+      generatedGuidance: string | null;
+      taggedGuidance: string[];
+    } | undefined;
+    const guidanceOptions = { multiAgentGuidanceEnabled: true };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+    });
+    Object.assign(config, guidanceOptions);
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const rawInput = (parsed._rawBody as { input?: unknown[] } | undefined)?.input ?? [];
+      const taggedGuidance = rawInput.flatMap(item => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const record = item as Record<string, unknown>;
+        if (record.type !== "message" || record.role !== "developer" || !Array.isArray(record.content)) return [];
+        return record.content.flatMap(part => !!part && typeof part === "object"
+          && !Array.isArray(part)
+          && (part as Record<string, unknown>).type === "input_text"
+          && typeof (part as Record<string, unknown>).text === "string"
+          && ((part as Record<string, unknown>).text as string).startsWith("<multi_agent_mode>")
+          && ((part as Record<string, unknown>).text as string).endsWith("</multi_agent_mode>")
+          ? [(part as Record<string, unknown>).text as string]
+          : []);
+      });
+      observed = {
+        replayPrefixLength: parsed._replayPrefixLen ?? 0,
+        contextCompactionBoundary: parsed._contextCompactionBoundary,
+        generatedGuidance: await multiAgentGuidanceText(parsed, guidanceOptions),
+        taggedGuidance,
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_replay_provenance",
+      input: [{ type: "message", role: "user", content: "current turn" }],
+      reasoning: { effort: "max" },
+      tools,
+    }, {}, { "x-codex-parent-thread-id": "combo-provenance-task" });
+
+    expect(response.status).toBe(200);
+    expect(observed).toEqual({
+      replayPrefixLength: expect.any(Number),
+      contextCompactionBoundary: undefined,
+      generatedGuidance: guidance,
+      taggedGuidance: [guidance],
+    });
+    expect(observed!.replayPrefixLength).toBeGreaterThan(0);
+  });
+
+  test("combo failover dispatches the one parent-validated continuation snapshot", async () => {
+    const { clearResponseStateForTests, rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: [{ role: "user", content: "stable prior history" }] },
+      {
+        id: "resp_combo_stable_snapshot",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "stable prior answer" }],
+      },
+    );
+    const a = serve(() => {
+      clearResponseStateForTests();
+      return Response.json({ error: { message: "retry" } }, { status: 503 });
+    });
+    let backupParsed: {
+      previousResponseId?: string;
+      replayPrefixLength: number;
+      rawInput: unknown[];
+    } | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      backupParsed = {
+        previousResponseId: parsed.previousResponseId,
+        replayPrefixLength: parsed._replayPrefixLen ?? 0,
+        rawInput: (parsed._rawBody as { input?: unknown[] } | undefined)?.input ?? [],
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_stable_snapshot",
+      input: [{ role: "user", content: "stable current turn" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(backupParsed?.previousResponseId).toBe("resp_combo_stable_snapshot");
+    expect(backupParsed?.replayPrefixLength).toBeGreaterThan(0);
+    const requestText = JSON.stringify(backupParsed?.rawInput);
+    expect(backupParsed?.rawInput).toHaveLength(3);
+    expect(requestText.split("stable prior history")).toHaveLength(2);
+    expect(requestText.split("stable prior answer")).toHaveLength(2);
+    expect(requestText.split("stable current turn")).toHaveLength(2);
+  });
+
+  test("combo child retains the local id without inheriting unbound provider state", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "prior target turn" },
+      {
+        id: "resp_combo_unbound_provider_state",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "prior target answer" }],
+      },
+      {
+        cursor: { conversationId: "cursor_owned_by_another_target" },
+        kiro: { conversationId: "kiro_owned_by_another_target" },
+      },
+    );
+    let observed: {
+      previousResponseId?: string;
+      providerContinuation: unknown;
+      cursorConversationId: unknown;
+    } | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      observed = {
+        previousResponseId: parsed.previousResponseId,
+        providerContinuation: parsed._providerContinuation,
+        cursorConversationId: parsed._cursorConversationId,
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_unbound_provider_state",
+      input: [{ role: "user", content: "continue" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(observed?.previousResponseId).toBe("resp_combo_unbound_provider_state");
+    expect(observed?.providerContinuation).toBeUndefined();
+    expect(observed?.cursorConversationId).toBeUndefined();
   });
 
   test("disabled image input rejects an image restored from previous_response_id before dispatch", async () => {
