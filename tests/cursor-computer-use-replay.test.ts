@@ -74,6 +74,13 @@ describe("Issue #1866: Cursor adapter tool-result replay for Computer Use / node
       expect(normalized.isError).toBe(false);
       expect(normalized.text).toBe("");
     });
+
+    test("preserves explicit empty exec wrapper for non-computer-use tools", () => {
+      const outerExec = "Script completed Wall time 7.9 seconds\nOutput: <empty>";
+      const normalized = normalizeToolResultContent(outerExec, "mcp__fs", "run", false);
+      expect(normalized.isError).toBe(false);
+      expect(normalized.text).toBe(outerExec);
+    });
   });
 
   describe("2. Oversized Computer Use payload compaction", () => {
@@ -121,7 +128,7 @@ describe("Issue #1866: Cursor adapter tool-result replay for Computer Use / node
       const compacted = compactComputerUsePayload(bigTree, 2048);
       expect(new TextEncoder().encode(compacted).byteLength).toBeLessThanOrEqual(2048);
       expect(compacted).toContain("window: Google Chrome");
-      expect(compacted).toContain("url: https://github.com");
+      expect(compacted).toContain("https://github.com/lidge-jun/opencodex/issues/1866");
       expect(compacted).toContain("AX tree summarized for Cursor context budget");
       expect(compacted).toContain("truncated for Cursor external replay budget");
     });
@@ -135,6 +142,15 @@ describe("Issue #1866: Cursor adapter tool-result replay for Computer Use / node
       expect(normalized.text).toContain("SkyComputerUseError");
       expect(normalized.text).toContain("The user changed '/Applications/Google Chrome.app'");
       expect(normalized.text).toContain("Re-query the latest state with `get_app_state` before sending more actions.");
+    });
+
+    test("does not invent a focus change for SkyComputerUseError without a user-changed clause", () => {
+      const err = "SkyComputerUseError: permission denied";
+      const normalized = normalizeToolResultContent(err, "mcp__node_repl", "js", false);
+      expect(normalized.isError).toBe(true);
+      expect(normalized.text).not.toContain("the active application");
+      expect(normalized.text).toContain("Re-query the latest state with `get_app_state` before sending more actions.");
+      expect(normalized.text).toContain("permission denied");
     });
 
     test("replays SkyComputerUseError in rootPromptMessages as [Tool Error]", () => {

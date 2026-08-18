@@ -216,6 +216,7 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
   }
 }
 
+/** Request JSON messages have no external replay byte budget; normalize only, do not cap size. */
 function toolResultToText(message: OcxToolResultMessage): string {
   return formatToolResultToWireText(message).wireOutput;
 }

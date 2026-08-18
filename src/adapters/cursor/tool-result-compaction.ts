@@ -83,13 +83,15 @@ export function normalizeToolResultContent(
 
   // Check for empty or outer-exec empty output
   const trimmed = text.trim();
-  const isEmptyOutput = trimmed.length === 0 || EMPTY_EXEC_OUTPUT_REGEX.test(trimmed);
+  const isBlank = trimmed.length === 0;
+  const isEmptyOutput = isBlank || EMPTY_EXEC_OUTPUT_REGEX.test(trimmed);
   if (isEmptyOutput) {
     if (isComputerUseOrRepl || effectiveIsError) {
       text = "[empty output: tool executed with no stdout or return value. If this was a Computer Use action or node_repl script, verify application state with get_app_state.]";
       effectiveIsError = true;
     } else {
-      text = "";
+      // Keep an explicit `<empty>` marker; only blank content collapses to "".
+      text = isBlank ? "" : trimmed;
     }
     return { text, isError: effectiveIsError };
   }
@@ -99,8 +101,10 @@ export function normalizeToolResultContent(
     effectiveIsError = true;
     if (!text.includes("Re-query the latest state with `get_app_state`")) {
       const match = text.match(/The user changed '([^']+)'/);
-      const app = match ? match[1] : "the active application";
-      text = `SkyComputerUseError: The user changed '${app}'. Re-query the latest state with \`get_app_state\` before sending more actions.\n\n${text}`;
+      const cause = match
+        ? `SkyComputerUseError: The user changed '${match[1]}'. `
+        : "";
+      text = `${cause}Re-query the latest state with \`get_app_state\` before sending more actions.\n\n${text}`;
     }
   }
 
@@ -176,20 +180,27 @@ export function compactComputerUsePayload(text: string, maxBytes?: number): stri
     let urlInfo = "";
 
     for (const line of lines) {
-      if (!foundWindow && (line.includes("window") || line.includes("title:") || line.includes("/Applications/"))) {
-        windowInfo = line.trim();
+      const trimmedLine = line.trim();
+      if (!foundWindow && (/^window\s*:/i.test(trimmedLine) || /^title\s*:/i.test(trimmedLine) || trimmedLine.includes("/Applications/"))) {
+        windowInfo = trimmedLine;
         foundWindow = true;
       }
-      if (!foundUrl && (line.includes("http://") || line.includes("https://") || line.includes("url:"))) {
-        urlInfo = line.trim();
-        foundUrl = true;
+      if (!foundUrl) {
+        const urlMatch = trimmedLine.match(/(?:^url\s*:\s*)?(https?:\/\/\S+)/i);
+        if (urlMatch) {
+          urlInfo = urlMatch[1] ?? trimmedLine;
+          foundUrl = true;
+        }
       }
       if (foundWindow && foundUrl) break;
     }
 
     const noteParts: string[] = [];
-    if (windowInfo) noteParts.push(`window: ${windowInfo.slice(0, 50)}`);
-    if (urlInfo) noteParts.push(`url: ${urlInfo.slice(0, 50)}`);
+    if (windowInfo) {
+      const windowLabel = windowInfo.replace(/^window\s*:\s*/i, "").trim();
+      noteParts.push(`window: ${windowLabel.slice(0, 120)}`);
+    }
+    if (urlInfo) noteParts.push(`url: ${urlInfo}`);
     const note = noteParts.length > 0 ? ` (${noteParts.join(", ")})` : "";
     const trailer = `\n…[AX tree summarized for Cursor context budget${note}; query specific elements with get_app_state]${CURSOR_TRUNCATION_MARKER}`;
     const trailerBytes = encoder.encode(trailer).byteLength;

@@ -250,6 +250,29 @@ describe("Cursor request builder", () => {
     }]);
   });
 
+  test("normalizes empty node_repl output into structured tool-result errors in request messages", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [{
+          role: "toolResult",
+          toolCallId: "call_cu",
+          toolName: "js",
+          toolNamespace: "mcp__node_repl",
+          content: "Script completed Wall time 7.9 seconds\nOutput: <empty>",
+          isError: false,
+          timestamp: 1,
+        }],
+      },
+    });
+
+    expect(request.messages).toHaveLength(1);
+    expect(request.messages[0]?.role).toBe("tool");
+    expect(request.messages[0]?.content).toContain("is_error: true");
+    expect(request.messages[0]?.content).toContain("empty output");
+    expect(request.messages[0]?.content).toContain("get_app_state");
+  });
+
   test("preserves Responses allowed_tools and parallel_tool_calls controls from parser", () => {
     const parsed = parseRequest({
       model: "cursor/auto",
