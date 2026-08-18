@@ -138,7 +138,7 @@ describe("Cursor live-model discovery hardening", () => {
       fetch: fetchImpl,
     });
 
-    expect(result).toMatchObject({ ok: false, error: "transport", detail: expect.stringContaining("requires HTTPS") });
+    expect(result).toEqual({ ok: false, error: "transport", detail: "Cursor discovery URL must use HTTPS" });
     expect(fetchCalls).toBe(0);
   });
 

@@ -1450,8 +1450,9 @@ export interface OcxProviderConfig {
    * HTTP/2 via TLS ALPN by default; some Cloudflare-fronted SSE endpoints hang on
    * HTTP/2 streaming responses (issue #1668). "http1.1" / "h1" forces HTTP/1.1,
    * "http2" / "h2" forces HTTP/2. Absent or "auto" keeps Bun's default negotiation
-   * (current behavior unchanged). Only meaningful for https: base URLs. Cursor additionally maps
-   * an HTTP/1.1 pin onto its RunSSE + BidiAppend compatibility transport.
+   * (current behavior unchanged). Explicit pins require an https: target and fail locally when the
+   * pin cannot be honored. Cursor additionally maps an HTTP/1.1 pin onto its RunSSE + BidiAppend
+   * compatibility transport.
    */
   upstreamHttpVersion?: UpstreamHttpVersion;
   /**

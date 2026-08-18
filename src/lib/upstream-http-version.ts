@@ -17,6 +17,16 @@ const UPSTREAM_HTTP_VERSION_PROTOCOL: Record<Exclude<UpstreamHttpVersion, "auto"
   h2: "h2",
 };
 
+/** Raised before I/O when a fixed Bun HTTP-version pin cannot apply to the target URL. */
+export class UpstreamHttpVersionTargetError extends Error {
+  readonly code = "upstream_http_version_target";
+
+  constructor() {
+    super("upstream HTTP version pin requires an HTTPS target");
+    this.name = "UpstreamHttpVersionTargetError";
+  }
+}
+
 /** Attach Bun's `protocol` pin for one explicit version value. */
 export function withUpstreamHttpVersionValue(
   input: Parameters<typeof globalThis.fetch>[0],
@@ -24,14 +34,16 @@ export function withUpstreamHttpVersionValue(
   version: UpstreamHttpVersion | undefined,
 ): RequestInit | undefined {
   if (!version || version === "auto") return init;
-  // Bun's protocol pin requires an https: target; local/plaintext upstreams keep
-  // their existing transport untouched.
+  // Bun's protocol pin requires an https: target. An explicit fixed-version request must fail
+  // locally when the pin cannot be honored instead of silently negotiating another transport.
   const target = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  let targetUrl: URL;
   try {
-    if (new URL(target).protocol !== "https:") return init;
+    targetUrl = new URL(target);
   } catch {
-    return init;
+    throw new UpstreamHttpVersionTargetError();
   }
+  if (targetUrl.protocol !== "https:") throw new UpstreamHttpVersionTargetError();
   return { ...(init ?? {}), protocol: UPSTREAM_HTTP_VERSION_PROTOCOL[version] } as RequestInit;
 }
 

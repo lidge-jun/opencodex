@@ -55,9 +55,13 @@ describe("withUpstreamHttpVersion", () => {
     }
   });
 
-  test("plain-http targets are left untouched (Bun protocol requires https)", () => {
+  test("plain-http targets fail clearly when an explicit pin cannot be honored", () => {
     const init = { method: "POST", headers: {} };
-    expect(withUpstreamHttpVersion(HTTP_URL, init, provider({ upstreamHttpVersion: "http1.1" }))).toBe(init);
+    expect(() => withUpstreamHttpVersion(
+      HTTP_URL,
+      init,
+      provider({ upstreamHttpVersion: "http1.1" }),
+    )).toThrow("upstream HTTP version pin requires an HTTPS target");
   });
 
   test("Request objects resolve their url for the https guard", () => {
@@ -67,9 +71,13 @@ describe("withUpstreamHttpVersion", () => {
     expect((out as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
   });
 
-  test("unparseable targets degrade to the untouched init", () => {
+  test("unparseable targets fail clearly when a pin is configured", () => {
     const init = { method: "POST" };
-    expect(withUpstreamHttpVersion("not a url", init, provider({ upstreamHttpVersion: "http1.1" }))).toBe(init);
+    expect(() => withUpstreamHttpVersion(
+      "not a url",
+      init,
+      provider({ upstreamHttpVersion: "http1.1" }),
+    )).toThrow("upstream HTTP version pin requires an HTTPS target");
   });
 
   test("absent init still applies the pin (providerFetch without init)", () => {
@@ -133,5 +141,20 @@ describe("providerFetch upstreamHttpVersion propagation", () => {
     await fetcher("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     expect(seen).toHaveLength(1);
     expect((seen[0] as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
+  });
+
+  test("a plaintext target with an explicit pin fails before the provider fetch runs", async () => {
+    let fetchCalls = 0;
+    const fetcher = providerFetch(provider({
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response("must not run");
+      }) as typeof fetch,
+    }));
+
+    await expect(fetcher(HTTP_URL, { method: "POST" }))
+      .rejects.toThrow("upstream HTTP version pin requires an HTTPS target");
+    expect(fetchCalls).toBe(0);
   });
 });
