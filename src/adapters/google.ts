@@ -498,6 +498,17 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           } else {
             sanitizeAntigravityClaudeSignatures(contents);
           }
+          // Claude-on-Antigravity rejects assistant-tail (model-tail in Gemini terms) histories
+          // as prefill: "This model does not support assistant message prefill. The conversation
+          // must end with a user message." Context compaction, previous_response_id expansion,
+          // and interrupted-turn replay can all produce a model-tail history. Append a user
+          // "(continue)" nudge, mirroring the anthropic adapter's tail guard (src/adapters/anthropic.ts).
+          if (/claude/i.test(wireModelId)) {
+            const last = contents.length > 0 ? contents[contents.length - 1] as { role?: string } : undefined;
+            if (!last || last.role === "model") {
+              contents.push({ role: "user", parts: [{ text: "(continue)" }] });
+            }
+          }
         }
         const envelope = {
           model: wireModelId,
