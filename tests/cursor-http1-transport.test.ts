@@ -428,9 +428,10 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
       if (url.pathname === "/agent.v1.AgentService/RunSSE") return heldRunSseResponse(init?.signal);
       throw Object.assign(new Error("fixture append connect failed"), { code: "ECONNREFUSED" });
     }) as typeof fetch;
+    const translatorBudget = createTestTranslatorBudget();
     const transport = createLiveCursorTransport({
       provider: cursorProvider(fetchImpl),
-      translatorBudget: createTestTranslatorBudget(),
+      translatorBudget,
       firstFrameTimeoutMs: 2_000,
     });
 
@@ -447,6 +448,7 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
     } finally {
       await transport.close?.();
     }
+    expect(translatorBudget.snapshot().currentBytes).toBe(0);
   });
 
   test("keeps ambiguous BidiAppend failures committed to prevent replay", async () => {

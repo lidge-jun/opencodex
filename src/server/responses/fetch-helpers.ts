@@ -149,6 +149,8 @@ export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
 export interface ProviderFetchOptions {
   providerName?: string;
   modelId?: string;
+  /** One pacing slot was acquired immediately before this fetch wrapper was created. */
+  pacingSlotAcquired?: boolean;
 }
 
 export function providerFetch(
@@ -166,9 +168,16 @@ export function providerFetch(
     }
     return base(input, withUpstreamHttpVersion(input, init, provider));
   };
-  const waitForPacing = (signal?: AbortSignal) => options.providerName
-    ? waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal)
-    : Promise.resolve();
+  let pacingSlotAcquired = options.pacingSlotAcquired === true;
+  const waitForPacing = (signal?: AbortSignal) => {
+    if (pacingSlotAcquired) {
+      pacingSlotAcquired = false;
+      return Promise.resolve();
+    }
+    return options.providerName
+      ? waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal)
+      : Promise.resolve();
+  };
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     await waitForPacing(init?.signal ?? undefined);
     return unpaced(input, init);

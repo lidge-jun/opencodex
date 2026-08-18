@@ -3444,9 +3444,26 @@ async function handleResponsesInner(
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery);
+        const runTurnProviderFetch = providerFetch(
+          route.provider,
+          options.codexWsRuntimeIdentity,
+          {
+            providerName: route.providerName,
+            modelId: route.modelId,
+            // runTurnAttempt acquired this logical turn's first physical-request slot above.
+            // Cursor HTTP/1.1 consumes it for RunSSE; every BidiAppend and redial then waits on
+            // the same provider queue through this stateful wrapper.
+            pacingSlotAcquired: true,
+          },
+        );
         await adapter.runTurn?.(
           parsed,
-          { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal, translatorBudget },
+          {
+            headers: selectedForwardHeaders,
+            abortSignal: runTurnAbort.signal,
+            translatorBudget,
+            providerFetch: runTurnProviderFetch,
+          },
           targetQueue.push,
         );
       } catch (err) {

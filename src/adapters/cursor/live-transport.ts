@@ -1122,7 +1122,8 @@ class LiveCursorTransport implements CursorTransport {
     };
 
     if (useHttp1) {
-      const providerFetch = (this.input.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
+      const providerFetch = this.input.fetch
+        ?? (this.input.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
       this.http1Connection = new CursorHttp1BidiConnection({
         baseUrl,
         token: this.token,

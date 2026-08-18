@@ -8,6 +8,12 @@ export interface IncomingMeta {
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
   /**
+   * Provider-scoped fetch prepared by the Responses router. Stateful transports that emit more
+   * than one physical HTTP request per logical turn must reuse it so every request participates in
+   * the same pacing queue and custom provider fetch seam.
+   */
+  providerFetch?: typeof globalThis.fetch;
+  /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Only the
    * anthropic adapter consumes it; others ignore it.

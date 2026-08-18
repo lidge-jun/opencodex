@@ -107,6 +107,35 @@ describe("provider request pacing queue", () => {
     expect(status.lastModelId).toBe("model-a");
   });
 
+  test("a runTurn fetch consumes its pre-acquired slot once, then paces internal requests", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const starts: number[] = [];
+    const fetchImpl = Object.assign(async () => {
+      starts.push(clock.now());
+      return new Response("ok");
+    }, { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = {
+      ...provider({ enabled: true, minIntervalMs: 100 }),
+      fetch: fetchImpl,
+    } as OcxProviderConfig & { fetch: typeof globalThis.fetch };
+
+    await waitForProviderRequestSlot("cursor", configured, "model-a");
+    const send = providerFetch(configured, undefined, {
+      providerName: "cursor",
+      modelId: "model-a",
+      pacingSlotAcquired: true,
+    });
+    await send("https://example.test/run-sse");
+    const append = send("https://example.test/bidi-append");
+
+    expect(starts).toHaveLength(1);
+    expect(providerRequestPacingStatus("cursor", configured).queued).toBe(1);
+    clock.advanceBy(100);
+    await append;
+    expect(starts).toEqual([0, 100]);
+  });
+
   test("aborted queued requests leave immediately and never consume a start", async () => {
     const configured = provider({ enabled: true, minIntervalMs: 1_000 });
     await waitForProviderRequestSlot("demo", configured, "first");

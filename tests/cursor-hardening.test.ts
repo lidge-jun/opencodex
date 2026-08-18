@@ -140,6 +140,43 @@ describe("Cursor live-model discovery hardening", () => {
     expect(new Headers(seenInit?.headers).get("authorization")).toBe("Bearer test-token");
   });
 
+  test("HTTP/1.1 discovery rejects announced and streamed 4 MiB overflow before decode", async () => {
+    let announcedCalls = 0;
+    const announced = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        announcedCalls += 1;
+        return new Response(new Uint8Array(), {
+          status: 200,
+          headers: { "content-length": String(4 * 1024 * 1024 + 1) },
+        });
+      }) as typeof fetch,
+    });
+    expect(announced).toMatchObject({ ok: false, error: "too_large" });
+    expect(announcedCalls).toBe(1);
+
+    let streamedCalls = 0;
+    const streamed = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        streamedCalls += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+            controller.enqueue(Uint8Array.of(0));
+            controller.close();
+          },
+        }), { status: 200 });
+      }) as typeof fetch,
+    });
+    expect(streamed).toMatchObject({ ok: false, error: "too_large" });
+    expect(streamedCalls).toBe(1);
+  });
+
   test("discovery rejects a cleartext non-loopback URL before exposing the token, even with an HTTP/1.1 pin", async () => {
     let fetchCalls = 0;
     const fetchImpl = (async () => {

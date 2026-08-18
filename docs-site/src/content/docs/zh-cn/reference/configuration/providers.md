@@ -253,7 +253,6 @@ Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用�
       "baseUrl": "https://api2.cursor.sh",
       "authMode": "oauth",
       "defaultModel": "auto",
-      "upstreamHttpVersion": "http1.1",
       "nativeLocalExec": "off"
     }
   }

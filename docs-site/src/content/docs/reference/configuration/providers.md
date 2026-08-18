@@ -331,7 +331,6 @@ Cursor server-driven local tools are disabled by default. Codex continues using 
       "baseUrl": "https://api2.cursor.sh",
       "authMode": "oauth",
       "defaultModel": "auto",
-      "upstreamHttpVersion": "http1.1",
       "nativeLocalExec": "off"
     }
   }
