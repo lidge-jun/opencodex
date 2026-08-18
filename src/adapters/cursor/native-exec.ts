@@ -419,16 +419,23 @@ export function pinCursorBlobIdsForCheckpoint(
 ): boolean {
   const state = blobRequestScopes.get(lease);
   if (!state || state.sealed) return false;
+  const added: Array<{ entry: { requestPins: Set<CursorBlobRequestScopeToken> }; key: string }> = [];
   for (const blobId of blobIds) {
     if (blobId.byteLength === 0) continue;
     const k = key(blobId);
     const entry = blobs.get(k);
-    if (!entry) return false;
-    if (isExpired(entry, Date.now()) && entry.requestPins.size === 0 && entry.provenance !== "remote-setBlobArgs") {
+    if (!entry || (isExpired(entry, Date.now()) && entry.requestPins.size === 0 && entry.provenance !== "remote-setBlobArgs")) {
+      for (const pinned of added) {
+        pinned.entry.requestPins.delete(lease);
+        state.keys.delete(pinned.key);
+      }
       return false;
     }
-    entry.requestPins.add(lease);
-    state.keys.add(k);
+    if (!entry.requestPins.has(lease)) {
+      entry.requestPins.add(lease);
+      state.keys.add(k);
+      added.push({ entry, key: k });
+    }
   }
   reconcileBlobClassAccountingAndEnforce();
   return true;

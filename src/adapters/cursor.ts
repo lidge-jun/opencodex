@@ -103,6 +103,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             /* Missing credential is handled by the live transport path below. */
           }
         }
+        const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
         let request = createCursorRequest(_parsed);
         // The builder may derive a stable provider id from the client thread when Responses state
@@ -252,9 +253,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         if (
           request.checkpointInvalidationReason
           && request.checkpointInvalidationReason !== "missing_ref"
-          && request.checkpointInvalidationReason !== "compaction"
         ) {
-          invalidateCursorCheckpoint(_parsed._providerContinuation?.cursor?.checkpointRef);
+          invalidateCursorCheckpoint(inheritedCheckpointRef);
           debugProviderDiagnostic("cursor", "checkpoint-invalidated", {
             reason: request.checkpointInvalidationReason,
           });

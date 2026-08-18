@@ -334,6 +334,66 @@ describe("Cursor adapter live transport", () => {
     expect(events.filter(event => event.type === "error")).toHaveLength(0);
   });
 
+  test("forced-fresh recovery keeps the new checkpoint instead of deleting it", async () => {
+    clearCursorCheckpointsForTests();
+    const parentBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["parent-stale"],
+    }));
+    const parentRef = commitCursorCheckpoint({
+      conversationId: "cursor_stale",
+      identityScope: "acct-fresh",
+      modelId: "gpt-5.6-sol",
+      checkpointBytes: parentBytes,
+    });
+    expect(parentRef).toBeDefined();
+    const recoveredBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["recovered"],
+    }));
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          if (attempts === 1) {
+            throw Object.assign(
+              new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+              { code: "invalid_argument" },
+            );
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+        capturedConversationCheckpoint() {
+          return attempts === 1 ? undefined : recoveredBytes;
+        },
+      }),
+    });
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "retry me", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_stale",
+      _cursorIdentityScope: "acct-fresh",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stale", checkpointUsable: true, checkpointRef: parentRef },
+      },
+    };
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+    expect(attempts).toBe(2);
+    expect(getCursorCheckpoint(parentRef)).toBeUndefined();
+    const done = events.find(event => event.type === "done");
+    const newRef = done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined;
+    expect(newRef).toBeDefined();
+    expect(newRef).not.toBe(parentRef);
+    expect(getCursorCheckpoint(newRef)?.conversationId).toBe(body._cursorConversationId);
+    clearCursorCheckpointsForTests();
+  });
+
   test("does not replay invalid_argument after a local side effect", async () => {
     let attempts = 0;
     const adapter = createCursorAdapter({

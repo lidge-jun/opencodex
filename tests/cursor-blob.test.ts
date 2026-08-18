@@ -1439,8 +1439,14 @@ describe("Cursor checkpoint request construction", () => {
       checkpointBytes: new Uint8Array([1, 2, 3, 4]),
     });
     const roots = decodeRootMessages(prepared.bytes);
-    expect(roots.length).toBeGreaterThan(0);
-    expect(JSON.stringify(roots)).toContain("You are helpful.");
+    const fullReplay = decodeRootMessages(prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "hello" }],
+      rawMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+    }).bytes);
+    expect(roots).toEqual(fullReplay);
   });
 
   test("checkpoint suffix replay appends only uncovered history", () => {
@@ -1540,7 +1546,9 @@ describe("Cursor checkpoint request construction", () => {
     });
     expect(ref).toBeDefined();
     releaseCursorBlobRequestScope(requestScope);
-    expectBlobHit(blobId, data, requestScope);
+    const hydrateScope = createCursorBlobRequestScope();
+    expectBlobHit(blobId, data, hydrateScope);
+    releaseCursorBlobRequestScope(hydrateScope);
     expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBeGreaterThan(0);
     expect(evictOldestCursorBlobForBudget()).toBe(0);
     invalidateCursorCheckpoint(ref);

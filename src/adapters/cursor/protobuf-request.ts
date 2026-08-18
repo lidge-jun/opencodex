@@ -25,6 +25,7 @@ import {
   ConversationActionSchema,
   ConversationStepSchema,
   ConversationStateStructureSchema,
+  type ConversationStateStructure,
   ConversationTurnStructureSchema,
   McpArgsSchema,
   McpSuccessSchema,
@@ -800,7 +801,7 @@ function buildPreparedCursorRunRequest(
   });
   let continuationMode: "full-replay" | "checkpoint" = "full-replay";
   let checkpointInvalidationReason = request.checkpointInvalidationReason;
-  let conversationState;
+  let conversationState: ConversationStateStructure | undefined;
   let rootPromptMessagesState: ReturnType<typeof rootPromptMessages> | undefined;
   if (request.checkpointBytes && request.checkpointBytes.byteLength > 0) {
     try {
@@ -816,6 +817,7 @@ function buildPreparedCursorRunRequest(
       ) {
         const suffixRequest: CursorRunRequest = {
           ...request,
+          system: [],
           rawMessages: request.rawMessages.slice(suffixStart),
         };
         const suffixRoots = rootPromptMessages(suffixRequest, requestScope);

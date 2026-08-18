@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { fromBinary } from "@bufbuild/protobuf";
-import { ConversationStateStructureSchema } from "./gen/agent_pb";
+import { ConversationStateStructureSchema, type ConversationStateStructure } from "./gen/agent_pb";
 import {
   createCursorBlobCheckpointLease,
   pinCursorBlobIdsForCheckpoint,
@@ -69,24 +69,31 @@ function deleteSnapshot(ref: string): void {
   store.totalBytes = Math.max(0, store.totalBytes - existing.checkpointBytes.byteLength);
 }
 
+function collectStateBlobIds(state: ConversationStateStructure, ids: Uint8Array[]): void {
+  ids.push(
+    ...state.rootPromptMessagesJson,
+    ...state.turns,
+    ...state.turnsOld,
+    ...state.todos,
+    ...state.summaryArchives,
+  );
+  if (state.summary) ids.push(state.summary);
+  if (state.summaryArchive) ids.push(state.summaryArchive);
+  if (state.plan) ids.push(state.plan);
+  for (const value of Object.values(state.fileStates)) ids.push(value);
+  for (const value of Object.values(state.fileStatesV2)) {
+    if (value.content) ids.push(value.content);
+    if (value.initialContent) ids.push(value.initialContent);
+  }
+  for (const nested of Object.values(state.subagentStates)) {
+    if (nested.conversationState) collectStateBlobIds(nested.conversationState, ids);
+  }
+}
+
 function collectCheckpointBlobIds(checkpointBytes: Uint8Array): Uint8Array[] | undefined {
   try {
-    const state = fromBinary(ConversationStateStructureSchema, checkpointBytes);
-    const ids: Uint8Array[] = [
-      ...state.rootPromptMessagesJson,
-      ...state.turns,
-      ...state.turnsOld,
-      ...state.todos,
-      ...state.summaryArchives,
-    ];
-    if (state.summary) ids.push(state.summary);
-    if (state.summaryArchive) ids.push(state.summaryArchive);
-    if (state.plan) ids.push(state.plan);
-    for (const value of Object.values(state.fileStates)) ids.push(value);
-    for (const value of Object.values(state.fileStatesV2)) {
-      if (value.content) ids.push(value.content);
-      if (value.initialContent) ids.push(value.initialContent);
-    }
+    const ids: Uint8Array[] = [];
+    collectStateBlobIds(fromBinary(ConversationStateStructureSchema, checkpointBytes), ids);
     return ids.filter(id => id.byteLength > 0);
   } catch {
     return undefined;
