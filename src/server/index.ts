@@ -1728,7 +1728,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     && isCanonicalOpenAiForwardProvider(openAiProvider)
     && providerCodexAccountMode("openai", openAiProvider) === "pool"
   ) {
-    import("../codex/auth-api")
+    import("../codex/plan-from-token")
+      .then(({ reconcileCodexPlansFromTokens }) => {
+        try {
+          reconcileCodexPlansFromTokens(config);
+        } catch {
+          // Derived plan metadata must not block WHAM priming.
+        }
+        return import("../codex/auth-api");
+      })
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {});
   }

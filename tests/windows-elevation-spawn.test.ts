@@ -190,7 +190,16 @@ describe("runWindowsElevated spawn contract", () => {
     const match = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(commandScript);
     expect(match).not.toBeNull();
     const elevatedScript = Buffer.from(match![1]!, "base64").toString("utf16le");
-    expect(elevatedScript).toContain("Register-ScheduledTask -TaskName $taskName -Xml $xml -Force");
+    expect(elevatedScript).toContain(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules\\ScheduledTasks\\ScheduledTasks.psd1",
+    );
+    expect(elevatedScript).toContain("Microsoft.PowerShell.Core\\Import-Module");
+    expect(elevatedScript).toContain("$module.ExportedCommands['Register-ScheduledTask']");
+    expect(elevatedScript).toContain(
+      "Trusted ScheduledTasks module does not export Register-ScheduledTask.",
+    );
+    expect(elevatedScript).toContain("& $registerTask -TaskName $taskName -Xml $xml -Force");
+    expect(elevatedScript.match(/\bRegister-ScheduledTask\b/g)).toHaveLength(2);
     expect(elevatedScript).toContain(Buffer.from(xml, "utf16le").toString("base64"));
     expect(commandScript).not.toContain("/xml");
     expect(commandScript).not.toContain("task.xml");

@@ -9,6 +9,7 @@ import type {
 import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
+import { isTruncatedStopReason, truncationReasonFor } from "./responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
 import { rememberReasoningForCall } from "./responses/reasoning-replay-cache";
 import {
@@ -1154,7 +1155,11 @@ export function bridgeToResponsesSSE(
               // After every close above, so the blob lands AFTER the assistant message it belongs
               // to and the parser's backwards pairing finds it.
               flushKiroRedactedReasoning();
-              if (options?.compaction) {
+              // Truncated turns must never install replacement history (#422). The buffered path
+              // has always checked this; streaming emitted the item BEFORE reading stopReason, so
+              // a max_tokens/content_filter turn shipped a half-written summary and then declared
+              // itself incomplete — the same hazard, one branch over.
+              if (options?.compaction && !isTruncatedStopReason(event.stopReason)) {
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,
@@ -1164,14 +1169,18 @@ export function bridgeToResponsesSSE(
                 retainFinishedItem(item as OutputItem, compactionTextBytes);
                 outputIndex++;
               }
-              if (event.stopReason === "max_tokens" || event.stopReason === "content_filter") {
+              // Recognize every adapter's truncation vocabulary, not just the canonical pair.
+              // Suppression and terminal status must agree: withholding the compaction item while
+              // still reporting success hands codex-rs a completed response with zero compaction
+              // items, which it treats as fatal.
+              if (truncationReasonFor(event.stopReason)) {
                 // Upstream stopped before a normal completion. Surface as incomplete so the
                 // client can distinguish a truncated/filtered turn from a finished one.
                 const response = {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
                   incomplete_details: {
-                    reason: event.stopReason === "max_tokens" ? "max_output_tokens" : "content_filter",
+                    reason: truncationReasonFor(event.stopReason) ?? "content_filter",
                   },
                 };
                 // Cache max-output partials so previous_response_id replay can continue them;
@@ -1467,7 +1476,15 @@ function buildResponseJSONWithBudget(
   let incompleteEvent: Extract<AdapterEvent, { type: "incomplete" }> | undefined;
   let endTurn: boolean | undefined;
   let stopReason: string | undefined;
+  // The adapter's stop reason exactly as it arrived. `stopReason` above is deliberately narrowed
+  // to the two reasons that map onto a Responses `incomplete_details`; the raw value is what the
+  // truncation guard needs, because adapters disagree on vocabulary (`length`, `refusal`, ...).
+  let rawStopReason: string | undefined;
   let cleanDone = false;
+  // Whether the adapter emitted ANY terminal (done/error/incomplete). Distinct from `cleanDone`,
+  // which is only true for a `done` without a stop reason. A buffered turn whose adapter simply
+  // stopped emitting has no terminal at all, and must not be reported as a success.
+  let sawTerminal = false;
   let compactionText = "";
   let compactionTextBytes = 0;
 
@@ -1782,20 +1799,30 @@ function buildResponseJSONWithBudget(
         break;
       case "error":
         errorEvent = e;
+        sawTerminal = true;
         usage = e.usage ?? usage;
         break;
       case "incomplete":
         incompleteEvent = e;
+        sawTerminal = true;
         endTurn = e.endTurn;
         if (e.providerState) options?.onProviderState?.(e.providerState);
         break;
       case "done":
         usage = e.usage;
+        sawTerminal = true;
         endTurn = e.endTurn;
         cleanDone = e.stopReason === undefined;
+        rawStopReason = e.stopReason;
         if (e.providerState) options?.onProviderState?.(e.providerState);
         // Match streaming: max_tokens and content_filter both terminate as incomplete.
-        if (e.stopReason === "max_tokens" || e.stopReason === "content_filter") stopReason = e.stopReason;
+        // Normalize every adapter's truncation vocabulary to the canonical pair, so a raw
+        // `length` or `refusal` reaches the status/incomplete_details logic below instead of
+        // silently reading as a clean stop.
+        {
+          const truncation = truncationReasonFor(e.stopReason);
+          if (truncation) stopReason = truncation === "max_output_tokens" ? "max_tokens" : "content_filter";
+        }
         break;
     }
     if (budget) releaseTranslatedEvent(e, budget);
@@ -1803,8 +1830,11 @@ function buildResponseJSONWithBudget(
   flushText(cleanDone && !errorEvent && !incompleteEvent ? "final_answer" : undefined);
   flushSummaryReasoning();
   flushRawReasoning();
-  // Open tool call on a failed/incomplete turn must not land as status:"completed".
-  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent ? "incomplete" : "completed");
+  // Open tool call on a failed/incomplete turn must not land as status:"completed" — and neither
+  // must one left open by a stream that stopped without any terminal at all. That case previously
+  // fell through to "completed", handing back a function_call whose arguments were half-written
+  // JSON, inside a turn also marked completed.
+  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent || !sawTerminal ? "incomplete" : "completed");
   if (batchKiroRedacted) {
     // pushOutput reserves the item itself and releases the retained raw blob it replaces.
     pushOutput({
@@ -1820,8 +1850,12 @@ function buildResponseJSONWithBudget(
     options?.compaction
     && !errorEvent
     && !incompleteEvent
-    && stopReason !== "max_tokens"
-    && stopReason !== "content_filter"
+    // A stream that stopped without any terminal did not complete either. The original guard
+    // could only see explicit failure events, so an adapter EOF slipped past it and installed a
+    // truncated summary as replacement history — the exact #422 hazard, reached by a route that
+    // did not exist when the guard was written.
+    && sawTerminal
+    && !isTruncatedStopReason(rawStopReason)
   ) {
     pushOutput({ type: "compaction", id: `cmp_${uuid()}`, encrypted_content: encodeCompactionSummary(compactionText) }, compactionTextBytes);
   }
@@ -1831,7 +1865,13 @@ function buildResponseJSONWithBudget(
     ? "failed"
     : incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter"
       ? "incomplete"
-      : "completed";
+      : sawTerminal
+        ? "completed"
+        // The adapter stopped emitting without any terminal, so the turn was cut short. Streaming
+        // already reports this as response.incomplete / adapter_eof (see the !terminated branch);
+        // defaulting the buffered path to "completed" handed callers a truncated turn — including
+        // one carrying a never-closed tool call with half-written JSON arguments — as a success.
+        : "incomplete";
   options?.onUsage?.(incompleteEvent?.usage ?? usage);
   return {
     id: responseId, object: "response",
@@ -1851,6 +1891,10 @@ function buildResponseJSONWithBudget(
       incomplete_details: { reason: "max_output_tokens" },
     } : stopReason === "content_filter" ? {
       incomplete_details: { reason: "content_filter" },
+    } : !sawTerminal ? {
+      // Same reason string the streaming path uses, so a caller sees one signal for one condition
+      // regardless of which surface it asked for.
+      incomplete_details: { reason: "adapter_eof" },
     } : {}),
     usage: responsesUsage(incompleteEvent?.usage ?? usage),
   };

@@ -1,6 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { PROVIDER_REGISTRY, type ProviderAuthKind } from "../../providers/registry";
-import { serviceTierSupportForModel } from "../../providers/service-tier";
+import { PROVIDER_REGISTRY } from "../../providers/registry";
+import { fastPolicyForModel, serviceTierSupportForModel } from "../../providers/service-tier";
+import { resolveProviderAuthTransport } from "../../providers/fastwire";
 import { localFingerprint } from "../../lab/digest";
 import type { LabBehaviorSource, LabBehaviorValues } from "../../lab/live/types";
 
@@ -57,18 +58,6 @@ function nonCredentialHeaderDigest(
   return localFingerprint("nonCredentialHeaders", rows, installationSalt);
 }
 
-function authTransportFor(
-  effective: OcxProviderConfig,
-  adapter: string,
-  mode: ProviderAuthKind,
-): string {
-  if (mode === "oauth") return "oauth_bearer";
-  if (mode === "forward") return "forwarded_authorization";
-  if (mode === "local") return "none";
-  if (adapter === "anthropic" && effective.apiKeyTransport !== "bearer") return "x_api_key";
-  return "authorization_bearer";
-}
-
 function effectiveOpenRouterRouting(effective: OcxProviderConfig, modelId: string) {
   return effective.modelOpenRouterRouting?.[modelId] ?? effective.openRouterRouting;
 }
@@ -104,6 +93,7 @@ export function resolveProductionBehaviorValues(
   const project = typeof effective.project === "string" && effective.project ? effective.project : null;
   const location = typeof effective.location === "string" && effective.location ? effective.location : null;
   const nativeLocalExec = effective.nativeLocalExec === "on" || effective.unsafeAllowNativeLocalExec === true;
+  const fastPolicy = fastPolicyForModel(effective, modelId, providerName);
 
   const values: LabBehaviorValues = {
     "wire.adapter": behaviorRow("provider_config", adapter),
@@ -115,11 +105,22 @@ export function resolveProductionBehaviorValues(
       effective.modelSuffixBracketStrip === true ? "bracket_strip" : "none",
     ),
     "auth.mode": behaviorRow("provider_config", authMode),
-    "auth.transport": behaviorRow("provider_config", authTransportFor(effective, adapter, authMode)),
+    "auth.transport": behaviorRow(
+      "provider_config",
+      resolveProviderAuthTransport(adapter, authMode, effective.apiKeyTransport),
+    ),
     "responses.stateful": behaviorRow("provider_config", effective.statelessResponses !== true),
     "responses.serviceTier": behaviorRow(
       "provider_config",
       serviceTierSupportForModel(effective, modelId, providerName) ?? null,
+    ),
+    "responses.fastWireKind": behaviorRow(
+      "provider_config",
+      fastPolicy.fastWire?.kind ?? null,
+    ),
+    "responses.fastWireValue": behaviorRow(
+      "provider_config",
+      fastPolicy.fastWire?.canonicalToWire.priority ?? null,
     ),
     "responses.snapshotRepair": behaviorRow("provider_config", effective.responsesSnapshotRepair === true),
     "responses.itemIdRepair": behaviorRow("provider_config", effective.responsesItemIdRepair ?? null),

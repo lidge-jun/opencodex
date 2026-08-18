@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
+import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
@@ -12,6 +12,9 @@ import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
+import {
+  createAdapterTierMetadata,
+} from "../providers/fastwire";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -764,6 +767,15 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
   return rest;
 }
 
+/** Apply the settled tier only to a fresh outbound object; `_rawBody` remains caller-owned. */
+function applyTierDecisionToResponsesBody(body: unknown, decision: TierDecision | undefined): unknown {
+  if (!decision || decision.kind === "forward-caller" || !isPlainObject(body)) return body;
+  const next: Record<string, unknown> = { ...body };
+  if (decision.kind === "set") next.service_tier = decision.value;
+  else delete next.service_tier;
+  return next;
+}
+
 /**
  * Drop request parameters a stateless Responses upstream cannot implement, and pin
  * `store` false.
@@ -778,8 +790,8 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
  * `prompt` is a reference to a server-stored prompt template — the most stateful
  * field in the accepted schema.
  *
- * `service_tier` is deliberately NOT dropped: the server writes it for fast mode
- * (`responses/core.ts`), and silently deleting a configured knob inside an adapter is
+ * `service_tier` is deliberately NOT dropped: the final TierDecision is applied to a
+ * detached outbound body before this sanitizer chain, and silently deleting a configured knob is
  * worse than forwarding a parameter the upstream ignores.
  *
  * MUST run before the composed sanitize chain below: `stripItemIdsWhenUnstored` keys
@@ -1367,6 +1379,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
+      // tier write so a force-fast/default decision can never mutate parsed._rawBody.
+      outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
       const stateless = provider.statelessResponses === true;
       if (stateless) outBody = stripStatefulResponsesParams(outBody);
       // A replay miss can leave a function_call_output whose paired function_call sat
@@ -1414,11 +1429,21 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         convertedRoutedCustomToolNames = rewritten.names;
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
-      const body = JSON.stringify(stripDisabledReasoningSummaries(
+      const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
         parsed.modelId,
-      ));
+      );
+      const actualServiceTier = isPlainObject(finalBody) && typeof finalBody.service_tier === "string"
+        ? finalBody.service_tier
+        : null;
+      const tierLog = createAdapterTierMetadata(
+        parsed.options?.tierObservation,
+        parsed.options?.tierDecision,
+        actualServiceTier === null ? null : "service-tier",
+        actualServiceTier,
+      );
+      const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         new TextEncoder().encode(body).byteLength,
@@ -1430,6 +1455,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         body,
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
+        ...(tierLog ? { tierLog } : {}),
       };
     },
 

@@ -237,6 +237,90 @@ test("chatCompletionsToResponsesBody maps messages/tools/system", () => {
   expect(input.some(i => i.type === "function_call_output" && i.call_id === "call_1")).toBe(true);
 });
 
+describe("chatCompletionsToResponsesBody service_tier", () => {
+  test("preserves a caller-supplied service_tier", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      service_tier: "flex",
+    });
+    expect(body.service_tier).toBe("flex");
+  });
+
+  test("does not inject service_tier when the caller omitted it", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(body).not.toHaveProperty("service_tier");
+  });
+});
+
+async function driveChatFallbackServiceTier(
+  providerOverrides: Partial<OcxProviderConfig>,
+): Promise<Record<string, unknown>> {
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  const captured: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    captured.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+
+  const providerName = "chat-tier-fixture";
+  const config = {
+    port: 0,
+    defaultProvider: providerName,
+    providers: {
+      [providerName]: {
+        adapter: "openai-chat",
+        baseUrl: "https://chat-tier.example.test/v1",
+        authMode: "key",
+        apiKey: "sk-test",
+        chatServiceTier: true,
+        supportsServiceTier: true,
+        ...providerOverrides,
+      },
+    },
+  } as OcxConfig;
+  const response = await handleChatCompletions(
+    new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: `${providerName}/model`,
+        messages: [{ role: "user", content: "ping" }],
+        stream: true,
+        // Force the Chat -> Responses fallback so this exercises the converter.
+        store: true,
+        service_tier: "flex",
+      }),
+    }),
+    config,
+    { model: "", provider: "" },
+  );
+
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(captured).toHaveLength(1);
+  return captured[0]!;
+}
+
+describe("POST /v1/chat/completions service_tier fallback", () => {
+  test("forwards the caller tier through a service-tier-capable openai-chat route", async () => {
+    const outboundBody = await driveChatFallbackServiceTier({});
+    expect(outboundBody.service_tier).toBe("flex");
+  });
+
+  test("strips the caller tier when the provider explicitly disables service tiers", async () => {
+    const outboundBody = await driveChatFallbackServiceTier({ supportsServiceTier: false });
+    expect(outboundBody).not.toHaveProperty("service_tier");
+  });
+});
+
 describe("chatCompletionsToResponsesBody reasoning summary", () => {
   test("defaults summary to auto when the client only sent reasoning_effort", () => {
     const body = chatCompletionsToResponsesBody({

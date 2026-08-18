@@ -27,6 +27,7 @@ import { getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
 import { responseStateMetrics } from "../../responses/state";
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
+import { readWindowsReplaceRetryCounters } from "../../lib/windows-atomic-replace";
 import {
   SYSTEM_RESTART_EXPECTED_PID_HEADER,
   parseExpectedSystemRestartPid,
@@ -115,6 +116,20 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
     });
   }
 
+  /**
+   * Windows atomic-replace retry counters.
+   *
+   * A sibling route rather than a field on /api/system/memory: that payload is
+   * memory-shaped, and appending unrelated filesystem counters to it makes both
+   * harder to consume.
+   *
+   * Keys are `publisher:CODE` where publisher is a closed union
+   * (ReplacePublisher) and never a path — a path could carry a username. The
+   * type is what enforces that; a text scan cannot see a runtime value.
+   */
+  if (url.pathname === "/api/system/windows-replace-retries" && req.method === "GET") {
+    return jsonResponse({ counters: readWindowsReplaceRetryCounters() });
+  }
   if (url.pathname === "/api/system/restart" && req.method === "POST") {
     const expectedPid = parseExpectedSystemRestartPid(
       req.headers.get(SYSTEM_RESTART_EXPECTED_PID_HEADER),

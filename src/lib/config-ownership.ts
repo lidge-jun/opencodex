@@ -5,7 +5,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
@@ -13,6 +12,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GenerationContext } from "./state-store-sweeper";
+import { renameAtomicFile } from "./windows-atomic-replace";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
@@ -232,7 +232,10 @@ function writeManifest(configDir: string, manifest: ConfigUninstallManifest): vo
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   try {
-    renameSync(temp, path);
+    // Same Windows sharing-violation tolerance the config writer has: a
+    // scanner holding the manifest must not turn uninstall bookkeeping into a
+    // hard failure.
+    renameAtomicFile(temp, path, undefined, "config-ownership");
   } catch (error) {
     try { unlinkSync(temp); } catch { /* best effort */ }
     throw error;

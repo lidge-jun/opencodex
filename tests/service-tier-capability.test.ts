@@ -3,7 +3,7 @@
  * for EVERY Responses provider; now a provider-level `supportsServiceTier` capability
  * gates it after the final route is settled (tri-state): canonical OpenAI providers
  * keep the fast-mode behavior (`true`), DeepSeek/Volcengine strip it (`false`), and
- * unclassified custom providers preserve caller-supplied values untouched without
+ * unclassified custom Responses providers preserve caller-supplied values untouched without
  * ever receiving an injection (PR #860 family).
  */
 import { afterEach, describe, expect, test } from "bun:test";
@@ -86,7 +86,7 @@ describe("service-tier capability is exact-model and provider-scoped", () => {
     expect(canForwardServiceTierForModel({
       ...provider,
       supportsServiceTier: true,
-    }, "chat-model", "custom-relay")).toBe(false);
+    }, "chat-model", "custom-relay")).toBe(true);
     expect(canForwardServiceTierForModel({
       ...provider,
       supportsServiceTier: true,
@@ -176,7 +176,7 @@ describe("routing evidence uses the final model adapter", () => {
     expect(candidateCapabilityEvidence({
       ...config,
       providers: { relay: relay({ chatServiceTier: false }) },
-    }, "relay", "verified").serviceTier).toBe("unsupported");
+    }, "relay", "verified").serviceTier).toBe("supported");
 
     const mixedProvider = relay({
       adapter: "openai-responses",
@@ -185,7 +185,7 @@ describe("routing evidence uses the final model adapter", () => {
     });
     const mixedConfig = { ...config, providers: { relay: mixedProvider } };
     expect(candidateCapabilityEvidence(mixedConfig, "relay", "verified").serviceTier).toBe("supported");
-    expect(candidateCapabilityEvidence(mixedConfig, "relay", "chat").serviceTier).toBe("unsupported");
+    expect(candidateCapabilityEvidence(mixedConfig, "relay", "chat").serviceTier).toBe("supported");
 
     const behavior = resolveProductionBehaviorValues(
       mixedConfig,
@@ -194,7 +194,7 @@ describe("routing evidence uses the final model adapter", () => {
       mixedProvider,
       "service-tier-test-salt",
     );
-    expect(behavior?.["responses.serviceTier"]?.value).toBe(false);
+    expect(behavior?.["responses.serviceTier"]?.value).toBe(true);
   });
 });
 

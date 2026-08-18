@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
@@ -8,6 +8,7 @@ import { durableBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { renameAtomicFile } from "../lib/windows-atomic-replace";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
@@ -242,7 +243,7 @@ export function replaceWindowsTrayOwnedFile(
       const hardened = hardenSecretPath(target, { required: true, timeoutMemoKey: path });
       if (!hardened.ok) throw new Error("Windows tray ACL hardening did not complete; refusing to persist executable state.");
     },
-    rename: renameSync,
+    rename: (source, destination) => renameAtomicFile(source, destination, undefined, "tray"),
     unlink: unlinkSync,
   },
 ): void {

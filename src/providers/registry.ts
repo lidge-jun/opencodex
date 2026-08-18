@@ -1,4 +1,5 @@
-import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
+import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
@@ -165,6 +166,8 @@ export interface ProviderRegistryEntry {
    * of paying a translation hop.
    */
   modelWireDefaults?: Record<string, ModelWireDefault>;
+  /** Explicit Fast wire declaration; absence derives from the final model adapter. */
+  fastWire?: FastWire | null;
   /**
    * Registry-only per-model override for the upstream request shape used behind a
    * Codex Responses WebSocket turn. `false` keeps the client-facing WebSocket but
@@ -2530,6 +2533,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "gitlab-duo", label: "GitLab Duo", baseUrl: "https://cloud.gitlab.com/ai/v1/proxy/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
 ];
+
+export function providerRegistryFastWireError(
+  entry: Pick<ProviderRegistryEntry, "fastWire" | "supportsServiceTier" | "modelSupportsServiceTier">,
+): string | null {
+  return fastWireDeclarationError(entry);
+}
+
+for (const entry of PROVIDER_REGISTRY) {
+  const error = providerRegistryFastWireError(entry);
+  if (error) throw new TypeError(`Invalid provider registry entry ${entry.id}: ${error}`);
+}
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(entry => entry.id === id);

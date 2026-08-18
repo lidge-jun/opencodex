@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
-import { providerConfigSeed } from "../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
@@ -86,6 +86,19 @@ describe("ClinePass provider", () => {
     const seed = providerConfigSeed(entry);
     expect(seed).toMatchObject({ reasoningWireFormat: "gateway-object" });
     expect(seed).not.toHaveProperty("preserveCustomDestination");
+  });
+
+  test("catalog enrichment repairs the low-only ladder persisted by older ClinePass presets", () => {
+    const stale = providerConfigSeed(registryEntry());
+    stale.reasoningEfforts = ["low"];
+
+    enrichProviderFromRegistry("cline-pass", stale);
+
+    expect(stale.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+
+    const custom = { ...stale, baseUrl: "https://custom.example/v1", reasoningEfforts: ["low"] };
+    enrichProviderFromRegistry("cline-pass", custom);
+    expect(custom.reasoningEfforts).toEqual(["low"]);
   });
 
   test("routing keeps the full upstream model slug and emits the Cline gateway reasoning object", () => {

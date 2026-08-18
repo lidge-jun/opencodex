@@ -14,6 +14,7 @@ import {
   bindReasoningReplayScope,
   reasoningReplayCodexCredentialIdentity,
   reasoningReplayDestinationIdentity,
+  durableReplayDestinationIdentity,
   reasoningReplayKeyCredentialIdentity,
   reasoningReplayOAuthCredentialIdentity,
 } from "../../responses/reasoning-replay-cache";
@@ -56,7 +57,7 @@ import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage, TierDecision } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -122,7 +123,18 @@ import { createTranslatorBudget, isTranslatorBudgetExceededError, type Translato
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerContextCap } from "../../providers/context-cap";
-import { SERVICE_TIER_ADAPTERS, serviceTierSupportForModel } from "../../providers/service-tier";
+import {
+  fastPolicyForModel,
+  serviceTierSupportFromPolicy,
+  SERVICE_TIER_ADAPTERS,
+} from "../../providers/service-tier";
+import {
+  canonicalFastTierMarker,
+  decideTier,
+  tierObservationContext,
+  tierValueAfterDecision,
+  type ResolvedFastPolicy,
+} from "../../providers/fastwire";
 import {
   RequestPacingQueueOverloadError,
   waitForProviderRequestSlot,
@@ -148,7 +160,7 @@ import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
-import { redactSecretString } from "../../lib/redact";
+import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
@@ -166,6 +178,8 @@ import {
   noteAttemptSend,
   readConfiguredCodexServiceTier,
   recordAdapterReasoning,
+  recordAdapterTier,
+  recordAdapterTierMetadata,
   recordAttemptRequestedEffort,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
@@ -336,6 +350,7 @@ function bindRouteReasoningReplayScope(args: {
       ? {
           providerName,
           providerDestinationIdentity,
+          providerDestinationDurableIdentity: durableReplayDestinationIdentity(provider.baseUrl),
           adapterName,
           modelId: parsed.modelId,
           credentialIdentity,
@@ -598,6 +613,7 @@ async function retryCodexPoolOnAlternateAccount(
     translatorBudget: options.translatorBudget,
   });
   recordAdapterReasoning(logCtx, request);
+  recordAdapterTier(logCtx, request);
 
   await firstResponse.body?.cancel().catch(() => undefined);
   options.onCodexAuthContextResolved?.(retryAuthCtx);
@@ -967,6 +983,23 @@ const UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE =
 const MAX_UPSTREAM_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS = 180_000;
 const UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS = 30_000;
+const MAX_FAST_WIRE_CAPABILITY_WARNINGS = 256;
+const warnedFastWireCapabilityGaps = new Set<string>();
+
+function warnFastWireCapabilityGap(providerName: string, modelId: string): void {
+  const safeProvider = sanitizeLogMetadataString(providerName) ?? "unknown";
+  const safeModel = sanitizeLogMetadataString(modelId) ?? "unknown";
+  const key = `${safeProvider}\0${safeModel}`;
+  if (warnedFastWireCapabilityGaps.has(key)) return;
+  if (warnedFastWireCapabilityGaps.size >= MAX_FAST_WIRE_CAPABILITY_WARNINGS) {
+    const oldest = warnedFastWireCapabilityGaps.values().next().value;
+    if (oldest !== undefined) warnedFastWireCapabilityGaps.delete(oldest);
+  }
+  warnedFastWireCapabilityGaps.add(key);
+  console.warn(
+    `[opencodex] Fast policy for ${safeProvider}/${safeModel} has service-tier capability but no Fast wire; preserving only caller-permitted tier behavior`,
+  );
+}
 export const UPSTREAM_JSON_BODY_READ_OPTIONS = {
   maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
   totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
@@ -1152,23 +1185,21 @@ async function applyFinalRouteRequestNormalization(args: {
     logCtx.preserveResolvedModelFromRoute = true;
   }
 
-  // Fast mode override only where the final provider/model route explicitly documents
-  // service-tier support. The same model-scoped resolver is used by catalog generation.
-  const modelServiceTierSupport = serviceTierSupportForModel(
+  // Resolve Fast policy after the final route/wire settles. A1 records the decision on parsed
+  // options; the Responses adapter owns the final outbound body write.
+  const fastPolicy = fastPolicyForModel(
     route.provider,
     route.modelId,
     route.providerName,
     inboundWire,
   );
-  if (config.fastMode !== undefined
-    && SERVICE_TIER_ADAPTERS.has(route.provider.adapter)
-    && modelServiceTierSupport === true) {
-    const tier = config.fastMode ? "priority" : undefined;
-    if (parsed._rawBody && typeof parsed._rawBody === "object") {
-      if (tier) (parsed._rawBody as Record<string, unknown>).service_tier = tier;
-      else delete (parsed._rawBody as Record<string, unknown>).service_tier;
-    }
-    parsed.options.serviceTier = tier;
+  const modelServiceTierSupport = serviceTierSupportFromPolicy(fastPolicy);
+  const callerTier = parsed.options.serviceTier;
+  parsed.options.tierObservation = tierObservationContext(fastPolicy, config.fastMode, callerTier);
+  parsed.options.tierDecision = decideTier(fastPolicy, config.fastMode, callerTier);
+  parsed.options.serviceTier = tierValueAfterDecision(parsed.options.tierDecision, callerTier);
+  if (fastPolicy.capability === true && fastPolicy.fastWire === null) {
+    warnFastWireCapabilityGap(route.providerName, route.modelId);
   }
   applyServiceTierGate(
     route.provider,
@@ -1177,6 +1208,7 @@ async function applyFinalRouteRequestNormalization(args: {
     route.modelId,
     route.providerName,
     inboundWire,
+    fastPolicy,
   );
   if (modelServiceTierSupport === false) {
     logCtx.requestedServiceTier = undefined;
@@ -1564,29 +1596,43 @@ function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBud
  * Service-tier capability gate, applied after the final route/wire is settled. A
  * provider explicitly documented as NOT supporting `service_tier` must never
  * receive it: strip the field and clear the logging value even when the caller
- * supplied one (fail closed). Tri-state contract: `true` supports (injection
- * allowed, caller values preserved), `false` strips, and an UNCLASSIFIED custom
- * provider (`undefined`) preserves caller-supplied values but never gets an
- * injection — deleting the caller's field there would silently change their
- * request against a gateway we know nothing about.
+ * supplied one (fail closed). A policy-produced canonical Fast decision has
+ * already passed capability validation and cannot be vetoed by Chat's caller
+ * forwarding permission. On unclassified routes every caller tier remains subject
+ * to `forwardCallerTier`.
  */
 export function applyServiceTierGate(
   provider: OcxProviderConfig,
   rawBody: unknown,
-  options: { serviceTier?: string },
+  options: { serviceTier?: string; tierDecision?: TierDecision },
   modelId?: string,
   providerName?: string,
   inbound: InboundWire = "responses",
+  resolvedPolicy?: ResolvedFastPolicy,
 ): void {
   // A direct unit caller without a model id retains the historical tri-state behavior for
   // adapters outside the OpenAI service-tier family. Once a model is known, resolve the final
   // model adapter as well: an explicit override to Anthropic (or another non-OpenAI wire) must
   // not carry a caller-supplied `service_tier` through a route that cannot forward it.
   if (modelId === undefined && !SERVICE_TIER_ADAPTERS.has(provider.adapter)) return;
-  const support = modelId === undefined
-    ? provider.supportsServiceTier
-    : serviceTierSupportForModel(provider, modelId, providerName, inbound);
-  if (support !== false) return;
+  const policy = modelId === undefined
+    ? undefined
+    : resolvedPolicy ?? fastPolicyForModel(provider, modelId, providerName, inbound);
+  const forwardCallerTier = modelId === undefined
+    ? provider.supportsServiceTier !== false
+    : policy!.forwardCallerTier;
+  const rawTier = rawBody && typeof rawBody === "object"
+    ? (rawBody as Record<string, unknown>).service_tier
+    : undefined;
+  const canonicalDecision = options.tierDecision?.kind === "set";
+  const callerTierIsForeign = rawTier !== undefined
+    && (typeof rawTier !== "string" || canonicalFastTierMarker(rawTier) === undefined);
+  const dropForeignCallerTier = policy?.capability === true
+    && policy.fastWire?.kind === "service-tier"
+    && policy.fastWire?.foreignCallerTiers === "drop"
+    && callerTierIsForeign;
+  if (policy && policy.capability !== false && canonicalDecision) return;
+  if (forwardCallerTier && !dropForeignCallerTier) return;
   if (rawBody && typeof rawBody === "object") {
     delete (rawBody as Record<string, unknown>).service_tier;
   }
@@ -1722,6 +1768,7 @@ async function handleResponsesInner(
   }
   logCtx.requestedModel = parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
+  logCtx.callerServiceTier = sanitizeLogMetadataString(parsed.options.serviceTier);
   logCtx.requestedServiceTier = parsed.options.serviceTier;
   logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
@@ -2164,6 +2211,9 @@ async function handleResponsesInner(
     (logCtx.attempts ??= []).push(attempt);
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
+  if (adapter.runTurn) {
+    recordAdapterTierMetadata(logCtx, adapter.tierLogForRunTurn?.(parsed));
+  }
   // Optional route-identity linkage for attempt correlation (CL-09 consumes it). The slot
   // resolves to null unless an opt-in subsystem registered a linker, so an install without
   // routing profiles does no work here and loads no additional module. The non-throwing
@@ -2398,6 +2448,7 @@ async function handleResponsesInner(
       }
       : undefined;
     recordAdapterReasoning(logCtx, request);
+    recordAdapterTier(logCtx, request);
     const actualHostKey = upstreamHostHealthKey(
       route.providerName,
       safeOriginLabel(request.url),
@@ -3194,7 +3245,10 @@ async function handleResponsesInner(
       stallTimeoutSec: config.stallTimeoutSec,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
-      onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
+      onRequestBuilt: request => {
+        recordAdapterReasoning(logCtx, request);
+        recordAdapterTier(logCtx, request);
+      },
       ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
       onUsage: usage => {
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
@@ -3272,7 +3326,10 @@ async function handleResponsesInner(
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
-      onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
+      onRequestBuilt: request => {
+        recordAdapterReasoning(logCtx, request);
+        recordAdapterTier(logCtx, request);
+      },
       onAttemptSend: (recovery?: AttemptRecoveryKind) =>
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery),
       onUsage: usage => {
@@ -3542,6 +3599,7 @@ async function handleResponsesInner(
   try {
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     recordAdapterReasoning(logCtx, initialRequest);
+    recordAdapterTier(logCtx, initialRequest);
     inputTokenEstimate = typeof initialRequest.usageLog?.inputTokens === "number"
       ? initialRequest.usageLog.inputTokens
       : undefined;
@@ -3646,6 +3704,7 @@ async function handleResponsesInner(
             ...(imageTierBias > 0 ? { imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, retryRequest);
+          recordAdapterTier(logCtx, retryRequest);
         } catch (err) {
           // A rotated/rebuilt adapter build failure is a request-shaping error, not an
           // upstream connect failure: tear the abort link down and map it as 400 (no 413
@@ -3968,6 +4027,7 @@ async function handleResponsesInner(
             ...(imageTierBias > 0 ? { imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, continuationRequest);
+          recordAdapterTier(logCtx, continuationRequest);
         } catch (err) {
           // The main body is already streaming, so there is no HTTP error surface: release
           // any partial body observation and surface the failure as an in-stream error via

@@ -27,6 +27,11 @@ import type { OcxProviderOpaqueToolCallMetadata, OcxReasoningReplayScopeRef } fr
 import { isCarryableSignature, responsesExtraContentFromProviderMetadata } from "./provider-opaque-metadata";
 
 const STORE_FILE_NAME = "thought-signature-replay.json";
+/**
+ * Bumped whenever `keyFor` changes shape. v3 added the durable destination identity, so a
+ * v2 file's keys can never match and are dropped on load instead of aging out invisibly.
+ */
+const STORE_VERSION = 3;
 
 /** Bound on remembered entries; real signatures are a few hundred bytes, so this stays small. */
 const MAX_ENTRIES = 16_384;
@@ -83,6 +88,11 @@ function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): 
   return JSON.stringify([
     scope.clientThreadId,
     identity.providerName,
+    // Destination, unlike the credential identity, has a restart-stable form: it is a
+    // configured endpoint rather than a secret, so a plain digest works where the
+    // reasoning cache's randomBytes-keyed HMAC cannot. Without it, one provider NAME
+    // serving two endpoints shares signatures across both.
+    identity.providerDestinationDurableIdentity ?? "destination:unknown",
     identity.adapterName,
     identity.modelId,
     callId,
@@ -103,6 +113,12 @@ function load(): void {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { entries?: unknown }).entries)) {
       return;
     }
+    // The version was written but never read, so a key-shape change could not be
+    // announced — old entries simply went dead and aged out on TTL, which is silent and
+    // indistinguishable from a store that is not working. Reading it makes a shape change
+    // an explicit drop: entries keyed by an older scheme are discarded on load rather than
+    // lingering as permanent misses.
+    if ((parsed as { version?: unknown }).version !== STORE_VERSION) return;
     const nowMs = Date.now();
     for (const entry of (parsed as { entries: unknown[] }).entries) {
       if (typeof entry !== "object" || entry === null) continue;
@@ -141,7 +157,7 @@ function persist(): Promise<void> {
   persistChain = persistChain
     .then(async () => {
       const snapshot = JSON.stringify({
-        version: 2,
+        version: STORE_VERSION,
         entries: [...entries].map(([key, entry]) => ({ key, sig: entry.sig, savedAt: entry.savedAt })),
       });
       await atomicWriteFileAsync(storePath(), snapshot);

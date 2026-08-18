@@ -9,10 +9,11 @@ import {
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
-import type { OcxUsage } from "../types";
+import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import type { AdapterRequest } from "../adapters/base";
-import { redactSecretString } from "../lib/redact";
+import type { AdapterTierMetadata } from "../providers/fastwire";
+import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import {
   appendUsageEntry,
   isKnownAdmissionKind,
@@ -70,12 +71,15 @@ export interface RequestLogContext {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
   configuredSpeedLabel?: string;
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
+  /** Final-attempt tier summary; attempt rows remain the accounting source of truth. */
+  tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
   /** Internal: client-facing response metadata must not replace the physical routed model. */
   preserveResolvedModelFromRoute?: boolean;
@@ -86,6 +90,8 @@ export interface RequestLogContext {
   activeAttempt?: PersistedUsageAttempt;
   /** Internal wall-clock origin for the committed final attempt; never persisted. */
   activeAttemptStartedAt?: number;
+  /** Internal adapter response observer paired with activeAttempt.tierOutcome. */
+  activeTierMetadata?: AdapterTierMetadata;
   usageDebugBodyKind?: UsageDebugBodyKind;
   usageDebugBodySample?: string;
   usageDebugContentType?: string;
@@ -140,12 +146,14 @@ export interface RequestLogEntry {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
   configuredSpeedLabel?: string;
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
+  tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
   status: number;
   durationMs: number;
@@ -251,6 +259,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
     ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
     ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
+    ...(entry.callerServiceTier ? { callerServiceTier: entry.callerServiceTier } : {}),
     ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
     ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
     ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
@@ -259,6 +268,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
       : {}),
     ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
+    ...(entry.tierOutcome ? { tierOutcome: entry.tierOutcome } : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
@@ -352,6 +362,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
       ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
       ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
+      ...(entry.callerServiceTier ? { callerServiceTier: entry.callerServiceTier } : {}),
       ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
       ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
       ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
@@ -360,6 +371,7 @@ export function addRequestLog(entry: RequestLogEntry) {
         ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
         : {}),
       ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
+      ...(entry.tierOutcome ? { tierOutcome: entry.tierOutcome } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
       ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
@@ -464,6 +476,35 @@ export function recordAdapterReasoning(
   }
 }
 
+/** Attach the serializing adapter's tier observation to the active durable attempt. */
+export function recordAdapterTier(
+  logCtx: RequestLogContext,
+  request: AdapterRequest,
+): void {
+  recordAdapterTierMetadata(logCtx, request.tierLog);
+}
+
+/** Attach adapter-owned metadata for transports that expose no AdapterRequest (runTurn). */
+export function recordAdapterTierMetadata(
+  logCtx: RequestLogContext,
+  metadata: AdapterTierMetadata | undefined,
+): void {
+  delete logCtx.tierOutcome;
+  delete logCtx.activeTierMetadata;
+  const attempt = logCtx.activeAttempt;
+  if (attempt) delete attempt.tierOutcome;
+
+  try {
+    const outcome = metadata?.outcome;
+    if (!metadata || !outcome) return;
+    logCtx.tierOutcome = outcome;
+    logCtx.activeTierMetadata = metadata;
+    if (attempt) attempt.tierOutcome = outcome;
+  } catch {
+    // Request logging is best-effort and must not affect request delivery.
+  }
+}
+
 export function requestLogErrorCode(
   status: number,
   upstreamError?: string,
@@ -552,7 +593,13 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
     && model.trim()
   ) logCtx.resolvedModel = model;
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
-  if (typeof serviceTier === "string" && serviceTier.trim()) logCtx.responseServiceTier = serviceTier;
+  if (typeof serviceTier === "string" && serviceTier.trim()) {
+    const sanitized = sanitizeLogMetadataString(serviceTier);
+    if (sanitized) logCtx.responseServiceTier = sanitized;
+    logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
+  } else if (Object.prototype.hasOwnProperty.call(source, "service_tier")) {
+    logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
+  }
   const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
   if (usage && !logCtx.usageFromBridge) {
     logCtx.usage = usage;
@@ -618,6 +665,7 @@ export function inspectResponseLogJson(logCtx: RequestLogContext, text: string):
   try {
     applyResponseLogMetadata(logCtx, JSON.parse(text));
   } catch {
+    logCtx.activeTierMetadata?.markResponseUnparseable();
     /* body may not be JSON; request log metadata is best-effort only */
   }
   captureUpstreamError(logCtx, text);
@@ -648,6 +696,7 @@ export function inspectResponseLogSsePayloadParsed(
   const debugEnabled = isUsageDebugEnabled();
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
+  else logCtx.activeTierMetadata?.markResponseUnparseable();
   captureUpstreamErrorParsed(logCtx, payload, parsed);
   if (debugEnabled) {
     if (!sseAlreadyMarked) {
@@ -849,6 +898,7 @@ export function addFinalRequestLog(
     ...attempt,
     recoveryKinds: [...attempt.recoveryKinds],
     ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
+    ...(attempt.tierOutcome ? { tierOutcome: { ...attempt.tierOutcome } } : {}),
   }));
   const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
   const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
@@ -873,12 +923,16 @@ export function addFinalRequestLog(
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
     ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),
     ...(logCtx.reasoningWireValue !== undefined ? { reasoningWireValue: logCtx.reasoningWireValue } : {}),
+    ...(logCtx.callerServiceTier ? { callerServiceTier: logCtx.callerServiceTier } : {}),
     ...(logCtx.requestedServiceTier ? { requestedServiceTier: logCtx.requestedServiceTier } : {}),
     ...(logCtx.requestedSpeedLabel ? { requestedSpeedLabel: logCtx.requestedSpeedLabel } : {}),
     ...(logCtx.configuredServiceTier ? { configuredServiceTier: logCtx.configuredServiceTier } : {}),
     ...(logCtx.configuredSpeedLabel ? { configuredSpeedLabel: logCtx.configuredSpeedLabel } : {}),
     ...(logCtx.modelSupportsServiceTier !== undefined ? { modelSupportsServiceTier: logCtx.modelSupportsServiceTier } : {}),
     ...(logCtx.responseServiceTier ? { responseServiceTier: logCtx.responseServiceTier } : {}),
+    ...((attempts?.at(-1)?.tierOutcome ?? logCtx.tierOutcome)
+      ? { tierOutcome: attempts?.at(-1)?.tierOutcome ?? { ...logCtx.tierOutcome! } }
+      : {}),
     ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
     status: effectiveStatus,
     durationMs: Date.now() - start,
@@ -1004,10 +1058,14 @@ function finalizedUsage(
   const usageFallback = !finalUsage && estimate !== undefined
     ? { inputTokens: estimate, outputTokens: 0, estimated: true }
     : undefined;
-  const loggedUsage = finalUsage && estimate !== undefined
+  const combinedInputTokens = finalUsage && estimate !== undefined
+    ? Math.max(finalUsage.inputTokens, estimate)
+    : undefined;
+  const loggedUsage = finalUsage && combinedInputTokens !== undefined
     ? {
         ...finalUsage,
-        inputTokens: Math.max(finalUsage.inputTokens, estimate),
+        inputTokens: combinedInputTokens,
+        totalTokens: combinedInputTokens + finalUsage.outputTokens,
         estimated: true,
       }
     : finalUsage
@@ -1017,7 +1075,11 @@ function finalizedUsage(
       // ESTIMATE via capEstimateAtContextWindow, and Math.max preserves a real
       // provider-reported count, so it needs no further reduction.
       ? (finalUsage.estimated && contextWindow !== undefined && finalUsage.inputTokens > contextWindow
-          ? { ...finalUsage, inputTokens: contextWindow }
+          ? {
+              ...finalUsage,
+              inputTokens: contextWindow,
+              totalTokens: contextWindow + finalUsage.outputTokens,
+            }
           : finalUsage)
       : usageFallback;
   const totalTokens = usageTotalTokens(loggedUsage);

@@ -461,6 +461,15 @@ export function setCursorBlobLimitsForTests(limits?: Partial<CursorBlobLimits>):
   blobLimits = limits ? { ...DEFAULT_BLOB_LIMITS, ...limits } : { ...DEFAULT_BLOB_LIMITS };
 }
 
+/**
+ * The live per-blob admission ceiling. Callers that build a blob must budget against THIS value
+ * rather than a copy of the constant: the limit is test-overridable, and a hardcoded 16 MiB would
+ * silently drift from admission the moment either side changes.
+ */
+export function cursorBlobMaxEntryBytes(): number {
+  return blobLimits.maxEntryBytes;
+}
+
 export function resetCursorBlobStateForTests(): void {
   if (blobExpiryAccountingTimer) clearTimeout(blobExpiryAccountingTimer);
   blobExpiryAccountingTimer = undefined;

@@ -640,15 +640,21 @@ export function runWindowsElevatedScheduledTaskRegistration(
   xml: string,
 ): Promise<number> {
   const xmlBase64 = Buffer.from(xml, "utf16le").toString("base64");
+  const powerShellPath = windowsPowerShell();
+  const powerShellDirectory = powerShellPath.replace(/[\\/][^\\/]+$/, "");
+  const scheduledTasksModule = `${powerShellDirectory}\\Modules\\ScheduledTasks\\ScheduledTasks.psd1`;
   const inner = [
     `$taskName = ${psSingleQuote(taskName)}`,
     `$xmlBase64 = ${psSingleQuote(xmlBase64)}`,
     "$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($xmlBase64))",
-    "Register-ScheduledTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null",
+    `$module = Microsoft.PowerShell.Core\\Import-Module -Name ${psSingleQuote(scheduledTasksModule)} -PassThru -Force -ErrorAction Stop`,
+    "$registerTask = $module.ExportedCommands['Register-ScheduledTask']",
+    "if ($null -eq $registerTask) { throw 'Trusted ScheduledTasks module does not export Register-ScheduledTask.' }",
+    "& $registerTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null",
   ].join("; ");
   const encodedCommand = Buffer.from(inner, "utf16le").toString("base64");
   const script = [
-    `$p = Start-Process -FilePath ${psSingleQuote(windowsPowerShell())}`,
+    `$p = Start-Process -FilePath ${psSingleQuote(powerShellPath)}`,
     ` -ArgumentList ${psSingleQuote(buildWindowsElevatedArgumentList([
       "-NoProfile",
       "-NonInteractive",

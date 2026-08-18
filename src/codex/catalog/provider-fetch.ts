@@ -33,12 +33,12 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
-  captureServiceTierAdapterAuthority,
+  captureFastPolicyAuthority,
   serviceTierSupportForModel,
-  type CapturedServiceTierAdapterAuthority,
 } from "../../providers/service-tier";
+import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
-import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
+import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
@@ -155,7 +155,7 @@ interface CapturedProviderGather {
   readonly discovery: ResolvedProviderModelDiscovery;
   readonly policy: CatalogProviderDiscoveryPolicySnapshot;
   readonly request: CapturedModelsRequest;
-  readonly serviceTierAdapterAuthority: CapturedServiceTierAdapterAuthority;
+  readonly fastPolicyAuthority: FastPolicyAuthority;
   readonly observedAuth?: ModelsAuthResolution;
   /**
    * Configured model ids this provider must keep even when live discovery omits
@@ -408,12 +408,12 @@ function captureProviderGather(
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
-  const serviceTierAdapterAuthority = captureServiceTierAdapterAuthority(
+  const provider = recursivelyFreeze(enriched);
+  const fastPolicyAuthority = captureFastPolicyAuthority(
     name,
-    enriched,
+    provider,
     registryTransportMatch,
   );
-  const provider = recursivelyFreeze(enriched);
   const observedAuth = authResolver.kind === "observed"
     && provider.authMode !== "forward"
     && provider.liveModels !== false
@@ -449,7 +449,7 @@ function captureProviderGather(
     discovery,
     policy,
     request,
-    serviceTierAdapterAuthority,
+    fastPolicyAuthority,
     ...(observedAuth ? { observedAuth: Object.freeze({ ...observedAuth }) } : {}),
     ...(retainConfiguredModelIds && retainConfiguredModelIds.size > 0
       ? { retainConfiguredModelIds }
@@ -518,7 +518,7 @@ function captureGatherFlight(
         // It is the one member of a provider row that is legitimately a function,
         // so it is dropped here rather than allowed to break every encode.
         provider: omitProviderTransportExecutor(provider.provider),
-        serviceTierAdapterAuthority: provider.serviceTierAdapterAuthority,
+        fastPolicyAuthority: provider.fastPolicyAuthority,
         // Combo retention is capture-time state, not a provider-row field. Two
         // gathers that share providers but differ in combo targets must not join.
         retainConfiguredModelIds: [...(provider.retainConfiguredModelIds ?? [])].sort(),
@@ -1374,6 +1374,10 @@ async function fetchProviderModelsWithAuth(
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      registerAntigravityDiscoveredWireModels(prov.baseUrl, antigravity, {
+        provider: name,
+        cacheGeneration,
+      });
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }

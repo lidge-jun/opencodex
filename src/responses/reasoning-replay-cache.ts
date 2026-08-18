@@ -19,7 +19,7 @@
  * long-lived proxy cannot grow without limit.
  */
 
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type {
   OcxProviderConfig,
   OcxReasoningReplayIdentity,
@@ -106,6 +106,21 @@ export function reasoningReplayDestinationIdentity(baseUrl: string | undefined):
   if (!nonEmpty(baseUrl)) return undefined;
   const canonical = baseUrl.trim().replace(/\/+$/, "");
   return `destination:${processLocalIdentity("destination", canonical)}`;
+}
+
+/**
+ * The same destination identity, but stable across restarts.
+ *
+ * The process-local form above is keyed by `randomBytes(32)` minted at module load, which
+ * is correct for an in-memory cache and fatal for a durable one: every key would change on
+ * restart and the store would silently stop matching anything. A plain digest of the same
+ * canonical URL is equally non-reversible for this purpose — the input is a configured
+ * endpoint, not a secret — and needs no persisted salt or new on-disk state.
+ */
+export function durableReplayDestinationIdentity(baseUrl: string | undefined): string | undefined {
+  if (!nonEmpty(baseUrl)) return undefined;
+  const canonical = baseUrl.trim().replace(/\/+$/, "");
+  return `destination:${createHash("sha256").update("destination\0").update(canonical).digest("hex")}`;
 }
 
 /** Produce a non-reversible process-local identity for credential material. */

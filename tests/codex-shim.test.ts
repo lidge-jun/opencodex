@@ -7,6 +7,29 @@ import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildW
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
+
+/**
+ * A child environment with the shim's recursion-guard state stripped.
+ *
+ * Every one of these tests reasons about a shim invocation starting from depth 0, but a developer
+ * whose shell was itself launched through an installed Codex shim exports
+ * `OCX_SHIM_ACTIVE_DEPTH=1` — so the guard fires a level early and the test measures whatever
+ * ancestry the machine happened to have. CI has no shimmed ancestor, which is what let that bleed
+ * hide: green there, red on a real developer's machine.
+ *
+ * The re-entry tests are the subtle case. They assert `status === 126`, so an inherited +1 offset
+ * leaves them passing for entirely the wrong reason. Sanitizing centrally is what makes their
+ * green mean what it says.
+ *
+ * Mirrors `probeUnixShimInstall`, which already clears the same three before spawning its probe.
+ */
+function shimChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+  delete env.OCX_SHIM_ACTIVE_PID;
+  delete env.OCX_SHIM_ACTIVE_DEPTH;
+  delete env.OCX_SHIM_PROBE_ACTIVE;
+  return env;
+}
 const skipStabilityWait = () => {};
 const python3Path = process.platform === "win32"
   ? ""
@@ -288,8 +311,7 @@ exit 64
       chmodSync(misePath, 0o755);
       chmodSync(realCodexPath, 0o755);
       chmodSync(shimPath, 0o755);
-      const env = { ...process.env, PATH: prependPath(dir, process.env.PATH), OCX_SHIM_BYPASS: "1" };
-      delete env.OCX_SHIM_ACTIVE_PID;
+      const env = shimChildEnv({ PATH: prependPath(dir, process.env.PATH) ?? "", OCX_SHIM_BYPASS: "1" });
 
       const result = spawnSync(shimPath, ["--help"], {
         encoding: "utf8",
@@ -1042,8 +1064,7 @@ printf '%s\\n' child-codex
       chmodSync(bunPath, 0o755);
       chmodSync(realCodexPath, 0o755);
       chmodSync(shimPath, 0o755);
-      const env = { ...process.env, OCX_SHIM_BYPASS: "1" };
-      delete env.OCX_SHIM_ACTIVE_PID;
+      const env = shimChildEnv({ OCX_SHIM_BYPASS: "1" });
 
       const result = spawnSync(shimPath, ["--help"], {
         encoding: "utf8",

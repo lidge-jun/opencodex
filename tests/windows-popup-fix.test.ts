@@ -9,6 +9,8 @@
  * and under a bounded timeout so a hung child cannot wedge those paths.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { readProcessStartMsBatch } from "../src/codex/app-server-processes";
 import {
@@ -83,5 +85,49 @@ describe("Windows process-lookup popup fix (#1278)", () => {
     } else {
       expect(startedAtMs).toBeNull();
     }
+  });
+});
+
+describe("no direct PowerShell argv carries the Bun-incompatible window flag (#1589)", () => {
+  // src/codex/user-identity.ts records the invariant in prose: PowerShell's
+  // `-WindowStyle Hidden` CLI pair can fail under Bun 1.3.14 before the command
+  // runs, and process-level `windowsHide` is what actually suppresses the window.
+  // The prose held for the file that carried it and drifted everywhere else, so
+  // this sweeps the whole runtime instead of one file.
+  //
+  // Only the ARGV form is forbidden. Passing `-WindowStyle Hidden` inside a
+  // PowerShell script string (`Start-Process ... -WindowStyle Hidden`) is a
+  // different construct that Bun never parses, and six legitimate call sites
+  // rely on it.
+  const runtimeFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...runtimeFiles(full));
+      else if (entry.name.endsWith(".ts")) out.push(full);
+    }
+    return out;
+  };
+
+  // "-WindowStyle" and "Hidden" as adjacent quoted argv elements, in either
+  // quote style, tolerating whitespace or a line break between them.
+  const FORBIDDEN_ARGV = /["']-WindowStyle["']\s*,\s*["']Hidden["']/;
+
+  const srcRoot = join(import.meta.dir, "..", "src");
+
+  test("no src/**/*.ts passes -WindowStyle Hidden as an argv pair", () => {
+    const offenders = runtimeFiles(srcRoot)
+      .filter(file => FORBIDDEN_ARGV.test(readFileSync(file, "utf8")))
+      .map(file => file.slice(srcRoot.length + 1).replaceAll("\\", "/"));
+    expect(offenders).toEqual([]);
+  });
+
+  test("the pattern accepts the script-string form and rejects the argv form", () => {
+    // Guard the guard: if this ever stops discriminating, the sweep above is
+    // either vacuous or about to fail six correct call sites.
+    expect(FORBIDDEN_ARGV.test('"-NonInteractive", "-WindowStyle", "Hidden",')).toBe(true);
+    expect(FORBIDDEN_ARGV.test("'-WindowStyle', 'Hidden'")).toBe(true);
+    expect(FORBIDDEN_ARGV.test('" -Verb RunAs -WindowStyle Hidden -PassThru -Wait;"')).toBe(false);
+    expect(FORBIDDEN_ARGV.test('"$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden"')).toBe(false);
   });
 });

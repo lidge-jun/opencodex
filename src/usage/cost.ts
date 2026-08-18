@@ -14,7 +14,7 @@ import {
   getModelMetadata,
   resolveMetadataProvider,
 } from "../generated/model-metadata";
-import type { OcxUsage } from "../types";
+import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { baseProviderLabel, canonicalUsageProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
@@ -44,6 +44,7 @@ export interface ServiceTierContext {
   responseServiceTier?: string;
   requestedServiceTier?: string;
   configuredServiceTier?: string;
+  tierOutcome?: AttemptTierOutcome;
 }
 
 export interface CostTokens {
@@ -349,11 +350,36 @@ export type ServiceTierInput = string | ServiceTierContext;
  * and long-context exclusivity depends on that distinction.
  */
 export function serviceTierContext(entry: ServiceTierContext): ServiceTierContext {
+  if (entry.tierOutcome) return serviceTierContextFromOutcome(entry.tierOutcome);
   return {
     responseServiceTier: entry.responseServiceTier,
     requestedServiceTier: entry.requestedServiceTier,
     configuredServiceTier: entry.configuredServiceTier,
   };
+}
+
+/** Convert one adapter-observed attempt outcome into the existing pricing provenance shape. */
+export function serviceTierContextFromOutcome(outcome: AttemptTierOutcome): ServiceTierContext {
+  if (outcome.canonical === "priority" && outcome.confirmation === "confirmed") {
+    return { responseServiceTier: "priority" };
+  }
+  if (outcome.responseServiceTier !== undefined) {
+    return { responseServiceTier: outcome.responseServiceTier };
+  }
+  if (outcome.canonical === "priority" && outcome.confirmation === "assumed") {
+    return { requestedServiceTier: "priority" };
+  }
+  // An unclassified route makes no canonical Fast claim, but its adapter can still prove that
+  // it serialized a caller tier. Preserve that wire evidence instead of discarding the legacy
+  // top-level pricing signal merely because B0 added an outcome row.
+  if (
+    outcome.fastOutcome === "unknown"
+    && outcome.wireKind === "service-tier"
+    && typeof outcome.wireValue === "string"
+  ) {
+    return { requestedServiceTier: outcome.wireValue };
+  }
+  return {};
 }
 
 function tierScalar(tier?: ServiceTierInput): string | undefined {
@@ -428,7 +454,7 @@ function applyPriorityMultiplier(
  * missing so combos can fail closed.
  */
 export function estimateAttemptCost(
-  attempt: Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus">,
+  attempt: Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus" | "tierOutcome">,
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   serviceTier?: ServiceTierInput,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
@@ -438,15 +464,18 @@ export function estimateAttemptCost(
   if (!tokens) return null;
   const price = resolveMatchedPrice(attempt.provider, attempt.model, overlays, userOverlays);
   if (!price) return null;
+  const attemptServiceTier = attempt.tierOutcome
+    ? serviceTierContextFromOutcome(attempt.tierOutcome)
+    : serviceTier;
   const [tieredCost4, contextTier] = applyContextTier(
-    price.cost4, attempt.provider, attempt.model, attempt.usage.inputTokens, serviceTier,
+    price.cost4, attempt.provider, attempt.model, attempt.usage.inputTokens, attemptServiceTier,
   );
   // Exclusive both ways: if the long rate applied, the request was NOT served as
   // Fast (Fast does not support long context), so the Fast multiplier must not
   // also apply — otherwise a downgraded request bills at both rates.
   const [effectiveCost4, multiplier] = contextTier
     ? [tieredCost4, 1] as const
-    : applyPriorityMultiplier(tieredCost4, attempt.provider, attempt.model, serviceTier);
+    : applyPriorityMultiplier(tieredCost4, attempt.provider, attempt.model, attemptServiceTier);
   return {
     ordinal: attempt.ordinal,
     provider: attempt.provider,
@@ -465,7 +494,7 @@ export function estimateAttemptCost(
  * attempt is unpriced or unnormalizable, return null rather than a partial sum.
  */
 export function estimateComboCost(
-  attempts: readonly Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus">[],
+  attempts: readonly Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus" | "tierOutcome">[],
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   serviceTier?: ServiceTierInput,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),

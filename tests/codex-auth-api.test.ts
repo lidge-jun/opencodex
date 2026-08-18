@@ -17,6 +17,7 @@ import {
   clearCodexQuotaPrimeState, primeCodexPoolQuotas, seedCodexAuthAdmissionForTests,
   type CodexAuthAccountDto,
   listCodexAuthAccounts,
+  setAccountQuotaFromParsed,
 } from "../src/codex/auth-api";
 import {
   getCodexAccountCredential,
@@ -44,6 +45,7 @@ import type { WsData } from "../src/server/ws-bridge";
 import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
+import { reconcileCodexPlansFromTokens, resetJwtPlanNotesForTests } from "../src/codex/plan-from-token";
 import {
   deleteCodexAccount,
   reconcileMainCodexAccountRuntimeState,
@@ -210,6 +212,15 @@ async function completeMockCodexOAuth(options: {
   }
 }
 
+function chatgptPlanJwt(plan: string, accountId = "acct"): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({
+    chatgpt_account_id: accountId,
+    "https://api.openai.com/auth": { chatgpt_account_id: accountId, chatgpt_plan_type: plan },
+  })).toString("base64url");
+  return `${header}.${body}.sig`;
+}
+
 function seedPoolAccount(
   config: OcxConfig,
   account: {
@@ -255,6 +266,7 @@ beforeEach(() => {
   clearPoolRotationState();
   clearCodexWebSocketRegistry();
   resetMainCodexAccountIdentityTrackingForTests();
+  resetJwtPlanNotesForTests();
 });
 
 afterEach(() => {
@@ -1323,6 +1335,77 @@ describe("codex-auth API", () => {
     expect(config.codexAccounts?.find(account => account.id === "pool-plan-unchanged")?.plan).toBe("plus");
     expect(loadConfig().codexAccounts?.find(account => account.id === "pool-plan-unchanged")?.plan).toBe("plus");
     expect(configCommits).toBe(0);
+  });
+
+  test("quota cache hit still corrects a stale stored pool plan from the access-token JWT (#1989)", async () => {
+    const config = makeConfig();
+    const accountId = "pool-jwt-plan";
+    seedPoolAccount(config, {
+      id: accountId,
+      email: "pool-jwt-plan@example.com",
+      plan: "free",
+      accessToken: chatgptPlanJwt("pro", `acct-${accountId}`),
+      chatgptAccountId: `acct-${accountId}`,
+    });
+    saveConfig(structuredClone(config));
+    setAccountQuotaFromParsed(accountId, { weeklyPercent: 4 }, captureConfigGeneration());
+    reconcileCodexPlansFromTokens(config);
+    let whamCalls = 0;
+    globalThis.fetch = (async () => {
+      whamCalls += 1;
+      return Response.json({ plan_type: "free" });
+    }) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as { accounts: Array<{ id: string; plan?: string }> };
+
+    expect(whamCalls).toBe(0);
+    expect(data.accounts.find(account => account.id === accountId)?.plan).toBe("pro");
+    expect(config.codexAccounts?.find(account => account.id === accountId)?.plan).toBe("pro");
+    expect(loadConfig().codexAccounts?.find(account => account.id === accountId)?.plan).toBe("pro");
+  });
+
+  test("a live WHAM plan_type still outranks a contradicting access-token JWT", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-wham-wins",
+      email: "pool-wham-wins@example.com",
+      plan: "free",
+      accessToken: chatgptPlanJwt("plus", "acct-pool-wham-wins"),
+      chatgptAccountId: "acct-pool-wham-wins",
+    });
+    saveConfig(structuredClone(config));
+    globalThis.fetch = (async () => Response.json({
+      plan_type: "prolite",
+      rate_limit: { primary_window: { used_percent: 11, reset_at: 1782628379 } },
+    })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as { accounts: Array<{ id: string; plan?: string }> };
+
+    expect(data.accounts.find(account => account.id === "pool-wham-wins")?.plan).toBe("prolite");
+    expect(loadConfig().codexAccounts?.find(account => account.id === "pool-wham-wins")?.plan).toBe("prolite");
+  });
+
+  test("main account list uses chatgpt_plan_type when WHAM omits plan_type (#1989)", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: chatgptPlanJwt("pro", "acct-main-jwt"),
+        account_id: "acct-main-jwt",
+      },
+    }));
+    globalThis.fetch = (async () => Response.json({
+      email: "main-jwt@example.test",
+      rate_limit: { primary_window: { used_percent: 2, reset_at: 1782628379 } },
+    })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    const data = await resp!.json() as { accounts: Array<{ id: string; plan?: string | null }> };
+
+    expect(data.accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)?.plan).toBe("pro");
   });
 
   test("pool plan refresh does not recreate a config file deleted while the server is running", async () => {

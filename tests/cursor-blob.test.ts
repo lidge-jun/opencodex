@@ -592,6 +592,8 @@ describe("Cursor blob handshake", () => {
     const roots = decodeRootMessages(bytes) as Array<{ role?: string; content?: unknown }>;
     const historicalUser = roots.find(root => root.role === "user");
     expect(historicalUser?.content).toEqual([{ type: "text", text: "read a file" }]);
+    const toolResultRoot = roots.find(root => JSON.stringify(root).includes("[Tool Result]"));
+    expect(toolResultRoot?.role).toBe("assistant");
     expect(run?.action?.action.case).toBe("resumeAction");
     expect(JSON.stringify(roots)).toContain("contents");
     expect(JSON.stringify(roots)).not.toContain("hidden reasoning");

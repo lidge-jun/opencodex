@@ -443,6 +443,17 @@ export function redactSecretString(value: string): string {
   return redacted;
 }
 
+/** Shared bounded representation for caller-controlled scalar metadata stored in logs. */
+export function sanitizeLogMetadataString(value: unknown, maxLength = 64): string | undefined {
+  if (typeof value !== "string" || !Number.isInteger(maxLength) || maxLength < 1) return undefined;
+  // Remove every control/line-separator code point that common terminals and log viewers
+  // can render as a record boundary before the value reaches a single-line log field.
+  const filtered = value.trim().replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "");
+  if (!filtered) return undefined;
+  const redacted = redactSecretString(filtered).trim();
+  return redacted ? redacted.slice(0, maxLength) : undefined;
+}
+
 export function redactSecrets(value: unknown): unknown {
   if (typeof value === "string") return redactSecretString(value);
   if (Array.isArray(value)) return value.map(item => redactSecrets(item));

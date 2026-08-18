@@ -45,6 +45,7 @@ import {
 } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
+import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
 
 const LABEL = "com.opencodex.proxy";
@@ -2323,45 +2324,17 @@ function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TA
 /**
  * Best-effort termination of surviving Windows scheduler launcher/wrapper processes.
  * `schtasks /end` ends the task instance but often leaves wscript/cmd running the
- * `:loop` batch, which brings the proxy back during a stop or restart. Same killer
- * the update job uses, so both teardown paths share the guarantee.
+ * `:loop` batch, which brings the proxy back during a stop or restart.
  *
- * Matching is scoped to the CANONICAL paths of THIS installation (opencodex-service.cmd
- * and opencodex-service-launcher.vbs under the current config dir), never a bare
- * filename: a wrapper from another OpenCodex home — or an unrelated process whose
- * command line merely contains the filename — must not be force-terminated.
- * The path must appear as a COMPLETE command-line token (wscript.exe spawns the
- * .vbs as an argument; cmd.exe /c runs the .cmd), so a substring-only match is
- * excluded.
+ * The matching rule — canonical paths of THIS installation, as complete
+ * command-line tokens — lives in lib/windows-service-wrappers so the update job
+ * cannot drift away from it again.
  */
 function killWindowsServiceWrapperProcesses(): void {
-  if (process.platform !== "win32") return;
-  try {
-    const script = windowsServiceScriptPath();
-    const launcher = windowsLauncherVbsPath();
-    // Quote for PowerShell: single-quote the value and double any embedded quote.
-    const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
-    const ps = [
-      `$pats = @(${quote(script)}, ${quote(launcher)});`,
-      "Get-CimInstance Win32_Process | Where-Object {",
-      "  if ($_.ProcessId -eq $PID) { return $false };",
-      "  $c = $_.CommandLine; if (-not $c) { return $false };",
-      "  foreach ($p in $pats) {",
-      "    $i = $c.IndexOf($p, [System.StringComparison]::OrdinalIgnoreCase);",
-      "    if ($i -lt 0) { continue };",
-      "    $before = if ($i -gt 0) { $c.Substring($i - 1, 1) } else { ' ' };",
-      "    $end = $i + $p.Length;",
-      "    $after = if ($end -lt $c.Length) { $c.Substring($end, 1) } else { ' ' };",
-      "    if ($before -match '[\\s\"'']' -and $after -match '[\\s\"'']') { return $true };",
-      "  };",
-      "  $false",
-      "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-    ].join(" ");
-    spawnSync(resolveTrustedWindowsPowerShellExe(), [
-      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
-      "-Command", ps,
-    ], { stdio: "ignore", timeout: 5000, windowsHide: true });
-  } catch { /* best-effort */ }
+  killWindowsSchedulerWrappers({
+    scriptPath: windowsServiceScriptPath(),
+    launcherPath: windowsLauncherVbsPath(),
+  });
 }
 function uninstallWindows(): void {
   const probe = probeWindowsSchedulerTask(TASK);

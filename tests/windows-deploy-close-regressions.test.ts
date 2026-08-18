@@ -52,7 +52,12 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     // Native WinSW installs must stop via stopWinswService, not Task Scheduler /end only.
     expect(src).toContain("readServiceBackend");
     expect(src).toContain("stopWinswService");
-    expect(src).toContain("$_.ProcessId -eq $PID");
+    // The wrapper-killer script (and its self-exclusion) moved to the shared
+    // lib/windows-service-wrappers so the updater and the service teardown path
+    // cannot drift apart again. Follow the invariant to where it lives; the
+    // matching rules themselves are covered by windows-service-wrappers.test.ts.
+    expect(src).toContain("killWindowsSchedulerWrappers");
+    expect(read("src/lib/windows-service-wrappers.ts")).toContain("$_.ProcessId -eq $PID");
     expect(src).toContain("lastChild?.pid && aliveFn(lastChild.pid)");
   });
 });

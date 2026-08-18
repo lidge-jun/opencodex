@@ -31,6 +31,57 @@ describe("request log token-estimate context-window cap (codex-router PR #140)",
     expect(attempt.usage?.inputTokens).toBe(100_000);
   });
 
+  test("capping adapter-estimated input recomputes an explicit total", () => {
+    const attempt = beginRequestAttempt(1, "kiro", "deepseek-3.2", "kiro");
+    finishRequestAttempt(attempt, 200, 10, {
+      inputTokens: 200_000,
+      outputTokens: 4,
+      totalTokens: 200_004,
+      estimated: true,
+    });
+    expect(attempt.usage).toEqual({
+      inputTokens: DEEPSEEK_WINDOW,
+      outputTokens: 4,
+      totalTokens: DEEPSEEK_WINDOW + 4,
+      estimated: true,
+    });
+    expect(attempt.totalTokens).toBe(DEEPSEEK_WINDOW + 4);
+  });
+
+  test("combining a local estimate recomputes the nested and outer totals", () => {
+    const attempt = beginRequestAttempt(1, "kiro", "deepseek-3.2", "kiro");
+    noteAttemptSend(attempt, 200_000);
+    finishRequestAttempt(attempt, 200, 10, {
+      inputTokens: 50,
+      outputTokens: 4,
+      totalTokens: 54,
+    });
+    expect(attempt.usage).toEqual({
+      inputTokens: DEEPSEEK_WINDOW,
+      outputTokens: 4,
+      totalTokens: DEEPSEEK_WINDOW + 4,
+      estimated: true,
+    });
+    expect(attempt.totalTokens).toBe(DEEPSEEK_WINDOW + 4);
+  });
+
+  test("caps an estimated Cursor checkpoint without double-adding output", () => {
+    const attempt = beginRequestAttempt(1, "cursor", "claude-4.6-opus-high", "cursor");
+    finishRequestAttempt(attempt, 200, 10, {
+      inputTokens: 499_994,
+      outputTokens: 6,
+      totalTokens: 500_000,
+      estimated: true,
+    });
+    expect(attempt.usage).toEqual({
+      inputTokens: CURSOR_CLAUDE_WINDOW,
+      outputTokens: 6,
+      totalTokens: CURSOR_CLAUDE_WINDOW + 6,
+      estimated: true,
+    });
+    expect(attempt.totalTokens).toBe(CURSOR_CLAUDE_WINDOW + 6);
+  });
+
   test("a positive provider-reported input count is never reduced by the cap", () => {
     const attempt = beginRequestAttempt(1, "kiro", "deepseek-3.2", "kiro");
     noteAttemptSend(attempt, 200_000); // estimate would exceed the window

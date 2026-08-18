@@ -381,6 +381,44 @@ describe("opencodex config defaults", () => {
     expect(backupNames()).toEqual([]);
   });
 
+  test("an inherited FastWire conflict warns without wiping persisted providers or keys", () => {
+    writeConfig({
+      port: 12345,
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          fastWire: null,
+        },
+      },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const loaded = loadConfig();
+      const diagnostics = readConfigDiagnostics();
+
+      expect(loaded).toMatchObject({
+        port: 12345,
+        defaultProvider: "openai-apikey",
+        providers: { "openai-apikey": { fastWire: null } },
+        apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
+      });
+      expect(diagnostics).toMatchObject({
+        source: "file",
+        error: null,
+        warnings: [expect.stringContaining("fastWire=null overrides service-tier capability")],
+      });
+      expect(backupNames()).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("persisted providers and API keys were preserved"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("a non-string experimentalRealtimeWsBaseUrl degrades to unset without wiping config", () => {
     // The sideband builder calls overrideBaseUrl?.trim(); a boolean here would crash
     // it, so the schema degrades the field instead of rejecting the whole config.

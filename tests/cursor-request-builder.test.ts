@@ -198,7 +198,12 @@ describe("Cursor request builder", () => {
     });
 
     expect(request.messages[0]?.content).toContain("see");
-    expect(request.messages[0]?.content).toContain("image input unsupported");
+    // A USER-message image is still flattened here (this path builds the plain-text prompt).
+    // The tool-result ENCODER does build real McpImageContent, so the placeholder no longer
+    // claims the encoder as a whole is unable to send images. (Neither kind reaches Cursor in
+    // production today: every Cursor model is in noVisionModels, so the vision sidecar runs
+    // first — see devlog/_plan/260817_cursor_toolcall_decode/020_*.md.)
+    expect(request.messages[0]?.content).toContain("image omitted from this Cursor text prompt");
     expect(request.messages[0]?.content).toContain("high");
   });
 

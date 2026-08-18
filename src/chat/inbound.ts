@@ -299,6 +299,7 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   if (raw.stop !== undefined) body.stop = raw.stop;
   if (typeof raw.user === "string") body.user = raw.user;
   if (typeof raw.parallel_tool_calls === "boolean") body.parallel_tool_calls = raw.parallel_tool_calls;
+  if (typeof raw.service_tier === "string") body.service_tier = raw.service_tier;
   if (typeof raw.prompt_cache_key === "string") body.prompt_cache_key = raw.prompt_cache_key;
   if (raw.metadata !== undefined) body.metadata = raw.metadata;
 

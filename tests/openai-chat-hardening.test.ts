@@ -561,7 +561,7 @@ describe("openai-chat credential hardening", () => {
     expect(body.service_tier).toBe("priority");
   });
 
-  test("an exact model capability authorizes only that Chat model", () => {
+  test("an exact model capability authorizes canonical Fast only for that Chat model", () => {
     const exactOnly = provider({ modelSupportsServiceTier: { "test-model": true } });
     const authorized = parsed();
     authorized.options.serviceTier = "priority";
@@ -574,6 +574,11 @@ describe("openai-chat credential hardening", () => {
     expect(JSON.parse(createOpenAIChatAdapter(exactOnly).buildRequest(undeclared).body))
       .not.toHaveProperty("service_tier");
 
+    const foreign = parsed();
+    foreign.options.serviceTier = "flex";
+    expect(JSON.parse(createOpenAIChatAdapter(exactOnly).buildRequest(foreign).body))
+      .not.toHaveProperty("service_tier");
+
     const providerDenied = provider({
       supportsServiceTier: false,
       modelSupportsServiceTier: { "test-model": true },
@@ -582,14 +587,13 @@ describe("openai-chat credential hardening", () => {
       .not.toHaveProperty("service_tier");
   });
 
-  // `service_tier` is an OpenAI-specific extension and this adapter serves 66 registry
-  // providers, several of which reject unknown body fields. Forwarding it by default would
-  // turn a caller-supplied tier into an upstream 400 on those routes, so absence of the
-  // opt-in must mean the field is dropped — the same contract `prompt_cache_key` uses.
-  test("drops a caller-supplied service tier when the provider has not opted in", () => {
+  // Foreign `service_tier` values are OpenAI-specific extensions and this adapter serves 66
+  // registry providers, several of which reject unknown body fields. Classified canonical Fast
+  // is handled separately by capability; an unclassified caller still needs this opt-in.
+  test("drops a foreign caller service tier when the provider has not opted in", () => {
     for (const p of [provider(), provider({ chatServiceTier: false })]) {
       const req = parsed();
-      req.options.serviceTier = "priority";
+      req.options.serviceTier = "flex";
 
       const body = JSON.parse(createOpenAIChatAdapter(p).buildRequest(req).body);
 

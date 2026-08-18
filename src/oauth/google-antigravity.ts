@@ -12,7 +12,7 @@
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
-import { antigravityUserAgent, ANTIGRAVITY_GOOG_API_CLIENT_UA } from "../adapters/client-fingerprint";
+import { antigravityUserAgent, ANTIGRAVITY_GOOG_API_CLIENT_UA, ANTIGRAVITY_IDE_VERSION } from "../adapters/client-fingerprint";
 
 const CLIENT_ID = process.env.GOOGLE_ANTIGRAVITY_CLIENT_ID
   || "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
@@ -111,7 +111,12 @@ async function onboardProject(accessToken: string, signal?: AbortSignal): Promis
     const response = await fetch(`${DAILY_API}/${API_VERSION}:onboardUser`, {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent(), "x-goog-api-client": ANTIGRAVITY_GOOG_API_CLIENT_UA },
-      body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity", ide_version: antigravityUserAgent() } }),
+      // `ide_version` is a version, not a User-Agent. `antigravityUserAgent()` returns the whole
+      // header — `antigravity/ide/2.5.5 (aidev_client; os_type=...; arch=...)` — so onboarding was
+      // sending a parenthesized UA string in a field the real client fills with `2.5.5`. It is a
+      // fingerprint mismatch rather than a crash, which is why nothing failed: the request still
+      // succeeds, it just does not look like Antigravity.
+      body: JSON.stringify({ tier_id: "free-tier", metadata: { ide_type: "ANTIGRAVITY", ide_name: "antigravity", ide_version: ANTIGRAVITY_IDE_VERSION } }),
       signal: requestSignal(signal),
     });
     if (!response.ok) {

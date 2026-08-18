@@ -6,11 +6,11 @@ import {
   linkSync,
   openSync,
   readFileSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { renameAtomicFile } from "../../lib/windows-atomic-replace";
 import {
   ensureLabDirs,
   labAutomationPolicyPath,
@@ -217,7 +217,7 @@ function writeConfigUnlocked(
     if (configCommitFaultForTests === "before_publish") {
       throw new LabAutomationError("synthetic automation config commit failure", "invalid_state");
     }
-    renameSync(tmp, path);
+    renameAtomicFile(tmp, path, undefined, "lab-automation");
     return normalized;
   } finally {
     if (fd !== null) closeSync(fd);

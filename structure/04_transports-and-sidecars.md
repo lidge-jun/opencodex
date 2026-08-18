@@ -44,12 +44,17 @@ OpenAI-compatible service-tier support is resolved only after the final provider
 known. `supportsServiceTier` remains the provider fallback, while the exact
 `modelSupportsServiceTier` map can override it per upstream model, including an explicit `false`.
 The catalog and request path share this decision: a routed row publishes `service_tiers` only when
-the resolved adapter is capable, and the final-route normalizer applies the same gate to
-`service_tier`. `openai-responses` uses the resolved provider/model declaration directly;
-`openai-chat` accepts either its provider-wide `chatServiceTier` serializer opt-in or an exact-model
-`true` declaration. Exact `false` narrows provider defaults, and provider-level
-`supportsServiceTier: false` cannot be reopened. Capability is namespaced by the selected provider
-and model; model-name similarity and adapter type alone never opt a gateway in.
+the resolved policy is eligible, and the final-route normalizer applies the same gate to
+`service_tier`. Both `openai-responses` and `openai-chat` use the resolved provider/model capability
+for catalog publication, routing evidence, and fingerprints. Canonical Fast injection additionally
+requires a compatible FastWire mapping on the final adapter and an eligible policy. Setting
+`fastMode: false` drops it. On classified Chat routes, `chatServiceTier` separately authorizes
+foreign caller values; an exact-model `true` does not grant that forwarding permission. On
+unclassified Chat routes it gates every caller tier because no canonical Fast capability has been
+validated. Exact `false`
+narrows provider defaults, and provider-level `supportsServiceTier: false` cannot be reopened.
+Capability is namespaced by the selected provider and model; model-name similarity and adapter type
+alone never opt a gateway in.
 
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
@@ -653,9 +658,11 @@ normalization, credential and provider headers, capability-specific fields, and 
 `openaiChatCompletionsUrl()` path. The passthrough builder uses an explicit Chat-field whitelist so
 messages (including `name` and separate `system`/`developer` entries), Chat token controls,
 sampling/logprob fields, caller identity/metadata, and caller stream options retain their wire
-shape. For streams, caller `stream_options` are merged with mandatory `include_usage: true`.
-`service_tier` remains gated by `chatServiceTier: true`; `parallel_tool_calls` is emitted only for
-providers opted into parallel tools (or pinned false by the existing provider opt-out contract).
+shape. For streams, caller `stream_options` are merged with mandatory `include_usage: true`. On
+classified Fast-capable routes, canonical Fast follows the resolved Fast policy and does not require
+`chatServiceTier`; foreign caller tiers still require `chatServiceTier: true`, as does every caller
+tier on an unclassified Chat route. `parallel_tool_calls` is emitted only for providers opted into
+parallel tools (or pinned false by the existing provider opt-out contract).
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
 

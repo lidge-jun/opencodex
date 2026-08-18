@@ -5,7 +5,7 @@ import type { LabBehaviorSource, LabBehaviorValues } from "../live/types";
 const CLOSED_KEYS = new Set([
   "wire.adapter", "wire.upstreamProtocol", "wire.responsesPath", "wire.commandCodeVersion", "wire.modelSuffixMode",
   "auth.mode", "auth.transport",
-  "responses.stateful", "responses.upstreamStreaming", "responses.serviceTier", "responses.snapshotRepair", "responses.itemIdRepair",
+  "responses.stateful", "responses.upstreamStreaming", "responses.serviceTier", "responses.fastWireKind", "responses.fastWireValue", "responses.snapshotRepair", "responses.itemIdRepair",
   "limits.contextWindow", "limits.maxInputTokens", "limits.maxOutputTokens",
   "modalities.input",
   "sampling.omitTemperature", "sampling.omitTopP", "sampling.omitPenalties",
@@ -72,6 +72,6 @@ export function normalizeBehaviorValues(values: LabBehaviorValues): LabBehaviorV
 
 /** Hash the authoritative production resolver output; Lab performs validation/canonicalization only. */
 export function buildBehaviorFingerprintV1(values: LabBehaviorValues): string {
-  const payload = { schemaVersion: 1, resolverVersion: 1, values: normalizeBehaviorValues(values) };
+  const payload = { schemaVersion: 1, resolverVersion: 2, values: normalizeBehaviorValues(values) };
   return createHash("sha256").update(jcsStringify(payload)).digest("hex");
 }

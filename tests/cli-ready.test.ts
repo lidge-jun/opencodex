@@ -881,12 +881,19 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     // process whose command line merely contains the canonical path. The
     // PowerShell filter must check token boundaries (whitespace/quote before
     // and after the path), not a bare IndexOf.
-    const serviceSource = readFileSync(join(import.meta.dir, "../src/service.ts"), "utf8");
-    const killBody = serviceSource.match(/function killWindowsServiceWrapperProcesses\(\)[\s\S]*?\n}/);
-    expect(killBody, "killWindowsServiceWrapperProcesses body must exist").not.toBeNull();
-    expect(killBody![0]).not.toMatch(/IndexOf\(\$p, \[System\.StringComparison\]::OrdinalIgnoreCase\) -ge 0/);
-    expect(killBody![0]).toMatch(/Substring\(/);
-    expect(killBody![0]).toMatch(/before/);
-    expect(killBody![0]).toMatch(/after/);
+    //
+    // The script itself now lives in lib/windows-service-wrappers, shared with
+    // the update job so the two teardown paths cannot drift apart again, so the
+    // token-boundary rule is asserted where it is implemented.
+    const sharedSource = readFileSync(
+      join(import.meta.dir, "../src/lib/windows-service-wrappers.ts"),
+      "utf8",
+    );
+    const killScript = sharedSource.match(/export function windowsWrapperKillScript\([\s\S]*?\n}/);
+    expect(killScript, "windowsWrapperKillScript body must exist").not.toBeNull();
+    expect(killScript![0]).not.toMatch(/IndexOf\(\$p, \[System\.StringComparison\]::OrdinalIgnoreCase\) -ge 0/);
+    expect(killScript![0]).toMatch(/Substring\(/);
+    expect(killScript![0]).toMatch(/before/);
+    expect(killScript![0]).toMatch(/after/);
   });
 });

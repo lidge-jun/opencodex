@@ -1,5 +1,6 @@
 import { readCodexTokens } from "./auth-collision";
 import { decodeJwtPayload } from "../oauth/chatgpt";
+import { extractChatgptPlanType } from "./plan";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
 export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
@@ -10,13 +11,23 @@ export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
  * percent, matching pool-account behavior.
  */
 let mainAccountPlan: string | null = null;
+let jwtPlanAttempted = false;
 
 export function setMainAccountPlan(plan: string | null): void {
   mainAccountPlan = plan;
+  if (plan === null) jwtPlanAttempted = false;
 }
 
 export function getMainAccountPlan(): string | undefined {
-  return mainAccountPlan ?? undefined;
+  if (mainAccountPlan) return mainAccountPlan;
+  if (jwtPlanAttempted) return undefined;
+  jwtPlanAttempted = true;
+  const tokens = readCodexTokens();
+  const jwtPlan = tokens
+    ? extractChatgptPlanType(tokens.id_token, tokens.access_token)
+    : undefined;
+  if (jwtPlan) mainAccountPlan = jwtPlan;
+  return jwtPlan;
 }
 
 /** Read-only main account token from ~/.codex/auth.json, or null when not logged in. */

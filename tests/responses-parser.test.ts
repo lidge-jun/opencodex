@@ -31,6 +31,47 @@ describe("Responses parser", () => {
     ]);
   });
 
+  test("unwraps Chat-shaped function tools while retaining flat function tools", () => {
+    const parameters = {
+      type: "object",
+      properties: { zone: { type: "string" } },
+      required: ["zone"],
+    };
+    const nested = parseRequest({
+      model: "test-model",
+      input: "What time is it?",
+      tools: [
+        {
+          type: "function",
+          function: { name: "get_time", description: "t", parameters, strict: true },
+        },
+      ],
+    });
+    expect(nested.context.tools).toEqual([
+      { name: "get_time", description: "t", parameters, strict: true },
+    ]);
+
+    const flat = parseRequest({
+      model: "test-model",
+      input: "What time is it?",
+      tools: [{ type: "function", name: "get_time", description: "t", parameters, strict: true }],
+    });
+    expect(flat.context.tools).toEqual([
+      { name: "get_time", description: "t", parameters, strict: true },
+    ]);
+  });
+
+  test("drops Chat-shaped function tools with an empty nested name", () => {
+    const parsed = parseRequest({
+      model: "test-model",
+      input: "What time is it?",
+      tools: [{ type: "function", function: { name: "" } }],
+    });
+
+    expect(parsed.context.tools).toBeUndefined();
+    expect(parsed.context.tools?.some(tool => tool.name.length === 0) ?? false).toBe(false);
+  });
+
   test("describes the exact apply_patch freeform envelope", () => {
     const parsed = parseRequest({
       model: "xai/grok-4.5",

@@ -1,5 +1,6 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import type { AdapterTierMetadata } from "../providers/fastwire";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
@@ -39,6 +40,9 @@ export interface ProviderAdapter {
     incoming: IncomingMeta,
     emit: (event: AdapterEvent) => void,
   ): Promise<void>;
+
+  /** Exact no-field observation for runTurn adapters, which expose no AdapterRequest object. */
+  tierLogForRunTurn?(parsed: OcxParsedRequest): AdapterTierMetadata | undefined;
 }
 
 export interface AdapterRequest {
@@ -67,6 +71,12 @@ export interface AdapterRequest {
           wireField: "reasoning_effort" | "reasoning.effort" | "thinking.type";
           wireValue: string;
         };
+    /**
+     * Exact tier outcome seeded after this adapter serialized the outbound request.
+     * This is a live shared observer: response-phase methods mutate `outcome`, so retain
+     * the reference rather than cloning or snapshotting it.
+     */
+    tierLog?: AdapterTierMetadata;
     usageLog?: {
       inputTokens?: number;
       estimated?: boolean;

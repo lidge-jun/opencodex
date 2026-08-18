@@ -393,6 +393,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         ? resolveAntigravityEffortWireModel(
             parsed.modelId,
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
+            provider.baseUrl,
           ).wireModelId
         : provider.googleMode === "vertex"
           ? parsed.modelId
@@ -452,7 +453,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);
         const mappedEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
-        const { wireModelId, thinkingLevel } = resolveAntigravityEffortWireModel(parsed.modelId, mappedEffort);
+        const { wireModelId, thinkingLevel } = resolveAntigravityEffortWireModel(
+          parsed.modelId,
+          mappedEffort,
+          provider.baseUrl,
+        );
         antigravityModel = wireModelId;
         antigravitySession = sessionId;
         // Effort → thinkingConfig for CCA (CLIProxyAPI proven: request.generationConfig.thinkingConfig).
@@ -941,9 +946,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
+      // Mirror the streaming path: a buffered turn cut off by the token limit or a content filter
+      // must carry its stop reason, or the bridge sees a clean `done` and reports the truncated
+      // turn as completed — and, on a compaction turn, installs the half-written summary as
+      // replacement history (#422).
+      const finishReason = candidates?.[0]?.finishReason as string | undefined;
+      const stopReason = finishReason === "MAX_TOKENS"
+        ? "max_tokens"
+        : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(finishReason ?? "")
+          ? "content_filter"
+          : undefined;
       events.push({
         type: "done",
         usage: usageFromGemini(usage),
+        ...(stopReason ? { stopReason } : {}),
       });
       return finish(events);
     },
