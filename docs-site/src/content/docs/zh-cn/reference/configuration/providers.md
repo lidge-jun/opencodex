@@ -223,7 +223,7 @@ affinity。这些策略不能规避 provider enforcement。
 Cursor 桥接是实验性的。执行 `ocx login cursor` 之后，添加或编辑 `providers.cursor`。
 
 如果代理无法承载 Cursor 默认的 HTTP/2 stream，请将 `upstreamHttpVersion` 设置为
-`"http1.1"`。推理会切换到 Cursor 的 `RunSSE` + `BidiAppend` 兼容传输，`GetUsableModels`
+`"http1.1"` 或其别名 `"h1"`。推理会切换到 Cursor 的 `RunSSE` + `BidiAppend` 兼容传输，`GetUsableModels`
 实时发现也会使用 HTTP/1.1。该配置要求 `baseUrl` 使用 HTTPS。保持未设置或使用 `"auto"`，
 则继续使用现有 HTTP/2 行为。
 在仪表板中，可通过 **Providers → Cursor → 设置 → Cursor 传输协议** 进行选择。

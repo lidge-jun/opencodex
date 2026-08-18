@@ -295,7 +295,8 @@ so passthrough stays byte-for-byte identical.
 
 The Cursor bridge is experimental. After `ocx login cursor`, add or edit `providers.cursor`.
 
-If a proxy cannot carry Cursor's default HTTP/2 stream, set `upstreamHttpVersion` to `"http1.1"`.
+If a proxy cannot carry Cursor's default HTTP/2 stream, set `upstreamHttpVersion` to `"http1.1"`
+or its `"h1"` alias.
 This switches inference to Cursor's `RunSSE` + `BidiAppend` compatibility transport and uses
 HTTP/1.1 for `GetUsableModels` discovery as well. The value requires an HTTPS `baseUrl`. Leave it
 unset or use `"auto"` for the existing HTTP/2 behavior. In the dashboard choose
