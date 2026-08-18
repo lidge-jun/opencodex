@@ -125,27 +125,43 @@ function responseWithBufferedBody(
   pending?: Uint8Array,
   status = response.status,
 ): Response {
+  let bufferedBody = buffered;
+  let pendingBody = pending;
+  let readerReleased = false;
+  const releaseReader = () => {
+    if (readerReleased) return;
+    readerReleased = true;
+    reader.releaseLock();
+  };
   const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      void (async () => {
-        try {
-          if (buffered.byteLength > 0) controller.enqueue(buffered);
-          if (pending?.byteLength) controller.enqueue(pending);
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value?.byteLength) controller.enqueue(value);
+    async pull(controller) {
+      try {
+        if (bufferedBody.byteLength > 0 || pendingBody?.byteLength) {
+          if (bufferedBody.byteLength > 0) {
+            controller.enqueue(bufferedBody);
+            bufferedBody = new Uint8Array();
           }
-          controller.close();
-        } catch (error) {
-          controller.error(error);
-        } finally {
-          reader.releaseLock();
+          if (pendingBody?.byteLength) {
+            controller.enqueue(pendingBody);
+            pendingBody = undefined;
+          }
+          return;
         }
-      })();
+
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          releaseReader();
+          return;
+        }
+        if (value?.byteLength) controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+        releaseReader();
+      }
     },
     cancel(reason) {
-      void reader.cancel(reason).catch(() => {});
+      void reader.cancel(reason).catch(() => {}).finally(releaseReader);
     },
   });
   return new Response(body, {

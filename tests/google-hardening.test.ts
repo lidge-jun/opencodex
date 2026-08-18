@@ -332,6 +332,61 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA passthrough does not consume an unread upstream tail", async () => {
+    const realFetch = globalThis.fetch;
+    const encoder = new TextEncoder();
+    const candidate = encoder.encode(
+      'data: {"response":{"candidates":[{"content":{"parts":[{"text":"first"}]}}]}}\n\n',
+    );
+    const tail = encoder.encode("data:\n\n");
+    let candidateSent = false;
+    let tailChunksProduced = 0;
+    let releaseTail!: () => void;
+    const tailGate = new Promise<void>(resolve => {
+      releaseTail = resolve;
+    });
+
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(streamController) {
+        if (!candidateSent) {
+          candidateSent = true;
+          streamController.enqueue(candidate);
+          return;
+        }
+        if (tailChunksProduced === 0) {
+          return tailGate.then(() => {
+            streamController.enqueue(tail);
+            tailChunksProduced += 1;
+          });
+        }
+        if (tailChunksProduced >= 1_000) {
+          streamController.close();
+          return;
+        }
+        streamController.enqueue(tail);
+        tailChunksProduced += 1;
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+
+    try {
+      const response = await fetchAntigravityWithRetry({
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      }, { timeoutMs: 5_000, stream: true });
+
+      releaseTail();
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(tailChunksProduced).toBeLessThan(10);
+      await response.body?.cancel();
+    } finally {
+      releaseTail();
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("CCA inline UNAVAILABLE fails over to the production host", async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
