@@ -67,7 +67,7 @@ describe("CLI subcommand help", () => {
     const topLevel = runCli([]);
     expectSpawnFinished(topLevel, "ocx help");
     expect(topLevel.status).toBe(0);
-    expect(topLevel.stdout).toContain("(8 clients)");
+    expect(topLevel.stdout).toContain("(10 clients)");
 
     const exportHelp = runCli(["help", "export"]);
     expectSpawnFinished(exportHelp, "ocx help export");

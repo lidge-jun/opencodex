@@ -215,7 +215,7 @@ describe("ocx export argument validation (accept criterion 4)", () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "cursor"], { baseUrl: proxy.baseUrl });
     expect(result.code).toBe(2);
-    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode"]) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode"]) {
       expect(result.stderr).toContain(id);
     }
     expect(result.stdout).toBe("");

@@ -511,6 +511,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { cmdMmx } = await import("./minimax");
     return await cmdMmx(deps.args.slice(1));
   },
+  zcode: async deps => {
+    const { handleZcodeCommand } = await import("./integrations");
+    return await handleZcodeCommand(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

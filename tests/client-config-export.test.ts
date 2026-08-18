@@ -515,7 +515,7 @@ describe("stable ordering (accept criterion 4)", () => {
 
 describe("EXPORT_CLIENTS registry", () => {
   test("covers exactly the nine file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode"]);
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -666,6 +666,7 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(EXPORT_CLIENTS.kimi.filename).toBe("kimi-config.toml");
     expect(EXPORT_CLIENTS.gajae.filename).toBe("gajae-models.yaml");
     expect(EXPORT_CLIENTS.mcode.filename).toBe("mcode-config.yaml");
+    expect(EXPORT_CLIENTS.zcode.filename).toBe("config.json");
   });
 
   test("the opencode destination reuses the launcher's XDG resolution", () => {

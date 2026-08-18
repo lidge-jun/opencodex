@@ -223,3 +223,38 @@ export async function handleClientIntegrationCommand(
 }
 
 export const INTEGRATION_USAGE = { claude: CLAUDE_USAGE, grok: GROK_USAGE, client: CLIENT_USAGE };
+
+const ZCODE_USAGE = `Usage:
+  ocx zcode [status] [--json]
+  ocx zcode <enable|disable> [--json]
+  ocx zcode history [--json]
+  ocx zcode restore --op <opId> [--confirm-drift] [--json]`;
+
+/**
+ * Thin alias over the client-integration surface for ZCode (Z.ai's desktop
+ * client). ZCode is a GUI app with no launch surface to wrap, so unlike
+ * `ocx mcode` there is no exec step: connecting the managed provider block is
+ * the whole integration, and every safety property (ownership, snapshots,
+ * journal, drift refusal) stays behind the shared management API. ZCode reads
+ * its config at startup, so enable/disable print a restart reminder.
+ */
+export async function handleZcodeCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const args = [...argv];
+  // Find the first non-flag token so `ocx zcode --json enable` still enables.
+  const verbIndex = args.findIndex(arg => !arg.startsWith("-"));
+  const action = (verbIndex === -1 ? "status" : args[verbIndex]).toLowerCase();
+  const known = ["status", "show", "list", "enable", "disable", "history", "journal", "restore"];
+  if (!known.includes(action)) {
+    console.error(`unknown zcode command ${action}`);
+    console.error(ZCODE_USAGE);
+    return 2;
+  }
+  const rest = verbIndex === -1 ? args : [...args.slice(0, verbIndex), ...args.slice(verbIndex + 1)];
+  // `restore` addresses an operation id, not a client, so nothing is injected.
+  const forwarded = action === "restore" ? [action, ...rest] : [action, ...rest, "--client", "zcode"];
+  const code = await handleClientIntegrationCommand(forwarded, deps);
+  if (code === 0 && (action === "enable" || action === "disable")) {
+    console.error("Restart ZCode to pick up the provider change.");
+  }
+  return code;
+}

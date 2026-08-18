@@ -417,6 +417,22 @@ export function mcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 }
 
 /**
+ * ZCode (Z.ai's desktop client) keeps everything under `~/.zcode`; custom
+ * providers live in `v2/config.json`. `ZCODE_DATA_DIR` mirrors the other
+ * clients' override convention; relative overrides are refused for the same
+ * reason as MCode's.
+ */
+export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.ZCODE_DATA_DIR?.trim();
+  if (override) return absoluteClientPath(override, home, "ZCODE_DATA_DIR");
+  return join(home, ".zcode");
+}
+
+export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -456,7 +472,8 @@ export type ExportClientId =
   | "kimi"
   | "gajae"
   | "dsh"
-  | "mcode";
+  | "mcode"
+  | "zcode";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -877,6 +894,36 @@ export interface McodeGeneratedConfig {
 }
 
 /**
+ * ZCode's `~/.zcode/v2/config.json` provider entry (observed schema, validated
+ * live against ZCode 3.7.7). `kind: "anthropic"` selects the Anthropic
+ * Messages protocol, which the proxy serves at `/v1/messages`. `apiKeyRequired`
+ * keeps ZCode's UI from prompting for a key it does not need on loopback; the
+ * serialized key is always the non-secret loopback placeholder.
+ */
+export interface ZcodeModelEntry {
+  name?: string;
+  limit?: { context: number; output?: number };
+  modalities: { input: string[]; output: string[] };
+}
+
+export interface ZcodeProviderBlock {
+  name: "OpenCodex";
+  kind: "anthropic";
+  enabled: true;
+  source: "custom";
+  options: {
+    apiKey: string;
+    baseURL: string;
+    apiKeyRequired: true;
+  };
+  models: Record<string, ZcodeModelEntry>;
+}
+
+export interface ZcodeGeneratedConfig {
+  provider: Record<string, ZcodeProviderBlock>;
+}
+
+/**
  * Pi's `~/.pi/agent/models.json` shape. `models` is an ARRAY (identity lives in `id`),
  * unlike OpenCode's keyed object.
  *
@@ -1209,6 +1256,53 @@ function buildMcodeClientConfig(ctx: ExportContext): McodeGeneratedConfig {
 }
 
 /**
+ * ZCode dials the Anthropic Messages surface, so `baseURL` is the proxy origin
+ * without the `/v1` suffix (ZCode appends `/v1/messages` itself — the same
+ * shape its builtin Z.ai providers use). Model ids are the proxy's canonical
+ * `provider/id` selectors, which `/v1/messages` resolves directly. Context
+ * limits follow the authoritative-window rule: a model without one ships
+ * without `limit` rather than guessing. Modalities are ZCode's observed
+ * `text`-floor vocabulary; image-capable rows advertise image input.
+ */
+function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig {
+  const models: Record<string, ZcodeModelEntry> = {};
+  for (const model of normalizeExportModels(ctx.models)) {
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    if (input === null) continue;
+    const entry: ZcodeModelEntry = {
+      name: exportModelLabel(model),
+      modalities: { input, output: ["text"] },
+    };
+    // `limit.context` follows the authoritative-window rule. `output` is
+    // deliberately absent: ZCode's schema makes it optional and we have no
+    // authoritative output budget to assert (reviewer finding: an emitted
+    // stand-in would be a guessed capability, exactly what "no metadata is
+    // guessed" forbids).
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) {
+      entry.limit = { context };
+    }
+    models[model.namespaced] = entry;
+  }
+  return {
+    provider: {
+      [OPENCODE_PROVIDER_ID]: {
+        name: "OpenCodex",
+        kind: "anthropic",
+        enabled: true,
+        source: "custom",
+        options: {
+          apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, ""),
+          apiKeyRequired: true,
+        },
+        models,
+      },
+    },
+  };
+}
+
+/**
  * Per-client model counts, read back off the SERIALIZED document rather than
  * recomputed from the input rows: `modelsWithoutLimits` drives a GUI line about
  * the bytes the user actually receives, so a parallel reimplementation of the
@@ -1261,6 +1355,11 @@ function summarizeMcode(document: unknown): { modelCount: number; modelsWithoutL
   const models = Object.values((document as McodeGeneratedConfig | undefined)?.custom_provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
   // MCode's custom-provider schema does not expose per-model context limits.
   return { modelCount: models.length, modelsWithoutLimits: 0 };
+}
+
+function summarizeZcode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = Object.values((document as ZcodeGeneratedConfig | undefined)?.provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => !model.limit).length };
 }
 
 /** One fragment at `path`, built from this client's own document. */
@@ -1322,6 +1421,11 @@ function buildDshContribution(ctx: ExportContext): ManagedContribution {
 function buildMcodeContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildMcodeClientConfig(ctx);
   return singleFragment("mcode", ["custom_provider", OPENCODE_PROVIDER_ID], doc.custom_provider[OPENCODE_PROVIDER_ID]);
+}
+
+function buildZcodeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildZcodeClientConfig(ctx);
+  return singleFragment("zcode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
@@ -1445,6 +1549,21 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     buildContribution: buildMcodeContribution,
     // MCode persists this credential and exposes no dedicated proxy-admission
     // header field, so real keys are never serialized and remote binds refuse.
+    loopbackOnly: true,
+  },
+  zcode: {
+    id: "zcode",
+    filename: "config.json",
+    destination: env => zcodeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "ZCode reads a non-secret placeholder from v2/config.json; loopback needs no key.",
+    build: buildZcodeClientConfig,
+    format: "json",
+    summarize: summarizeZcode,
+    buildContribution: buildZcodeContribution,
+    // ZCode persists the credential in its own file and has no dedicated
+    // proxy-admission header field, so real keys are never serialized and
+    // remote binds refuse — same reasoning as MCode.
     loopbackOnly: true,
   },
 };

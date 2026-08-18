@@ -62,7 +62,7 @@ describe("no secret reaches a client config", () => {
     // carry provider headers, but remote credential wiring is deliberately
     // deferred from this initial generated integration.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -267,7 +267,7 @@ describe("gajae", () => {
 
 describe("contributions name every fragment we own", () => {
   test("single-entry clients own exactly one path", () => {
-    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "gajae", "dsh", "mcode"] as const) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "gajae", "dsh", "mcode", "zcode"] as const) {
       expect(buildClientContribution(id, ctx()).fragments).toHaveLength(1);
     }
   });

@@ -90,6 +90,8 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/kimi",
   "integrations/gajae",
   "integrations/dsh",
+  "integrations/mcode",
+  "integrations/zcode",
 ] as const;
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {

@@ -10,6 +10,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "gajae",
   "dsh",
   "mcode",
+  "zcode",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];

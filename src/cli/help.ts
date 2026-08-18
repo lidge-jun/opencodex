@@ -58,7 +58,7 @@ Usage:
   ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
-  ocx export --client <id>    Print a client config wired to the running proxy (8 clients)
+  ocx export --client <id>    Print a client config wired to the running proxy (10 clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, and updates
@@ -69,6 +69,7 @@ Usage:
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)
   ocx mcode [args...]         Launch MiniMax Code through its managed provider
   ocx mmx text <sub> [args]   Launch MiniMax CLI text through the proxy
+  ocx zcode [sub]             Connect ZCode to the proxy (managed provider)
   ocx help [command]          Show help
   ocx --version | -v          Print version
 

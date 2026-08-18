@@ -27,6 +27,8 @@ import {
   opencodeGlobalConfigPath,
   openclawConfigPath,
   openclawHomeDir,
+  zcodeConfigPath,
+  zcodeHomeDir,
   type ExportClientId,
 } from "../clients/config-export";
 
@@ -118,6 +120,11 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "mcode",
     configPath: (env = process.env, home = homedir()) => mcodeConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => mcodeHomeDir(env, home),
+  },
+  zcode: {
+    id: "zcode",
+    configPath: (env = process.env, home = homedir()) => zcodeConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => zcodeHomeDir(env, home),
   },
 };
 

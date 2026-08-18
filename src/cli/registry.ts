@@ -216,8 +216,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "api-key", usage: "ocx api-key <list|create|remove> ...", summary: "Alias of ocx access key." },
   {
     name: "export",
-    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
@@ -300,6 +300,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Only the official MMX Anthropic-compatible text surface is proxied.",
       "Use plain mmx for MiniMax-native image, video, speech, music, vision, search, quota, auth, config, file, and update commands.",
       "The wrapper isolates ~/.mmx credentials and refuses --api-key/--base-url overrides.",
+    ],
+  },
+  {
+    name: "zcode",
+    usage: "ocx zcode [status|enable|disable|history|restore] [--json]",
+    summary: "Connect ZCode (Z.ai desktop client) to the proxy via its managed provider.",
+    details: [
+      "Alias of ocx integration client <sub> --client zcode.",
+      "enable writes the managed provider.opencodex block into ~/.zcode/v2/config.json; disable removes only that block.",
+      "ZCode reads its config at startup — restart ZCode after enable/disable.",
+      "Select OpenCodex Proxy/<provider>/<model> from ZCode's model picker.",
     ],
   },
   {
