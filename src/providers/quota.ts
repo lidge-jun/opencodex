@@ -28,6 +28,8 @@ import {
   type CodexCapacityAggregation,
   type CodexCapacityQuota,
 } from "./codex-capacity";
+import { fetchAntigravityLiveQuota } from "./antigravity-quota";
+import { antigravityHostCandidates, isAntigravityHttpsHost } from "../adapters/google-antigravity-hosts";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -2009,37 +2011,70 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     return null;
   }
   const baseUrl = (config.baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": antigravityUserAgent(),
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ project: credential.projectId }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const liveQuota = await fetchAntigravityLiveQuota({
+    accessToken,
+    projectId: credential.projectId,
+    baseUrl,
+    timeoutMs: REQUEST_TIMEOUT_MS,
   });
-  if (!response.ok) return null;
-  const body = asRecord(await readQuotaJson(response));
-  const models = asRecord(body?.models);
-  if (!models) return null;
 
   const windows = new Map<string, ProviderQuotaWindow>();
-  for (const [modelId, rawModelInfo] of Object.entries(models)) {
-    const modelInfo = asRecord(rawModelInfo);
-    if (!modelInfo) continue;
-    for (const quotaInfo of quotaInfoEntries(modelInfo)) {
-      const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
-      if (!label || windows.has(label)) continue;
-      const percent = antigravityUsedPercent(quotaInfo);
-      if (percent === undefined) continue;
-      windows.set(label, {
-        label,
-        percent,
-        ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
+  for (const [index, host] of antigravityHostCandidates(baseUrl).entries()) {
+    if (!isAntigravityHttpsHost(host)) continue;
+    try {
+      const response = await fetch(`${host}/v1internal:fetchAvailableModels`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": antigravityUserAgent(),
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ project: credential.projectId }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      if (!response.ok) {
+        if (index === 0 && (response.status === 404 || response.status === 503)) continue;
+        break;
+      }
+      const body = asRecord(await readQuotaJson(response));
+      const models = asRecord(body?.models);
+      if (models) {
+        for (const [modelId, rawModelInfo] of Object.entries(models)) {
+          const modelInfo = asRecord(rawModelInfo);
+          if (!modelInfo) continue;
+          for (const quotaInfo of quotaInfoEntries(modelInfo)) {
+            const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
+            if (!label || windows.has(label)) continue;
+            const percent = antigravityUsedPercent(quotaInfo);
+            if (percent === undefined) continue;
+            windows.set(label, {
+              label,
+              percent,
+              ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
+            });
+          }
+        }
+      }
+      break;
+    } catch {
+      if (index === 0) continue;
+      break;
     }
+  }
+
+  if (liveQuota) {
+    const liveWindows = liveQuota.customWindows ?? [];
+    const catalogClaude = windows.get("Cla");
+    const customWindows = [
+      ...liveWindows,
+      ...(liveWindows.some(window => window.label === "Cla") || !catalogClaude ? [] : [catalogClaude]),
+    ];
+    return report(provider, "google-antigravity:retrieveUserQuota", {
+      ...liveQuota,
+      ...(customWindows.length > 0 ? { customWindows } : {}),
+      updatedAt: Date.now(),
+    });
   }
 
   const customWindows = ["Gem", "Cla"].flatMap(label => {
