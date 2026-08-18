@@ -1104,8 +1104,11 @@ export async function injectCodexConfig(
  * `[model_providers.opencodex_backup]`-style tables out of scope.
  */
 function isOcxProviderHeaderLine(trimmedLine: string): boolean {
+  // Root form matched by regex, not equality: TOML v1.0 allows a trailing comment
+  // (`[model_providers.opencodex] # comment`), and an exact compare would miss that form.
+  // The sub-table prefix check already tolerates trailing comments by construction.
   return (
-    trimmedLine === "[model_providers.opencodex]" ||
+    /^\[model_providers\.opencodex\]\s*(?:#.*)?$/.test(trimmedLine) ||
     trimmedLine.startsWith("[model_providers.opencodex.")
   );
 }

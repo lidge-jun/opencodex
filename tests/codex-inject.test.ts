@@ -431,6 +431,36 @@ describe("Design B openai_base_url injection", () => {
     expect(stripped).toContain("[model_providers.opencodex_backup]");
     expect(stripped).toContain('name = "user backup"');
   });
+
+  test("a trailing comment on the root provider header is still recognized (TOML allows `[table] # comment`)", () => {
+    const commented = [
+      'model = "gpt-5.5"',
+      "",
+      "[model_providers.opencodex] # managed provider",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(commented);
+
+    expect(stripped).not.toContain("model_providers.opencodex");
+    expect(stripped).not.toContain("OpenCodex Proxy");
+    expect(stripped).toContain('model = "gpt-5.5"');
+  });
+
+  test("a trailing comment on the sub-table header is still recognized", () => {
+    const commented = [
+      'model = "gpt-5.5"',
+      "",
+      "[model_providers.opencodex.env_http_headers] # managed sub-table",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(commented);
+
+    expect(stripped).not.toContain("opencodex");
+    expect(stripped).toContain('model = "gpt-5.5"');
+  });
 });
 
 describe("EOL boundary helpers (Windows CRLF configs)", () => {
