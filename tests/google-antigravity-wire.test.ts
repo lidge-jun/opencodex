@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
+import { antigravityHostCandidates } from "../src/adapters/google-antigravity-hosts";
+import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "../src/adapters/google-antigravity-tools";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -44,7 +46,7 @@ describe("antigravity CCA envelope", () => {
   test("wraps the gemini body in the CCA envelope with project/userAgent/requestType/requestId/sessionId", async () => {
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     const env = JSON.parse(req.body);
-    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
+    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
     expect(env.model).toBe("gemini-3-pro");
     // The envelope BODY userAgent is the protocol constant; the versioned CLI UA rides in the header.
     expect(env.userAgent).toBe("antigravity");
@@ -74,6 +76,56 @@ describe("antigravity CCA envelope", () => {
   test("stream uses :streamGenerateContent?alt=sse", async () => {
     const req = await createGoogleAdapter(provider).buildRequest(parsed("x", true));
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+  });
+
+  test("host candidates keep the configured host first and use only daily/prod", () => {
+    expect(antigravityHostCandidates("https://daily-cloudcode-pa.googleapis.com")).toEqual([
+      "https://daily-cloudcode-pa.googleapis.com",
+      "https://cloudcode-pa.googleapis.com",
+    ]);
+    expect(antigravityHostCandidates("https://cloudcode-pa.googleapis.com/")).toEqual([
+      "https://cloudcode-pa.googleapis.com",
+      "https://daily-cloudcode-pa.googleapis.com",
+    ]);
+  });
+
+  test("Claude CCA adds the interleaved-thinking beta header and preamble mode", async () => {
+    const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, "claude-sonnet-4-6"));
+    const env = JSON.parse(req.body);
+
+    expect(req.headers["anthropic-beta"]).toBe("interleaved-thinking-2025-05-14");
+    expect(env.request.preambleConfig).toEqual({ mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" });
+  });
+
+  test("Gemini CCA does not receive the Claude beta header", async () => {
+    const req = await createGoogleAdapter(provider).buildRequest(parsed());
+    expect(req.headers["anthropic-beta"]).toBeUndefined();
+  });
+
+  test("Claude CCA strips a trailing prefill model turn but keeps a lone model turn", async () => {
+    const withPrefill = {
+      ...parsed("x", false, "claude-sonnet-4-6"),
+      context: {
+        messages: [
+          { role: "user", content: "question" },
+          { role: "assistant", content: [{ type: "text", text: "prefill" }] },
+        ],
+        systemPrompt: [],
+        tools: [],
+      },
+    } as unknown as OcxParsedRequest;
+    const prefillEnv = JSON.parse((await createGoogleAdapter(provider).buildRequest(withPrefill)).body);
+    expect(prefillEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["user"]);
+
+    const loneModel = {
+      ...withPrefill,
+      context: {
+        ...withPrefill.context,
+        messages: [{ role: "assistant", content: [{ type: "text", text: "only turn" }] }],
+      },
+    } as unknown as OcxParsedRequest;
+    const loneEnv = JSON.parse((await createGoogleAdapter(provider).buildRequest(loneModel)).body);
+    expect(loneEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["model"]);
   });
 
   test("exposes Gemini 3.7 Flash while retired Flash ids resolve to it", async () => {
@@ -631,6 +683,50 @@ describe("antigravity CCA envelope", () => {
   });
 });
 
+describe("Google Antigravity history repair", () => {
+  test("drops orphan tool results and unmatched trailing calls", () => {
+    const messages = [
+      { role: "user", content: "run tools" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "one", arguments: {} },
+          { type: "toolCall", id: "call-2", name: "two", arguments: {} },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call-1", toolName: "one", content: "ok", isError: false },
+      { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect(repaired).toHaveLength(3);
+    expect((repaired[1] as { content: { id: string }[] }).content.map(part => part.id)).toEqual(["call-1"]);
+    expect((repaired[2] as { toolCallId: string }).toolCallId).toBe("call-1");
+  });
+
+  test("keeps parallel calls when every call has a later result", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "call-1", name: "one", arguments: {} },
+        { type: "toolCall", id: "call-2", name: "two", arguments: {} },
+      ] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "one", content: "one", isError: false },
+      { role: "toolResult", toolCallId: "call-2", toolName: "two", content: "two", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect((repaired[0] as { content: { id: string }[] }).content.map(part => part.id)).toEqual(["call-1", "call-2"]);
+    expect(repaired).toHaveLength(3);
+  });
+
+  test("strips only trailing model turns when another content turn remains", () => {
+    expect(stripTrailingClaudePrefill([{ role: "user" }, { role: "model" }, { role: "model" }]))
+      .toEqual([{ role: "user" }]);
+    expect(stripTrailingClaudePrefill([{ role: "model" }]))
+      .toEqual([{ role: "model" }]);
+  });
+});
+
 function sseResponse(chunks: unknown[]): Response {
   const body = chunks.map(c => `data: ${JSON.stringify(c)}\n`).join("\n") + "\n";
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -653,10 +749,20 @@ describe("antigravity parseStream unwraps response", () => {
 });
 
 describe("antigravity parseResponse unwraps response (non-streaming)", () => {
+  test("buffers CCA SSE frames for unary callers", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const events = await adapter.parseResponse!(sseResponse([
+      { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }] } },
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]));
+    expect(events).toContainEqual({ type: "text_delta", text: "hello" });
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test("reads response.candidates + response.usageMetadata from the CCA envelope", async () => {
     const adapter = createGoogleAdapter(provider);
-    const body = JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "hello" }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 2, cachedContentTokenCount: 7 } } });
-    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    const body = { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 2, cachedContentTokenCount: 7 } } };
+    const events = await adapter.parseResponse!(sseResponse([body]));
     expect(events.some(e => e.type === "text_delta" && e.text === "hello")).toBe(true);
     const done = events.find(e => e.type === "done");
     expect((done as Extract<AdapterEvent, { type: "done" }>).usage?.inputTokens).toBe(9);
@@ -669,8 +775,8 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     const adapter = createGoogleAdapter(provider);
     // buildRequest first to set the per-adapter model/session, then parseResponse to observe.
     await adapter.buildRequest(parsed("hello world"));
-    const body = JSON.stringify({ response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } });
-    await adapter.parseResponse!(new Response(body, { status: 200 }));
+    const body = { response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } };
+    await adapter.parseResponse!(sseResponse([body]));
     // A follow-up request's history should now get the signature re-injected.
     const followup = parsed("hello world");
     const contents = [{ role: "model", parts: [{ functionCall: { name: "do_x", args: { a: 1 } } }] }];
@@ -689,7 +795,7 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     __resetAntigravityReplayCache();
     const adapter = createGoogleAdapter(provider);
     await adapter.buildRequest(parsed("hello world"));
-    const body = JSON.stringify({
+    const body = {
       response: {
         candidates: [{
           content: {
@@ -700,8 +806,8 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
           },
         }],
       },
-    });
-    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    };
+    const events = await adapter.parseResponse!(sseResponse([body]));
 
     expect(events).not.toContainEqual({ type: "text_delta", text: "deciding which tool to call" });
 
@@ -721,6 +827,7 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
         messages: [
           { role: "user", content: "go" },
           { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: { a: 1 }, thoughtSignature: "sig-abcdef0123456789" }] },
+          { role: "toolResult", toolCallId: "c1", toolName: "get_x", content: "ok", isError: false },
         ],
         systemPrompt: [], tools: [],
       },
@@ -741,6 +848,7 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
         messages: [
           { role: "user", content: "go" },
           { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: {}, thoughtSignature: "fc_d8df7548e31a4130b7624f3d27571cdd" }] },
+          { role: "toolResult", toolCallId: "c1", toolName: "get_x", content: "ok", isError: false },
         ],
         systemPrompt: [], tools: [],
       },
@@ -761,6 +869,7 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
         messages: [
           { role: "user", content: "go" },
           { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: {}, thoughtSignature: "ctc_038f26d3f20962bc016a54f0fcfa208190a8ec0f289c2ba211" }] },
+          { role: "toolResult", toolCallId: "c1", toolName: "get_x", content: "ok", isError: false },
         ],
         systemPrompt: [], tools: [],
       },
