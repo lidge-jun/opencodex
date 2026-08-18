@@ -7,21 +7,12 @@ const decoder = new TextDecoder();
 export const CURSOR_TRUNCATION_MARKER = "\n…[truncated for Cursor external replay budget]";
 
 const COMPUTER_USE_TOOL_NAMES = new Set([
-  "js",
   "node_repl",
   "node_repl__js",
   "mcp__node_repl__js",
   "get_app_state",
   "list_apps",
   "screenshot",
-  "click",
-  "set_value",
-  "type_text",
-  "select_text",
-  "press_key",
-  "scroll",
-  "drag",
-  "perform_secondary_action",
   "computer_use",
   "desktop",
 ]);

@@ -69,6 +69,17 @@ export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
 export const CURSOR_EXTERNAL_ROOT_BLOB_LIMIT = 192;
 /** Approximate prompt-size guard; tool schemas and protocol framing consume context separately. */
 export const CURSOR_EXTERNAL_ROOT_BYTE_LIMIT = 512 * 1024;
+/**
+ * Per-tool-result share of the root budget for replayed history. The whole-root limit cannot be
+ * used per result: N results would each be allowed the full budget and force turn pruning (#1866).
+ */
+export const CURSOR_HISTORY_TOOL_RESULT_BYTE_LIMIT = 32 * 1024;
+/** Headroom for the wire header, the [Tool Result] prefix, and the JSON envelope. */
+const CURSOR_TOOL_RESULT_ENVELOPE_HEADROOM = 512;
+
+function historyToolResultBodyByteLimit(): number {
+  return Math.max(0, CURSOR_HISTORY_TOOL_RESULT_BYTE_LIMIT - CURSOR_TOOL_RESULT_ENVELOPE_HEADROOM);
+}
 
 /** Runtime timezone for protobuf RequestContextEnv (dynamic, never hardcoded). */
 function runtimeTimeZone(): string {
@@ -243,7 +254,9 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       }
       // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
     } else if (message.role === "toolResult") {
-      const { wireOutput, isError } = formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT });
+      const { wireOutput, isError } = formatToolResultToWireText(message, {
+        maxBytes: historyToolResultBodyByteLimit(),
+      });
       const prefix = isError ? "[Tool Error]" : "[Tool Result]";
       const text = `${prefix}\n${wireOutput}`;
       entries.push(rootBlobCandidate(
@@ -373,7 +386,7 @@ function contentToText(content: OcxToolResultMessage["content"]): string {
 }
 
 function toolResultToText(message: OcxToolResultMessage): string {
-  return formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT }).wireOutput;
+  return formatToolResultToWireText(message, { maxBytes: historyToolResultBodyByteLimit() }).wireOutput;
 }
 
 function argBytes(value: unknown): Uint8Array {
@@ -415,7 +428,7 @@ function toolCallStep(
 }
 
 function toolResultPart(message: OcxToolResultMessage) {
-  const formatted = formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT });
+  const formatted = formatToolResultToWireText(message, { maxBytes: historyToolResultBodyByteLimit() });
   return create(McpToolResultSchema, {
     result: {
       case: "success",
@@ -514,13 +527,13 @@ function conversationTurns(
     }
     if (message.role === "toolResult") {
       if (!current) continue;
-      const formatted = formatToolResultToWireText(message, { maxBytes: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT });
+      const formatted = formatToolResultToWireText(message, { maxBytes: historyToolResultBodyByteLimit() });
       if (externalModel) {
         const prefix = formatted.isError ? "[Tool Error]" : "[Tool Result]";
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
             case: "assistantMessage",
-            value: create(AssistantMessageSchema, { text: `${prefix}\n${formatted.text}` }),
+            value: create(AssistantMessageSchema, { text: `${prefix}\n${formatted.wireOutput}` }),
           },
         })), requestScope));
         continue;

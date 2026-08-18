@@ -43,7 +43,9 @@ describe("Issue #1866: Cursor adapter tool-result replay for Computer Use / node
       expect(isNodeReplOrComputerUseTool("js", "mcp__node_repl")).toBe(true);
       expect(isNodeReplOrComputerUseTool("mcp__node_repl__js")).toBe(true);
       expect(isNodeReplOrComputerUseTool("get_app_state")).toBe(true);
-      expect(isNodeReplOrComputerUseTool("click")).toBe(true);
+      expect(isNodeReplOrComputerUseTool("click", "mcp__computer_use")).toBe(true);
+      expect(isNodeReplOrComputerUseTool("click", "mcp__playwright")).toBe(false);
+      expect(isNodeReplOrComputerUseTool("js", "mcp__quickjs")).toBe(false);
       expect(isNodeReplOrComputerUseTool("read_file", "mcp__fs")).toBe(false);
     });
 
@@ -286,6 +288,55 @@ describe("Issue #1866: Cursor adapter tool-result replay for Computer Use / node
       expect(serialized).toContain("[Tool Error]");
       expect(serialized).toContain("empty output: tool executed with no stdout or return value");
       expect(serialized).toContain("get_app_state");
+    });
+
+    test("multi-turn replay keeps the trailing tool result and stays within the root budget", () => {
+      const bigAx = [
+        "AXTree snapshot for /Applications/Google Chrome.app:",
+        "window: Pull Requests · lidge-jun/opencodex",
+        "url: https://github.com/lidge-jun/opencodex/pulls",
+        ...Array.from({ length: 4000 }, (_, i) => `  AXNode[${i}]: link href="/pull/${i}" title="PR ${i}"`),
+      ].join("\n");
+
+      const rawMessages: OcxMessage[] = [
+        { role: "user", content: "walk the PR list", timestamp: 1 },
+        ...[0, 1, 2].flatMap<OcxMessage>(n => [
+          {
+            role: "assistant",
+            model: "cursor/grok-4.6",
+            timestamp: 2 + n * 2,
+            content: [{ type: "toolCall", id: `cu_${n}`, name: "js", namespace: "mcp__node_repl", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: `cu_${n}`,
+            toolName: "js",
+            toolNamespace: "mcp__node_repl",
+            content: `turn marker ${n}\n${bigAx}`,
+            isError: false,
+            timestamp: 3 + n * 2,
+          },
+        ]),
+      ];
+
+      const bytes = encodeCursorRunRequest({
+        modelId: "grok-4.6",
+        conversationId: "c_cu_multi",
+        system: ["system"],
+        messages: [{ role: "tool", content: "ignored" }],
+        rawMessages,
+      });
+
+      const msg = fromBinary(AgentClientMessageSchema, bytes);
+      const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+      const rootBytes = (run?.conversationState?.rootPromptMessagesJson ?? [])
+        .reduce((sum, id) => sum + blobData(id).byteLength, 0);
+
+      expect(rootBytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+
+      const serialized = JSON.stringify(decodeRoots(bytes));
+      expect(serialized).toContain("turn marker 2");
+      expect(serialized).toContain("turn marker 1");
     });
   });
 });
