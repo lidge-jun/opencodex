@@ -372,6 +372,32 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA does not POST the OAuth bearer to an http host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: "ok" }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]);
+    }) as typeof fetch;
+    try {
+      const request = {
+        url: "http://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: { Authorization: "Bearer secret-token" },
+        body: "{}",
+      };
+      const response = await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+      expect(response.ok).toBe(true);
+      expect(calls.filter(url => url.startsWith("http://"))).toEqual([]);
+      expect(calls[0]).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("CCA geoblock records cooldown without account carousel", async () => {
     clearAntigravityAccountCooldown("test-antigravity-account");
     const realFetch = globalThis.fetch;
