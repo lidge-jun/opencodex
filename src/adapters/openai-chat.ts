@@ -19,6 +19,7 @@ import {
 import {
   canonicalFastTierMarker,
   createAdapterTierMetadata,
+  type ResolvedFastPolicy,
 } from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
@@ -95,6 +96,7 @@ export function buildOpenAIChatPassthroughRequest(
   rawBody: Record<string, unknown>,
   modelId: string,
   stream: boolean,
+  fastPolicy: ResolvedFastPolicy,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
@@ -118,7 +120,10 @@ export function buildOpenAIChatPassthroughRequest(
   }
   if (modelInList(provider.noStructuredOutputModels, modelId)) delete body.response_format;
 
-  if (provider.chatServiceTier && rawBody.service_tier !== undefined) {
+  // Share the ordinary openai-chat adapter's capability gate, while preserving the
+  // caller's exact wire representation promised by this passthrough contract. The
+  // Responses surface may normalize canonical Fast spelling; this difference is intentional.
+  if (canSerializeOpenAIChatServiceTier(provider, modelId, rawBody.service_tier, undefined, fastPolicy)) {
     body.service_tier = rawBody.service_tier;
   }
   if (provider.promptCacheKey && rawBody.prompt_cache_key !== undefined) {
@@ -1280,6 +1285,26 @@ function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: stri
   return fraction === undefined ? undefined : Math.max(1, Math.floor(maxBudget * fraction));
 }
 
+function canSerializeOpenAIChatServiceTier(
+  provider: OcxProviderConfig,
+  modelId: string,
+  serviceTier: unknown,
+  tierDecision?: OcxParsedRequest["options"]["tierDecision"],
+  resolvedPolicy?: Pick<ResolvedFastPolicy, "capability">,
+): boolean {
+  if (serviceTier === undefined) return false;
+  if (tierDecision !== undefined) {
+    return tierDecision.kind === "set" || tierDecision.kind === "forward-caller";
+  }
+  const callerTier = typeof serviceTier === "string" ? serviceTier : undefined;
+  const callerCanonicalFast = canonicalFastTierMarker(callerTier) !== undefined;
+  const capability = resolvedPolicy === undefined
+    ? supportsServiceTierForModel(provider, modelId)
+    : resolvedPolicy.capability;
+  const callerTierForwardAllowed = canForwardForeignServiceTierForChatModel(provider, modelId);
+  return callerTierForwardAllowed || (callerCanonicalFast && capability === true);
+}
+
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   return {
     name: "openai-chat",
@@ -1302,13 +1327,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // unclassified Chat routes remain behind the caller-forwarding opt-in.
       const serviceTier = parsed.options.serviceTier;
       const tierDecision = parsed.options.tierDecision;
-      const callerCanonicalFast = canonicalFastTierMarker(serviceTier) !== undefined;
-      const callerTierForwardAllowed = canForwardForeignServiceTierForChatModel(provider, parsed.modelId);
-      const canonicalFastCapability = callerCanonicalFast
-        && supportsServiceTierForModel(provider, parsed.modelId) === true;
-      const canSerializeServiceTier = tierDecision?.kind === "set"
-        || tierDecision?.kind === "forward-caller"
-        || (tierDecision === undefined && (callerTierForwardAllowed || canonicalFastCapability));
+      const canSerializeServiceTier = canSerializeOpenAIChatServiceTier(
+        provider,
+        parsed.modelId,
+        serviceTier,
+        tierDecision,
+      );
       if (canSerializeServiceTier && serviceTier !== undefined) {
         body.service_tier = serviceTier;
       }

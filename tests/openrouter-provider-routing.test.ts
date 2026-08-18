@@ -7,6 +7,7 @@ import {
   openRouterRoutingConfigError,
   openRouterProviderPayload,
 } from "../src/providers/openrouter-routing";
+import { fastPolicyForModel } from "../src/providers/service-tier";
 import { clearKeyCooldowns, rotateProviderTransportOn429 } from "../src/providers/key-failover";
 import { routeModel } from "../src/router";
 import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
@@ -39,7 +40,7 @@ function passthroughBody(
   const request = buildOpenAIChatPassthroughRequest(providerConfig, {
     messages: [{ role: "user", content: "hello" }],
     ...rawBody,
-  }, modelId, false);
+  }, modelId, false, fastPolicyForModel(providerConfig, modelId, undefined, "chat"));
   return JSON.parse(request.body as string) as Record<string, unknown>;
 }
 
