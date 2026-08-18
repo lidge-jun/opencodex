@@ -6,7 +6,7 @@ import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "../src/adapte
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
-import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
   withTestTranslatorBudget(createGoogleAdapterProduction(...args));
@@ -757,6 +757,18 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     ]));
     expect(events).toContainEqual({ type: "text_delta", text: "hello" });
     expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("unary CCA responses retain the translated event batch in the translator budget", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 1024 });
+    const events = await adapter.parseResponse!(sseResponse([
+      { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }] } },
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]), budget);
+
+    expect(events).toContainEqual({ type: "text_delta", text: "hello" });
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
   });
 
   test("reads response.candidates + response.usageMetadata from the CCA envelope", async () => {

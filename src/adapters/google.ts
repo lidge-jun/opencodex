@@ -317,6 +317,17 @@ export function setGoogleSseFrameMaxBytesForTests(bytes?: number): void {
   sseFrameMaxBytes = bytes ?? MAX_SSE_FRAME_BYTES;
 }
 
+function maxSseLineBytes(bufferBytes: number, incoming: Uint8Array): number {
+  let lineBytes = bufferBytes;
+  let maximum = lineBytes;
+  for (const byte of incoming) {
+    lineBytes += 1;
+    maximum = Math.max(maximum, lineBytes);
+    if (byte === 0x0a) lineBytes = 0;
+  }
+  return maximum;
+}
+
 // Note: imagen-* models use a different API surface (prediction/image-generation
 // schema) and must NOT be treated as responseModalities-capable Gemini models.
 // Explicit allowlist only — never `/gemini/ && /image/` (resurrects media-gen IDs).
@@ -617,7 +628,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const handleDataLine = async function* (line: string): AsyncGenerator<AdapterEvent, "continue" | "content" | "terminate"> {
         const payload = line.slice(5).trim();
         if (!payload) return "continue";
-        if (payload.length > sseFrameMaxBytes) {
+        if (budgetEncoder.encode(payload).byteLength > sseFrameMaxBytes) {
           yield { type: "error", message: `upstream SSE data frame exceeds ${sseFrameMaxBytes} bytes` };
           return "terminate";
         }
@@ -757,10 +768,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const { done, value } = await reader.read();
           if (done) break;
           const incomingBytes = value?.byteLength ?? 0;
-          // Cap incomplete frames before decode and before waiting for a newline —
+          // Cap each incomplete line before decode and before waiting for a newline —
           // otherwise a single unterminated data: payload can grow without bound, and
-          // buffer.length is UTF-16 units rather than bytes.
-          if (bufferBytes + incomingBytes > sseFrameMaxBytes) {
+          // buffer.length is UTF-16 units rather than bytes. Reset at each newline so
+          // several sub-cap frames delivered in one network chunk are not rejected as
+          // one oversized frame.
+          if (maxSseLineBytes(bufferBytes, value) > sseFrameMaxBytes) {
             yield { type: "error", message: `upstream SSE data frame exceeds ${sseFrameMaxBytes} bytes` };
             try { await reader.cancel(); } catch { /* ignore */ }
             return;
@@ -850,6 +863,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (provider.googleMode === "cloud-code-assist") {
         const events: AdapterEvent[] = [];
         for await (const event of this.parseStream(response, budget)) events.push(event);
+        retainTranslatedEventBatch(events, budget);
         return events;
       }
       // Reject oversized responses before JSON parse. Prefer Content-Length when

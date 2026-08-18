@@ -113,4 +113,26 @@ describe("google SSE frame byte cap", () => {
       message: `upstream SSE data frame exceeds ${CAP} bytes`,
     });
   });
+
+  test("accepts multiple sub-cap data frames delivered in one oversized chunk", async () => {
+    const cap = 96;
+    const body = [
+      `data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "a" }] } }] } })}\n`,
+      `data: ${JSON.stringify({ response: { candidates: [{ finishReason: "STOP" }] } })}\n`,
+    ].join("\n");
+    const lines = body.split("\n").filter(Boolean);
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(cap);
+    expect(Math.max(...lines.map(line => new TextEncoder().encode(line).byteLength))).toBeLessThanOrEqual(cap);
+
+    setGoogleSseFrameMaxBytesForTests(cap);
+    const events = await collect(
+      createGoogleAdapter(ccaProvider()).parseStream(byteStreamResponse([
+        new TextEncoder().encode(body),
+      ])),
+    );
+
+    expect(events).toContainEqual({ type: "text_delta", text: "a" });
+    expect(events).toContainEqual({ type: "done", usage: undefined });
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
 });
