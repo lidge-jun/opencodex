@@ -670,6 +670,7 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
 /**
  * Z.AI GLM Coding Plan `GET /api/monitor/usage/quota/limit` — the coding-plan
  * subscription's 5-hour token cycle, weekly quota, and monthly MCP usage.
+ * Parses the `data.limits` array using the same logic as OmniRoute's getGlmUsage.
  * Authenticates with the API key as a Bearer token per Z.AI's API reference.
  */
 async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
@@ -689,31 +690,72 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const body = asRecord(await readQuotaJson(response));
   if (!body || body.success === false) return null;
   const data = asRecord(body.data) ?? body;
-  // The plugin renders a 5h token window, a weekly window, and a monthly MCP
-  // window. Look for percent fields with window identifiers.
+  const limits: unknown[] = Array.isArray(data.limits) ? data.limits : [];
+  if (limits.length === 0) return null;
   const quota: ProviderQuota = { updatedAt: Date.now() };
   let windows = 0;
-  const percentAt = (key: string): number | undefined => {
-    const value = normalizePercent(data?.[key]);
-    if (value !== undefined) return value;
-    const nested = asRecord(data?.quota);
-    return nested ? normalizePercent(nested[key]) : undefined;
-  };
-  const fiveHour = percentAt("fiveHourPercent") ?? percentAt("fiveHourUsage") ?? percentAt("fiveHourUsed");
-  const weekly = percentAt("weeklyPercent") ?? percentAt("weeklyUsage") ?? percentAt("weeklyUsed");
-  const monthly = percentAt("monthlyPercent") ?? percentAt("mcpPercent") ?? percentAt("monthlyMCPUsage");
-  if (fiveHour !== undefined) {
-    quota.fiveHourPercent = fiveHour;
-    windows += 1;
+  const tradeNames = new Set<string>();
+
+  for (const raw of limits) {
+    const entry = asRecord(raw);
+    if (!entry) continue;
+    const type = String(entry.type ?? "").toUpperCase();
+    const unit = toFiniteNumber(entry.unit) ?? 0;
+    const number_ = toFiniteNumber(entry.number) ?? 0;
+    const pct = normalizePercent(entry.percentage);
+    if (pct === undefined) continue;
+    const resetMs = toFiniteNumber(entry.nextResetTime) ?? 0;
+    const resetAt = resetMs > 0 ? resetMs : undefined;
+
+    if (type === "TOKENS_LIMIT" || type === "TOKEN_LIMIT") {
+      // unit=3, number=5 => 5-hour session; unit=6 => weekly
+      // unit=3, number>=168 => weekly; unit=3, number=5 already matched as session
+      if ((unit === 3 && number_ === 5) || (unit === 6 && number_ === 1)) {
+        // First matching TOKENS_LIMIT with these params is session; second fallback is weekly
+        const name = unit === 6 || tradeNames.has("fiveHourPercent") ? "weekly" : "session";
+        if (name === "session") {
+          tradeNames.add("fiveHourPercent");
+          quota.fiveHourPercent = pct;
+          if (resetAt) quota.fiveHourResetAt = resetAt;
+          windows += 1;
+        } else if (!tradeNames.has("weeklyPercent")) {
+          tradeNames.add("weeklyPercent");
+          quota.weeklyPercent = pct;
+          if (resetAt) quota.weeklyResetAt = resetAt;
+          windows += 1;
+        }
+      } else if (unit === 6 || (unit === 3 && number_ >= 168)) {
+        if (!tradeNames.has("weeklyPercent")) {
+          tradeNames.add("weeklyPercent");
+          quota.weeklyPercent = pct;
+          if (resetAt) quota.weeklyResetAt = resetAt;
+          windows += 1;
+        }
+      } else if (unit === 3 && number_ === 5 && tradeNames.has("fiveHourPercent")) {
+        // Second TOKENS_LIMIT with unit=3,number=5 → weekly fallback
+        if (!tradeNames.has("weeklyPercent")) {
+          tradeNames.add("weeklyPercent");
+          quota.weeklyPercent = pct;
+          if (resetAt) quota.weeklyResetAt = resetAt;
+          windows += 1;
+        }
+      }
+    } else if (type === "TIME_LIMIT" || type === "TIME_USAGE_LIMIT") {
+      // Monthly MCP usage → custom window
+      const total = toFiniteNumber(entry.total) ?? toFiniteNumber(entry.usage) ?? 0;
+      const remainingPct = total > 0
+        ? Math.max(0, total - (toFiniteNumber(entry.remaining) ?? Math.max(0, total - Math.round(total * pct / 100)))) / total * 100
+        : pct;
+      if (!quota.customWindows) quota.customWindows = [];
+      quota.customWindows.push({
+        label: "Monthly MCP",
+        percent: Math.max(0, Math.min(100, Math.round(remainingPct))),
+        ...(resetAt ? { resetAt } : {}),
+      });
+      windows += 1;
+    }
   }
-  if (weekly !== undefined) {
-    quota.weeklyPercent = weekly;
-    windows += 1;
-  }
-  if (monthly !== undefined) {
-    quota.monthlyPercent = monthly;
-    windows += 1;
-  }
+
   return windows > 0 ? report(provider, "zai:quota-limit", quota) : null;
 }
 
