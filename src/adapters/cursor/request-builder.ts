@@ -27,7 +27,7 @@ import {
 import { lookupCursorThreadConversation } from "./thread-continuity";
 import {
   getCursorCheckpoint,
-  getLatestCursorCheckpoint,
+  getCursorCheckpointForPrefix,
   type CursorCheckpointInvalidationReason,
   type CursorCheckpointSnapshot,
 } from "./checkpoint-store";
@@ -291,16 +291,7 @@ export function resolveCursorConversationId(
   options: CreateCursorRequestOptions = {},
 ): string {
   if (options.forceFreshConversation === true) return generatedCursorConversationId();
-  // Helper/shadow turns must not append into the parent's Cursor conversation, even when
-  // previous_response_id restored the parent's remembered id. They still keep their own
-  // cache, keyed off this turn's first user/developer text.
-  if (parsed._cursorIsolateConversation === true) {
-    const isolatedSeed = cursorHistorySeed(parsed);
-    if (isolatedSeed) {
-      return cursorConversationIdFromClientThread(`isolate:${isolatedSeed}`, parsed._cursorIdentityScope);
-    }
-    return generatedCursorConversationId();
-  }
+  if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
   if (parsed._cursorConversationId) return parsed._cursorConversationId;
   const threadId = parsed._clientThreadId?.trim();
   if (threadId) {
@@ -308,23 +299,70 @@ export function resolveCursorConversationId(
     if (recovered) return recovered;
     return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
   }
-  const historySeed = cursorHistorySeed(parsed);
-  if (historySeed) return cursorConversationIdFromClientThread(`history:${historySeed}`, parsed._cursorIdentityScope);
   return generatedCursorConversationId();
 }
 
-function cursorHistorySeed(parsed: OcxParsedRequest): string | undefined {
-  for (const message of parsed.context.messages) {
-    if (message.role !== "user" && message.role !== "developer") continue;
-    const text = contentToText(message.content).trim();
-    if (text) return text;
+export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
+  const hash = createHash("sha256").update("ocx:cursor:sys:");
+  for (const line of parsed.context.systemPrompt ?? []) {
+    hash.update(line).update("\n");
   }
-  return undefined;
+  for (const message of parsed.context.messages) {
+    if (message.role !== "developer") continue;
+    hash.update(contentToText(message.content)).update("\n");
+  }
+  return hash.digest("hex");
+}
+
+export function cursorCoveredPrefixDigest(parsed: OcxParsedRequest, coveredMessageCount: number): string {
+  const hash = createHash("sha256").update("ocx:cursor:prefix:");
+  hash.update(cursorInstructionDigest(parsed)).update("\0");
+  for (const message of parsed.context.messages.slice(0, coveredMessageCount)) {
+    hash.update(message.role).update("\0");
+    hash.update(contentToText(message.content)).update("\n");
+  }
+  return hash.digest("hex");
 }
 
 export interface CreateCursorRequestOptions {
   /** Force a brand-new Cursor conversation id even when remembered state exists. */
   forceFreshConversation?: boolean;
+}
+
+function lookupPrefixSnapshot(
+  parsed: OcxParsedRequest,
+  request: CursorRunRequest,
+  identityScope: string,
+): CursorCheckpointSnapshot | undefined {
+  const systemDigest = cursorInstructionDigest(parsed);
+  const modelId = cursorCheckpointModelAffinityId(request.modelId);
+  for (let covered = parsed.context.messages.length; covered >= 1; covered--) {
+    const snapshot = getCursorCheckpointForPrefix({
+      prefixDigest: cursorCoveredPrefixDigest(parsed, covered),
+      systemDigest,
+      coveredMessageCount: covered,
+      identityScope,
+      modelId,
+    });
+    if (snapshot) return snapshot;
+  }
+  return undefined;
+}
+
+function lineageMismatch(
+  parsed: OcxParsedRequest,
+  snapshot: CursorCheckpointSnapshot,
+): CursorCheckpointInvalidationReason | undefined {
+  const covered = snapshot.coveredMessageCount;
+  if (covered === undefined || covered < 0 || covered > parsed.context.messages.length) {
+    return "lineage_mismatch";
+  }
+  if (!snapshot.prefixDigest || !snapshot.systemDigest) return "lineage_mismatch";
+  if (snapshot.systemDigest !== cursorInstructionDigest(parsed)) return "lineage_mismatch";
+  if (snapshot.prefixDigest !== cursorCoveredPrefixDigest(parsed, covered)) return "lineage_mismatch";
+  const lastRole = parsed.context.messages.at(-1)?.role;
+  if (lastRole === "toolResult" && covered >= parsed.context.messages.length) return "trailing_tool_result";
+  return undefined;
 }
 
 function resolveCursorCheckpoint(
@@ -338,28 +376,26 @@ function resolveCursorCheckpoint(
   const cursorState = parsed._providerContinuation?.cursor;
   const ref = isolated ? undefined : cursorState?.checkpointRef;
   const identityScope = parsed._cursorIdentityScope?.trim() || "local";
-  const modelAffinity = cursorCheckpointModelAffinityId(request.modelId);
-  let snapshot = getCursorCheckpoint(ref);
-  if (!snapshot) {
-    snapshot = getLatestCursorCheckpoint(candidate =>
-      candidate.conversationId === request.conversationId
-      && candidate.identityScope === identityScope
-      && cursorCheckpointModelAffinityId(candidate.modelId) === modelAffinity
-    );
+  let snapshot: CursorCheckpointSnapshot | undefined;
+  if (ref) {
+    snapshot = getCursorCheckpoint(ref);
+    if (!snapshot) return { reason: "expired" };
+  } else {
+    snapshot = lookupPrefixSnapshot(parsed, request, identityScope);
+    if (!snapshot) return { reason: "missing_ref" };
   }
-  if (!snapshot) return { reason: ref ? "expired" : "missing_ref" };
-  if (snapshot.conversationId !== request.conversationId) return { reason: "conversation_changed" };
+  if (!isolated && snapshot.conversationId !== request.conversationId && ref) {
+    return { reason: "conversation_changed" };
+  }
   if (snapshot.identityScope !== identityScope) return { reason: "identity_changed" };
-  if (cursorCheckpointModelAffinityId(snapshot.modelId) !== modelAffinity) return { reason: "model_changed" };
-  const lastRole = parsed.context.messages.at(-1)?.role;
-  if (lastRole === "toolResult") {
-    if (snapshot.coveredMessageCount === undefined) return { reason: "trailing_tool_result" };
-    if (snapshot.coveredMessageCount < 0 || snapshot.coveredMessageCount >= parsed.context.messages.length) {
-      return { reason: "trailing_tool_result" };
-    }
-  } else if (cursorState?.checkpointUsable === false) {
+  if (cursorCheckpointModelAffinityId(snapshot.modelId) !== cursorCheckpointModelAffinityId(request.modelId)) {
+    return { reason: "model_changed" };
+  }
+  if (parsed.context.messages.at(-1)?.role !== "toolResult" && cursorState?.checkpointUsable === false) {
     return { reason: "trailing_tool_result" };
   }
+  const lineage = lineageMismatch(parsed, snapshot);
+  if (lineage) return { reason: lineage };
   return { snapshot };
 }
 

@@ -22,7 +22,8 @@ export type CursorCheckpointInvalidationReason =
   | "compaction"
   | "trailing_tool_result"
   | "force_fresh"
-  | "upstream_invalid_argument";
+  | "upstream_invalid_argument"
+  | "lineage_mismatch";
 
 export interface CursorCheckpointSnapshot {
   ref: string;
@@ -34,20 +35,77 @@ export interface CursorCheckpointSnapshot {
   lastAccessAt: number;
   blobLease?: CursorBlobRequestScopeToken;
   coveredMessageCount?: number;
+  prefixDigest?: string;
+  systemDigest?: string;
 }
 
 interface CursorCheckpointStore {
   snapshots: Map<string, CursorCheckpointSnapshot>;
+  prefixIndex: Map<string, Set<string>>;
   totalBytes: number;
 }
 
 const store: CursorCheckpointStore = {
   snapshots: new Map(),
+  prefixIndex: new Map(),
   totalBytes: 0,
 };
 
+let nowFn = (): number => Date.now();
+let scheduleFn = (fn: () => void, ms: number): ReturnType<typeof setTimeout> => {
+  const timer = setTimeout(fn, ms);
+  timer.unref?.();
+  return timer;
+};
+let clearScheduleFn = (timer: ReturnType<typeof setTimeout>): void => {
+  clearTimeout(timer);
+};
+let pruneTimer: ReturnType<typeof setTimeout> | undefined;
+
 function now(): number {
-  return Date.now();
+  return nowFn();
+}
+
+export function installCursorCheckpointClockForTests(input: {
+  now?: () => number;
+  schedule?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clear?: (timer: ReturnType<typeof setTimeout>) => void;
+}): void {
+  if (input.now) nowFn = input.now;
+  if (input.schedule) scheduleFn = input.schedule;
+  if (input.clear) clearScheduleFn = input.clear;
+}
+
+export function resetCursorCheckpointClockForTests(): void {
+  nowFn = () => Date.now();
+  scheduleFn = (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    return timer;
+  };
+  clearScheduleFn = timer => {
+    clearTimeout(timer);
+  };
+  stopPruneTimer();
+}
+
+function stopPruneTimer(): void {
+  if (pruneTimer !== undefined) clearScheduleFn(pruneTimer);
+  pruneTimer = undefined;
+}
+
+function schedulePrune(at = now()): void {
+  stopPruneTimer();
+  let nextExpiry = Number.POSITIVE_INFINITY;
+  for (const snapshot of store.snapshots.values()) {
+    nextExpiry = Math.min(nextExpiry, snapshot.lastAccessAt + CURSOR_CHECKPOINT_TTL_MS);
+  }
+  if (!Number.isFinite(nextExpiry)) return;
+  pruneTimer = scheduleFn(() => {
+    pruneTimer = undefined;
+    prune();
+    schedulePrune();
+  }, Math.max(0, nextExpiry - at));
 }
 
 function prune(at = now()): void {
@@ -59,12 +117,29 @@ function prune(at = now()): void {
     if (oldest === undefined) break;
     deleteSnapshot(oldest);
   }
+  schedulePrune(at);
+}
+
+function indexPrefix(digest: string | undefined, ref: string): void {
+  if (!digest) return;
+  const refs = store.prefixIndex.get(digest) ?? new Set<string>();
+  refs.add(ref);
+  store.prefixIndex.set(digest, refs);
+}
+
+function unindexPrefix(digest: string | undefined, ref: string): void {
+  if (!digest) return;
+  const refs = store.prefixIndex.get(digest);
+  if (!refs) return;
+  refs.delete(ref);
+  if (refs.size === 0) store.prefixIndex.delete(digest);
 }
 
 function deleteSnapshot(ref: string): void {
   const existing = store.snapshots.get(ref);
   if (!existing) return;
   if (existing.blobLease) releaseCursorBlobRequestScope(existing.blobLease);
+  unindexPrefix(existing.prefixDigest, ref);
   store.snapshots.delete(ref);
   store.totalBytes = Math.max(0, store.totalBytes - existing.checkpointBytes.byteLength);
 }
@@ -110,6 +185,8 @@ export function commitCursorCheckpoint(input: {
   modelId: string;
   checkpointBytes: Uint8Array;
   coveredMessageCount?: number;
+  prefixDigest?: string;
+  systemDigest?: string;
 }): string | undefined {
   if (!input.conversationId || !input.modelId || input.checkpointBytes.byteLength === 0) return undefined;
   if (input.checkpointBytes.byteLength > CURSOR_CHECKPOINT_MAX_TOTAL_BYTES) return undefined;
@@ -137,6 +214,8 @@ export function commitCursorCheckpoint(input: {
     createdAt,
     lastAccessAt: createdAt,
     ...(input.coveredMessageCount !== undefined ? { coveredMessageCount: input.coveredMessageCount } : {}),
+    ...(input.prefixDigest ? { prefixDigest: input.prefixDigest } : {}),
+    ...(input.systemDigest ? { systemDigest: input.systemDigest } : {}),
   };
   const blobIds = collectCheckpointBlobIds(input.checkpointBytes);
   if (blobIds === undefined) return undefined;
@@ -151,8 +230,31 @@ export function commitCursorCheckpoint(input: {
   deleteSnapshot(ref);
   store.snapshots.set(ref, snapshot);
   store.totalBytes += snapshot.checkpointBytes.byteLength;
+  indexPrefix(snapshot.prefixDigest, ref);
   prune(createdAt);
   return store.snapshots.has(ref) ? ref : undefined;
+}
+
+export function getCursorCheckpointForPrefix(input: {
+  prefixDigest: string;
+  systemDigest: string;
+  coveredMessageCount: number;
+  identityScope?: string;
+  modelId: string;
+}): CursorCheckpointSnapshot | undefined {
+  prune();
+  const refs = store.prefixIndex.get(input.prefixDigest);
+  if (!refs || refs.size !== 1) return undefined;
+  const [ref] = refs;
+  if (!ref) return undefined;
+  const snapshot = getCursorCheckpoint(ref);
+  if (!snapshot) return undefined;
+  const identityScope = input.identityScope?.trim() || "local";
+  if (snapshot.systemDigest !== input.systemDigest) return undefined;
+  if (snapshot.coveredMessageCount !== input.coveredMessageCount) return undefined;
+  if (snapshot.identityScope !== identityScope) return undefined;
+  if (snapshot.modelId !== input.modelId) return undefined;
+  return snapshot;
 }
 
 export function getLatestCursorCheckpoint(
@@ -188,9 +290,12 @@ export function invalidateCursorCheckpoint(ref: string | undefined): void {
 }
 
 export function clearCursorCheckpointsForTests(): void {
+  stopPruneTimer();
   for (const ref of [...store.snapshots.keys()]) deleteSnapshot(ref);
   store.snapshots.clear();
+  store.prefixIndex.clear();
   store.totalBytes = 0;
+  resetCursorCheckpointClockForTests();
 }
 
 export function cursorCheckpointStoreMetricsForTests(): { count: number; totalBytes: number } {

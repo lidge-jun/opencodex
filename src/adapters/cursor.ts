@@ -7,7 +7,11 @@ import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErro
 import { cursorCheckpointModelAffinityId, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
-import { createCursorRequest } from "./cursor/request-builder";
+import {
+  createCursorRequest,
+  cursorCoveredPrefixDigest,
+  cursorInstructionDigest,
+} from "./cursor/request-builder";
 import {
   createLiveCursorTransport,
   CursorMissingCredentialError,
@@ -133,12 +137,15 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             || lastTransport.captured.byteLength === 0
           ) return;
           const previousRef = _parsed._providerContinuation?.cursor?.checkpointRef;
+          const coveredMessageCount = _parsed.context.messages.length;
           const checkpointRef = commitCursorCheckpoint({
             conversationId: activeRequest.conversationId,
             identityScope: _parsed._cursorIdentityScope,
             modelId: cursorCheckpointModelAffinityId(activeRequest.modelId),
             checkpointBytes: lastTransport.captured,
-            coveredMessageCount: _parsed.context.messages.length,
+            coveredMessageCount,
+            prefixDigest: cursorCoveredPrefixDigest(_parsed, coveredMessageCount),
+            systemDigest: cursorInstructionDigest(_parsed),
           });
           if (!checkpointRef) return;
           if (previousRef && previousRef !== checkpointRef) invalidateCursorCheckpoint(previousRef);

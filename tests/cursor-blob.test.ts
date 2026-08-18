@@ -20,6 +20,9 @@ import {
 import {
   clearCursorCheckpointsForTests,
   commitCursorCheckpoint,
+  CURSOR_CHECKPOINT_TTL_MS,
+  cursorCheckpointStoreMetricsForTests,
+  installCursorCheckpointClockForTests,
   invalidateCursorCheckpoint,
 } from "../src/adapters/cursor/checkpoint-store";
 import {
@@ -1589,5 +1592,40 @@ describe("Cursor checkpoint request construction", () => {
     const serialized = JSON.stringify(suffix);
     expect(serialized).not.toContain("You are helpful.");
     expect(serialized).toContain("FILE CONTENTS HERE");
+  });
+});
+
+describe("Cursor checkpoint idle TTL", () => {
+  afterEach(() => {
+    clearCursorCheckpointsForTests();
+  });
+
+  test("releases expired checkpoint leases without another request", () => {
+    let now = 1_000;
+    let scheduled: (() => void) | undefined;
+    installCursorCheckpointClockForTests({
+      now: () => now,
+      schedule: fn => {
+        scheduled = fn;
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clear: () => {
+        scheduled = undefined;
+      },
+    });
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["ttl"],
+    }));
+    expect(commitCursorCheckpoint({
+      conversationId: "cursor_ttl",
+      identityScope: "acct-1",
+      modelId: "grok-4.6",
+      checkpointBytes,
+    })).toBeDefined();
+    expect(cursorCheckpointStoreMetricsForTests().count).toBe(1);
+    expect(scheduled).toBeTypeOf("function");
+    now += CURSOR_CHECKPOINT_TTL_MS + 1;
+    scheduled?.();
+    expect(cursorCheckpointStoreMetricsForTests().count).toBe(0);
   });
 });
