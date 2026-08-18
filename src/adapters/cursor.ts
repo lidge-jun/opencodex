@@ -241,6 +241,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             throw err;
           }
           const failedConversationId = request.conversationId;
+          lastTransport = undefined;
           _parsed._cursorConversationId = undefined;
           request = createCursorRequest(_parsed, { forceFreshConversation: true });
           rekeyContextUsage(failedConversationId, request.conversationId);

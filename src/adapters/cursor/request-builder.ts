@@ -302,24 +302,30 @@ export function resolveCursorConversationId(
   return generatedCursorConversationId();
 }
 
+function updateFramed(hash: ReturnType<typeof createHash>, value: string): void {
+  const bytes = Buffer.from(value, "utf8");
+  const length = Buffer.allocUnsafe(4);
+  length.writeUInt32BE(bytes.byteLength);
+  hash.update(length);
+  hash.update(bytes);
+}
+
 export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
   const hash = createHash("sha256").update("ocx:cursor:sys:");
-  for (const line of parsed.context.systemPrompt ?? []) {
-    hash.update(line).update("\n");
-  }
+  for (const line of parsed.context.systemPrompt ?? []) updateFramed(hash, line);
   for (const message of parsed.context.messages) {
     if (message.role !== "developer") continue;
-    hash.update(contentToText(message.content)).update("\n");
+    updateFramed(hash, contentToText(message.content));
   }
   return hash.digest("hex");
 }
 
 export function cursorCoveredPrefixDigest(parsed: OcxParsedRequest, coveredMessageCount: number): string {
   const hash = createHash("sha256").update("ocx:cursor:prefix:");
-  hash.update(cursorInstructionDigest(parsed)).update("\0");
+  updateFramed(hash, cursorInstructionDigest(parsed));
   for (const message of parsed.context.messages.slice(0, coveredMessageCount)) {
-    hash.update(message.role).update("\0");
-    hash.update(contentToText(message.content)).update("\n");
+    updateFramed(hash, message.role);
+    updateFramed(hash, contentToText(message.content));
   }
   return hash.digest("hex");
 }

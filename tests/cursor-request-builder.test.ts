@@ -76,6 +76,28 @@ describe("Cursor request builder", () => {
     expect(continuation.conversationId).toBe(initial.conversationId);
   });
 
+  test("prefix digests do not collide across delimiter boundaries", () => {
+    const left = {
+      ...base,
+      context: {
+        messages: [
+          { role: "user" as const, content: "ab", timestamp: 1 },
+          { role: "user" as const, content: "c", timestamp: 2 },
+        ],
+      },
+    };
+    const right = {
+      ...base,
+      context: {
+        messages: [
+          { role: "user" as const, content: "a", timestamp: 1 },
+          { role: "user" as const, content: "bc", timestamp: 2 },
+        ],
+      },
+    };
+    expect(cursorCoveredPrefixDigest(left, 2)).not.toBe(cursorCoveredPrefixDigest(right, 2));
+  });
+
   test("does not own a Cursor conversation from the first user message alone", () => {
     const first = createCursorRequest({
       ...base,
