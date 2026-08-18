@@ -1540,6 +1540,10 @@ function writeRetainedCatalogSync({
   });
   clampCatalogModelsToCodexSupport(catalog.models);
 
+  const autoReviewModel = configuredAutoReviewModel();
+  if (autoReviewModel) {
+    catalog.models = catalog.models.map((entry) => ({ ...entry, auto_review_model_override: autoReviewModel }));
+  }
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
   // A byte-identical rewrite is not a catalog change, but every mtime-keyed reader
