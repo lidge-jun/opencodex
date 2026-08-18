@@ -17,7 +17,12 @@ import http2 from "node:http2";
 import { fromBinary } from "@bufbuild/protobuf";
 import type { UpstreamHttpVersion } from "../../types";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
-import { isPinnedHttp1, withUpstreamHttpVersionValue } from "../../lib/upstream-http-version";
+import {
+  isPinnedHttp1,
+  UpstreamHttpVersionTargetError,
+  withUpstreamHttpVersionValue,
+} from "../../lib/upstream-http-version";
+import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { GetUsableModelsResponseSchema } from "./gen/agent_pb";
 
 const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
@@ -38,7 +43,7 @@ export interface CursorUsableModelsOptions {
 
 export type CursorUsableModelsResult =
   | { ok: true; models: string[] }
-  | { ok: false; error: "auth" | "http" | "transport" | "timeout" | "decode" | "empty" | "too_large"; detail?: string };
+  | { ok: false; error: "auth" | "http" | "policy" | "transport" | "timeout" | "decode" | "empty" | "too_large"; detail?: string };
 
 /** Test-only seam for management connectivity probes; production callers retain the HTTP/2 path. */
 export function setFetchCursorUsableModelsForTests(next: CursorUsableModelsFetcher | null): void {
@@ -47,6 +52,7 @@ export function setFetchCursorUsableModelsForTests(next: CursorUsableModelsFetch
 
 const RETRYABLE_DISCOVERY_ERRORS = new Set(["timeout", "transport"]);
 const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
+const CURSOR_MAX_DISCOVERED_MODELS = 500;
 
 /**
  * Live discovery with ONE bounded retry for transient pre-response failures (a fresh transport
@@ -117,10 +123,10 @@ function decodeCursorUsableModels(bytes: Uint8Array): CursorUsableModelsResult {
       const rawId = (model as { modelId?: string }).modelId;
       if (typeof rawId !== "string") continue;
       const id = rawId.trim();
-      if (id.length === 0 || /[\x00-\x1f]/.test(id) || seenIds.has(id)) continue;
+      if (!isValidModelDiscoveryModelId(id) || seenIds.has(id)) continue;
       seenIds.add(id);
       ids.push(id);
-      if (ids.length === 500) break;
+      if (ids.length >= CURSOR_MAX_DISCOVERED_MODELS) break;
     }
     return ids.length > 0 ? { ok: true, models: ids } : { ok: false, error: "empty" };
   } catch {
@@ -133,7 +139,7 @@ async function fetchCursorUsableModelsHttp1Once(opts: CursorUsableModelsOptions)
   try {
     const parsed = new URL(CURSOR_GET_USABLE_MODELS_PATH, opts.baseUrl ?? "https://api2.cursor.sh");
     if (parsed.protocol !== "https:") {
-      return { ok: false, error: "transport", detail: "Cursor HTTP/1.1 discovery requires HTTPS" };
+      return { ok: false, error: "policy", detail: "Cursor HTTP/1.1 discovery requires HTTPS" };
     }
     requestUrl = parsed.toString();
   } catch {
@@ -175,7 +181,10 @@ async function fetchCursorUsableModelsHttp1Once(opts: CursorUsableModelsOptions)
       return { ok: false, error: "too_large", detail: "GetUsableModels response exceeds 4 MiB" };
     }
     return decodeCursorUsableModels(body.bytes);
-  } catch {
+  } catch (error) {
+    if (error instanceof UpstreamHttpVersionTargetError) {
+      return { ok: false, error: "policy", detail: error.message };
+    }
     return timedOut
       ? { ok: false, error: "timeout", detail: `No response within ${timeoutMs}ms` }
       : { ok: false, error: "transport", detail: "HTTP/1.1 request failed" };

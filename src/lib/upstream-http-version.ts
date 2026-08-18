@@ -21,8 +21,8 @@ const UPSTREAM_HTTP_VERSION_PROTOCOL: Record<Exclude<UpstreamHttpVersion, "auto"
 export class UpstreamHttpVersionTargetError extends Error {
   readonly code = "upstream_http_version_target";
 
-  constructor() {
-    super("upstream HTTP version pin requires an HTTPS target");
+  constructor(readonly observedProtocol: string) {
+    super(`upstream HTTP version pin requires an HTTPS target (received ${observedProtocol})`);
     this.name = "UpstreamHttpVersionTargetError";
   }
 }
@@ -41,9 +41,9 @@ export function withUpstreamHttpVersionValue(
   try {
     targetUrl = new URL(target);
   } catch {
-    throw new UpstreamHttpVersionTargetError();
+    throw new UpstreamHttpVersionTargetError("unparseable");
   }
-  if (targetUrl.protocol !== "https:") throw new UpstreamHttpVersionTargetError();
+  if (targetUrl.protocol !== "https:") throw new UpstreamHttpVersionTargetError(targetUrl.protocol);
   return { ...(init ?? {}), protocol: UPSTREAM_HTTP_VERSION_PROTOCOL[version] } as RequestInit;
 }
 

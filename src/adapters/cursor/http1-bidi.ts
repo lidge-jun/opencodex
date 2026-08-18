@@ -125,6 +125,9 @@ function bunFetchBody(bytes: Uint8Array): BodyInit {
 export class CursorHttp1BidiConnection {
   private readonly abortController = new AbortController();
   private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly runSseReady: Promise<void>;
+  private resolveRunSseReady!: () => void;
+  private rejectRunSseReady!: (reason?: unknown) => void;
   private appendChain: Promise<void> = Promise.resolve();
   private nextAppendSeqno = 0n;
   private committed = false;
@@ -136,10 +139,20 @@ export class CursorHttp1BidiConnection {
 
   constructor(private readonly options: CursorHttp1BidiOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.runSseReady = new Promise<void>((resolve, reject) => {
+      this.resolveRunSseReady = resolve;
+      this.rejectRunSseReady = reject;
+    });
+    // A RunSSE failure can happen before the first append reaches its await; observe it here so
+    // the readiness promise never becomes an unhandled rejection.
+    void this.runSseReady.catch(() => undefined);
   }
 
   start(): void {
-    void this.runSse().catch(error => this.fail(asError(error)));
+    void this.runSse().catch(error => {
+      this.rejectRunSseReady(error);
+      this.fail(asError(error));
+    });
   }
 
   write(frameBytes: Uint8Array): boolean {
@@ -191,7 +204,9 @@ export class CursorHttp1BidiConnection {
     this.closed = true;
     this.destroyed = true;
     this.resume();
-    this.abortController.abort(new DOMException("Cursor HTTP/1.1 connection closed", "AbortError"));
+    const reason = new DOMException("Cursor HTTP/1.1 connection closed", "AbortError");
+    this.rejectRunSseReady(reason);
+    this.abortController.abort(reason);
     queueMicrotask(() => this.finish());
   }
 
@@ -247,6 +262,9 @@ export class CursorHttp1BidiConnection {
       throw cursorHttp1Error("RunSSE", response.status);
     }
     if (!response.body) throw new Error("Cursor HTTP/1.1 RunSSE returned no response body");
+    // Cursor has accepted the request id once RunSSE returns successful headers. Do not race the
+    // first BidiAppend ahead of that registration.
+    this.resolveRunSseReady();
     const reader = response.body.getReader();
     try {
       while (!this.closed && !this.terminal) {
@@ -263,6 +281,8 @@ export class CursorHttp1BidiConnection {
   }
 
   private async postAppend(pending: PendingAppend): Promise<void> {
+    if (this.closed || this.terminal) return;
+    await this.runSseReady;
     if (this.closed || this.terminal) return;
     const encodedBytes = cursorBidiAppendRequestSize(
       pending.payload.byteLength,
@@ -326,6 +346,7 @@ export class CursorHttp1BidiConnection {
     this.terminal = true;
     this.destroyed = true;
     this.resume();
+    this.rejectRunSseReady(error);
     if (!this.abortController.signal.aborted) this.abortController.abort(error);
     this.options.callbacks.onError(error);
   }

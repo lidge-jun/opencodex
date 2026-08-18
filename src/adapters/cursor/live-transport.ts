@@ -814,6 +814,10 @@ class LiveCursorTransport implements CursorTransport {
     fail: (error: Error) => void,
     finish: () => void,
   ): void {
+    if (signal?.aborted) {
+      fail(signal.reason instanceof Error ? signal.reason : new Error("Cursor request was aborted"));
+      return;
+    }
     this.turnStartedAt = Date.now();
     this.framesReceived = 0;
     this.sawAssistantText = false;
@@ -1153,6 +1157,13 @@ class LiveCursorTransport implements CursorTransport {
       this.close();
       failAndClear(new Error("Cursor request was aborted"));
     }, { once: true });
+    // Close the race between the preflight above and listener installation. No request payload is
+    // written until after this check.
+    if (signal?.aborted) {
+      this.close();
+      failAndClear(signal.reason instanceof Error ? signal.reason : new Error("Cursor request was aborted"));
+      return;
+    }
 
     this.writeConnectFrame(encodeConnectFrame(encodedRequest));
     this.heartbeat = setInterval(() => {

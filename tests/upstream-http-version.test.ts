@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { providerFetch, withUpstreamHttpVersion } from "../src/server/responses/fetch-helpers";
+import { UpstreamHttpVersionTargetError } from "../src/lib/upstream-http-version";
 import type { OcxProviderConfig } from "../src/types";
 
 const HTTPS_URL = "https://opencode.ai/zen/go/v1/chat/completions";
@@ -33,6 +34,14 @@ describe("withUpstreamHttpVersion", () => {
     expect(withUpstreamHttpVersion(HTTPS_URL, undefined, provider({ upstreamHttpVersion: "auto" }))).toBeUndefined();
   });
 
+  test("absent and auto pins leave plaintext and unparseable targets untouched", () => {
+    const init = { method: "POST", headers: {} };
+    expect(withUpstreamHttpVersion(HTTP_URL, init, provider())).toBe(init);
+    expect(withUpstreamHttpVersion(HTTP_URL, init, provider({ upstreamHttpVersion: "auto" }))).toBe(init);
+    expect(withUpstreamHttpVersion("not a url", init, provider())).toBe(init);
+    expect(withUpstreamHttpVersion("not a url", init, provider({ upstreamHttpVersion: "auto" }))).toBe(init);
+  });
+
   test("http1.1 pins the protocol on https targets", () => {
     const init = { method: "POST", headers: {} };
     const out = withUpstreamHttpVersion(HTTPS_URL, init, provider({ upstreamHttpVersion: "http1.1" }))!;
@@ -57,11 +66,15 @@ describe("withUpstreamHttpVersion", () => {
 
   test("plain-http targets fail clearly when an explicit pin cannot be honored", () => {
     const init = { method: "POST", headers: {} };
-    expect(() => withUpstreamHttpVersion(
-      HTTP_URL,
-      init,
-      provider({ upstreamHttpVersion: "http1.1" }),
-    )).toThrow("upstream HTTP version pin requires an HTTPS target");
+    let failure: unknown;
+    try {
+      withUpstreamHttpVersion(HTTP_URL, init, provider({ upstreamHttpVersion: "http1.1" }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(UpstreamHttpVersionTargetError);
+    expect((failure as UpstreamHttpVersionTargetError).observedProtocol).toBe("http:");
+    expect((failure as Error).message).toContain("received http:");
   });
 
   test("Request objects resolve their url for the https guard", () => {
@@ -73,11 +86,14 @@ describe("withUpstreamHttpVersion", () => {
 
   test("unparseable targets fail clearly when a pin is configured", () => {
     const init = { method: "POST" };
-    expect(() => withUpstreamHttpVersion(
-      "not a url",
-      init,
-      provider({ upstreamHttpVersion: "http1.1" }),
-    )).toThrow("upstream HTTP version pin requires an HTTPS target");
+    let failure: unknown;
+    try {
+      withUpstreamHttpVersion("not a url", init, provider({ upstreamHttpVersion: "http1.1" }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(UpstreamHttpVersionTargetError);
+    expect((failure as UpstreamHttpVersionTargetError).observedProtocol).toBe("unparseable");
   });
 
   test("absent init still applies the pin (providerFetch without init)", () => {

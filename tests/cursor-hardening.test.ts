@@ -85,6 +85,21 @@ describe("Cursor live-model discovery hardening", () => {
     expect(result).toEqual({ ok: true, models: ["gpt-5.5-high"] });
   });
 
+  test("filters every shared model-id control-character class", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [
+        create(ModelDetailsSchema, { modelId: "good-model" }),
+        create(ModelDetailsSchema, { modelId: "bad-del\u007f" }),
+        create(ModelDetailsSchema, { modelId: "bad-c1\u0085" }),
+        create(ModelDetailsSchema, { modelId: "bad-line\u2028separator" }),
+      ],
+    }));
+    const result = await withDiscoveryServer(respond(200, body), baseUrl =>
+      fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+
+    expect(result).toEqual({ ok: true, models: ["good-model"] });
+  });
+
   test("rejects a cleartext non-loopback discovery URL before connecting", async () => {
     const result = await fetchCursorUsableModels({
       apiKey: "test-token",
@@ -120,11 +135,12 @@ describe("Cursor live-model discovery hardening", () => {
     expect(result).toEqual({ ok: true, models: ["claude-opus-5"] });
     expect(seenUrl).toBe("https://api2.cursor.sh/agent.v1.AgentService/GetUsableModels");
     expect(seenInit?.method).toBe("POST");
+    expect(seenInit?.redirect).toBe("manual");
     expect((seenInit as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
     expect(new Headers(seenInit?.headers).get("authorization")).toBe("Bearer test-token");
   });
 
-  test("HTTP/1.1 discovery rejects cleartext before exposing the Bearer token", async () => {
+  test("discovery rejects a cleartext non-loopback URL before exposing the token, even with an HTTP/1.1 pin", async () => {
     let fetchCalls = 0;
     const fetchImpl = (async () => {
       fetchCalls += 1;
@@ -139,6 +155,28 @@ describe("Cursor live-model discovery hardening", () => {
     });
 
     expect(result).toEqual({ ok: false, error: "transport", detail: "Cursor discovery URL must use HTTPS" });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("HTTP/1.1 discovery rejects an admitted loopback URL without retrying or invoking fetch", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "must-not-leave-process",
+      baseUrl: "http://127.0.0.1:1",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "policy",
+      detail: "Cursor HTTP/1.1 discovery requires HTTPS",
+    });
     expect(fetchCalls).toBe(0);
   });
 

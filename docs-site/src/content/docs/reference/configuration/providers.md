@@ -294,13 +294,15 @@ so passthrough stays byte-for-byte identical.
 ## Cursor provider (`adapter: "cursor"`)
 
 The Cursor bridge is experimental. After `ocx login cursor`, add or edit `providers.cursor`.
-Cursor Router's optimization ladder is exposed as separate Codex ids because the picker cannot render
-Cursor-specific model parameters:
 
 If a proxy cannot carry Cursor's default HTTP/2 stream, set `upstreamHttpVersion` to `"http1.1"`.
 This switches inference to Cursor's `RunSSE` + `BidiAppend` compatibility transport and uses
-HTTP/1.1 for `GetUsableModels` discovery as well. Leave it unset or use `"auto"` for the existing
-HTTP/2 behavior. In the dashboard choose **Providers → Cursor → Settings → Cursor transport**.
+HTTP/1.1 for `GetUsableModels` discovery as well. The value requires an HTTPS `baseUrl`. Leave it
+unset or use `"auto"` for the existing HTTP/2 behavior. In the dashboard choose
+**Providers → Cursor → Settings → Cursor transport**.
+
+Cursor Router's optimization ladder is exposed as separate Codex ids because the picker cannot render
+Cursor-specific model parameters:
 
 | Codex model | Cursor Router mode |
 | --- | --- |

@@ -1,8 +1,18 @@
-import { fromBinary } from "@bufbuild/protobuf";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, test } from "bun:test";
 import {
   AgentClientMessageSchema,
+  AgentServerMessageSchema,
   BidiRequestIdSchema,
+  CreatePlanArgsSchema,
+  CreatePlanRequestQuerySchema,
+  InteractionQuerySchema,
+  InteractionUpdateSchema,
+  McpArgsSchema,
+  McpToolCallSchema,
+  TextDeltaUpdateSchema,
+  ToolCallSchema,
+  ToolCallStartedUpdateSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 import { decodeConnectFrame, encodeConnectFrame } from "../src/adapters/cursor/framing";
 import {
@@ -10,6 +20,7 @@ import {
   encodeCursorBidiAppendRequest,
 } from "../src/adapters/cursor/http1-bidi";
 import { createLiveCursorTransport } from "../src/adapters/cursor/live-transport";
+import type { CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
 import type { OcxProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -102,6 +113,73 @@ function heldRunSseResponse(signal: AbortSignal | null | undefined): Response {
   });
 }
 
+function connectEndFrame(): Uint8Array {
+  return encodeConnectFrame(new TextEncoder().encode("{}"), { endStream: true });
+}
+
+function scriptedHttp1Fetch(frames: Uint8Array[]): typeof fetch {
+  let runController!: ReadableStreamDefaultController<Uint8Array>;
+  let delivered = false;
+  return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/agent.v1.AgentService/RunSSE") {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          runController = controller;
+          const abort = () => {
+            try { controller.error(init?.signal?.reason ?? new DOMException("aborted", "AbortError")); } catch { /* closed */ }
+          };
+          if (init?.signal?.aborted) abort();
+          else init?.signal?.addEventListener("abort", abort, { once: true });
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/connect+proto" },
+      });
+    }
+    if (url.pathname === "/aiserver.v1.BidiService/BidiAppend") {
+      if (!delivered) {
+        delivered = true;
+        queueMicrotask(() => {
+          for (const frame of frames) runController.enqueue(frame);
+          runController.close();
+        });
+      }
+      return new Response(new Uint8Array(), { status: 200 });
+    }
+    throw new Error(`unexpected Cursor compatibility endpoint ${url.pathname}`);
+  }) as typeof fetch;
+}
+
+async function runHttp1Turn(
+  fetchImpl: typeof fetch,
+  conversationId: string,
+  overrides: Partial<CursorRunRequest> = {},
+): Promise<{ messages: CursorServerMessage[]; failure?: Error }> {
+  const transport = createLiveCursorTransport({
+    provider: cursorProvider(fetchImpl),
+    translatorBudget: createTestTranslatorBudget(),
+    firstFrameTimeoutMs: 2_000,
+  });
+  const messages: CursorServerMessage[] = [];
+  let failure: Error | undefined;
+  try {
+    for await (const message of transport.run({
+      modelId: "claude-opus-5",
+      conversationId,
+      system: [],
+      messages: [{ role: "user", content: "hello" }],
+      ...overrides,
+    })) messages.push(message);
+  } catch (error) {
+    failure = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    await transport.close?.();
+  }
+  return { messages, ...(failure ? { failure } : {}) };
+}
+
 describe("Cursor HTTP/1.1 compatibility transport", () => {
   test("encodes the Cursor BidiAppend hex fallback wire shape", () => {
     const payload = Uint8Array.of(0xde, 0xad, 0xbe, 0xef);
@@ -184,6 +262,164 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
     expect(appends[0]?.data).not.toBe("");
     expect(fromBinary(AgentClientMessageSchema, hexBytes(appends[0]!.data)).message.case).toBe("runRequest");
     expect(transport.requestCommitted?.()).toBe(true);
+  });
+
+  test("waits for successful RunSSE registration before the first BidiAppend", async () => {
+    let releaseRunSse!: (response: Response) => void;
+    const runSseGate = new Promise<Response>(resolve => { releaseRunSse = resolve; });
+    let runController!: ReadableStreamDefaultController<Uint8Array>;
+    const paths: string[] = [];
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === "/agent.v1.AgentService/RunSSE") return runSseGate;
+      if (url.pathname === "/aiserver.v1.BidiService/BidiAppend") {
+        queueMicrotask(() => {
+          runController.enqueue(connectEndFrame());
+          runController.close();
+        });
+        return new Response(new Uint8Array(), { status: 200 });
+      }
+      throw new Error(`unexpected endpoint ${url.pathname}`);
+    }) as typeof fetch;
+
+    const pending = runHttp1Turn(fetchImpl, "cursor_http1_ready_order");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(paths).toEqual(["/agent.v1.AgentService/RunSSE"]);
+
+    releaseRunSse(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { runController = controller; },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/connect+proto" },
+    }));
+    const result = await pending;
+
+    expect(result.failure).toBeUndefined();
+    expect(paths.slice(0, 2)).toEqual([
+      "/agent.v1.AgentService/RunSSE",
+      "/aiserver.v1.BidiService/BidiAppend",
+    ]);
+  });
+
+  test("a pre-aborted turn performs no HTTP/1.1 I/O", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run");
+    }) as typeof fetch;
+    const transport = createLiveCursorTransport({
+      provider: cursorProvider(fetchImpl),
+      translatorBudget: createTestTranslatorBudget(),
+      firstFrameTimeoutMs: 2_000,
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("fixture pre-aborted"));
+
+    try {
+      await expect((async () => {
+        for await (const _message of transport.run({
+          modelId: "claude-opus-5",
+          conversationId: "cursor_http1_preaborted",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        }, controller.signal)) { /* drain */ }
+      })()).rejects.toThrow("fixture pre-aborted");
+      expect(fetchCalls).toBe(0);
+      expect(transport.requestCommitted?.()).toBe(false);
+    } finally {
+      await transport.close?.();
+    }
+  });
+
+  test("synthesizes done after assistant text on clean HTTP/1.1 EOF", async () => {
+    const textFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionUpdate",
+        value: create(InteractionUpdateSchema, {
+          message: { case: "textDelta", value: create(TextDeltaUpdateSchema, { text: "hello" }) },
+        }),
+      },
+    })));
+    const result = await runHttp1Turn(
+      scriptedHttp1Fetch([textFrame, connectEndFrame()]),
+      "cursor_http1_text_eof",
+    );
+
+    expect(result.failure).toBeUndefined();
+    expect(result.messages).toContainEqual({ type: "text", text: "hello" });
+    expect(result.messages.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("synthesizes done after createPlanRequestQuery text on clean HTTP/1.1 EOF", async () => {
+    const planFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionQuery",
+        value: create(InteractionQuerySchema, {
+          id: 7,
+          query: {
+            case: "createPlanRequestQuery",
+            value: create(CreatePlanRequestQuerySchema, {
+              args: create(CreatePlanArgsSchema, {
+                name: "Fix bridge",
+                overview: "Two steps.",
+                plan: "1. read\n2. patch",
+              }),
+            }),
+          },
+        }),
+      },
+    })));
+    const result = await runHttp1Turn(
+      scriptedHttp1Fetch([planFrame, connectEndFrame()]),
+      "cursor_http1_plan_eof",
+    );
+
+    expect(result.failure).toBeUndefined();
+    expect(result.messages.some(message => message.type === "text" && message.text?.includes("Fix bridge"))).toBe(true);
+    expect(result.messages.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("open tool call plus clean HTTP/1.1 EOF emits a truncation event", async () => {
+    const startedFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionUpdate",
+        value: create(InteractionUpdateSchema, {
+          message: {
+            case: "toolCallStarted",
+            value: create(ToolCallStartedUpdateSchema, {
+              callId: "call_1",
+              modelCallId: "model_1",
+              toolCall: create(ToolCallSchema, {
+                tool: {
+                  case: "mcpToolCall",
+                  value: create(McpToolCallSchema, {
+                    args: create(McpArgsSchema, {
+                      name: "get_time",
+                      toolName: "get_time",
+                      toolCallId: "call_1",
+                      providerIdentifier: "opencodex-responses",
+                    }),
+                  }),
+                },
+              }),
+            }),
+          },
+        }),
+      },
+    })));
+    const result = await runHttp1Turn(
+      scriptedHttp1Fetch([startedFrame, connectEndFrame()]),
+      "cursor_http1_open_tool_eof",
+      { tools: [{ name: "get_time", description: "t", parameters: { type: "object", properties: {} } }] },
+    );
+
+    expect(result.failure).toBeUndefined();
+    expect(result.messages.at(-1)).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("incomplete tool call"),
+    });
   });
 
   test("keeps a proven pre-connect BidiAppend failure uncommitted", async () => {
