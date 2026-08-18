@@ -2642,6 +2642,7 @@ describe("provider management validation", () => {
       providers: {
         openai: { ...canonicalDirect },
         extra: { adapter: "openai-chat", baseUrl: "https://extra.example.test/v1", apiKey: "sk-existing", note: "old note" },
+        relay: { adapter: "openai-responses", baseUrl: "https://relay.example.test/v1", apiKey: "sk-relay" },
         gateway: { adapter: "anthropic", baseUrl: "https://gateway.example.test/v1", apiKey: "sk-gateway" },
         nvidia: { adapter: "openai-chat", baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "sk-nvidia" },
         ollama: { adapter: "openai-chat", baseUrl: "http://localhost:11434/v1" },
@@ -2671,6 +2672,18 @@ describe("provider management validation", () => {
       apiKey: "sk-existing", // untouched — keys are not writable through PATCH
     });
     expect(catalogRefreshes).toBe(1);
+
+    const encryptedV2 = await patch("relay", { allowEncryptedV2AgentTasks: true });
+    expect(encryptedV2?.status).toBe(200);
+    expect(liveConfig.providers.relay.allowEncryptedV2AgentTasks).toBe(true);
+    expect(loadConfig().providers.relay.allowEncryptedV2AgentTasks).toBe(true);
+    const listReq = new Request("http://127.0.0.1/api/providers");
+    const listed = await handleManagementAPI(listReq, new URL(listReq.url), liveConfig);
+    expect(listed?.status).toBe(200);
+    const listedBody = await listed?.json() as Array<{ name?: string; allowEncryptedV2AgentTasks?: boolean }>;
+    expect(listedBody.find(provider => provider.name === "relay")?.allowEncryptedV2AgentTasks).toBe(true);
+    expect((await patch("relay", { allowEncryptedV2AgentTasks: "yes" }))?.status).toBe(400);
+    expect((await patch("extra", { allowEncryptedV2AgentTasks: true }))?.status).toBe(400);
 
     // Empty defaultModel/note clear the fields.
     const clear = await patch("extra", { defaultModel: "", note: "" });

@@ -76,15 +76,17 @@ v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트�
 
 ## 암호화된 v2 작업 전달
 
-Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `encrypted_content`로만 보낼 수 있습니다. 이 페이로드는 네이티브 ChatGPT 백엔드가 읽을 수 있지만 외부 프로바이더는 읽을 수 없습니다. 이것이 알려진 [#92 제한](https://github.com/lidge-jun/opencodex/issues/92)입니다.
+Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `encrypted_content`로만 보낼 수 있습니다. 네이티브 ChatGPT 백엔드는 이를 처리할 수 있고 일부 호환 릴레이도 처리 가능한 백엔드로 전달할 수 있지만, OpenCodex는 이름이나 Base URL만으로 이 능력을 추론할 수 없습니다. 이것이 알려진 [#92 제한](https://github.com/lidge-jun/opencodex/issues/92)입니다.
 
 opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안전하게 실패합니다.
 
-- 비네이티브 직접 라우팅은 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환하며, 암호문을 에코하지 않습니다.
-- 콤보는 해당 작업에 대해 재시도를 포함해 정규 네이티브 ChatGPT 대상만 고려합니다. 사용할 수 있는 대상이 없으면 같은 400 오류를 반환합니다.
+- 명시적으로 신뢰하지 않은 비네이티브 직접 라우팅은 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환하며, 암호문을 에코하지 않습니다.
+- 콤보는 해당 작업에 대해 재시도를 포함해 정규 네이티브 ChatGPT 대상과 명시적으로 신뢰한 Responses 대상만 고려합니다. 사용할 수 있는 대상이 없으면 같은 400 오류를 반환합니다.
 - 읽을 수 있는 평문 작업은 정상 라우트와 폴백 동작을 그대로 유지합니다.
 
 복구 방법은 네이티브 ChatGPT 자식을 선택하거나, 콤보에 네이티브 ChatGPT 대상을 추가하거나, 이종 프로바이더 위임에는 v1을 사용하거나, 호출자를 제어할 수 있을 때 작업을 평문 v2 `agent_message` 콘텐츠로 다시 보내는 것입니다.
+
+비표준 Responses 엔드포인트가 이 암호문을 처리한다고 확인한 경우 공급자 설정에서 **암호화된 V2 에이전트 작업 전달**을 켜거나 `allowEncryptedV2AgentTasks: true`를 설정하세요. 기본값은 꺼짐이며 `adapter: "openai-responses"`에서만 유효합니다. 불투명한 작업을 변경 없이 전달할 뿐 복호화, 평문 복구 또는 호환성 증명을 하지 않으며, 이 경로에서는 `agentTaskRecovery`를 건너뜁니다.
 
 실험적인 `agentTaskRecovery`는 기본적으로 꺼져 있습니다. 명시적으로 켜면 고정된 ChatGPT 엔드포인트로 인증된 요청을 하나 더 보내 이 형식을 복구할 수 있지만, 할당량과 지연 시간이 늘고 비공개 백엔드 동작에 의존합니다. 실패하면 기존 `unreadable_encrypted_agent_task` 오류를 그대로 유지합니다. 자세한 내용은 [영문 설정 참고 문서](/reference/configuration/agents/#encrypted-v2-task-recovery)를 보세요.
 

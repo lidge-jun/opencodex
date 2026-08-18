@@ -60,6 +60,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `responsesPath?` | `string` | 키 인증 `openai-responses` 요청의 상대 리소스 경로입니다. 반드시 `/`로 시작해야 하며 스킴, query, fragment를 포함하면 안 됩니다. |
 | `supportsServiceTier?` | `boolean` | `service_tier` 케이퍼빌리티 3상태입니다. `true`: fast 모드가 주입할 수 있고 호출자 값도 보존합니다. `false`: 필드를 제거하고 절대 주입하지 않습니다(미지원으로 문서화된 업스트림에는 볼 수 없습니다). 미설정: 미분류 — 호출자가 준 값은 그대로 보존하고 fast 모드는 주입하지 않습니다. 레지스트리는 정식 OpenAI(`true`), DeepSeek, Volcengine Ark(`false`)를 분류하며, 실제로 티어를 지원하는 커스텀 게이트웨이에만 명시적으로 설정하세요. |
 | `preserveResponsesReasoningContent?` | `boolean` | 리플레이되는 Responses reasoning 항목의 평문 reasoning 내용을 지우지 않고 유지합니다(지우는 것은 ChatGPT 백엔드 규칙입니다). DeepSeek처럼 reasoning 리플레이를 허용하는 업스트림에 켜세요. 프록시가 만든 `ocxr1` 봉투는 항상 제거됩니다. |
+| `allowEncryptedV2AgentTasks?` | `boolean` | 기본값은 꺼짐입니다. 이 비표준 `openai-responses` 공급자가 불투명한 암호화 V2 하위 에이전트 작업을 처리할 수 있다고 신뢰합니다. 켜면 opencodex가 `encrypted_content`를 변경 없이 전달하고 해당 경로의 평문 복구를 건너뜁니다. 호환성이나 복호화 능력을 보장하지 않으므로 업스트림을 확인한 뒤에만 켜세요. 표준 ChatGPT 전달에는 필요하지 않습니다. |
 | `disabled?` | `boolean` | 공급자를 디스크에는 남기되, 라우팅과 모델/카탈로그 목록에서는 제외합니다. |
 | `apiKey?` | `string` | API 키 또는 요청 시점에 해석되는 `${ENV_VAR}` / `$ENV_VAR` 참조입니다. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic 키 헤더 형식입니다. 기본값은 네이티브 `x-api-key`이며, 키 인증 `anthropic` 공급자에만 유효합니다. |

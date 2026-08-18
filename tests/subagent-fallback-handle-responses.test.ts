@@ -911,6 +911,41 @@ describe("native fallback account preview", () => {
 });
 
 describe("encrypted child native-only fallback", () => {
+  test("falls back to an explicitly trusted Responses provider", async () => {
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      subagentModelFallback: ["relay/gpt-5.6-luna"],
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "xai-test",
+        },
+        relay: {
+          adapter: "openai-responses",
+          baseUrl: "https://relay.example.test/v1",
+          authMode: "key",
+          apiKey: "relay-test",
+          allowEncryptedV2AgentTasks: true,
+        },
+      },
+    });
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(cfg, {
+      model: "xai/grok-4.5",
+      input: encryptedAgentInput(),
+      stream: false,
+    });
+
+    expect(response.status).toBe(200);
+    expect(capture.urls.some(url => url.includes("relay.example.test"))).toBe(true);
+    expect(capture.urls.some(url => url.includes("api.x.ai"))).toBe(false);
+    expect(capture.bodies.some(body => body.includes("encrypted_content"))).toBe(true);
+  });
+
   test("rejects encrypted routed primary when only routed fallbacks exist", async () => {
     const cfg = poolNativePlusRoutedConfig({
       defaultProvider: "xai",

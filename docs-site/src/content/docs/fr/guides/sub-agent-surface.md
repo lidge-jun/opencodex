@@ -116,26 +116,28 @@ pendant un temps de recharge, il manque un compte Codex poolé utilisable ou au-
 Les sondes de disponibilité sont mises en cache pendant `subagentModelFallbackPollMs` (60 secondes par défaut).
 
 La solution de secours ne rend pas lisibles les tâches chiffrées incompatibles. Lorsque la tâche enfant est chiffrée pour
-ChatGPT, la sélection est restreinte aux cibles ChatGPT natives canoniques même si un modèle externe
-apparaît plus tôt dans la chaîne.
+ChatGPT, la sélection est restreinte aux cibles ChatGPT natives canoniques ou aux fournisseurs Responses avec
+`allowEncryptedV2AgentTasks: true`.
 
 ## Livraison de tâches v2 cryptées
 
-Codex peut envoyer une tâche enfant v2 native vers routé uniquement sous forme `encrypted_content` chiffrée par le backend. Cette
-charge utile peut être lue par le backend natif ChatGPT, mais pas par un fournisseur externe. C'est la
+Codex peut envoyer une tâche enfant v2 native vers routé uniquement sous forme `encrypted_content` chiffrée par le backend. Le
+backend ChatGPT natif peut la traiter et certains relais compatibles peuvent la transmettre à un backend capable de la traiter ; OpenCodex ne peut pas déduire cette capacité du nom ou de l’URL de base. C'est la
 limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
 
-- Une route directe non native renvoie HTTP 400 avec
+- Une route directe non native non approuvée renvoie HTTP 400 avec
   `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré.
-- Un combo considère uniquement les cibles ChatGPT natives canoniques pour cette tâche, y compris les tentatives. Si aucun
+- Un combo considère uniquement les cibles ChatGPT natives canoniques et les cibles Responses explicitement approuvées pour cette tâche, y compris les tentatives. Si aucun
   est disponible, il renvoie la même erreur 400.
 - Une tâche lisible en texte clair conserve la route normale et le comportement de repli.
 
 Les options de récupération consistent à sélectionner un enfant ChatGPT natif, à ajouter une cible ChatGPT native au combo, à utiliser
 v1 pour la délégation de fournisseurs hétérogènes, ou renvoyer la tâche en texte brut v2 `agent_message`
 contenu lorsque vous contrôlez l’appelant.
+
+Après avoir vérifié qu’un endpoint Responses non canonique accepte ce ciphertext, activez **Transmettre les tâches d’agent V2 chiffrées** dans ses paramètres ou définissez `allowEncryptedV2AgentTasks: true`. L’option est désactivée par défaut, exige `adapter: "openai-responses"`, transmet la tâche opaque sans modification et ne prouve ni compatibilité ni capacité de déchiffrement. Cette route ignore alors `agentTaskRecovery`.
 
 L’option expérimentale `agentTaskRecovery`, désactivée par défaut, peut récupérer cette forme précise de
 tâche native envoyée vers une route externe. Elle utilise un transfert Responses brut vers le point de
@@ -154,8 +156,7 @@ récupéré, la fidélité octet par octet n’est pas garantie. Les appelants g
 sont rejetés, et tout échec conserve l’erreur `unreadable_encrypted_agent_task`. Consultez
 [Configuration de l'agent : récupération de tâche chiffrée v2](/fr/reference/configuration/agents/#récupération-des-tâches-v2-chiffrées)
 pour la limite de confiance complète et la configuration.
-Le routage des combinaisons reste inchangé et continue de considérer uniquement les cibles ChatGPT natives
-canoniques pour les tâches chiffrées.
+Le routage des combinaisons applique la même règle et considère les cibles ChatGPT natives canoniques ainsi que les cibles Responses explicitement approuvées.
 
 ## Changer le mode
 

@@ -6,7 +6,7 @@ description: 全域控制 Codex 在所有模型上生成和管理子代理的方
 opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀表板和 Models 頁面中的 **Sub-agent** 開關會全域控制這一設定。
 
 :::note
-在 v2 介面（`multi_agent_v2`）上，子代理**預設**繼承父會話的模型：`fork_turns` 預設為 `all`，而全量歷史 fork 會拒絕覆蓋。自 v2.7.2 起，opencodex 注入的指引會教模型如何打破繼承 —— 將 `fork_turns` 設為 `"none"`（或如 `"3"` 的部分 fork）的 `spawn_agent` 呼叫可以傳入 `model` / `reasoning_effort` 引數；即使公開的工具 schema 中看不到這些引數，Codex 執行環境也會解析並應用。已知傳輸限制：當**原生**父代理 spawn 一個路由到**非原生** provider 的子代理時，Codex 用戶端可能只以後端加密的 `encrypted_content` 傳送 `NEW_TASK` 載荷（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。opencodex 不會把這種無法讀取的任務轉發給外部 provider：直接路由會回傳 HTTP 400 和錯誤碼 `unreadable_encrypted_agent_task`；組合路由則會跳過無法解密的目標，並在存在可用目標時選擇規範的原生 ChatGPT 目標。恢復方法：異構 provider 委派改用 v1、選擇原生 ChatGPT 子代理，或將任務重新作為明文 v2 `agent_message` 內容傳送。另有預設停用的實驗性 `agentTaskRecovery`；它會增加 ChatGPT 配額用量與延遲，且依賴非公開後端行為。
+在 v2 介面（`multi_agent_v2`）上，子代理**預設**繼承父會話的模型：`fork_turns` 預設為 `all`，而全量歷史 fork 會拒絕覆蓋。自 v2.7.2 起，opencodex 注入的指引會教模型如何打破繼承 —— 將 `fork_turns` 設為 `"none"`（或如 `"3"` 的部分 fork）的 `spawn_agent` 呼叫可以傳入 `model` / `reasoning_effort` 引數；即使公開的工具 schema 中看不到這些引數，Codex 執行環境也會解析並應用。已知傳輸限制：當**原生**父代理 spawn 一個路由到**非原生** provider 的子代理時，Codex 用戶端可能只以後端加密的 `encrypted_content` 傳送 `NEW_TASK` 載荷（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。opencodex 預設不會把這種無法讀取的任務轉發給外部 provider；經驗證的 Responses provider 可透過 `allowEncryptedV2AgentTasks: true` 明確啟用原樣透傳。未啟用的直接路由會回傳 HTTP 400 和錯誤碼 `unreadable_encrypted_agent_task`；組合路由會跳過不合格目標。其他恢復方法包括改用 v1、選擇原生 ChatGPT 子代理，或傳送明文 v2 `agent_message`。另有預設停用的實驗性 `agentTaskRecovery`；它會增加 ChatGPT 配額用量與延遲，且依賴非公開後端行為。
 :::
 
 ## What sub-agents are
@@ -87,24 +87,26 @@ opencodex 仍可為了向後相容從 TOML 讀取舊版 `model_fallback` 列，�
 停用 provider 支撐、標記為不健康、在冷卻中、缺少可用 Pool 化 Codex 帳號，或超過設定配額閾值的
 候選。可用性探測會快取 `subagentModelFallbackPollMs`（預設 60 秒）。
 
-Fallback 不能讓不相容的加密任務變成可讀。當子任務是為 ChatGPT 加密時，即使外部模型在鏈中出現得
-更早，選擇也會限制在規範的原生 ChatGPT 目標。
+Fallback 不能讓不相容的加密任務變成可讀。當子任務是為 ChatGPT 加密時，選擇僅限規範的原生
+ChatGPT 目標，或明確設定 `allowEncryptedV2AgentTasks: true` 的 Responses 供應商。
 
 ## 加密的 v2 任務傳輸
 
-Codex 可能只以後端加密的 `encrypted_content` 傳送 v2 原生→路由子任務。該載荷可以被原生 ChatGPT
-後端讀取，但外部 provider 無法讀取。這是已知的
+Codex 可能只以後端加密的 `encrypted_content` 傳送 v2 原生→路由子任務。原生 ChatGPT 後端可處理
+該載荷，某些相容中繼也可能將它交給可處理的後端；OpenCodex 無法從名稱或 Base URL 推斷此能力。這是已知的
 [#92 限制](https://github.com/lidge-jun/opencodex/issues/92)。
 
 opencodex 會安全失敗，而不是轉發空或無法讀取的任務：
 
-- 直接的非原生路由回傳 HTTP 400，帶有 `error.code = "unreadable_encrypted_agent_task"`，且不會回顯
+- 未明確信任的非原生直連路由回傳 HTTP 400，帶有 `error.code = "unreadable_encrypted_agent_task"`，且不會回顯
   密文。
-- 組合只會為該任務考慮規範的原生 ChatGPT 目標，包括重試。若沒有可用目標，回傳相同的 400。
+- 組合只會為該任務考慮規範的原生 ChatGPT 目標與明確信任的 Responses 目標，包括重試。若沒有可用目標，回傳相同的 400。
 - 可讀取的明文任務保持正常的路由與 fallback 行為。
 
 恢復方法：選擇原生 ChatGPT 子代理、在組合中加入原生 ChatGPT 目標、異構 provider 委派改用 v1，
 或在你能控制呼叫方時將任務重新作為明文 v2 `agent_message` 內容傳送。
+
+若已驗證非規範 Responses 端點可處理此密文，可在供應商設定中啟用「透傳加密的 V2 子代理任務」，或設定 `allowEncryptedV2AgentTasks: true`。此選項預設停用，僅適用於 `adapter: "openai-responses"`；它會原樣透傳不透明任務，不會解密、復原明文或證明相容性。啟用透傳的路由會跳過 `agentTaskRecovery`。
 
 實驗性的 `agentTaskRecovery` 預設停用。明確啟用後，它可透過固定 ChatGPT 端點的額外已驗證請求
 恢復此格式，但會消耗配額、增加延遲，並依賴非公開後端行為。任何失敗都保留原本的

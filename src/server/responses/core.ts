@@ -159,7 +159,11 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import {
+  canReceiveEncryptedV2AgentTasks,
+  isCanonicalOpenAiForwardProvider,
+  OPENAI_CODEX_PROVIDER_ID,
+} from "../../providers/openai-tiers";
 import { providerContextCap } from "../../providers/context-cap";
 import {
   fastPolicyForModel,
@@ -1803,7 +1807,7 @@ export async function handleComboResponses(
     if (!provider || provider.disabled === true) return false;
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
-      return isCanonicalOpenAiForwardProvider(route.provider);
+      return canReceiveEncryptedV2AgentTasks(route.provider);
     } catch {
       return false;
     }
@@ -2413,7 +2417,7 @@ async function handleResponsesInner(
     threadSpawn
     && unreadableEncryptedAgentTask
     && agentTaskRecovery
-    && !isCanonicalOpenAiForwardProvider(route.provider)
+    && !canReceiveEncryptedV2AgentTasks(route.provider)
     && !options.comboAttempt
   ) {
     let recovered = false;
@@ -2504,9 +2508,10 @@ async function handleResponsesInner(
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
 
-  // Encrypted child tasks may only reach the canonical native backend. This check
-  // runs against the FINAL route so native-only fallback can rescue a routed primary.
-  if (!isCanonicalOpenAiForwardProvider(route.provider) && unreadableEncryptedAgentTask) {
+  // Encrypted child tasks may reach canonical ChatGPT or an explicitly trusted
+  // Responses provider. This check runs against the FINAL route so compatible-only
+  // fallback can rescue an incompatible primary.
+  if (!canReceiveEncryptedV2AgentTasks(route.provider) && unreadableEncryptedAgentTask) {
     return unreadableEncryptedAgentTaskResponse();
   }
 

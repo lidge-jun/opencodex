@@ -223,6 +223,85 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  test("passes an encrypted task unchanged to an explicitly trusted Responses provider", async () => {
+    const config = routedConfig();
+    config.defaultProvider = "relay";
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    config.agentTaskRecovery = { enabled: true };
+    const fetchedUrls: string[] = [];
+    const forwardedBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      fetchedUrls.push(String(input));
+      forwardedBodies.push(typeof init?.body === "string" ? init.body : "");
+      return Response.json({
+        id: "resp_trusted_relay",
+        object: "response",
+        status: "completed",
+        model: "grok-4.5",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "relay/gpt-5.6-luna", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toContain("relay.example.test");
+    expect(fetchedUrls[0]).not.toContain("chatgpt.com");
+    expect(forwardedBodies).toHaveLength(1);
+    expect(forwardedBodies[0]).toContain(FERNET_TASK);
+  });
+
+  test("lets a combo select an explicitly trusted Responses target", async () => {
+    const config = mixedComboConfig();
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    config.combos!.mixed!.targets = [
+      { provider: "xai", model: "grok-primary" },
+      { provider: "relay", model: "gpt-5.6-luna" },
+      { provider: "openai", model: "gpt-native-backup" },
+    ];
+    const fetchedUrls: string[] = [];
+    const forwardedBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      fetchedUrls.push(String(input));
+      forwardedBodies.push(typeof init?.body === "string" ? init.body : "");
+      return Response.json({
+        id: "resp_combo_relay",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.6-luna",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/mixed", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toContain("relay.example.test");
+    expect(forwardedBodies[0]).toContain(FERNET_TASK);
+  });
+
   test("keeps encrypted combo failover on native targets after a native failure", async () => {
     const config = mixedComboConfig();
     config.providers["openai-backup"] = {

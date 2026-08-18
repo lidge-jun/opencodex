@@ -181,6 +181,13 @@ function applyProviderPatchFields(
     next.allowPrivateNetwork = rawBody.allowPrivateNetwork;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "allowEncryptedV2AgentTasks")) {
+    if (typeof rawBody.allowEncryptedV2AgentTasks !== "boolean") {
+      return { error: "allowEncryptedV2AgentTasks must be a boolean" };
+    }
+    next.allowEncryptedV2AgentTasks = rawBody.allowEncryptedV2AgentTasks;
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "liveModels")) {
     if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };
     next.liveModels = rawBody.liveModels;
@@ -399,6 +406,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasApiKey: !!p.apiKey,
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
+      allowEncryptedV2AgentTasks: p.allowEncryptedV2AgentTasks === true,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,

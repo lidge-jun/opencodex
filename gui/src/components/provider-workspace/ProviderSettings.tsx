@@ -79,6 +79,7 @@ export default function ProviderSettings({
   const [authMode, setAuthMode] = useState(initialAuth);
   const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
   const [note, setNote] = useState(item.note ?? "");
+  const [allowEncryptedV2AgentTasks, setAllowEncryptedV2AgentTasks] = useState(item.allowEncryptedV2AgentTasks ?? false);
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
@@ -107,6 +108,7 @@ export default function ProviderSettings({
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? "");
+    setAllowEncryptedV2AgentTasks(item.allowEncryptedV2AgentTasks ?? false);
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion);
@@ -117,7 +119,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowEncryptedV2AgentTasks, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -192,6 +194,7 @@ export default function ProviderSettings({
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
     || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
     || note.trim() !== (item.note ?? "")
+    || (item.name !== "openai" && allowEncryptedV2AgentTasks !== (item.allowEncryptedV2AgentTasks ?? false))
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
     || liveModels !== savedLiveModels
     || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion);
@@ -236,6 +239,7 @@ export default function ProviderSettings({
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
       const pacingOnly = pacingDirty && !dirty;
+      const encryptedV2Value = adapter.trim() === "openai-responses" && allowEncryptedV2AgentTasks;
       const patch: ProviderUpdatePatch = pacingOnly
         ? { requestPacing: pacingDraft }
         : {
@@ -244,6 +248,9 @@ export default function ProviderSettings({
             defaultModel: defaultModel.trim(),
             authMode,
             note: note.trim(),
+            ...(item.name !== "openai" && encryptedV2Value !== (item.allowEncryptedV2AgentTasks ?? false)
+              ? { allowEncryptedV2AgentTasks: encryptedV2Value }
+              : {}),
             allowPrivateNetwork,
             ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
           };
@@ -299,7 +306,8 @@ export default function ProviderSettings({
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
-    setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
+    setNote(item.note ?? ""); setAllowEncryptedV2AgentTasks(item.allowEncryptedV2AgentTasks ?? false);
+    setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs)); setPacingModels({ ...(item.requestPacing?.models ?? {}) });
@@ -333,7 +341,10 @@ export default function ProviderSettings({
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("modal.adapter")}</span>
         {isPreset ? <input className="input" value={adapter} readOnly disabled /> : (
-          <select className="input" value={adapter} onChange={e => setAdapter(e.target.value)}>
+          <select className="input" value={adapter} onChange={e => {
+            setAdapter(e.target.value);
+            if (e.target.value !== "openai-responses") setAllowEncryptedV2AgentTasks(false);
+          }}>
             {adapterOptions.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
         )}
@@ -459,6 +470,23 @@ export default function ProviderSettings({
         <input type="checkbox" checked={allowPrivateNetwork} onChange={e => setAllowPrivateNetwork(e.target.checked)} />
         <span className="pwi-settings-label">{t("pws.allowPrivateNetwork")}</span>
       </label>
+      {item.name !== "openai" && adapter.trim() === "openai-responses" && (
+        <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={allowEncryptedV2AgentTasks}
+            onChange={e => {
+              const checked = e.target.checked;
+              if (checked && !window.confirm(t("pws.encryptedV2Confirm"))) return;
+              setAllowEncryptedV2AgentTasks(checked);
+            }}
+          />
+          <span>
+            <span className="pwi-settings-label">{t("pws.encryptedV2Passthrough")}</span>
+            <span className="muted text-label" style={{ display: "block", marginTop: 2 }}>{t("pws.encryptedV2PassthroughDesc")}</span>
+          </span>
+        </label>
+      )}
       <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
         <input
           type="checkbox"

@@ -31,6 +31,7 @@ import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
 import { PROVIDER_REGISTRY } from "../providers/registry";
 import {
+  canReceiveEncryptedV2AgentTasks,
   CODEX_FORWARD_BASE_URL,
   OPENAI_CODEX_PROVIDER_ID,
   isCanonicalOpenAiForwardProvider,
@@ -281,7 +282,7 @@ export function selectAvailableSubagentModel(
   for (const candidate of chain) {
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
-      if (!route || !isCanonicalOpenAiForwardProvider(route.provider)) {
+      if (!route || !canReceiveEncryptedV2AgentTasks(route.provider)) {
         skipped.push(candidate);
         continue;
       }

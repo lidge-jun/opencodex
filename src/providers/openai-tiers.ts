@@ -68,6 +68,16 @@ function isOfficialOpenAiResponsesDestination(provider: OcxProviderConfig): bool
 }
 
 /**
+ * Whether an opaque encrypted V2 agent task may be sent to this provider.
+ * Canonical ChatGPT forwarding is trusted implicitly. Any other Responses
+ * endpoint requires an explicit provider-level operator opt-in.
+ */
+export function canReceiveEncryptedV2AgentTasks(provider: OcxProviderConfig): boolean {
+  return isCanonicalOpenAiForwardProvider(provider)
+    || (provider.adapter === "openai-responses" && provider.allowEncryptedV2AgentTasks === true);
+}
+
+/**
  * Whether this provider can serve `POST /responses/compact`. The canonical ChatGPT
  * backend can, and so can the official OpenAI API — but an arbitrary gateway that
  * merely speaks the Responses wire cannot, and calling it there fails compaction

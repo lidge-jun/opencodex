@@ -716,6 +716,7 @@ const providerConfigSchema = z.object({
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
+  allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   // The management API accepts `null` as "clear this", so a config written before the POST
   // canonicalization below can hold one on disk. Rejecting it here would send the operator
@@ -1386,6 +1387,13 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "fastWire"],
         message: "fastWire=null conflicts with supportsServiceTier=true",
+      });
+    }
+    if (provider.allowEncryptedV2AgentTasks === true && provider.adapter !== "openai-responses") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "allowEncryptedV2AgentTasks"],
+        message: "allowEncryptedV2AgentTasks requires adapter=openai-responses",
       });
     }
     const openRouterRoutingError = openRouterRoutingConfigError(provider);
