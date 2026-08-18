@@ -122,7 +122,9 @@ function parseWeeklyWindow(payload: unknown): { percent: number; resetAt?: numbe
 }
 
 async function readJson(response: Response, timeoutMs: number): Promise<unknown> {
-  return await readProviderQuotaJsonForTests(response, timeoutMs);
+  const payload = await readProviderQuotaJsonForTests(response, timeoutMs);
+  if (payload === null) throw new Error("Antigravity quota RPC returned unreadable JSON");
+  return payload;
 }
 
 class AntigravityQuotaRpcError extends Error {
@@ -167,18 +169,16 @@ async function fetchHostQuota(
     fetchRpc(fetchImpl, host, "retrieveUserQuota", args),
     fetchRpc(fetchImpl, host, "retrieveUserQuotaSummary", args),
   ]);
-  for (const result of [quotaResult, summaryResult]) {
-    if (
-      result.status === "rejected"
-      && result.reason instanceof AntigravityQuotaRpcError
-      && !shouldRetryPeer(result.reason.status)
-    ) {
-      throw result.reason;
-    }
+  if (
+    quotaResult.status === "rejected"
+    && quotaResult.reason instanceof AntigravityQuotaRpcError
+    && !shouldRetryPeer(quotaResult.reason.status)
+  ) {
+    throw quotaResult.reason;
   }
-  if (quotaResult.status === "rejected" || summaryResult.status === "rejected") return null;
+  if (quotaResult.status === "rejected") return null;
   const quotaPayload = quotaResult.value;
-  const summaryPayload = summaryResult.value;
+  const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : null;
   const gem = parseGeminiWindow(quotaPayload);
   const weekly = parseWeeklyWindow(summaryPayload);
   if (!gem && !weekly) return null;
