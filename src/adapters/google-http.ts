@@ -1,7 +1,13 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
-import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import {
+  isAntigravityGeoBlockedBody,
+  isQuotaExhaustedBody,
+  retryableGoogleStatus,
+  safeGoogleHttpErrorMessage,
+} from "./google-errors";
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
+import { recordAntigravityCooldown } from "../oauth/antigravity-routing";
 import {
   abortError,
   cancelResponseBodyBestEffort,
@@ -24,6 +30,34 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
     signal,
     formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText),
   });
+}
+
+function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
+  }
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) && timestamp > now ? timestamp - now : undefined;
+}
+
+async function recordAntigravityHttpCooldown(
+  response: Response,
+  accountId: string | undefined,
+): Promise<void> {
+  if (!accountId || (response.status !== 429 && response.status !== 403)) return;
+  const payloadText = await readDisplaySafeErrorPayloadText(response.clone());
+  if (response.status === 429) {
+    recordAntigravityCooldown(
+      accountId,
+      isQuotaExhaustedBody(payloadText) ? "quota_exhausted" : "rate_limited",
+      retryAfterMs(response.headers.get("retry-after")),
+    );
+  } else if (isAntigravityGeoBlockedBody(payloadText)) {
+    recordAntigravityCooldown(accountId, "geo_blocked");
+  }
 }
 
 /**
@@ -53,6 +87,9 @@ export async function fetchGoogleWithRetry(
         headers: activeRequest.headers,
         body: activeRequest.body,
       }, timeoutMs, ctx.abortSignal, ctx.stream, executor);
+      if (label === "Antigravity") {
+        await recordAntigravityHttpCooldown(res, ctx.accountId);
+      }
       if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
         let payloadText = "";
         try {
