@@ -100,6 +100,7 @@ describe("state-store sweeper", () => {
       "provider-request-pacing",
       "combo-target-cooldowns",
       "anthropic-routing-health",
+      "antigravity-routing-health",
       "xai-refresh-verdicts",
       "responses-continuation",
       "antigravity-replay",
