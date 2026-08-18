@@ -276,6 +276,89 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA throwing peer leg does not replay the first host", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      if (calls.length === 1) {
+        return sseResponse([{ error: { status: "UNAVAILABLE", message: "try another host" } }]);
+      }
+      throw new Error("peer transport down");
+    }) as typeof fetch;
+    try {
+      await expect(fetchAntigravityWithRetry({
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      }, { timeoutMs: 5_000 })).rejects.toThrow("peer transport down");
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("CCA host failover preserves a body repaired after the first host 400", async () => {
+    const calls: Array<{ url: string; body: string }> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      calls.push({ url: String(input), body: String(init?.body ?? "") });
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({
+          error: { status: "INVALID_ARGUMENT", message: "input schema is invalid" },
+        }), { status: 400 });
+      }
+      if (calls.length === 2) {
+        return sseResponse([{ error: { status: "UNAVAILABLE", message: "try another host" } }]);
+      }
+      return sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: "repaired" }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]);
+    }) as typeof fetch;
+    const originalBody = JSON.stringify({
+      model: "gemini-3.7-flash-tiered",
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        tools: [{
+          functionDeclarations: [{
+            name: "lookup",
+            parameters: { type: "object", properties: { city: { type: "string" } } },
+          }],
+        }],
+      },
+    });
+    try {
+      const response = await fetchAntigravityWithRetry({
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: originalBody,
+      }, { timeoutMs: 5_000 });
+
+      expect(await response.text()).toContain("repaired");
+      expect(calls.map(call => call.url)).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+      expect(calls[0]?.body).toBe(originalBody);
+      expect(calls[1]?.body).not.toBe(originalBody);
+      expect(calls[2]?.body).toBe(calls[1]?.body);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("CCA peer failures use retry and final error normalization", async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
