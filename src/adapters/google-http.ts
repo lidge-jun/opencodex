@@ -308,7 +308,7 @@ async function fetchGoogleWithRetryInternal(
         if (shouldTryPeer) {
           cancelResponseBodyBestEffort(res);
           antigravityHostIndex = 1;
-          activeRequest = requestForHost(request, antigravityHosts[antigravityHostIndex]!);
+          activeRequest = requestForHost(activeRequest, antigravityHosts[antigravityHostIndex]!);
           continue;
         }
       }
@@ -316,7 +316,7 @@ async function fetchGoogleWithRetryInternal(
         const fetchPeer = antigravityHosts.length > 1 && antigravityHostIndex === 0
           ? () => fetchGoogleWithRetryInternal(
             label,
-            requestForHost(request, antigravityHosts[1]!),
+            requestForHost(activeRequest, antigravityHosts[1]!),
             ctx,
             false,
             opts,
@@ -366,7 +366,7 @@ async function fetchGoogleWithRetryInternal(
       lastError = err;
       if (antigravityHosts.length > 1 && antigravityHostIndex === 0) {
         antigravityHostIndex = 1;
-        activeRequest = requestForHost(request, antigravityHosts[antigravityHostIndex]!);
+        activeRequest = requestForHost(activeRequest, antigravityHosts[antigravityHostIndex]!);
         continue;
       }
       if (attempt === GOOGLE_RETRY_ATTEMPTS - 1) throw err;
