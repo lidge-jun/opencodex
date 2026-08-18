@@ -8,7 +8,6 @@ import {
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { antigravityHostCandidates, isAntigravityHttpsHost } from "./google-antigravity-hosts";
-import { recordAntigravityCooldown } from "../oauth/antigravity-routing";
 import {
   abortError,
   cancelResponseBodyBestEffort,
@@ -33,17 +32,6 @@ function requestForHost(request: AdapterRequest, host: string): AdapterRequest {
   current.protocol = replacement.protocol;
   current.host = replacement.host;
   return { ...request, url: current.toString() };
-}
-
-function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
-  const text = value?.trim();
-  if (!text) return undefined;
-  if (/^\d+(?:\.\d+)?$/.test(text)) {
-    const seconds = Number(text);
-    return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
-  }
-  const timestamp = Date.parse(text);
-  return Number.isFinite(timestamp) && timestamp > now ? timestamp - now : undefined;
 }
 
 type CcaSseProbe = "empty" | "candidate" | "unavailable" | "quota_exhausted" | "geo_blocked" | "terminal";
@@ -170,7 +158,6 @@ function responseWithBufferedBody(
 async function prepareCcaSseResponse(
   response: Response,
   fetchPeer: (() => Promise<Response>) | undefined,
-  accountId?: string,
 ): Promise<Response> {
   if (!response.body) return fetchPeer ? fetchPeer() : response;
   const reader = response.body.getReader();
@@ -203,12 +190,6 @@ async function prepareCcaSseResponse(
           }
           if (probe === "quota_exhausted" || probe === "geo_blocked") {
             const status = probe === "quota_exhausted" ? 429 : 403;
-            if (accountId) {
-              recordAntigravityCooldown(
-                accountId,
-                probe === "quota_exhausted" ? "quota_exhausted" : "geo_blocked",
-              );
-            }
             return passthrough(undefined, status);
           }
         }
@@ -234,12 +215,6 @@ async function prepareCcaSseResponse(
         }
         if (probe === "quota_exhausted" || probe === "geo_blocked") {
           const status = probe === "quota_exhausted" ? 429 : 403;
-          if (accountId) {
-            recordAntigravityCooldown(
-              accountId,
-              probe === "quota_exhausted" ? "quota_exhausted" : "geo_blocked",
-            );
-          }
           return passthrough(overflow, status);
         }
         if (probe === "terminal") return passthrough(overflow);
@@ -259,23 +234,6 @@ async function prepareCcaSseResponse(
 
 function isUnavailableResponse(response: Response): boolean {
   return response.status === 503;
-}
-
-function recordAntigravityHttpCooldown(
-  response: Response,
-  payloadText: string,
-  accountId: string | undefined,
-): void {
-  if (!accountId) return;
-  if (response.status === 429) {
-    recordAntigravityCooldown(
-      accountId,
-      isQuotaExhaustedBody(payloadText) ? "quota_exhausted" : "rate_limited",
-      retryAfterMs(response.headers.get("retry-after")),
-    );
-  } else if (response.status === 403 && isAntigravityGeoBlockedBody(payloadText)) {
-    recordAntigravityCooldown(accountId, "geo_blocked");
-  }
 }
 
 export interface GoogleRetryOptions {
@@ -348,11 +306,7 @@ async function fetchGoogleWithRetryInternal(
             opts,
           )
           : undefined;
-        return prepareCcaSseResponse(res, fetchPeer, ctx.accountId);
-      }
-      if (label === "Antigravity" && (res.status === 429 || res.status === 403)) {
-        const body = await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal);
-        recordAntigravityHttpCooldown(res, body, ctx.accountId);
+        return prepareCcaSseResponse(res, fetchPeer);
       }
       if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
         let payloadText = "";

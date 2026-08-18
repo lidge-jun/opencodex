@@ -9,7 +9,6 @@ import {
   CcaProbeBuffer,
   fetchAntigravityWithRetry,
 } from "../src/adapters/google-http";
-import { isAntigravityAccountInCooldown, clearAntigravityAccountCooldown } from "../src/oauth/antigravity-routing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -398,8 +397,7 @@ describe("google provider hardening", () => {
     }
   });
 
-  test("CCA geoblock records cooldown without account carousel", async () => {
-    clearAntigravityAccountCooldown("test-antigravity-account");
+  test("CCA geoblock maps to 403 without account carousel", async () => {
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -417,19 +415,15 @@ describe("google provider hardening", () => {
       };
       const response = await fetchAntigravityWithRetry(request, {
         timeoutMs: 5_000,
-        accountId: "test-antigravity-account",
       });
       expect(response.status).toBe(403);
       expect(calls).toBe(1);
-      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
-      clearAntigravityAccountCooldown("test-antigravity-account");
     }
   });
 
-  test("CCA inline quota error becomes a cooldown-aware 429 without host failover", async () => {
-    clearAntigravityAccountCooldown("test-antigravity-account");
+  test("CCA inline quota error becomes a 429 without host failover", async () => {
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -451,19 +445,15 @@ describe("google provider hardening", () => {
       };
       const response = await fetchAntigravityWithRetry(request, {
         timeoutMs: 5_000,
-        accountId: "test-antigravity-account",
       });
       expect(response.status).toBe(429);
       expect(calls).toBe(1);
-      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
-      clearAntigravityAccountCooldown("test-antigravity-account");
     }
   });
 
-  test("CCA peer HTTP 200 RESOURCE_EXHAUSTED after first-host 404 becomes a cooldown-aware 429", async () => {
-    clearAntigravityAccountCooldown("test-antigravity-account");
+  test("CCA peer HTTP 200 RESOURCE_EXHAUSTED after first-host 404 becomes a 429", async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -488,22 +478,18 @@ describe("google provider hardening", () => {
       };
       const response = await fetchAntigravityWithRetry(request, {
         timeoutMs: 5_000,
-        accountId: "test-antigravity-account",
       });
       expect(response.status).toBe(429);
       expect(calls).toEqual([
         "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
         "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
       ]);
-      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
-      clearAntigravityAccountCooldown("test-antigravity-account");
     }
   });
 
-  test("CCA peer HTTP 200 geoblock after first-host 503 records cooldown without a third host", async () => {
-    clearAntigravityAccountCooldown("test-antigravity-account");
+  test("CCA peer HTTP 200 geoblock after first-host 503 remains 403 without a third host", async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -527,17 +513,14 @@ describe("google provider hardening", () => {
       };
       const response = await fetchAntigravityWithRetry(request, {
         timeoutMs: 5_000,
-        accountId: "test-antigravity-account",
       });
       expect(response.status).toBe(403);
       expect(calls).toEqual([
         "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
         "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
       ]);
-      expect(isAntigravityAccountInCooldown("test-antigravity-account")).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
-      clearAntigravityAccountCooldown("test-antigravity-account");
     }
   });
 
