@@ -733,7 +733,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   <td className="num mono log-col-cost">
                     {formatEstimatedUsd(log.displayMetrics?.cost, localeTag)}
                   </td>
-                 <td className="mono log-col-model" title={modelTitle(log)}>
+                 <td className="mono log-col-model" title={modelTitle(log, t)}>
                    <span className="logs-model-cell">
                     <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
                       {(log.surface === "claude" || log.surface === "claude-desktop") && (
