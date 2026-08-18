@@ -32,6 +32,30 @@ describe("Codex pre-stream quota rejection classification", () => {
     expect(entitlement).toMatchObject({ kind: "permission-error", denial: "entitlement" });
   });
 
+  test("a 403 with the denial nested under detail.code is classified (#2046)", async () => {
+    // K12's actual envelope: {"detail":{"code":"codex_workspace_access_denied",...}}.
+    // Before this lookup the denial read null and a valid credential was
+    // marked needs-reauth.
+    const detailNested = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: {
+        code: "codex_workspace_access_denied",
+        message: "workspace access denied",
+      },
+    }));
+    expect(detailNested).toMatchObject({ kind: "permission-error", denial: "workspace" });
+
+    const detailEntitlement = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: { code: "entitlement_missing" },
+    }));
+    expect(detailEntitlement).toMatchObject({ kind: "permission-error", denial: "entitlement" });
+
+    // A detail object with a non-denial code must still read no denial.
+    const detailOther = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: { code: "something_else" },
+    }));
+    expect(detailOther.denial).toBeUndefined();
+  });
+
   test("a 403 without denial evidence stays an ordinary permission error (#1789)", async () => {
     // Fail safe: status alone must never downgrade a credential failure, or a genuinely
     // revoked credential would stop prompting for reauthentication.

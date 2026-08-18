@@ -71,15 +71,27 @@ async function denialFromResponse(
   }
 }
 
-/** Own-property `code` lookup at the top level or under `error`. No coercion, no accessors. */
+/**
+ * Own-property `code` lookup at the top level, under `error`, or under `detail`.
+ * No coercion, no accessors. The `detail` nesting is what K12 actually sends
+ * ({"detail":{"code":"codex_workspace_access_denied",...}}) — without it the
+ * denial read null and a valid credential was marked needs-reauth (#2046).
+ */
 function structuredDenialCode(payload: unknown): string | undefined {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const direct = (payload as Record<string, unknown>).code;
   if (typeof direct === "string") return direct;
   const error = (payload as Record<string, unknown>).error;
-  if (error === null || typeof error !== "object" || Array.isArray(error)) return undefined;
-  const nested = (error as Record<string, unknown>).code;
-  return typeof nested === "string" ? nested : undefined;
+  if (error !== null && typeof error === "object" && !Array.isArray(error)) {
+    const nested = (error as Record<string, unknown>).code;
+    if (typeof nested === "string") return nested;
+  }
+  const detail = (payload as Record<string, unknown>).detail;
+  if (detail !== null && typeof detail === "object" && !Array.isArray(detail)) {
+    const nestedDetail = (detail as Record<string, unknown>).code;
+    if (typeof nestedDetail === "string") return nestedDetail;
+  }
+  return undefined;
 }
 
 const RESET_ELIGIBLE_CODES: ReadonlySet<string> = new Set(RESET_ELIGIBLE_CODE_VALUES);
