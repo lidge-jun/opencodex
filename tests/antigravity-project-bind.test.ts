@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { bindAntigravityProject } from "../src/oauth/antigravity-routing";
 
 const MISSING_PROJECT_MESSAGE =
@@ -59,5 +60,18 @@ describe("bindAntigravityProject", () => {
     expect(bound.ok).toBe(true);
     if (!bound.ok) throw new Error("expected successful bind");
     expect(bound.provider.project).toBe("project-from-current-account");
+  });
+
+  test("binds a cooldown replacement before promoting it active", () => {
+    const source = readFileSync(new URL("../src/server/responses/core.ts", import.meta.url), "utf8");
+    const start = source.indexOf("let skippedAntigravityCooldown = false;");
+    const end = source.indexOf('if (route.providerName === "kiro")', start);
+    const initialSelection = source.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(initialSelection.indexOf("bindAntigravityProject")).toBeLessThan(
+      initialSelection.indexOf('setActiveAccount("google-antigravity"'),
+    );
   });
 });

@@ -2306,7 +2306,6 @@ async function handleResponsesInner(
             projectId: nextCredential?.projectId,
           };
           skippedAntigravityCooldown = true;
-          void setActiveAccount("google-antigravity", nextAccountId).catch(() => { /* best-effort promotion */ });
         }
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
@@ -2324,6 +2323,9 @@ async function handleResponsesInner(
             return formatErrorResponse(bound.status, bound.type, bound.message);
           }
           route.provider = bound.provider;
+          if (skippedAntigravityCooldown) {
+            void setActiveAccount("google-antigravity", resolved.accountId).catch(() => { /* best-effort promotion */ });
+          }
         }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
