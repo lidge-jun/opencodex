@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { fetchAntigravityLiveQuota } from "../src/providers/antigravity-quota";
+import { QUOTA_RESPONSE_MAX_BYTES } from "../src/providers/quota";
 
 test("does not classify an unlabelled daily summary window as weekly", async () => {
   const result = await fetchAntigravityLiveQuota({
@@ -28,6 +29,56 @@ test("does not classify an unlabelled daily summary window as weekly", async () 
   expect(result?.customWindows?.[0]?.label).toBe("Gem");
   expect(result?.weeklyPercent).toBeUndefined();
 });
+
+test("keeps the daily quota when the summary RPC fails", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: "agy-access-secret",
+    projectId: "agy-project-secret",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return new Response(JSON.stringify({
+          buckets: [
+            { modelId: "gemini-test", remainingFraction: 0.5 },
+          ],
+        }), { status: 200 });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) return new Response("unavailable", { status: 503 });
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  expect(result?.customWindows).toEqual([{ label: "Gem", percent: 50 }]);
+  expect(result?.weeklyPercent).toBeUndefined();
+});
+
+test("treats a daily quota JSON read failure as an RPC failure", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: "agy-access-secret",
+    projectId: "agy-project-secret",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return new Response(JSON.stringify({
+          padding: "x".repeat(QUOTA_RESPONSE_MAX_BYTES),
+        }), { status: 200 });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return new Response(JSON.stringify({
+          weekly: { remainingPercentage: 75 },
+        }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  expect(result).toBeNull();
+});
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
