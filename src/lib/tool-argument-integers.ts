@@ -1,4 +1,7 @@
-// Schema-aware repair for integer tool arguments that arrive as floats (issue #1611).
+// Schema-aware repair for tool arguments whose serialized representation disagrees
+// with the declared schema in a way that has exactly one faithful reading.
+//
+// Case 1 — integer fields arriving as integral floats (issue #1611).
 //
 // Grok serializes integer tool-call arguments through a float representation, so
 // `yield_time_ms: 120000` leaves the provider as `120000.0`. Codex declares those
@@ -15,7 +18,23 @@
 //     `120000.0` has exactly one integer reading, so it is repaired;
 //   - `1.5` in an integer field is a genuine disagreement with the schema and is left
 //     alone so it still fails, rather than being truncated into a plausible lie.
-// Anything without a declared `integer` type is never touched.
+//
+// Case 2 — string fields arriving as bare integers (issue #1938).
+//
+// Cursor-served models emit `{"cell_id": 4}` where the schema declares
+// `{"type": "string"}`. Codex rejects the call before the tool runs (invalid type:
+// integer `4`, expected a string), and the model never self-corrects, so every such
+// call is a hard failure loop. A safely-integral JSON number in a string-declared
+// field has exactly one faithful string reading (`4` -> `"4"`), so it is repaired
+// under the same intent boundary:
+//   - only when the field declares `string` and no numeric type (a
+//     `["integer","string"]` union accepts the number as-is and is left alone);
+//   - a non-integral number (`4.5`) in a string field is a genuine disagreement and
+//     is left alone so it still fails;
+//   - beyond 2^53-1 the parsed value may differ from the serialized text, so the
+//     original bytes stay.
+//
+// Anything without a declared `integer`/`string` type is never touched.
 
 /** JSON Schema subset we need; provider tool schemas are untrusted input. */
 type SchemaNode = Record<string, unknown>;
@@ -31,6 +50,21 @@ function declaresInteger(schema: SchemaNode): boolean {
   const type = schema.type;
   if (type === "integer") return true;
   return Array.isArray(type) && type.includes("integer");
+}
+
+/** True when the node declares `string`, including `["string","null"]` unions. */
+function declaresString(schema: SchemaNode): boolean {
+  const type = schema.type;
+  if (type === "string") return true;
+  return Array.isArray(type) && type.includes("string");
+}
+
+/** True when the node accepts a JSON number (`integer` or `number`), so a numeric
+ * value is already schema-valid and must not be rewritten into a string. */
+function declaresNumeric(schema: SchemaNode): boolean {
+  const type = schema.type;
+  if (type === "integer" || type === "number") return true;
+  return Array.isArray(type) && (type.includes("integer") || type.includes("number"));
 }
 
 /**
@@ -91,8 +125,17 @@ function coerceValue(value: unknown, schema: SchemaNode | undefined, root: Schem
 
   if (typeof value === "number") {
     if (!resolved) return { value, changed: false };
-    const integerDeclared = declaresInteger(resolved)
-      || compositionBranches(resolved).some(declaresInteger);
+    const branches = compositionBranches(resolved);
+    const integerDeclared = declaresInteger(resolved) || branches.some(declaresInteger);
+    if (!integerDeclared && safelyIntegral(value)) {
+      // Issue #1938: a bare integer in a string-only field has exactly one faithful
+      // string reading. A field that also accepts a numeric type keeps the number.
+      const stringDeclared = declaresString(resolved) || branches.some(declaresString);
+      const numericDeclared = declaresNumeric(resolved) || branches.some(declaresNumeric);
+      if (stringDeclared && !numericDeclared) {
+        return { value: String(value), changed: true };
+      }
+    }
     // Not an integer field, already an integer, non-integral, or unrepresentable:
     // in every one of those cases the received value is the right thing to keep.
     if (!integerDeclared || !safelyIntegral(value)) return { value, changed: false };
@@ -141,8 +184,9 @@ export function coerceIntegerToolArguments(
   parameters: Record<string, unknown> | undefined,
 ): string {
   if (!parameters || !args) return args;
-  // Cheap reject: a payload with no fractional-looking number cannot need repair.
-  if (!/\d\.\d/.test(args)) return args;
+  // Cheap reject: a payload with no digit cannot need either repair (integral-float
+  // -> integer, or bare-integer -> string).
+  if (!/\d/.test(args)) return args;
   let parsed: unknown;
   try {
     parsed = JSON.parse(args);

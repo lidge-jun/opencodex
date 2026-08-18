@@ -103,11 +103,12 @@ understands:
 | `done` | `response.completed` (with usage) |
 | `error` | `response.failed` (with `last_error`) |
 
-The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits a
-parser-ignored `response.heartbeat` SSE event every 2 seconds to re-arm Codex's idle timer. The
-default **stall deadline** is 300 seconds (`stallTimeoutSec`); reaching it aborts the upstream and emits
-`response.incomplete` with reason `upstream_stall_timeout`, preventing a hung connection from blocking
-Codex indefinitely.
+The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits an SSE
+comment line (`: opencodex heartbeat`) every 2 seconds to re-arm Codex's idle timer. Comment lines
+are discarded by every eventsource parser without producing an event, so strict Responses decoders
+never see an unknown variant. The default **stall deadline** is 300 seconds (`stallTimeoutSec`);
+reaching it aborts the upstream and emits `response.incomplete` with reason
+`upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
 
 Tool calls are disambiguated into three Responses item types using the namespace map, the freeform
 set, and the tool-search set captured by the parser — so MCP namespaces, `apply_patch`-style freeform

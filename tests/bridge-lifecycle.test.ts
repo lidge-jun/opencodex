@@ -246,7 +246,7 @@ describe("bridge stream lifecycle (RC1 / RC2)", () => {
     expect(aborted).toBe(true);
   });
 
-  test("RC3: emits a parser-ignored response.heartbeat during upstream silence", async () => {
+  test("RC3: emits an SSE comment keep-alive (no response.heartbeat event) during upstream silence", async () => {
     // heartbeatMs = 10 so the keep-alive fires quickly; hangs() goes silent after one delta.
     const stream = bridgeToResponsesSSE(hangs(), "routed/model", undefined, undefined, undefined, undefined, 10);
     const reader = stream.getReader();
@@ -258,7 +258,10 @@ describe("bridge stream lifecycle (RC1 / RC2)", () => {
       if (value) text += dec.decode(value, { stream: true });
     }
     await reader.cancel();
-    expect(text).toContain("response.heartbeat");
+    // Keep-alives are SSE comment lines, not typed events: any client parser discards
+    // them without deserializing, so strict Responses decoders stay alive and quiet.
+    expect(text).toContain(": opencodex heartbeat\n\n");
+    expect(text).not.toContain("event: response.heartbeat");
   });
 
   test("RC3: configurable stall timeout emits response.incomplete after deadline", async () => {

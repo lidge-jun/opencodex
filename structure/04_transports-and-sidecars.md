@@ -328,13 +328,14 @@ frame rather than always emitting `response.completed`. If the response status i
 
 ## Heartbeat and stall deadline
 
-The HTTP/SSE bridge emits `response.heartbeat` events during upstream silence to re-arm Codex's idle
-timer (Codex's default `stream_idle_timeout` is 300 s and ANY SSE event re-arms it). Those
-bridge-enqueued keepalive frames do NOT count as activity for the bridge's own watchdog: a bounded
-stall deadline (default 300 s, configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick)
-closes the stream with `response.incomplete` / `upstream_stall_timeout` and cancels the upstream
-request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
-the watchdog.
+The HTTP/SSE bridge emits an SSE comment-line keep-alive (`: opencodex heartbeat`) during upstream
+silence to re-arm Codex's idle timer (Codex's default `stream_idle_timeout` is 300 s and ANY SSE
+bytes re-arm it). A comment line is discarded by every eventsource parser without producing an event,
+so strict Responses decoders never see an unknown variant. Those bridge-enqueued keepalive frames do
+NOT count as activity for the bridge's own watchdog: a bounded stall deadline (default 300 s,
+configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick) closes the stream with
+`response.incomplete` / `upstream_stall_timeout` and cancels the upstream request if no real
+adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
 
 Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when a
 successful upstream completion contains neither output text nor a tool call. The default is off

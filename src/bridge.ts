@@ -326,10 +326,12 @@ export function bridgeToResponsesSSE(
     clearOwnedWatchdog();
   };
   // RC3 keep-alive: Codex's idle timer is timeout(idle_timeout, stream.next()) over an
-  // eventsource_stream; ANY received event re-arms it, while an unknown type is ignored
-  // (responses.rs `_ => Ok(None)`). Emit a parser-ignored `response.heartbeat` whenever the
+  // eventsource_stream; ANY received bytes re-arm it. An SSE comment line (a line starting
+  // with `:`) is discarded by every eventsource parser without producing an event, so it
+  // keeps the wire alive without triggering deserialization. Emit a comment line whenever the
   // *wire* has been silent, even if invisible adapter heartbeats are still flowing (web-search
-  // buffering + raw-byte progress). Upstream activity only resets the stall watchdog.
+  // buffering + raw-byte progress). Upstream activity only resets the stall watchdog. Parity
+  // with the passthrough relay's `: opencodex keepalive` (relay.ts).
   let upstreamActivity = false;
   let wireActivity = false;
   let beat: unknown;
@@ -396,7 +398,7 @@ export function bridgeToResponsesSSE(
         ...(endTurn !== undefined ? { end_turn: endTurn } : {}),
       });
 
-      const heartbeatFrame = encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
+      const heartbeatFrame = encoder.encode(': opencodex heartbeat\n\n');
       let stallTicks = 0;
       const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);

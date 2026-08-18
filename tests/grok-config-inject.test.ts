@@ -70,7 +70,7 @@ describe("Grok config injection", () => {
     const table = block.slice(block.indexOf("[model.ocx-cursor-grok-4-5]"));
     expect(table).toContain('model = "cursor/grok-4.5"');
     expect(table).toContain('base_url = "http://127.0.0.1:10190/v1"');
-    expect(table).toContain('api_backend = "chat_completions"');
+    expect(table).toContain('api_backend = "responses"');
     expect(table).toContain('api_key = "opencodex-loopback"');
     expect(table).toContain("context_window = 500000");
   });

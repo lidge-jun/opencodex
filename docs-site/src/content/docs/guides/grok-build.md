@@ -104,7 +104,7 @@ per-model tables with **direct fields**, outside the `# >>> opencodex managed bl
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -115,7 +115,7 @@ dial and use your admission token:
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ```
 
@@ -129,11 +129,6 @@ the id `grok-4.5`. Generated aliases avoid dots entirely for this reason.
 
 ## Known limitations
 
-- **Responses backend and keep-alives:** opencodex emits a `response.heartbeat` keep-alive
-  on `/v1/responses` streams during upstream silence. Grok Build's Responses decoder
-  rejects unknown event types, so a manually configured `api_backend = "responses"` model
-  can fail mid-turn on slow upstreams. The auto-registered entries pin
-  `api_backend = "chat_completions"`, which never surfaces raw heartbeat frames.
 - **Service-installed `ocx restart`:** the running proxy owns restart authorization and drain
   coordination, while the installed service manager launches the replacement after the old process
   exits. Service supervision remains installed. On loopback auto-registration, the managed block

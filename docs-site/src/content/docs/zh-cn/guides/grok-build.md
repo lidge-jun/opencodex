@@ -14,7 +14,7 @@ opencodex 在本地端口提供一个与 OpenAI 兼容的 `POST /v1/chat/complet
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... one [model.ocx-*] table per visible model ...
@@ -52,7 +52,7 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -62,7 +62,7 @@ api_key = "opencodex-loopback"
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ```
 
@@ -72,7 +72,6 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 
 ## 已知限制
 
-- **Responses 后端与保活：** opencodex 在 `/v1/responses` 流上、上游静默期间会发送 `response.heartbeat` 保活事件。Grok Build 的 Responses 解码器会拒绝未知事件类型，因此手动配置为 `api_backend = "responses"` 的模型在上游较慢时可能会在对话中途失败。自动注册的条目会固定为 `api_backend = "chat_completions"`，这样就不会暴露原始的心跳帧。
 - **服务安装后的 `ocx restart`：** 运行中的代理负责重启授权和排空协调；旧进程退出后，由已安装的服务管理器启动替换进程。服务监督始终保留。仅在 loopback 自动注册模式下，受管理区块也会在交接期间保留；非 loopback 部署使用手动管理的 Grok 配置。只有确认同一端口上出现另一个经过身份验证且健康的进程后，命令才会成功。
 - **配置读取时机：** 先启动 opencodex，再启动 `grok`，结果最可预测。Grok Build 会监视 `~/.grok/config.toml`，并在 `[model]` 表实际发生变化时重新加载（大约一秒的防抖，按内容比较），因此刷新后的区块可以在无需重启的情况下进入已打开的会话。要确认 Grok 解析到了什么，可以运行 `grok inspect`：它会列出已加载的配置来源，并提示被拒绝的字段，但不会打印最终解析出的模型列表。注意，单个 TOML 错误会使*整个*用户配置层失效，这也是 opencodex 以原子方式写入文件的原因——Grok 不会看到半写入的配置。
 - **目录更新：** 有边界线的区块反映的是注入时的目录状态。添加提供方或模型后，运行 `ocx ensure`（或重启代理）以刷新它。

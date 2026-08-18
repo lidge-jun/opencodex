@@ -433,10 +433,9 @@ test("chatCompletionsUsage always emits detail objects with zero defaults", () =
 });
 
 test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwarding a raw frame", async () => {
-  // grok-build's strict Responses decoder dies on unknown variants (response.heartbeat),
-  // which is why the injected Grok config pins api_backend = "chat_completions". This
-  // regression pins the safety property: heartbeats never surface as raw frames here —
-  // at most a valid role chunk is emitted.
+  // Upstream responses SSE may contain heartbeat events (SSE comment keep-alive in
+  // bridge.ts, but some upstreams emit them as typed frames). The chat-completions
+  // converter must drop them rather than forwarding raw Responses-vocab frames.
   const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const upstream = new Response([
     `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,

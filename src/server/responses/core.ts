@@ -1,6 +1,10 @@
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
+import {
+  createResponsesFieldBackfillBlockRewrite,
+  backfillResponsesFieldsJson,
+} from "./responses-field-backfill";
 import { checkInputAdmission } from "./input-admission";
 import { nativeContextLimits } from "../../codex/catalog";
 import { describeUpstreamConnectFailure } from "./upstream-error";
@@ -2848,6 +2852,7 @@ async function handleResponsesInner(
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(outboundRequestBody, translatorBudget)
           : undefined,
+        createResponsesFieldBackfillBlockRewrite(),
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
         undeclaredToolGuardActive
@@ -3042,8 +3047,8 @@ async function handleResponsesInner(
           ? repairResponsesSnapshotJson(restored, outboundRequestBody)
           : restored;
         return parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId
-          ? rewriteResponsesModelJson(repaired, parsed._responseModelId)
-          : repaired;
+          ? rewriteResponsesModelJson(backfillResponsesFieldsJson(repaired), parsed._responseModelId)
+          : backfillResponsesFieldsJson(repaired);
       })();
       // #1700: same fail-closed policy as the SSE relay above. Both the plain JSON answer and
       // the reframed-SSE branch below are built from this body, so one check covers them. This

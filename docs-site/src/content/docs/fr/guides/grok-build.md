@@ -18,7 +18,7 @@ en `~/.grok/config.toml` :
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... one [model.ocx-*] table per visible model ...
@@ -104,7 +104,7 @@ tables par modèle avec **champs directs**, en dehors des marqueurs `# >>> openc
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -115,7 +115,7 @@ composez et utilisez votre jeton d'entrée :
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ```
 
@@ -129,11 +129,6 @@ l'identifiant `grok-4.5`. Les alias générés évitent entièrement les points 
 
 ## Limitations connues
 
-- **Réponses backend et keep-alives:** opencodex émet un `response.heartbeat` keep-alive
-  dans les flux `/v1/responses` pendant les périodes de silence en amont. Le décodeur Responses de Grok Build
-  rejette les types d'événements inconnus, donc un modèle `api_backend = "responses"` configuré manuellement
-  peut échouer à mi-tour sur des amonts lents. Le code PIN des entrées enregistrées automatiquement
-  `api_backend = "chat_completions"`, qui ne fait jamais apparaître les images de battements de cœur bruts.
 - **Installé par le service `ocx restart` :** le proxy en cours d'exécution possède l'autorisation de redémarrage et la vidange
   coordination, tandis que le gestionnaire de service installé lance le remplacement après l'ancien processus
   sorties. La supervision du service reste installée. Lors de l'enregistrement automatique en boucle, le bloc géré

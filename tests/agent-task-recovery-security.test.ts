@@ -390,4 +390,27 @@ describe("agent task recovery security", () => {
     expect(response.status).toBe(400);
     expect(recoveryFetches).toBe(0);
   });
+
+  test("accepts the current Codex Work desktop originator", async () => {
+    let recoveryOriginator = "";
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).includes("chatgpt.com")) {
+        recoveryOriginator = new Headers(init?.headers).get("originator") ?? "";
+        return new Response(recoverySse("Recover the desktop child task."), { status: 200 });
+      }
+      return providerResponse();
+    }) as typeof fetch;
+    const headers = codexHeaders();
+    headers.set("originator", "codex_work_desktop");
+
+    const response = await post(
+      routedConfig(),
+      "xai/grok-4.5",
+      encryptedInput(),
+      headers,
+    );
+
+    expect(response.status).toBe(200);
+    expect(recoveryOriginator).toBe("codex_work_desktop");
+  });
 });
