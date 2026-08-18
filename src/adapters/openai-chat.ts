@@ -116,7 +116,11 @@ export function buildOpenAIChatPassthroughRequest(
     delete body.presence_penalty;
     delete body.frequency_penalty;
   }
-  if (modelInList(provider.noStructuredOutputModels, modelId)) delete body.response_format;
+  // Exact match, unlike the gates above: `noStructuredOutputModels` is documented as
+  // "only an exact requested-model match omits the field" (#1424), and the Responses
+  // ingress enforces exactly that. A prefix match here would strip response_format from
+  // `<listed>:<tag>` siblings the operator never opted out, silently returning prose.
+  if (provider.noStructuredOutputModels?.includes(modelId)) delete body.response_format;
 
   if (provider.chatServiceTier && rawBody.service_tier !== undefined) {
     body.service_tier = rawBody.service_tier;
