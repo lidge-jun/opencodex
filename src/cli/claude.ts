@@ -34,6 +34,13 @@ export type ClaudeEnvDeps = {
   authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens">;
   /** Test seam; production uses the authenticated Node-launcher context. */
   preBunAnthropicSlots?: readonly AnthropicParentEnvSlot[] | null;
+  /**
+   * The user explicitly passed --dangerously-skip-permissions. Claude Code's
+   * root guard (uid==0) refuses that flag unless it believes it runs inside a
+   * sandbox (#1688); the launch is proxy-owned, so the session is marked with
+   * IS_SANDBOX=1 — but only for explicit bypass launches, never by default.
+   */
+  dangerouslySkipPermissionsRequested?: boolean;
 };
 
 function isClaudeLoopbackHostname(hostname: string): boolean {
@@ -116,6 +123,12 @@ export function buildClaudeEnv(
     env[name] = value;
   };
   setDefault("ANTHROPIC_BASE_URL", `http://127.0.0.1:${port}`);
+  // Claude Code refuses --dangerously-skip-permissions as root unless
+  // IS_SANDBOX marks the environment as contained. This launch IS proxy-owned
+  // (credentials and traffic pinned to the loopback proxy), and the user asked
+  // for the bypass explicitly, so honor it on root hosts too (#1688). An
+  // explicit user export still wins via setDefault.
+  if (deps.dangerouslySkipPermissionsRequested) setDefault("IS_SANDBOX", "1");
   const existingBaseUrl = env.ANTHROPIC_BASE_URL;
   if (existingBaseUrl) {
     try {
@@ -313,7 +326,9 @@ export async function cmdClaude(args: string[]): Promise<number> {
     return 1;
   }
   const contextWindows = await fetchClaudeContextWindows(config, port);
-  const env = buildClaudeEnv(config, port, process.env, contextWindows);
+  const env = buildClaudeEnv(config, port, process.env, contextWindows, {
+    dangerouslySkipPermissionsRequested: args.includes("--dangerously-skip-permissions"),
+  });
   // Pre-write the CLI's gateway-model cache (devlog 030): without a token the CLI
   // never refreshes it, so the picker would keep showing yesterday's aliases.
   try {

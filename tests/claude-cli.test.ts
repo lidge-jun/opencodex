@@ -267,3 +267,30 @@ describe("ocx claude Windows launch (devlog 260715_cross_platform_audit/020)", (
     expect(claudeNotFoundHint(0, null, "win32")).toBeNull();
   });
 });
+
+describe("ocx claude env assembly: root-host bypass (#1688)", () => {
+  test("marks the session IS_SANDBOX only for an explicit --dangerously-skip-permissions launch", () => {
+    const bypass = buildClaudeEnv(
+      cfg({ claudeCode: {} }),
+      10100,
+      {},
+      {},
+      { ...AUTH_PRESENT, dangerouslySkipPermissionsRequested: true },
+    );
+    expect(bypass.IS_SANDBOX).toBe("1");
+
+    const ordinary = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {}, {}, AUTH_PRESENT);
+    expect(ordinary.IS_SANDBOX).toBeUndefined();
+  });
+
+  test("an explicit user IS_SANDBOX export still wins", () => {
+    const env = buildClaudeEnv(
+      cfg({ claudeCode: {} }),
+      10100,
+      { IS_SANDBOX: "0" },
+      {},
+      { ...AUTH_PRESENT, dangerouslySkipPermissionsRequested: true },
+    );
+    expect(env.IS_SANDBOX).toBe("0");
+  });
+});
