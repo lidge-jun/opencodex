@@ -2084,7 +2084,7 @@ async function maybeFetchProviderQuota(
       && isCanonicalCommandCodeBaseUrl(provider.baseUrl)) {
       return fetchCommandCodeQuota(name, provider);
     }
-    if ((provider.authMode ?? "key") === "key" && name === "opencode-go") {
+    if ((provider.authMode ?? "key") === "key" && isCanonicalOpenCodeGoBaseUrl(provider.baseUrl)) {
       return fetchOpenCodeGoQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl)) {
