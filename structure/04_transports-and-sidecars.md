@@ -253,9 +253,11 @@ These are standalone Images API routes, not the hosted Responses `image_generati
 selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
 provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never
 falls through to another paid upstream. The relay accepts bounded JSON generation and edit requests,
-then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST receives
-one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
-existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
+then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST,
+including the Google Antigravity fallback, receives one upstream attempt; an ambiguous transport
+failure is never replayed on a peer host because the generation may already have been accepted.
+Client cancellation aborts the upstream and pool-only failures update the existing account-health
+state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
 When the OpenAI credential path is unavailable or its authentication fails, `generations` (not
 `edits`) may fall back to Google Antigravity if that provider is logged in. The fallback is
@@ -1075,6 +1077,16 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
+## Antigravity transport failover
+
+Cloud Code Assist requests always use `streamGenerateContent?alt=sse`, including unary callers;
+the adapter buffers those SSE events for the unary contract. The configured daily or production
+host is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.com` or
+`cloudcode-pa.googleapis.com`) is eligible for one first-host transport, 404, `UNAVAILABLE`, or
+empty-stream retry. Authentication, geoblock, invalid-request, and exhausted-quota responses do
+not trigger host failover. Antigravity 429 cooldowns are process-local and keyed by OAuth account;
+geoblock records cooldown without starting an account carousel.
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport
@@ -1083,7 +1095,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
-| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. |
+| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-antigravity-hosts.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts`, `src/oauth/antigravity-routing.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. CCA host failover is daily/prod only (`google-antigravity-hosts.ts`); process-local 429/quota/geoblock cooldowns are keyed by OAuth account (`antigravity-routing.ts`). |
 | Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
 | Anthropic image ingress | `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts` | Oversized or unsupported images are normalized or rejected before reaching upstream. |
 | Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |
