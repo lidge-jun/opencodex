@@ -7,7 +7,7 @@ import {
 } from "./google-errors";
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
-import { antigravityHostCandidates } from "./google-antigravity-hosts";
+import { antigravityHostCandidates, isAntigravityHttpsHost } from "./google-antigravity-hosts";
 import { recordAntigravityCooldown } from "../oauth/antigravity-routing";
 import {
   abortError,
@@ -307,12 +307,19 @@ async function fetchGoogleWithRetryInternal(
   const repairInvalid400 = opts.repairInvalid400 ?? true;
   const timeoutMs = ctx.timeoutMs ?? 200_000;
   const executor = ctx.executor ?? globalThis.fetch;
-  const antigravityHosts = allowAntigravityHostFailover && label === "Antigravity" && isAntigravitySseRequest(request)
-    ? antigravityHostCandidates(new URL(request.url).origin)
+  let activeRequest = request;
+  if (label === "Antigravity" && isAntigravitySseRequest(activeRequest)) {
+    const origin = new URL(activeRequest.url).origin;
+    if (!isAntigravityHttpsHost(origin)) {
+      const httpsHost = antigravityHostCandidates(origin).find(isAntigravityHttpsHost);
+      if (httpsHost) activeRequest = requestForHost(activeRequest, httpsHost);
+    }
+  }
+  const antigravityHosts = allowAntigravityHostFailover && label === "Antigravity" && isAntigravitySseRequest(activeRequest)
+    ? antigravityHostCandidates(new URL(activeRequest.url).origin).filter(isAntigravityHttpsHost)
     : [];
   let antigravityHostIndex = 0;
   let lastError: unknown;
-  let activeRequest = request;
   let compatibilityReplayUsed = false;
   for (let attempt = 0; attempt < GOOGLE_RETRY_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
