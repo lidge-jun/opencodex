@@ -267,9 +267,21 @@ function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): Servic
   if (shown.spawnFailed) return { kind: "absent" };
   if (shown.timedOut) return unknown("systemctl could not be asked: timed out");
   if (shown.status !== 0) {
+    const err = shown.stderr.trim();
     // A missing unit still exits ZERO and says not-found; a non-zero status means
-    // the question never reached the bus.
-    return unknown(`systemctl show exited ${String(shown.status)}: ${shown.stderr.trim()}`);
+    // the question never reached the bus. Two of those failures mean it never
+    // could: with no session-bus socket (or no systemd at all, e.g. WSL), no
+    // user unit can be registered, so there is nothing to conflict with — the
+    // same conclusion as systemctl being absent (#1939). Other bus failures
+    // (e.g. a misconfigured DBUS_SESSION_BUS_ADDRESS while the user manager
+    // runs) stay unknown.
+    if (
+      err.includes("Failed to get D-Bus connection: No such file or directory")
+      || err.includes("System has not been booted with systemd")
+    ) {
+      return { kind: "absent" };
+    }
+    return unknown(`systemctl show exited ${String(shown.status)}: ${err}`);
   }
 
   const loadState = systemdProperty(shown.stdout, "LoadState");

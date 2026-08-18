@@ -1008,3 +1008,29 @@ describe("ownership refuses what it cannot prove", () => {
     expect(result.ownership).toBe("owned");
   });
 });
+
+describe("systemd probe: no user session bus", () => {
+  test("a missing session-bus socket means no user units can exist — absent (#1939)", () => {
+    const { run } = recorder(() => ({
+      status: 1,
+      stderr: "Failed to get D-Bus connection: No such file or directory",
+    }));
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("absent");
+  });
+
+  test("WSL's not-booted-with-systemd message is absent for the same reason (#1939)", () => {
+    const { run } = recorder(() => ({
+      status: 1,
+      stderr: "System has not been booted with systemd as init system (PID 1).",
+    }));
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("absent");
+  });
+
+  test("other bus failures stay unknown — the user manager may be running", () => {
+    const { run } = recorder(() => ({
+      status: 1,
+      stderr: "Failed to connect to bus: $DBUS_SESSION_BUS_ADDRESS not set",
+    }));
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("unknown");
+  });
+});
