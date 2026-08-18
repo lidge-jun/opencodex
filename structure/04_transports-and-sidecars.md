@@ -852,9 +852,10 @@ combo whose remaining eligible targets use other providers.
 
 ## Antigravity transport failover
 
-Cloud Code Assist requests always use `streamGenerateContent?alt=sse`, including unary callers;
-the adapter buffers those SSE events for the unary contract. The configured daily or production
-host is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.com` or
+CCA chat/adapter requests use `streamGenerateContent?alt=sse`, including unary callers; the adapter
+buffers those SSE events for the unary contract. Built-in image generation uses the separate unary
+`v1internal:generateContent` endpoint outside the adapter. The configured daily or production host
+is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.com` or
 `cloudcode-pa.googleapis.com`) is eligible for one first-host transport, 404, `UNAVAILABLE`, or
 empty-stream retry. Authentication, geoblock, invalid-request, and exhausted-quota responses do
 not trigger host failover.
