@@ -445,3 +445,31 @@ describe("rate-limit reset credits", () => {
     });
   });
 });
+
+// ── short-window quota survives the account cache (#2047) ──────────────
+
+describe("short-window quota cache (#2047)", () => {
+  it("setAccountQuotaFromParsed carries the burst window into the cached snapshot", () => {
+    setAccountQuotaFromParsed("acct-short", {
+      weeklyPercent: 1,
+      weeklyResetAt: 1_000,
+      shortPercent: 0,
+      shortResetAt: 2_000,
+      shortWindowSeconds: 18_000,
+    });
+    const snap = getAccountQuota("acct-short");
+    expect(snap).not.toBeNull();
+    // 0% is data, not missing.
+    expect(snap!.shortPercent).toBe(0);
+    expect(snap!.shortResetAt).toBe(2_000);
+    expect(snap!.shortWindowSeconds).toBe(18_000);
+    expect(snap!.weeklyPercent).toBe(1);
+
+    // credits-only refresh must not drop the burst window either
+    setAccountQuotaFromParsed("acct-short", { resetCredits: 12 });
+    const carried = getAccountQuota("acct-short")!;
+    expect(carried.shortPercent).toBe(0);
+    expect(carried.shortWindowSeconds).toBe(18_000);
+    expect(carried.resetCredits).toBe(12);
+  });
+});

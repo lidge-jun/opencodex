@@ -122,6 +122,16 @@ describe("codex routing", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 15 })).toBe(15);
   });
 
+  test("usage score counts the burst window on every plan (#2047)", () => {
+    // A long window at 0-1% with the burst window saturated must not score idle.
+    expect(computeCodexUsageScore({ weeklyPercent: 1, shortPercent: 100 })).toBe(100);
+    expect(computeCodexUsageScore({ monthlyPercent: 0, shortPercent: 87 }, "k12")).toBe(87);
+    expect(computeCodexUsageScore({ weeklyPercent: 15, shortPercent: 9 })).toBe(15);
+    // Missing burst data keeps the pre-existing behavior (long windows only).
+    expect(computeCodexUsageScore({ weeklyPercent: 15 })).toBe(15);
+    expect(computeCodexUsageScore(null)).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+  });
+
   test("exact-account failures record health without rotating the active Pool account", () => {
     const transient = makeConfig({ upstreamFailoverThreshold: 1, activeCodexAccountId: "a" });
     const transientThread = "fixed-transient-thread";

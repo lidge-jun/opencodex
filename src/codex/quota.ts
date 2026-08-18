@@ -246,6 +246,9 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
+    if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
+    if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
     next.resetCredits = quota.resetCredits;
     accountQuota.set(accountId, next);
     schedulePersistAccountQuotas();
@@ -275,6 +278,15 @@ export function setAccountQuotaFromParsed(
     if (existing.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
   }
+
+  // The burst (short) window is upstream-enforced on every plan, so its
+  // fields must survive parse → cache like the longer windows do: dropping
+  // them here reported shortPercent=null while the raw payload carried 0%,
+  // hiding imminent burst exhaustion from the API, dashboard, and routing
+  // (#2047).
+  if (quota.shortPercent !== undefined) next.shortPercent = quota.shortPercent;
+  if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
+  if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
 
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;

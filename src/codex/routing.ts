@@ -322,14 +322,23 @@ function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): void {
 export function computeCodexUsageScore(quota: {
   weeklyPercent?: number;
   monthlyPercent?: number;
+  shortPercent?: number;
 } | null, plan?: unknown): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
+  // The burst window counts on every plan (upstream-enforced independently,
+  // see isCodexQuotaExhausted): a 0% long window with the burst window at
+  // 100% must not score as idle, or routing picks the account that 429s
+  // on the very next request (#2047).
+  const burst = typeof quota.shortPercent === "number" && Number.isFinite(quota.shortPercent)
+    ? quota.shortPercent
+    : undefined;
   if (isThirtyDayOnlyCodexPlan(plan)) {
-    return typeof quota.monthlyPercent === "number" && Number.isFinite(quota.monthlyPercent)
-      ? quota.monthlyPercent
-      : CODEX_UNKNOWN_USAGE_SCORE;
+    if (typeof quota.monthlyPercent !== "number" || !Number.isFinite(quota.monthlyPercent)) {
+      return burst !== undefined ? burst : CODEX_UNKNOWN_USAGE_SCORE;
+    }
+    return burst !== undefined ? Math.max(quota.monthlyPercent, burst) : quota.monthlyPercent;
   }
-  const values = [quota.weeklyPercent, quota.monthlyPercent]
+  const values = [quota.weeklyPercent, quota.monthlyPercent, burst]
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return values.length > 0 ? Math.max(...values) : CODEX_UNKNOWN_USAGE_SCORE;
 }
