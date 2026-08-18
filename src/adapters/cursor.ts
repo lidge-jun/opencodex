@@ -127,7 +127,6 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           if (
             replayUnsafe
             || emittedClientTool
-            || _parsed._cursorIsolateConversation === true
             || activeRequest.contextUsageStoreCheckpoints === false
             || !lastTransport?.captured
             || lastTransport.captured.byteLength === 0
@@ -253,7 +252,6 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         if (
           request.checkpointInvalidationReason
           && request.checkpointInvalidationReason !== "missing_ref"
-          && request.checkpointInvalidationReason !== "isolated_turn"
           && request.checkpointInvalidationReason !== "compaction"
         ) {
           invalidateCursorCheckpoint(_parsed._providerContinuation?.cursor?.checkpointRef);

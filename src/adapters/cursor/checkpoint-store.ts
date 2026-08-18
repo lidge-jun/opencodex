@@ -20,7 +20,6 @@ export type CursorCheckpointInvalidationReason =
   | "identity_changed"
   | "model_changed"
   | "compaction"
-  | "isolated_turn"
   | "trailing_tool_result"
   | "force_fresh"
   | "upstream_invalid_argument";
@@ -147,6 +146,17 @@ export function commitCursorCheckpoint(input: {
   store.totalBytes += snapshot.checkpointBytes.byteLength;
   prune(createdAt);
   return store.snapshots.has(ref) ? ref : undefined;
+}
+
+export function getLatestCursorCheckpoint(
+  match: (snapshot: CursorCheckpointSnapshot) => boolean,
+): CursorCheckpointSnapshot | undefined {
+  prune();
+  let found: CursorCheckpointSnapshot | undefined;
+  for (const snapshot of store.snapshots.values()) {
+    if (match(snapshot)) found = snapshot;
+  }
+  return found ? getCursorCheckpoint(found.ref) : undefined;
 }
 
 export function getCursorCheckpoint(ref: string | undefined): CursorCheckpointSnapshot | undefined {

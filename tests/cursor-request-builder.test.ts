@@ -73,6 +73,87 @@ describe("Cursor request builder", () => {
     expect(continuation.conversationId).toBe(initial.conversationId);
   });
 
+  test("pins chat-style store:false turns to the first user message when no thread header exists", () => {
+    const first = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "fix the cache in sol", timestamp: 1 }] },
+    });
+    const toolHop = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      context: {
+        messages: [
+          { role: "user", content: "fix the cache in sol", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "calling" }], timestamp: 2 },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "ok",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+    const other = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "a different task", timestamp: 1 }] },
+    });
+
+    expect(toolHop.conversationId).toBe(first.conversationId);
+    expect(other.conversationId).not.toBe(first.conversationId);
+  });
+
+  test("reuses a live checkpoint by conversation when chat omits the continuation ref", () => {
+    clearCursorCheckpointsForTests();
+    const first = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      _cursorIdentityScope: "acct-1",
+      context: { messages: [{ role: "user", content: "fix the cache in sol", timestamp: 1 }] },
+    });
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["chat-store-false"],
+    }));
+    const checkpointRef = commitCursorCheckpoint({
+      conversationId: first.conversationId,
+      identityScope: "acct-1",
+      modelId: first.modelId,
+      checkpointBytes,
+      coveredMessageCount: 1,
+    });
+    expect(checkpointRef).toBeDefined();
+
+    const toolHop = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      _cursorIdentityScope: "acct-1",
+      context: {
+        messages: [
+          { role: "user", content: "fix the cache in sol", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "calling" }], timestamp: 2 },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "ok",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+
+    expect(toolHop.conversationId).toBe(first.conversationId);
+    expect(toolHop.continuationMode).toBe("checkpoint");
+    expect(toolHop.checkpointBytes?.byteLength).toBe(checkpointBytes.byteLength);
+    expect(toolHop.checkpointSuffixStart).toBe(1);
+    clearCursorCheckpointsForTests();
+  });
+
   test("isolates client threads even when they share a prompt cache key", () => {
     const first = createCursorRequest({
       ...base,
@@ -143,6 +224,79 @@ describe("Cursor request builder", () => {
       _cursorIsolateConversation: true,
     });
     expect(helper.conversationId).not.toBe(main.conversationId);
+  });
+
+  test("isolated helper turns keep their own cache and never reuse the parent checkpoint", () => {
+    clearCursorCheckpointsForTests();
+    const parentBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["parent-fixture"],
+    }));
+    const parentRef = commitCursorCheckpoint({
+      conversationId: "cursor_parent_real",
+      identityScope: "acct-1",
+      modelId: "default",
+      checkpointBytes: parentBytes,
+      coveredMessageCount: 1,
+    });
+    expect(parentRef).toBeDefined();
+
+    const helperPrompt = { role: "user" as const, content: "summarize this helper task", timestamp: 1 };
+    const first = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_parent_real",
+      _cursorIdentityScope: "acct-1",
+      _cursorIsolateConversation: true,
+      _clientThreadId: "thread-a",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_parent_real", checkpointUsable: true, checkpointRef: parentRef },
+      },
+      context: { messages: [helperPrompt] },
+    });
+    expect(first.conversationId).not.toBe("cursor_parent_real");
+    expect(first.continuationMode).toBe("full-replay");
+    expect(first.checkpointBytes).toBeUndefined();
+
+    const helperBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["helper-fixture"],
+    }));
+    const helperRef = commitCursorCheckpoint({
+      conversationId: first.conversationId,
+      identityScope: "acct-1",
+      modelId: first.modelId,
+      checkpointBytes: helperBytes,
+      coveredMessageCount: 1,
+    });
+    expect(helperRef).toBeDefined();
+
+    const second = createCursorRequest({
+      ...base,
+      _cursorConversationId: "cursor_parent_real",
+      _cursorIdentityScope: "acct-1",
+      _cursorIsolateConversation: true,
+      _clientThreadId: "thread-a",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_parent_real", checkpointUsable: true, checkpointRef: parentRef },
+      },
+      context: {
+        messages: [
+          helperPrompt,
+          { role: "assistant", content: [{ type: "text", text: "calling" }], timestamp: 2 },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "ok",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(second.continuationMode).toBe("checkpoint");
+    expect(second.checkpointBytes?.byteLength).toBe(helperBytes.byteLength);
+    expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+    clearCursorCheckpointsForTests();
   });
 
   test("isolation wins over a remembered parent conversation id", () => {
@@ -741,8 +895,8 @@ describe("Cursor request builder", () => {
         cursor: { conversationId: "cursor_stable", checkpointUsable: true, checkpointRef },
       },
     });
+    expect(isolated.conversationId).not.toBe("cursor_stable");
     expect(isolated.continuationMode).toBe("full-replay");
-    expect(isolated.checkpointInvalidationReason).toBe("isolated_turn");
     expect(isolated.checkpointBytes).toBeUndefined();
 
     const toolResult = createCursorRequest({
@@ -806,9 +960,18 @@ describe("Cursor request builder", () => {
     });
     expect(checkpointRef).toBeDefined();
 
+    const implied = createCursorRequest({
+      ...base,
+      modelId: "cursor/grok-4.6",
+      _cursorConversationId: "cursor_stable",
+      _cursorIdentityScope: "acct-1",
+    });
+    expect(implied.continuationMode).toBe("checkpoint");
+    expect(implied.checkpointBytes?.byteLength).toBe(checkpointBytes.byteLength);
+
     const missing = createCursorRequest({
       ...base,
-      _cursorConversationId: "cursor_stable",
+      _cursorConversationId: "cursor_unknown",
       _cursorIdentityScope: "acct-1",
     });
     expect(missing.continuationMode).toBe("full-replay");

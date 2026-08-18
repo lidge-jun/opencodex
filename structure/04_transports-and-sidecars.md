@@ -519,10 +519,13 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 After a successful no-tool turn, the Cursor adapter keeps the returned ConversationStateStructure in
 a process-local store and reuses that snapshot on the next validated linear continuation instead of
 rebuilding rootPromptMessagesJson and conversationTurns. Tool-result turns reuse the last completed
-checkpoint plus only the uncovered suffix. Compaction, helper/shadow isolation, account or model
-mismatch, missing refs, decode failures, and invalid_argument recovery keep the existing full-replay
-path. previous_response_id may select a branch's opaque checkpointRef; it is never a Cursor
-conversation ownership key. Cursor Connect still does not expose authoritative cache_read_tokens.
+checkpoint plus only the uncovered suffix. Chat Completions hops that omit previous_response_id and
+thread headers pin to the first user/developer text and reuse the live snapshot for that
+conversation. Isolated helper/shadow turns keep their own checkpoint and never join the parent
+conversation. Compaction, account or model mismatch, missing refs, decode failures, and
+invalid_argument recovery keep the existing full-replay path. previous_response_id may select a
+branch's opaque checkpointRef; it is never a Cursor conversation ownership key. Cursor Connect still
+does not expose authoritative cache_read_tokens.
 
 ```text
 [Decision Log]

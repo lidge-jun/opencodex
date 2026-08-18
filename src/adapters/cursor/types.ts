@@ -1,6 +1,7 @@
 import type { OcxUsage } from "../../types";
 import type { OcxMessage, OcxRequestOptions, OcxTool } from "../../types";
 import type { CursorRoutingLevel } from "./discovery";
+import type { CursorCheckpointInvalidationReason } from "./checkpoint-store";
 
 export interface CursorRequestedModelParameter {
   id: string;
@@ -37,7 +38,7 @@ export interface CursorRunRequest {
    */
   checkpointBytes?: Uint8Array;
   continuationMode?: "full-replay" | "checkpoint";
-  checkpointInvalidationReason?: string;
+  checkpointInvalidationReason?: CursorCheckpointInvalidationReason;
   /**
    * When set with checkpointBytes, only this suffix of rawMessages is replayed onto the
    * decoded ConversationStateStructure. Used for tool-result continuations.
