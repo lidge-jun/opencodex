@@ -1,3 +1,33 @@
+import { expect, test } from "bun:test";
+import { fetchAntigravityLiveQuota } from "../src/providers/antigravity-quota";
+
+test("does not classify an unlabelled daily summary window as weekly", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: "agy-access-secret",
+    projectId: "agy-project-secret",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return new Response(JSON.stringify({
+          models: {
+            "gemini-test": { quotaInfo: { remainingFraction: 0.5 } },
+          },
+        }), { status: 200 });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return new Response(JSON.stringify({
+          daily: { remainingFraction: 0.75 },
+        }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  expect(result?.customWindows?.[0]?.label).toBe("Gem");
+  expect(result?.weeklyPercent).toBeUndefined();
+});
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

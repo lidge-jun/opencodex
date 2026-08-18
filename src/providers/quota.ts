@@ -2067,7 +2067,7 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
   const remaining = normalizePercent(toFiniteNumber(quotaInfo.remainingFraction) !== undefined
     ? toFiniteNumber(quotaInfo.remainingFraction)! * 100
     : toFiniteNumber(quotaInfo.remainingPercentage) !== undefined
-      ? toFiniteNumber(quotaInfo.remainingPercentage)! * 100
+      ? toFiniteNumber(quotaInfo.remainingPercentage)!
       : undefined);
   if (remaining === undefined) return undefined;
   return normalizePercent(100 - remaining);
@@ -2103,6 +2103,7 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ project: credential.projectId }),
+        redirect: "error",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) {
