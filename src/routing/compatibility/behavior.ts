@@ -1,3 +1,4 @@
+import { modelInList } from "../../types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { PROVIDER_REGISTRY } from "../../providers/registry";
 import { fastPolicyForModel, serviceTierSupportForModel } from "../../providers/service-tier";
@@ -37,8 +38,17 @@ function behaviorRow(source: LabBehaviorSource, value: unknown) {
   return { source, value };
 }
 
+/**
+ * Membership for the provider's `no*Models`-style lists.
+ *
+ * Delegates to modelInList so the report matches the wire: every runtime gate these
+ * rows describe (openai-chat's sampling/reasoning/tool-choice gates, reasoning-effort's
+ * noReasoningModels) matches through modelInList, which also accepts a bare entry for a
+ * tagged id. ollama-cloud serves `gpt-oss:120b` and lists the bare `gpt-oss`, so an
+ * exact-only check here reported "temperature is sent" on a request that omits it.
+ */
 function includesModel(list: string[] | undefined, modelId: string): boolean {
-  return Array.isArray(list) && list.includes(modelId);
+  return modelInList(list, modelId);
 }
 
 function modelValue<T>(map: Record<string, T> | undefined, modelId: string): T | undefined {
