@@ -9,7 +9,7 @@ import { antigravityUserAgent } from "./client-fingerprint";
  * sends. The IDE client family is also required to unlock newer agent models (the backend 404s
  * CLI-shaped UAs for `gemini-3.7-*`). A `GOOGLE_ANTIGRAVITY_USER_AGENT` override still wins.
  */
-export const ANTIGRAVITY_REQUEST_UA = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT || antigravityUserAgent();
+export const ANTIGRAVITY_REQUEST_UA = antigravityUserAgent();
 
 /**
  * Whether a stored `OcxToolCall.thoughtSignature` is a REAL upstream Gemini signature versus a

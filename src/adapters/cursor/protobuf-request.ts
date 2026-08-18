@@ -8,12 +8,14 @@ import { isCursorExternalWireModel } from "./discovery";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import {
   createCursorBlobRequestScope,
+  cursorBlobMaxEntryBytes,
   releaseCursorBlobRequestScope,
   sealCursorBlobRequestScope,
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
 import { estimateTokens } from "../../lib/token-estimate";
+import { parseDataUrl } from "../image";
 import {
   AgentClientMessageSchema,
   AgentConversationTurnStructureSchema,
@@ -26,6 +28,7 @@ import {
   McpArgsSchema,
   McpSuccessSchema,
   McpTextContentSchema,
+  McpImageContentSchema,
   McpToolCallSchema,
   McpToolResultContentItemSchema,
   McpToolResultSchema,
@@ -371,7 +374,7 @@ function contentText(message: OcxMessage): string {
     .map(part => {
       if (part.type === "text") return part.text;
       if (part.type === "thinking") return part.thinking;
-      if (part.type === "image") return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
+      if (part.type === "image") return `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`;
       return undefined;
     })
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -381,8 +384,144 @@ function contentText(message: OcxMessage): string {
 function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
-    .map(part => part.type === "text" ? part.text : `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`)
+    .map(part => part.type === "text" ? part.text : `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`)
     .join("\n");
+}
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/**
+ * Decode a Codex inline image into Cursor wire bytes.
+ *
+ * `OcxImageContent.imageUrl` is either a `data:` URL or a remote https URL, so this cannot reuse
+ * the MCP helper (which takes bare base64 plus a separate mime). It layers strict validation over
+ * the shared `parseDataUrl` rather than tightening it, because Anthropic, Google, and Command Code
+ * share that parser. `Buffer.from(x, "base64")` accepts many invalid strings silently, so the
+ * charset is checked explicitly. Remote URLs are out of scope: `McpImageContent` needs bytes, and
+ * fetching here would put network IO inside request construction.
+ */
+function decodeInlineImage(imageUrl: string): { bytes: Uint8Array; mimeType: string } | undefined {
+  const parsed = parseDataUrl(imageUrl);
+  if (!parsed) return undefined;
+  const base64 = parsed.base64.trim();
+  if (base64.length === 0 || base64.length % 4 !== 0 || !BASE64_PATTERN.test(base64)) return undefined;
+  try {
+    const bytes = Uint8Array.from(Buffer.from(base64, "base64"));
+    if (bytes.length === 0) return undefined;
+    return { bytes, mimeType: parsed.mediaType || "application/octet-stream" };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A degraded image must never make a step LARGER than the legacy encoding did, or this change
+ * could fail admission for a request that previously fit. The old placeholder was
+ * `[image input unsupported by Cursor adapter phase 3: <detail>]`; anything we emit in its place
+ * is truncated to that budget so the zero-image case is byte-bounded by the pre-change behavior.
+ */
+const LEGACY_IMAGE_PLACEHOLDER_BUDGET =
+  "[image input unsupported by Cursor adapter phase 3: auto]".length;
+
+function imagePlaceholder(reason: string): string {
+  const text = `[image omitted: ${reason}]`;
+  return text.length <= LEGACY_IMAGE_PLACEHOLDER_BUDGET
+    ? text
+    : `${text.slice(0, LEGACY_IMAGE_PLACEHOLDER_BUDGET - 1)}]`;
+}
+
+type DecodedResultPart =
+  | { kind: "text"; text: string }
+  | { kind: "image"; bytes: Uint8Array; mimeType: string }
+  | { kind: "undecodable" };
+
+/**
+ * Decode a tool result's parts ONCE. `toolCallStep` may re-serialize a step several times while
+ * shrinking it to fit blob admission, and decoding base64 on every attempt made that loop
+ * quadratic (an audit measured ~3s for 100 images).
+ */
+function decodeResultParts(message: OcxToolResultMessage): DecodedResultPart[] | undefined {
+  const content = message.content;
+  if (typeof content === "string") return undefined;
+  return content.map((part): DecodedResultPart => {
+    if (part.type === "text") return { kind: "text", text: part.text };
+    const decoded = decodeInlineImage(part.imageUrl);
+    return decoded ? { kind: "image", ...decoded } : { kind: "undecodable" };
+  });
+}
+
+function countImages(parts: DecodedResultPart[] | undefined): number {
+  return parts ? parts.filter(p => p.kind === "image").length : 0;
+}
+
+/**
+ * Build the wire content items for a tool result, preserving part order.
+ *
+ * Images become real `McpImageContent` — the Cursor schema has an image case on
+ * `McpToolResultContentItem`, and `native-exec-mcp.ts` already uses it for MCP-invoked tools.
+ * Flattening them to placeholder text blinded every screenshot-returning tool (Computer Use,
+ * browser QA) that Codex routes through this path.
+ */
+function toolResultContentItems(
+  message: OcxToolResultMessage,
+  decoded?: DecodedResultPart[],
+  maxImages = Number.POSITIVE_INFINITY,
+) {
+  const parts = decoded ?? decodeResultParts(message);
+  if (!parts) {
+    const text = typeof message.content === "string" ? message.content : "";
+    return [create(McpToolResultContentItemSchema, {
+      content: { case: "text" as const, value: create(McpTextContentSchema, { text }) },
+    })];
+  }
+  // Images are dropped OLDEST first when the step must shrink: the most recent screenshot is the
+  // one the model is reasoning about, so it is the last to go.
+  const totalImages = countImages(parts);
+  const allowed = Math.max(0, Math.min(totalImages, maxImages));
+  let seen = 0;
+  // Consecutive text runs are newline-joined into ONE item, exactly as the legacy encoding did.
+  // Emitting one protobuf item per part adds per-item framing, which was enough to push a
+  // previously admissible step past the blob ceiling (round-3 audit: 1020 -> 1025 bytes at a
+  // 1024 limit). A result with no images must serialize identically to before this feature.
+  const items: ReturnType<typeof create<typeof McpToolResultContentItemSchema>>[] = [];
+  let pendingText: string[] = [];
+  const flushText = () => {
+    if (pendingText.length === 0) return;
+    const text = pendingText.join("\n");
+    pendingText = [];
+    items.push(create(McpToolResultContentItemSchema, {
+      content: { case: "text" as const, value: create(McpTextContentSchema, { text }) },
+    }));
+  };
+  for (const part of parts) {
+    if (part.kind === "text") {
+      pendingText.push(part.text);
+      continue;
+    }
+    if (part.kind === "undecodable") {
+      pendingText.push(imagePlaceholder("no inline data"));
+      continue;
+    }
+    seen++;
+    if (seen <= totalImages - allowed) {
+      pendingText.push(imagePlaceholder(`${part.bytes.byteLength}B over step limit`));
+      continue;
+    }
+    flushText();
+    items.push(create(McpToolResultContentItemSchema, {
+      content: { case: "image" as const, value: create(McpImageContentSchema, {
+        data: part.bytes,
+        mimeType: part.mimeType,
+      }) },
+    }));
+  }
+  flushText();
+  if (items.length === 0) {
+    items.push(create(McpToolResultContentItemSchema, {
+      content: { case: "text" as const, value: create(McpTextContentSchema, { text: "" }) },
+    }));
+  }
+  return items;
 }
 
 function toolResultToText(message: OcxToolResultMessage): string {
@@ -405,7 +544,8 @@ function toolCallStep(
   const args: Record<string, Uint8Array> = {};
   for (const [key, value] of Object.entries(part.arguments ?? {})) args[key] = argBytes(value);
   const toolName = namespacedToolName(part.namespace, part.name);
-  return storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
+  const decodedResult = result ? decodeResultParts(result) : undefined;
+  const serialize = (maxImages: number): Uint8Array => toBinary(ConversationStepSchema, create(ConversationStepSchema, {
     message: {
       case: "toolCall",
       value: create(ToolCallSchema, {
@@ -419,24 +559,35 @@ function toolCallStep(
               providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
               args,
             }),
-            ...(result ? { result: toolResultPart(result) } : {}),
+            ...(result ? { result: toolResultPart(result, decodedResult, maxImages) } : {}),
           }),
         },
       }),
     },
-  })), requestScope);
+  }));
+
+  // A step is stored as ONE blob, so its images share an entry with the call's arguments, text,
+  // mime strings, and protobuf framing. A byte budget over decoded images alone cannot bound that
+  // (an audit reproduced a 448-byte-argument call whose 460-byte image pushed a previously
+  // admitted step past the ceiling). Measure the real serialized size instead, then drop images —
+  // oldest first, so the most recent screenshot survives — until the step fits.
+  const limit = cursorBlobMaxEntryBytes();
+  const imageCount = countImages(decodedResult);
+  let encoded = serialize(imageCount);
+  for (let allowed = imageCount - 1; allowed >= 0 && encoded.byteLength > limit; allowed--) {
+    encoded = serialize(allowed);
+  }
+  return storeCursorBlob(encoded, requestScope);
 }
 
-function toolResultPart(message: OcxToolResultMessage) {
+function toolResultPart(message: OcxToolResultMessage, decoded?: DecodedResultPart[], maxImages?: number) {
   const formatted = formatToolResultToWireText(message, { maxBytes: historyToolResultBodyByteLimit() });
   return create(McpToolResultSchema, {
     result: {
       case: "success",
       value: create(McpSuccessSchema, {
         isError: formatted.isError,
-        content: [create(McpToolResultContentItemSchema, {
-          content: { case: "text", value: create(McpTextContentSchema, { text: formatted.text }) },
-        })],
+        content: toolResultContentItems(message, decoded, maxImages),
       }),
     },
   });

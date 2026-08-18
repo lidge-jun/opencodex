@@ -5,6 +5,11 @@ export interface OcxReasoningReplayIdentity {
   providerName: string;
   /** Opaque process-local digest of the exact upstream destination. */
   providerDestinationIdentity: string;
+  /**
+   * The same destination, digested WITHOUT the process-local random key, so it can key a
+   * durable store. Absent when no base URL was resolvable.
+   */
+  providerDestinationDurableIdentity?: string;
   adapterName: string;
   modelId: string;
   /** Opaque process-local credential identity; never a raw token or API key. */
@@ -1392,8 +1397,15 @@ export interface OcxProviderConfig {
    * HTTP/2 streaming responses (issue #1668). "http1.1" / "h1" forces HTTP/1.1,
    * "http2" / "h2" forces HTTP/2. Absent or "auto" keeps Bun's default negotiation
    * (current behavior unchanged). Only meaningful for https: base URLs.
-   */
+  */
   upstreamHttpVersion?: UpstreamHttpVersion;
+  /**
+   * Google only. When `false`, the AI Studio (direct) path sends Gemini Flash ids
+   * unchanged to the wire instead of applying the `-tiered` suffix (`gemini-3.7-flash`
+   * -> `gemini-3.7-flash-tiered`). Set this to `false` when the configured upstream still
+   * serves the bare ids. Absent (default) keeps the rename.
+   */
+  directGeminiWireRenames?: boolean;
   /** Keep provider settings on disk but exclude it from routing and model/catalog listings. */
   disabled?: boolean;
   /**

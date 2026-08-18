@@ -38,11 +38,10 @@ interface ProviderAdapter {
   省略**该参数。
 - 流式输出 `delta.content`（文本）、`delta.reasoning_content`（thinking）和
   `delta.tool_calls[]`，并收集 `usage`。
-- ClinePass 使用经实时验证的网关格式 `reasoning: { enabled: true, effort: "low" }`；关闭
-  reasoning 时使用 `{ enabled: false }`。其公开 API 文档目前没有说明这一请求格式。adapter 会把
-  其他 effort 请求限制到已验证的 `low`，把 `delta.reasoning_content` 或 `delta.reasoning`
-  作为 reasoning delta，通过 `stream_options.include_usage` 请求流式 usage，并从非流式响应
-  envelope 中读取 usage。
+- ClinePass 使用经实时验证的网关格式 `reasoning: { enabled: true, effort }`；关闭 reasoning 时使用
+  `{ enabled: false }`。其公开 API 文档目前没有说明这一请求格式。adapter 会保留请求的 `low`、
+  `medium`、`high`、`xhigh` 或 `max` 档位，把 `delta.reasoning_content` 或 `delta.reasoning`
+  作为 reasoning delta，通过 `stream_options.include_usage` 请求流式 usage，并从非流式响应 envelope 中读取 usage。
 
 ## `openai-responses`
 

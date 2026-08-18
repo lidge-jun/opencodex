@@ -14,6 +14,7 @@ import {
   bindReasoningReplayScope,
   reasoningReplayCodexCredentialIdentity,
   reasoningReplayDestinationIdentity,
+  durableReplayDestinationIdentity,
   reasoningReplayKeyCredentialIdentity,
   reasoningReplayOAuthCredentialIdentity,
 } from "../../responses/reasoning-replay-cache";
@@ -336,6 +337,7 @@ function bindRouteReasoningReplayScope(args: {
       ? {
           providerName,
           providerDestinationIdentity,
+          providerDestinationDurableIdentity: durableReplayDestinationIdentity(provider.baseUrl),
           adapterName,
           modelId: parsed.modelId,
           credentialIdentity,

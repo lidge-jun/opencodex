@@ -15,6 +15,7 @@ import {
   rememberThoughtSignatureForReplay,
   resetThoughtSignatureReplayForTests,
 } from "../src/responses/thought-signature-replay";
+import { durableReplayDestinationIdentity } from "../src/responses/reasoning-replay-cache";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -38,12 +39,18 @@ const provider = {
  * client-visible call_id is not unique across threads, accounts, providers or models,
  * so keying on it alone let one conversation's signature reach another's turn.
  */
-function scopeFor(threadId = "thread-a", modelId = MODEL, providerName = "google") {
+function scopeFor(
+  threadId = "thread-a",
+  modelId = MODEL,
+  providerName = "google",
+  destination = "https://generativelanguage.googleapis.com",
+) {
   return {
     clientThreadId: threadId,
     current: {
       providerName,
       providerDestinationIdentity: `dest-${providerName}`,
+      providerDestinationDurableIdentity: durableReplayDestinationIdentity(destination),
       adapterName: "google",
       modelId,
       credentialIdentity: `cred-${providerName}`,
@@ -297,5 +304,35 @@ describe("#1735 thought signature survives history replay", () => {
     // Simulate a fresh process: drop in-memory state; lookup must reload from disk.
     resetThoughtSignatureReplayForTests();
     expect(lookupReplayThoughtSignature("call_disk_1", scopeFor())).toBe(SIGNATURE);
+  });
+
+  test("one provider name serving two endpoints does not share signatures", () => {
+    // The gap the durable key closes. providerName, adapterName, modelId and thread can all
+    // be identical across two upstreams — a gateway and a direct endpoint under one config
+    // name — and an opaque signature minted by one is meaningless to the other.
+    const primary = scopeFor("thread-a", MODEL, "google", "https://generativelanguage.googleapis.com");
+    const secondary = scopeFor("thread-a", MODEL, "google", "https://gateway.internal.example/v1beta");
+
+    rememberThoughtSignatureForReplay("call_dest", SIGNATURE, primary);
+
+    expect(lookupReplayThoughtSignature("call_dest", primary)).toBe(SIGNATURE);
+    expect(lookupReplayThoughtSignature("call_dest", secondary)).toBeUndefined();
+  });
+
+  test("the durable destination identity is stable across restarts, unlike the process-local one", async () => {
+    // The reason this is a separate digest rather than the sibling cache's HMAC: that one is
+    // keyed by randomBytes minted at module load, so reusing it here would change every key
+    // on restart and the store would silently stop matching — a worse failure than the
+    // over-broad key it replaced, because it looks like it is working.
+    const url = "https://generativelanguage.googleapis.com";
+    expect(durableReplayDestinationIdentity(url)).toBe(durableReplayDestinationIdentity(url));
+    expect(durableReplayDestinationIdentity(url)).not.toBe(durableReplayDestinationIdentity("https://other.example"));
+    // Trailing-slash normalization matches the process-local form.
+    expect(durableReplayDestinationIdentity(`${url}/`)).toBe(durableReplayDestinationIdentity(url));
+
+    rememberThoughtSignatureForReplay("call_dest_restart", SIGNATURE, scopeFor());
+    await flushThoughtSignatureReplayForTests();
+    resetThoughtSignatureReplayForTests();
+    expect(lookupReplayThoughtSignature("call_dest_restart", scopeFor())).toBe(SIGNATURE);
   });
 });

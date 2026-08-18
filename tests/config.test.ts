@@ -833,6 +833,38 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("responsesSnapshotRepair");
   });
 
+  test("direct Gemini wire rename opt-out is a boolean and round-trips", () => {
+    const base = {
+      port: 12345,
+      providers: {
+        google: {
+          adapter: "google",
+          baseUrl: "https://generativelanguage.googleapis.com",
+        },
+      },
+      defaultProvider: "google",
+    };
+    writeConfig({
+      ...base,
+      providers: {
+        google: { ...base.providers.google, directGeminiWireRenames: false },
+      },
+    });
+    const config = loadConfig();
+    expect(config.providers.google.directGeminiWireRenames).toBe(false);
+    saveConfig(config);
+    expect(loadConfig().providers.google.directGeminiWireRenames).toBe(false);
+
+    writeConfig({
+      ...base,
+      providers: {
+        google: { ...base.providers.google, directGeminiWireRenames: "false" },
+      },
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("directGeminiWireRenames");
+  });
+
   test("accepts a relative responsesPath", () => {
     writeResponsesPathConfig("/responses");
 

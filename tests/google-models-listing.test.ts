@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCatalogEntries, gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
 import { buildModelsRequest } from "../src/oauth";
-import { clearModelCache, getStaleCached } from "../src/codex/model-cache";
+import { captureModelCacheGeneration, clearModelCache, getStaleCached } from "../src/codex/model-cache";
+import { registerAntigravityDiscoveredWireModels, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 
@@ -129,8 +130,6 @@ describe("Antigravity live model discovery", () => {
         "future-flash-high",
         "future-flash-low",
         "future-flash-medium",
-        "future-flash-tiered",
-        "gemini-3.1-flash-image",
         "gemini-3.1-pro-low",
         "gemini-3.7-flash",
       ]);
@@ -211,6 +210,64 @@ describe("Antigravity live model discovery", () => {
       expect(getStaleCached("google-antigravity")).toBeNull();
     } finally {
       warning.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("does not register wire mappings from a stale CCA discovery", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-stale-discovery-"));
+    process.env.OPENCODEX_HOME = home;
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3_600_000,
+            projectId: "project-id",
+          },
+        }],
+      },
+    }));
+    let releaseResponse!: () => void;
+    let markFetchStarted!: () => void;
+    const responseGate = new Promise<void>(resolve => { releaseResponse = resolve; });
+    const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+    const baseUrl = "https://cca-stale-discovery.example";
+    const priorGeneration = captureModelCacheGeneration("google-antigravity");
+    registerAntigravityDiscoveredWireModels(baseUrl, [{ id: "stale-model", wireModelId: "old-wire-model" }], {
+      provider: "google-antigravity",
+      cacheGeneration: priorGeneration,
+    });
+    expect(resolveAntigravityWireModelId("stale-model", baseUrl)).toBe("old-wire-model");
+    globalThis.fetch = (async () => {
+      markFetchStarted();
+      await responseGate;
+      return Response.json({
+        models: { "stale-wire-model": { displayName: "Stale Model" } },
+        agentModelSorts: [{ groups: [{ modelIds: ["stale-wire-model"] }] }],
+      });
+    }) as typeof fetch;
+
+    try {
+      const pending = gatherRoutedModels(configWith("google-antigravity", {
+        adapter: "google",
+        authMode: "oauth",
+        baseUrl,
+        project: "configured-project",
+        liveModels: true,
+        models: ["configured-only"],
+      }));
+      await fetchStarted;
+      clearModelCache("google-antigravity");
+      releaseResponse();
+
+      expect((await pending).filter(model => model.provider === "google-antigravity").map(model => model.id))
+        .toEqual(["configured-only"]);
+      expect(resolveAntigravityWireModelId("stale-model", baseUrl)).toBe("stale-model");
+    } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });

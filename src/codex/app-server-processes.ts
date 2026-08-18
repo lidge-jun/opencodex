@@ -348,8 +348,34 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
  * Exported for the Windows integration regression that exercises the real
  * PowerShell enumeration.
  */
-export function listWindowsSnapshots(): ProcessSnapshot[] {
+/**
+ * Turn one PowerShell enumeration's stdout into snapshots.
+ *
+ * Split out from the spawn so the failure contract is testable off-Windows: the
+ * sentinel path is the difference between "no Codex process is running" and "we could
+ * not read the process list", and only one of those is safe to act on.
+ */
+export function parseWindowsSnapshotOutput(output: string): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    // A candidate whose owner could not be verified — or a top-level query that
+    // failed outright — makes the whole enumeration incomplete. The staleness
+    // collector must not read the partial result as "nothing running".
+    if (line.trim() === "__OCX_ENUM_INCOMPLETE__") throw new Error("windows_enum_incomplete");
+    const tab = line.indexOf("\t");
+    if (tab <= 0) continue;
+    const tab2 = line.indexOf("\t", tab + 1);
+    if (tab2 <= tab) continue;
+    const pid = Number(line.slice(0, tab));
+    const commandLine = line.slice(tab + 1, tab2).trim();
+    const owner = line.slice(tab2 + 1).trim();
+    if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine || !owner) continue;
+    out.push({ pid, commandLine, owner });
+  }
+  return out;
+}
+
+export function listWindowsSnapshots(runPowerShell?: (psCommand: string) => string): ProcessSnapshot[] {
   // Newlines keep -Command as a real script (space-joined statements need ';').
   // Double-quoted format string so `t expands to a real tab.
   // Codex candidates only: basename token codex / codex.exe / codex.cmd /
@@ -361,7 +387,15 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   const psCommand = [
     "$ErrorActionPreference='SilentlyContinue'",
     "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
-    "Get-CimInstance Win32_Process | Where-Object {",
+    // -ErrorAction Stop plus the outer try is what makes a TOP-LEVEL query failure
+    // observable. Under SilentlyContinue alone, a failing Get-CimInstance emits nothing
+    // and the enumeration is indistinguishable from "no Codex process is running" —
+    // the parse loop finds no rows, no sentinel is produced, and the staleness collector
+    // reports not_running for a machine whose process list it never actually read.
+    // The per-process catch below cannot cover this: it only runs once the pipeline has
+    // objects to iterate.
+    "try {",
+    "Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {",
     "  -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and (",
     `    $_.CommandLine -match ${basenameMatch} -or`,
     `    $_.CommandLine -match ${codeModeMatch}`,
@@ -376,31 +410,19 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     "    \"{0}`t{1}`t{2}\" -f $_.ProcessId, $cmd, $owner",
     "  } catch { \"__OCX_ENUM_INCOMPLETE__\" }",
     "}",
+    "} catch { \"__OCX_ENUM_INCOMPLETE__\" }",
   ].join("\n");
   // Top-level exec failure propagates (see listDarwinSnapshots note). The
   // executable resolves from the trusted System32 directory (never PATH), and
   // windowsHide keeps the enumeration console-less on desktop sessions (#1278).
-  const output = execFileSync(resolveTrustedWindowsPowerShellExe(), [
-    "-NoProfile", "-NoLogo", "-NonInteractive",
-    "-Command",
-    psCommand,
-  ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true });
-  for (const line of output.split(/\r?\n/)) {
-    // A candidate whose owner could not be verified makes the whole
-    // enumeration incomplete — the staleness collector must not read the
-    // partial result as "nothing running".
-    if (line.trim() === "__OCX_ENUM_INCOMPLETE__") throw new Error("windows_enum_incomplete");
-    const tab = line.indexOf("\t");
-    if (tab <= 0) continue;
-    const tab2 = line.indexOf("\t", tab + 1);
-    if (tab2 <= tab) continue;
-    const pid = Number(line.slice(0, tab));
-    const commandLine = line.slice(tab + 1, tab2).trim();
-    const owner = line.slice(tab2 + 1).trim();
-    if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine || !owner) continue;
-    out.push({ pid, commandLine, owner });
-  }
-  return out;
+  const output = runPowerShell
+    ? runPowerShell(psCommand)
+    : execFileSync(resolveTrustedWindowsPowerShellExe(), [
+      "-NoProfile", "-NoLogo", "-NonInteractive",
+      "-Command",
+      psCommand,
+    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true });
+  return parseWindowsSnapshotOutput(output);
 }
 
 function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined): ProcessSnapshot[] {
@@ -592,6 +614,18 @@ function defaultCatalogMtimeMs(): number | null {
 // guidance calls (#857).
 let catalogStateCache: { atMs: number; status: CodexAppServerCatalogStatus } | null = null;
 const CATALOG_STATE_TTL_MS = 5_000;
+/**
+ * `unknown` is a failure to observe, not an observation, so it gets a much shorter
+ * window than a real reading. At the full 5s a single transient enumeration failure
+ * suppresses guidance for every call in that window, and the retry that would have
+ * succeeded never runs. Keeping a brief window still collapses a burst of per-turn
+ * calls into one probe, which is what the cache is for.
+ */
+const CATALOG_STATE_UNKNOWN_TTL_MS = 250;
+
+export function catalogStateTtlMs(state: CodexAppServerCatalogState): number {
+  return state === "unknown" ? CATALOG_STATE_UNKNOWN_TTL_MS : CATALOG_STATE_TTL_MS;
+}
 
 /**
  * Compare the on-disk catalog mtime against the start time of running Codex
@@ -616,7 +650,8 @@ export function collectCodexAppServerCatalogState(
   const fullyDefault = !io.listSnapshots && !io.readStartMs && !io.catalogMtimeMs
     && !io.platform && !io.getuid && !io.now;
   if (fullyDefault
-    && catalogStateCache && now - catalogStateCache.atMs < CATALOG_STATE_TTL_MS) {
+    && catalogStateCache
+    && now - catalogStateCache.atMs < catalogStateTtlMs(catalogStateCache.status.state)) {
     return catalogStateCache.status;
   }
   const compute = (): CodexAppServerCatalogStatus => {
@@ -630,17 +665,16 @@ export function collectCodexAppServerCatalogState(
     });
     let snapshots: ProcessSnapshot[];
     let enumerationFailed = false;
-    if (io.listSnapshots) {
-      snapshots = io.listSnapshots();
-    } else {
-      try {
-        snapshots = defaultListSnapshots(platform, getuid);
-      } catch {
-        // Enumeration failure must never read as "nothing running" — that
-        // would let positive model guidance through on guesswork (#857).
-        snapshots = [];
-        enumerationFailed = true;
-      }
+    const enumerate = io.listSnapshots ?? (() => defaultListSnapshots(platform, getuid));
+    try {
+      snapshots = enumerate();
+    } catch {
+      // Enumeration failure must never read as "nothing running" — that would let
+      // positive model guidance through on guesswork (#857). The injected seam gets
+      // the same contract as the default path: whoever enumerates, a failure to read
+      // the process list is unknown, not an empty machine.
+      snapshots = [];
+      enumerationFailed = true;
     }
     const processes: CodexAppServerProcess[] = [];
     const seen = new Set<number>();

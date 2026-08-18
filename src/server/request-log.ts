@@ -1004,10 +1004,14 @@ function finalizedUsage(
   const usageFallback = !finalUsage && estimate !== undefined
     ? { inputTokens: estimate, outputTokens: 0, estimated: true }
     : undefined;
-  const loggedUsage = finalUsage && estimate !== undefined
+  const combinedInputTokens = finalUsage && estimate !== undefined
+    ? Math.max(finalUsage.inputTokens, estimate)
+    : undefined;
+  const loggedUsage = finalUsage && combinedInputTokens !== undefined
     ? {
         ...finalUsage,
-        inputTokens: Math.max(finalUsage.inputTokens, estimate),
+        inputTokens: combinedInputTokens,
+        totalTokens: combinedInputTokens + finalUsage.outputTokens,
         estimated: true,
       }
     : finalUsage
@@ -1017,7 +1021,11 @@ function finalizedUsage(
       // ESTIMATE via capEstimateAtContextWindow, and Math.max preserves a real
       // provider-reported count, so it needs no further reduction.
       ? (finalUsage.estimated && contextWindow !== undefined && finalUsage.inputTokens > contextWindow
-          ? { ...finalUsage, inputTokens: contextWindow }
+          ? {
+              ...finalUsage,
+              inputTokens: contextWindow,
+              totalTokens: contextWindow + finalUsage.outputTokens,
+            }
           : finalUsage)
       : usageFallback;
   const totalTokens = usageTotalTokens(loggedUsage);

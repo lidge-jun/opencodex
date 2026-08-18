@@ -19,6 +19,8 @@ import { GetUsableModelsResponseSchema } from "./gen/agent_pb";
 const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
 const CURSOR_DISCOVERY_CLIENT_VERSION = "cli-2026.02.13-41ac335";
 const CURSOR_MODEL_DISCOVERY_MAX_BYTES = 4 * 1024 * 1024;
+type CursorUsableModelsFetcher = (opts: CursorUsableModelsOptions) => Promise<CursorUsableModelsResult>;
+let cursorUsableModelsFetcherForTests: CursorUsableModelsFetcher | null = null;
 
 export interface CursorUsableModelsOptions {
   apiKey: string;
@@ -31,6 +33,11 @@ export type CursorUsableModelsResult =
   | { ok: true; models: string[] }
   | { ok: false; error: "auth" | "http" | "transport" | "timeout" | "decode" | "empty" | "too_large"; detail?: string };
 
+/** Test-only seam for management connectivity probes; production callers retain the HTTP/2 path. */
+export function setFetchCursorUsableModelsForTests(next: CursorUsableModelsFetcher | null): void {
+  cursorUsableModelsFetcherForTests = next;
+}
+
 const RETRYABLE_DISCOVERY_ERRORS = new Set(["timeout", "transport"]);
 const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
 
@@ -42,10 +49,37 @@ const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
  * devlog 260723_cursor_context_continuity/030).
  */
 export async function fetchCursorUsableModels(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
-  const first = await fetchCursorUsableModelsOnce(opts);
+  if (cursorUsableModelsFetcherForTests) return cursorUsableModelsFetcherForTests(opts);
+  const resolved = resolveCursorDiscoveryBaseUrl(opts.baseUrl ?? "https://api2.cursor.sh");
+  if (!resolved.ok) return resolved;
+  const first = await fetchCursorUsableModelsOnce({ ...opts, baseUrl: resolved.baseUrl });
   if (first.ok || !RETRYABLE_DISCOVERY_ERRORS.has(first.error)) return first;
   await new Promise(resolve => setTimeout(resolve, 250 + Math.floor(Math.random() * 250)));
-  return fetchCursorUsableModelsOnce({ ...opts, timeoutMs: Math.min(opts.timeoutMs ?? 8000, DISCOVERY_RETRY_TIMEOUT_MS) });
+  return fetchCursorUsableModelsOnce({
+    ...opts,
+    baseUrl: resolved.baseUrl,
+    timeoutMs: Math.min(opts.timeoutMs ?? 8000, DISCOVERY_RETRY_TIMEOUT_MS),
+  });
+}
+
+function resolveCursorDiscoveryBaseUrl(raw: string): { ok: true; baseUrl: string } | Extract<CursorUsableModelsResult, { ok: false }> {
+  const baseUrl = raw.replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return { ok: false, error: "transport", detail: "Cursor discovery URL is invalid" };
+  }
+  if (parsed.protocol === "https:") return { ok: true, baseUrl };
+  // Local h2c fixtures (and an operator loopback proxy) never leave the machine.
+  // Anything else with a Bearer token must be HTTPS, matching providerOutbound POST.
+  if (parsed.protocol === "http:") {
+    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (host === "127.0.0.1" || host === "::1" || host === "localhost" || host.endsWith(".localhost")) {
+      return { ok: true, baseUrl };
+    }
+  }
+  return { ok: false, error: "transport", detail: "Cursor discovery URL must use HTTPS" };
 }
 
 async function fetchCursorUsableModelsOnce(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {

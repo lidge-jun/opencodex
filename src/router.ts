@@ -12,7 +12,7 @@ import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
-import { applyDirectReasoningEffortContracts } from "./providers/derive";
+import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./providers/derive";
 import {
   providerMatchesRegistryTransportWithStaticGuards,
   providerSupportsLiveModelDiscovery,
@@ -286,14 +286,6 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
   const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
-  // Key-login used to persist this exact low-only ClinePass capability seed. Once the gateway's
-  // wider input ladder was live-verified, leaving that generated row untouched would keep old
-  // installs clamped forever. This branch is reached only after canonical transport matching, so
-  // same-named custom destinations and every other explicit ladder still retain user precedence.
-  const repairLegacyClinePassReasoningEfforts = providerName === "cline-pass"
-    && provider.reasoningWireFormat === "gateway-object"
-    && provider.reasoningEfforts?.length === 1
-    && provider.reasoningEfforts[0] === "low";
   const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
     ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
     : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
@@ -374,7 +366,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
-    ...((provider.reasoningEfforts === undefined || repairLegacyClinePassReasoningEfforts)
+    ...((provider.reasoningEfforts === undefined || hasLegacyClinePassReasoningEfforts(providerName, provider))
       && registryEntry.reasoningEfforts !== undefined
       ? { reasoningEfforts: [...registryEntry.reasoningEfforts] }
       : {}),

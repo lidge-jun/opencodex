@@ -1,6 +1,7 @@
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
+import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-deepseek-v4-tool-replay";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
 import { createGoogleAdapter } from "./google";
@@ -57,7 +58,8 @@ export const ADAPTER_REGISTRY = {
   "openai-chat": {
     wire: "openai-chat",
     mutation: "codex-owned",
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createOpenAIChatAdapter(provider),
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) =>
+      withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider)),
   },
   anthropic: {
     wire: "anthropic",

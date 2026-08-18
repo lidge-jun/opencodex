@@ -553,6 +553,23 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             sawFinish = true;
             const usageValue = event.totalUsage ?? event.usage;
             const stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
+            // The AI SDK's `error` finish reason means the generation failed upstream, not that it
+            // stopped. Reporting it as a `done` left the bridge to infer failure from a stop-reason
+            // string, which either read as a clean completion or (once classified) mislabelled an
+            // upstream error as a content filter and rejected it from the replay cache for the
+            // wrong reason.
+            if (stopReason === "error") {
+              // Keep the usage: a failed turn still consumed tokens, and dropping it makes the
+              // turn look free in accounting and reports zeros to the client.
+              yield {
+                type: "error",
+                message: "Command Code upstream ended the turn with finishReason \"error\"",
+                status: 502,
+                errorType: "upstream_error",
+                usage: usage(usageValue),
+              };
+              break;
+            }
             yield { type: "done", usage: usage(usageValue), stopReason };
             break;
           }

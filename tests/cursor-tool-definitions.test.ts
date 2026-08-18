@@ -157,8 +157,11 @@ describe("Cursor tool definitions", () => {
       },
     } as OcxTool);
     expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
-    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "exec_command", execSchema)).toBeUndefined();
-    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "", command: "echo hi" }), "exec_command", execSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "", command: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "exec", command: "shell" }), "exec_command", execSchema)).toBe("exec");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({}), "exec_command", execSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: " ", command: "\t" }), "exec_command", execSchema)).toBeUndefined();
 
     const shellSchema = cursorToolArgNormalizeSchema({
       name: "shell_command",
@@ -170,7 +173,11 @@ describe("Cursor tool definitions", () => {
       },
     } as OcxTool);
     expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
-    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "shell_command", shellSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "", cmd: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "exec", command: "shell" }), "shell_command", shellSchema)).toBe("shell");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({}), "shell_command", shellSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: " ", command: "\t" }), "shell_command", shellSchema)).toBeUndefined();
   });
 
   test("does not alias namespaced exec_command tools", () => {
@@ -447,12 +454,30 @@ describe("Cursor code mode tool guidance", () => {
     expect(note).toContain("await tools.exec_command({cmd: " + "\"" + "ls" + "\"" + "})");
     expect(note).toContain("text(...)");
     expect(note).toContain("There is no `require`");
+    expect(note).toContain("isolate global `ALL_TOOLS`");
+    expect(note).toContain("not `tools.ALL_TOOLS`");
+    expect(note).toContain("absence from the top-level catalog");
 
     // The flat-catalog shell-bridge guidance must NOT appear: naming a top-level
     // `exec_command` in code mode sends the model after a tool that does not exist.
     expect(note).not.toContain("is the Codex Responses shell bridge for this turn");
     expect(note).not.toContain("mcp_opencodex-responses_shell_command");
     expect(note).not.toContain("For file read/search/listing, use");
+  });
+
+  test("does not forbid a separately listed apply_patch in code mode", () => {
+    const note = buildCursorToolGuidanceSystemNote([
+      codeModeExec(),
+      { name: "apply_patch", description: "Apply a patch", parameters: {}, freeform: true },
+    ]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("is Codex code mode");
+    expect(note).toContain("remains callable at the top level as usual");
+    expect(note).toContain("`apply_patch`");
+    expect(note).not.toContain("do not call `exec_command`, `shell_command`, or `apply_patch` at the top level here");
+    expect(note).toContain("do not call `exec_command` or `shell_command` at the top level here");
   });
 
   test("keeps other visible top-level tools callable in code mode", () => {

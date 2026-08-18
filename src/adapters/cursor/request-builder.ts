@@ -206,7 +206,15 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "thinking":
       return part.thinking;
     case "image":
-      return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
+      // User-message images are still flattened here: this path builds the plain-text prompt, and
+      // the schema slot that could carry them (UserMessage.selectedContext.selectedImages) is not
+      // populated by this adapter. The tool-result ENCODER does build real McpImageContent
+      // (see protobuf-request.ts), so the old "unsupported by Cursor adapter" wording is no
+      // longer true of the encoder — but note that nothing reaches Cursor today either way:
+      // every Cursor model is in noVisionModels (providers/registry.ts), so the vision sidecar
+      // describes or strips images before this adapter runs. Kept the same length to avoid
+      // shifting any byte-budgeted prompt path.
+      return `[image omitted from this Cursor text prompt: ${part.detail ?? "auto"}]`;
     case "toolCall":
       // Cursor does not accept OpenAI Responses assistant tool-call parts as native history here.
       // Rendering them as visible "[tool_call]" text leaks synthetic protocol markers back into

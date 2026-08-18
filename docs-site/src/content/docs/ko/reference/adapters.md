@@ -41,10 +41,10 @@ interface ProviderAdapter {
   유지합니다. `provider.noReasoningModels`에 든 id에는 값을 **아예 보내지 않습니다**.
 - `delta.content`(텍스트), `delta.reasoning_content`(thinking), `delta.tool_calls[]`를
   스트리밍하고 `usage`를 수집합니다.
-- ClinePass는 라이브로 검증된 게이트웨이 형식 `reasoning: { enabled: true, effort: "low" }`을
-  사용하며, reasoning을 끌 때는 `{ enabled: false }`를 사용합니다. 공개 API 문서에는 현재 이 요청
-  형식이 명시되어 있지 않습니다. 어댑터는 다른 effort 요청을 검증된 `low`로 조정하고,
-  `delta.reasoning_content` 또는 `delta.reasoning`을 reasoning delta로 처리하며,
+- ClinePass는 라이브로 검증된 게이트웨이 형식 `reasoning: { enabled: true, effort }`을 사용하며,
+  reasoning을 끌 때는 `{ enabled: false }`를 사용합니다. 공개 API 문서에는 현재 이 요청 형식이
+  명시되어 있지 않습니다. 어댑터는 요청한 `low`, `medium`, `high`, `xhigh`, `max` 단계를 그대로
+  유지하고, `delta.reasoning_content` 또는 `delta.reasoning`을 reasoning delta로 처리하며,
   `stream_options.include_usage`로 스트림 usage를 요청하고 비스트림 응답 envelope에서도 usage를 읽습니다.
 
 ## `openai-responses`

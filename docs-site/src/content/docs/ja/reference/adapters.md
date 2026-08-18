@@ -35,11 +35,11 @@ interface ProviderAdapter {
   プロバイダーが明示的に alias を設定しない限り、`xhigh` と `max` は異なるラベルのまま保ちます。`provider.noReasoningModels` に含まれる id には値を **一切送りません**。
 - `delta.content`（テキスト）、`delta.reasoning_content`（thinking）、`delta.tool_calls[]` を
   ストリーミングし、`usage` を収集します。
-- ClinePass は、ライブ検証済みのゲートウェイ形式 `reasoning: { enabled: true, effort: "low" }`
+- ClinePass は、ライブ検証済みのゲートウェイ形式 `reasoning: { enabled: true, effort }`
   （reasoning を無効にする場合は `{ enabled: false }`）を使用します。公開 API ドキュメントには
-  現在このリクエスト形式が明記されていません。アダプターは他の effort リクエストを検証済みの
-  `low` に調整し、`delta.reasoning_content` または `delta.reasoning` を reasoning delta として扱い、
-  `stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
+  現在このリクエスト形式が明記されていません。アダプターは要求された `low`、`medium`、`high`、
+  `xhigh`、`max` tier をそのまま保持し、`delta.reasoning_content` または `delta.reasoning` を
+  reasoning delta として扱い、`stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
 
 ## `openai-responses`
 

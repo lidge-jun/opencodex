@@ -4,6 +4,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getCredential, saveCredential } from "../src/oauth/store";
+import { ANTIGRAVITY_IDE_VERSION } from "../src/adapters/client-fingerprint";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -48,6 +49,29 @@ describe("antigravity project discovery", () => {
     });
     expect(await discoverAntigravityProject("tok")).toBe("proj-onboarded");
     expect(onboardCalls).toBe(2);
+  });
+
+  // `ide_version` was sending `antigravityUserAgent()` — the whole header, parentheses and all —
+  // where the real client sends a bare version. Nothing failed, because the request still
+  // succeeds; it just does not look like Antigravity. A fingerprint is only worth having if it
+  // matches, so pin the field rather than trusting that nobody re-reaches for the UA helper.
+  test("onboardUser sends a bare ide_version, not the User-Agent string", async () => {
+    let onboardBody: string | undefined;
+    routeFetch((url, init) => {
+      if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({}), { status: 200 });
+      if (url.includes(":onboardUser")) {
+        onboardBody = typeof init?.body === "string" ? init.body : undefined;
+        return new Response(JSON.stringify({ done: true, response: { cloudaicompanionProject: "p" } }), { status: 200 });
+      }
+      return new Response("no", { status: 404 });
+    });
+
+    await discoverAntigravityProject("tok");
+
+    const metadata = JSON.parse(onboardBody ?? "{}").metadata as { ide_version?: string };
+    expect(metadata.ide_version).toBe(ANTIGRAVITY_IDE_VERSION);
+    expect(metadata.ide_version).not.toContain("antigravity/ide/");
+    expect(metadata.ide_version).not.toContain("(");
   });
 
   test("returns undefined when onboardUser aborts with a hard 4xx", async () => {

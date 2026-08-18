@@ -48,7 +48,7 @@ import {
   type InteractionResponse,
 } from "./gen/agent_pb";
 import { debugProviderDiagnostic } from "../../lib/debug";
-import { classifyCursorError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
+import { classifyCursorError, CursorUnexpectedCancelError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import {
@@ -410,6 +410,12 @@ class LiveCursorTransport implements CursorTransport {
   private firstFrameTimer?: ReturnType<typeof setTimeout>;
   private committed = false;
   private expectedClose = false;
+  /**
+   * True once a terminal (`done` or `error`) has been admitted to the outbound queue. Read only
+   * by the EOF branch below: after a mapper error the bridge has already failed the turn, so
+   * failing again on EOF would add a duplicate adapter error for no benefit.
+   */
+  private emittedTerminal = false;
   private pendingFinalize?: ReturnType<typeof setTimeout>;
   private readonly clientToolFinalizeGraceMs: number;
   private activeClientToolFinalizeGraceMs: number;
@@ -428,6 +434,7 @@ class LiveCursorTransport implements CursorTransport {
   // close; safe to read after a stream failure because open() owns the only writer before run().
   private turnStartedAt = 0;
   private framesReceived = 0;
+  private sawAssistantText = false;
  private firstFrameAt?: number;
  private firstFrameLogged = false;
   /** Stable session identifier sent as x-session-id; mirrors IDE session semantics. */
@@ -522,6 +529,22 @@ class LiveCursorTransport implements CursorTransport {
       }
       return err;
     };
+    /**
+     * A cancel we did not request is a real transport failure, but as a raw `NGHTTP2_CANCEL` it
+     * gets swallowed twice over: the adapter re-decides "benign" from the error code alone
+     * (`cursor.ts:181`) and drops the turn, and any message that survives is re-matched
+     * downstream and labelled an intentional "Cursor stream suspended". Raising a typed error
+     * carries the provenance this class already holds.
+     *
+     * Suppressed once a terminal was emitted: the turn already ended, and a second terminal flips
+     * a completed buffered response to failed.
+     */
+    const classifyTurnFailure = (err: Error): Error => {
+      if (!this.expectedClose && !this.emittedTerminal && isCursorBenignCancelError(err)) {
+        return summarizeFailure(new CursorUnexpectedCancelError(err));
+      }
+      return summarizeFailure(err);
+    };
     const wake = () => {
       const fn = notify;
       notify = undefined;
@@ -531,6 +554,7 @@ class LiveCursorTransport implements CursorTransport {
     const push = (message: CursorServerMessage) => {
       const bytes = new TextEncoder().encode(JSON.stringify(message)).byteLength;
       this.reserveTransportBytes(bytes);
+      if (message.type === "done" || message.type === "error") this.emittedTerminal = true;
       queue.push({ message, bytes });
       wake();
     };
@@ -620,7 +644,7 @@ class LiveCursorTransport implements CursorTransport {
         // A CANCEL is benign only on the client-tool suspend path (expectedClose); an
         // unexpected server-side NGHTTP2_CANCEL must surface as a real transport error.
         if (this.expectedClose && isCursorBenignCancelError(failure)) return;
-        throw attachPartialUsage(summarizeFailure(failure), state);
+        throw attachPartialUsage(classifyTurnFailure(failure), state);
       }
       if (done) break;
       await new Promise<void>(resolve => {
@@ -629,7 +653,7 @@ class LiveCursorTransport implements CursorTransport {
     }
     if (failure) {
       if (this.expectedClose && isCursorBenignCancelError(failure)) return;
-      throw attachPartialUsage(summarizeFailure(failure), state);
+      throw attachPartialUsage(classifyTurnFailure(failure), state);
     }
   }
 
@@ -769,6 +793,8 @@ class LiveCursorTransport implements CursorTransport {
   ): void {
     this.turnStartedAt = Date.now();
     this.framesReceived = 0;
+    this.sawAssistantText = false;
+    this.emittedTerminal = false;
     this.firstFrameAt = undefined;
     this.firstFrameLogged = false;
     const dialHost = cursorHostLabel(this.input.provider.baseUrl || "https://api2.cursor.sh");
@@ -1026,6 +1052,27 @@ class LiveCursorTransport implements CursorTransport {
           settler.settleFail(new Error("Cursor stream ended before any response frame (unexpected EOF)"));
           return;
         }
+        // `emittedTerminal` joins dev's two conditions so EOF finalization cannot append a
+        // second terminal after a mapper error already failed the turn (integration 010).
+        if (state.terminated || this.expectedClose || this.emittedTerminal) {
+          releaseBacklogLease();
+          settler.settleFinish();
+          return;
+        }
+        // Open tools fail-closed as a truncation *event* (finalizeTurnEvents), not a thrown
+        // transport error. settleFail here would hide that typed message as adapter_eof.
+        if (state.openToolCalls.size > 0) {
+          for (const event of finalizeTurnEvents(state)) push(event);
+          releaseBacklogLease();
+          settler.settleFinish();
+          return;
+        }
+        if (this.framesReceived > 0 && this.sawAssistantText) {
+          for (const event of finalizeTurnEvents(state)) push(event);
+          releaseBacklogLease();
+          settler.settleFinish();
+          return;
+        }
         releaseBacklogLease();
         settler.settleFinish();
       }, (err) => {
@@ -1087,7 +1134,10 @@ class LiveCursorTransport implements CursorTransport {
       debugProviderDiagnostic("cursor", "interaction-query", { id: query.id, queryCase: query.query.case ?? "unknown", reply: plan.replyCase });
       this.stream.write(encodeClientMessage({ message: { case: "interactionResponse", value: plan.response } }));
       if (!state.terminated) {
-        if (plan.planText) push({ type: "text", text: plan.planText });
+        if (plan.planText) {
+          this.sawAssistantText = true;
+          push({ type: "text", text: plan.planText });
+        }
         push({ type: "heartbeat" });
       }
       return;
@@ -1100,6 +1150,7 @@ class LiveCursorTransport implements CursorTransport {
     const awaitedNativeArgsBeforeMapping = update?.case === "toolCallCompleted"
       && state.openToolCalls.get(update.value.callId)?.awaitingNativeArgs === true;
     const mapped = mapCursorProtobufServerMessage(message, state);
+    if (mapped.some(event => event.type === "text")) this.sawAssistantText = true;
     const beganAwaitingNativeClientToolArgs = update?.case === "toolCallCompleted"
       && !awaitedNativeArgsBeforeMapping
       && state.openToolCalls.get(update.value.callId)?.awaitingNativeArgs === true;

@@ -6,12 +6,14 @@ import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/window
 import {
   afterCatalogWriteHandleAppServers,
   attachStaleAppServerHint,
+  catalogStateTtlMs,
   collectCodexAppServerCatalogState,
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
   isWindowsCodexCandidateCommandLine,
   listCodexAppServerProcesses,
   listWindowsSnapshots,
+  parseWindowsSnapshotOutput,
   resetCodexAppServerCatalogStateCache,
   restartCodexAppServers,
   STALE_CODEX_APP_SERVER_HINT,
@@ -81,6 +83,22 @@ describe("collectCodexAppServerCatalogState (#857)", () => {
       catalogMtimeMs: () => 1_000,
     });
     expect(status.state).toBe("not_running");
+  });
+
+  // The extraction that made the sentinel testable also silently dropped `owner` on
+  // its first pass, and nothing failed — the field feeds ownership decisions elsewhere,
+  // not the two states these tests assert. Pin the whole parsed row so a refactor of the
+  // parse loop cannot quietly lose a field again.
+  test("parsed rows keep every field the enumeration reports", () => {
+    const rows = parseWindowsSnapshotOutput([
+      "4321\tC:\\Program Files\\codex\\codex.exe app-server\tCONTOSO\\jun",
+      "",
+      "1\tinit\tCONTOSO\\jun",
+      "9999\tcodex app-server\t",
+    ].join("\r\n"));
+    expect(rows).toEqual([
+      { pid: 4321, commandLine: "C:\\Program Files\\codex\\codex.exe app-server", owner: "CONTOSO\\jun" },
+    ]);
   });
 
   test("enumeration failure reports unknown, never not_running", () => {
@@ -461,6 +479,44 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
     expect(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source).toContain("['\"]?");
   });
 
+  // The top-level Get-CimInstance sits under `$ErrorActionPreference='SilentlyContinue'`.
+  // If it fails without `-ErrorAction Stop` and an outer catch, it emits nothing at all —
+  // which is byte-identical to a healthy machine running no Codex process. The existing
+  // coverage drives a *throwing* enumerator (by swapping `platform` so the real one fails
+  // on a missing binary); the path below is the one that returns cleanly empty, and it is
+  // the one that used to launder "we could not look" into "nothing is running".
+  test("a top-level CIM failure emits the sentinel, so an empty read is never not_running", () => {
+    const psCommand = { value: "" };
+    expect(() => listWindowsSnapshots((command) => {
+      psCommand.value = command;
+      // What PowerShell actually prints when the outer catch fires.
+      return "__OCX_ENUM_INCOMPLETE__\n";
+    })).toThrow("windows_enum_incomplete");
+
+    // The guard has to be on the top-level query itself, not only per-process.
+    expect(psCommand.value).toContain("Get-CimInstance Win32_Process -ErrorAction Stop");
+    expect(psCommand.value).toContain("} catch { \"__OCX_ENUM_INCOMPLETE__\" }");
+
+    // And the collector must turn that throw into unknown, never not_running.
+    const status = collectCodexAppServerCatalogState({
+      listSnapshots: () => listWindowsSnapshots(() => "__OCX_ENUM_INCOMPLETE__\n"),
+      catalogMtimeMs: () => 1_000,
+    });
+    expect(status.state).toBe("unknown");
+  });
+
+  test("a clean empty read still means not_running", () => {
+    // The other half of the contract: no sentinel, no rows, nothing wrong — the
+    // sentinel must not make every quiet machine look unreadable.
+    expect(listWindowsSnapshots(() => "")).toEqual([]);
+    expect(parseWindowsSnapshotOutput("")).toEqual([]);
+    const status = collectCodexAppServerCatalogState({
+      listSnapshots: () => listWindowsSnapshots(() => ""),
+      catalogMtimeMs: () => 1_000,
+    });
+    expect(status.state).toBe("not_running");
+  });
+
   test.skipIf(process.platform !== "win32")(
     "listWindowsSnapshots returns a current-user Codex-shaped process via real PowerShell enumeration",
     () => {
@@ -602,6 +658,24 @@ describe("warnIfStaleCodexAppServersAfterStartupWrite (#1046)", () => {
 
     resetCodexAppServerCatalogStateCache();
     expect(collectCodexAppServerCatalogState()).not.toBe(first);
+  });
+
+  /*
+   * An `unknown` reading is a failure to observe, not an observation. Serving it for
+   * the full window means one transient enumeration failure suppresses guidance for
+   * every call in that window and the retry that would have succeeded never runs.
+   *
+   * Scope: this asserts the POLICY the cache gate consults. The gate itself only
+   * engages on a fully-defaulted call — injecting `now` would make the call
+   * non-default and bypass the memo entirely — so there is no seam to drive a clock
+   * through, and no test here proves the gate reads this function. That is why it is
+   * one function rather than an inline ternary.
+   */
+  test("an unknown reading is cached far more briefly than a real one", () => {
+    expect(catalogStateTtlMs("unknown")).toBeLessThan(catalogStateTtlMs("fresh"));
+    expect(catalogStateTtlMs("unknown")).toBeLessThan(catalogStateTtlMs("not_running"));
+    expect(catalogStateTtlMs("fresh")).toBe(catalogStateTtlMs("stale"));
+    expect(catalogStateTtlMs("unknown")).toBeGreaterThan(0);
   });
 
   /*
