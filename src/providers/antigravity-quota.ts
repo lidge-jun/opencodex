@@ -57,7 +57,7 @@ function remainingPercent(record: Record<string, unknown>): number | undefined {
       ?? record.remainingPercent
       ?? record.remaining_percent,
   );
-  if (percentage !== undefined) return normalizePercent(percentage <= 1 ? percentage * 100 : percentage);
+  if (percentage !== undefined) return normalizePercent(percentage);
   return undefined;
 }
 
@@ -111,11 +111,8 @@ function isWeeklyPath(path: string[]): boolean {
 
 function parseWeeklyWindow(payload: unknown): { percent: number; resetAt?: number } | undefined {
   const candidates = collectCandidates(payload);
-  const ordered = [
-    ...candidates.filter(candidate => isWeeklyPath(candidate.path)),
-    ...candidates.filter(candidate => !isWeeklyPath(candidate.path)),
-  ];
-  for (const candidate of ordered) {
+  for (const candidate of candidates) {
+    if (!isWeeklyPath(candidate.path)) continue;
     const percent = usedPercent(candidate.record);
     if (percent === undefined) continue;
     const reset = recordResetAt(candidate.record);
