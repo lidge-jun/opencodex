@@ -735,7 +735,7 @@ export async function injectCodexConfig(
   // Design B form FIRST: removeOcxSection also keys on the marker line, so a root-level
   // marker + openai_base_url pair must be gone before it scans or it would swallow root keys.
   content = stripInjectedOpenaiBaseUrl(content);
-  if (content.includes("[model_providers.opencodex]")) {
+  if (hasOcxProviderTable(content)) {
     content = removeOcxSection(content);
   }
   content = removeProfileSection(content);
@@ -1095,6 +1095,27 @@ export async function injectCodexConfig(
   };
 }
 
+/**
+ * Sub-table headers like `[model_providers.opencodex.env_http_headers]` appear when a Codex app
+ * config rewrite re-serializes the provider's inline `env_http_headers` table. They define the
+ * same `model_providers.opencodex` provider, so cleanup must remove them too — otherwise the
+ * provider survives with no `name` and Codex rejects the whole config
+ * ("provider name must not be empty"). The dot terminator keeps a user's
+ * `[model_providers.opencodex_backup]`-style tables out of scope.
+ */
+function isOcxProviderHeaderLine(trimmedLine: string): boolean {
+  return (
+    trimmedLine === "[model_providers.opencodex]" ||
+    trimmedLine.startsWith("[model_providers.opencodex.")
+  );
+}
+
+function hasOcxProviderTable(content: string): boolean {
+  return content
+    .split("\n")
+    .some((line) => isOcxProviderHeaderLine(line.trim()));
+}
+
 function removeOcxSection(content: string): string {
   const lines = content.split("\n");
   const filtered: string[] = [];
@@ -1102,18 +1123,16 @@ function removeOcxSection(content: string): string {
   for (const line of lines) {
     if (
       line.includes(OCX_SECTION_MARKER) ||
-      line.trim() === "[model_providers.opencodex]"
+      isOcxProviderHeaderLine(line.trim())
     ) {
       inOcxSection = true;
       continue;
     }
     if (inOcxSection) {
-      // End the injected section at the next table header that ISN'T our own — exact match so a
-      // user's "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
-      if (
-        /^\s*\[/.test(line) &&
-        line.trim() !== "[model_providers.opencodex]"
-      ) {
+      // End the injected section at the next table header that ISN'T our own. Exact match on the
+      // provider name (plus our own sub-tables) so a user's
+      // "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
+      if (/^\s*\[/.test(line) && !isOcxProviderHeaderLine(line.trim())) {
         inOcxSection = false;
         filtered.push(line);
       }
@@ -1153,7 +1172,7 @@ function stripOpencodexConfigResult(
     || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
   out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl);
-  if (out.includes("[model_providers.opencodex]")) {
+  if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
   }
   out = removeProfileSection(out);
@@ -1182,7 +1201,7 @@ export function stripOpencodexConfig(content: string): string {
 
 function hasOpencodexRouting(content: string): boolean {
   return (
-    content.includes("[model_providers.opencodex]") ||
+    hasOcxProviderTable(content) ||
     /^\s*model_provider\s*=\s*"opencodex"/m.test(content) ||
     hasInjectedOpenaiBaseUrl(content)
   );
