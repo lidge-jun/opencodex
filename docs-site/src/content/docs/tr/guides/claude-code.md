@@ -172,8 +172,11 @@ olan kabuklar etkilenmez ve yeniden açılmalıdır.
 `ocx stop` ve proxy'nin kapatılması **enjekte edilen anahtarları kaldırır**
 (önceki değerleri geri yüklemez — yalnızca opencodex'in enjekte ettiği
 anahtarlar kaldırılır). Proxy ayrıca `~/.opencodex/claude-env.sh` dosyasını
-yazar; `ocx start`, bunu otomatik olarak yükleyen bir `.zshrc` kaynak kancası
-kurar.
+yazar; `ocx start`, bunu otomatik olarak yükleyen `.zshrc` kaynak kancasını
+yalnızca çalıştırılabilir Claude Code CLI `PATH` içinde bulunduğunda kurar.
+Claude Code yoksa veya sistem ortamı entegrasyonu etkin değilse başlangıç işlemi
+ve `ocx ensure`, OpenCodex tarafından eklenen kancayı kaldırır. Claude Desktop ayrı
+bir profil kullanır ve shell kancasının kurulmasını tetiklemez.
 
 Yapılandırmada `claudeCode.systemEnv: false` ile veya GUI anahtarıyla devre dışı
 bırakın. Bu özellik yalnızca macOS içindir; diğer platformlarda `ocx claude`
@@ -604,5 +607,4 @@ modellerde opencodex varsayılan olarak bunu taslakla değiştirir (`blockedSkil
 aracının `model` argümanını değil, `<!-- ocx-route: ... -->` yönergelerini
 kullanır. Yönergenin hedeflenen rotayla eşleştiğinden emin olun. Model yer
 tutucusu olarak `"haiku"` iletin.
-
 
