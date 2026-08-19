@@ -816,6 +816,53 @@ function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown>
   return normalized;
 }
 
+/**
+ * AgentRouter's gateway applies a language filter to the FIRST user message
+ * content and hard-fails non-English prompts with 400 content-blocked
+ * (#2074). Prepending an explicit English instruction frame lets the filter
+ * pass while the model still answers in the user's language — the frame says
+ * "respond in the appropriate language", it does not force English output.
+ */
+export const AGR_PREAMBLE_MARKER =
+  "[Instruction: Process the user request below and respond in the appropriate language.]";
+
+export function isAgentRouterBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.includes("agentrouter");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prepend the AgentRouter language frame to the first user message, once.
+ * Idempotent: a message already carrying the marker is left untouched (retries
+ * and replays must not stack frames).
+ */
+export function applyAgrLanguagePreamble(messages: unknown[]): void {
+  const firstUser = messages.find(
+    m => typeof m === "object" && m !== null && (m as { role?: string }).role === "user",
+  ) as { content?: unknown } | undefined;
+  if (!firstUser) return;
+
+  if (typeof firstUser.content === "string") {
+    if (!firstUser.content.includes(AGR_PREAMBLE_MARKER)) {
+      firstUser.content = `${AGR_PREAMBLE_MARKER}\n\n${firstUser.content}`;
+    }
+  } else if (Array.isArray(firstUser.content)) {
+    const textPart = firstUser.content.find(
+      p => typeof p === "object" && p !== null && (p as { type?: string }).type === "text",
+    ) as { text?: string } | undefined;
+    if (textPart && typeof textPart.text === "string") {
+      if (!textPart.text.includes(AGR_PREAMBLE_MARKER)) {
+        textPart.text = `${AGR_PREAMBLE_MARKER}\n\n${textPart.text}`;
+      }
+    } else {
+      firstUser.content.unshift({ type: "text", text: AGR_PREAMBLE_MARKER });
+    }
+  }
+}
+
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
@@ -833,6 +880,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      if (isAgentRouterBaseUrl(provider.baseUrl)) {
+        applyAgrLanguagePreamble(messages);
+      }
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
       // (anthropic-image-normalize.ts); the guard below remains the deterministic backstop.
       // imageTierBias > 0 = upstream-413 tightened retry (030): start every image one tier lower.
