@@ -147,7 +147,7 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.service_tiers = [{
       id: "priority",
       name: "Fast",
-      description: "1.5x speed, increased usage",
+      description: model.fastTierDescription ?? "1.5x speed, increased usage",
     }];
     entry.additional_speed_tiers = ["fast"];
   }

@@ -410,3 +410,44 @@ describe("unclassified chat-wire tier projection (release-audit fix)", () => {
     expect(serviceTierSupportForModel(provider, "some-model")).toBeUndefined();
   });
 });
+
+describe("xAI keyAuthServiceTier (#2072)", () => {
+  test("OAuth Grok stays off Fast; API-key Grok publishes Priority Processing", () => {
+    const oauth: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "oauth",
+    };
+    const key: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+    };
+    expect(serviceTierSupportForModel(oauth, "grok-4.5", "xai")).toBe(false);
+    expect(serviceTierSupportForModel(key, "grok-4.5", "xai")).toBe(true);
+
+    const oauthEntry: RawEntry = {};
+    applyCatalogModelMetadata(oauthEntry, applyProviderConfigHints("xai", oauth, { id: "grok-4.5", provider: "xai" }));
+    expect(oauthEntry).not.toHaveProperty("service_tiers");
+
+    const keyEntry: RawEntry = {};
+    applyCatalogModelMetadata(keyEntry, applyProviderConfigHints("xai", key, { id: "grok-4.5", provider: "xai" }));
+    expect(keyEntry.service_tiers).toEqual([
+      expect.objectContaining({
+        id: "priority",
+        name: "Fast",
+        description: "Priority processing, 2x token price",
+      }),
+    ]);
+  });
+
+  test("an explicit xAI API-key false stays fail-closed", () => {
+    const key: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+      supportsServiceTier: false,
+    };
+    expect(serviceTierSupportForModel(key, "grok-4.5", "xai")).toBe(false);
+  });
+});

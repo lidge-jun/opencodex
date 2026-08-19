@@ -34,7 +34,8 @@ import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, r
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
-  serviceTierSupportForModel,
+  fastPolicyForModel,
+  serviceTierSupportFromPolicy,
 } from "../../providers/service-tier";
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
@@ -647,8 +648,13 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
-  const supportsServiceTier = serviceTierSupportForModel(prov, model.id, name);
-  const { supportsServiceTier: _staleServiceTier, ...modelWithoutServiceTier } = model;
+  const fastPolicy = fastPolicyForModel(prov, model.id, name);
+  const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
+  const {
+    supportsServiceTier: _staleServiceTier,
+    fastTierDescription: _staleFastTierDescription,
+    ...modelWithoutServiceTier
+  } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
@@ -671,6 +677,9 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+    ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
+      ? { fastTierDescription: fastPolicy.fastTierDescription }
+      : {}),
     ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),
     // Default-on for openai-chat providers (explicit false opts out); other adapters
     // advertise only on explicit opt-in.
@@ -1845,8 +1854,11 @@ async function gatherRoutedModelsUncached(
       ? nativeDefaultReasoningEffort(cm.modelId)
       : undefined;
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
-    const supportsServiceTier = effectiveProvider
-      ? serviceTierSupportForModel(effectiveProvider, cm.modelId, cm.provider)
+    const fastPolicy = effectiveProvider
+      ? fastPolicyForModel(effectiveProvider, cm.modelId, cm.provider)
+      : undefined;
+    const supportsServiceTier = fastPolicy
+      ? serviceTierSupportFromPolicy(fastPolicy)
       : undefined;
     const base: CatalogModel = {
       id: cm.modelId,
@@ -1883,6 +1895,9 @@ async function gatherRoutedModelsUncached(
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
       ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+      ...(supportsServiceTier === true && fastPolicy?.fastTierDescription !== undefined
+        ? { fastTierDescription: fastPolicy.fastTierDescription }
+        : {}),
       ...(cm.codexToolMode !== undefined
         ? { codexToolMode: cm.codexToolMode }
         : effectiveProvider?.codexToolMode !== undefined
