@@ -3,10 +3,10 @@ title: Grok Build
 description: Use any opencodex-routed model from xAI's Grok Build CLI — models are auto-registered into ~/.grok/config.toml while the proxy runs.
 ---
 
-opencodex serves an OpenAI-compatible `POST /v1/chat/completions` (and `/v1/responses`) on its
-local port, and Grok Build supports custom models against OpenAI-compatible servers. Starting
-with this integration, opencodex registers its whole visible catalog into Grok Build
-automatically — no manual config editing required.
+opencodex serves an OpenAI-compatible `POST /v1/responses` on its local port, and Grok Build
+supports custom models against OpenAI-compatible servers. Starting with this integration,
+opencodex registers its whole visible catalog into Grok Build automatically — no manual config
+editing required.
 
 ## Auto-registration
 
@@ -18,7 +18,7 @@ into `~/.grok/config.toml`:
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... one [model.ocx-*] table per visible model ...
@@ -61,12 +61,11 @@ in Codex. Models with an empty tier list keep no effort control, matching Codex
 behavior. Native GPT-5.6 entries are separate: they preserve and expose their pinned
 upstream reasoning ladders rather than provider-configured routed metadata.
 
-Grok Build talks to opencodex over Chat Completions and sends `reasoning_effort` when
-the ladder is advertised. The Chat Completions inbound translator defaults the internal
-Responses `reasoning.summary` to `auto` in that case, so thinking traces reach Grok as
-`delta.reasoning_content` instead of being hidden. Set `include_reasoning: false` (or
-`reasoning.summary: "none"`) if a client wants the model to think without returning the
-trace. An explicit `reasoning.summary` wins when both knobs are present.
+Grok Build talks to opencodex over the Responses API. When the route advertises a reasoning
+ladder, the Responses passthrough forwards `reasoning.summary` as configured, so thinking
+traces reach Grok natively as Responses reasoning items. Set `reasoning.summary: "none"` if
+a client wants the model to think without returning the trace. An explicit `reasoning.summary`
+wins over the route default.
 
 ## Authentication note
 

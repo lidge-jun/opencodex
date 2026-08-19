@@ -29,6 +29,46 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Wire prefixes for Responses output item ids, matching OpenAI's id shapes. */
+const ITEM_ID_PREFIXES: Readonly<Record<string, string>> = {
+  message: "msg_",
+  reasoning: "rs_",
+  function_call: "fc_",
+  web_search_call: "ws_",
+  file_search_call: "fs_",
+  code_interpreter_call: "ci_",
+  computer_call: "cc_",
+  image_gen_call: "ig_",
+};
+
+/**
+ * Backfill a required id on an output item when absent. Strict Responses
+ * decoders (e.g. grok-build serde types) fail with "missing field id" when a
+ * message or reasoning item has no id, which some upstream relays omit. The
+ * generated id is deterministic per (type, output index) so it stays stable
+ * across streaming events that reference the same item.
+ */
+function backfillItemId(item: Record<string, unknown>, outputIndex: number): Record<string, unknown> {
+  if (typeof item.id === "string" && item.id.length > 0) return item;
+  const type = typeof item.type === "string" ? item.type : "";
+  const prefix = Object.prototype.hasOwnProperty.call(ITEM_ID_PREFIXES, type) ? ITEM_ID_PREFIXES[type] : "item_";
+  return { ...item, id: prefix + "ocx_" + outputIndex };
+}
+
+/**
+ * Monotonic ordinal for an event whose `output_index` is absent or malformed.
+ *
+ * Starts far above any plausible real index so a synthesized id can never collide with an
+ * index-derived one inside the same response. Process-global rather than per-response because
+ * this module is stateless by design and the value only has to be unique, not meaningful.
+ */
+const SYNTHETIC_ITEM_ORDINAL_BASE = 1_000_000;
+let syntheticItemOrdinal = 0;
+function nextSyntheticItemOrdinal(): number {
+  syntheticItemOrdinal += 1;
+  return SYNTHETIC_ITEM_ORDINAL_BASE + syntheticItemOrdinal;
+}
+
 /**
  * Backfill annotations: [] on an output_text content part if missing.
  * Returns the same object reference if no change is needed.
@@ -60,14 +100,16 @@ function backfillContentArray(content: unknown): unknown {
 
 /**
  * Walk an output item and backfill output_text parts in its content.
+ * Also backfills a missing required id on the item itself.
  * Returns the same object reference if nothing changed.
  */
-function backfillOutputItem(item: unknown): unknown {
+function backfillOutputItem(item: unknown, outputIndex: number): unknown {
   if (!isPlainObject(item)) return item;
   const content = item.content;
   const repaired = backfillContentArray(content);
-  if (repaired === content) return item;
-  return { ...item, content: repaired };
+  const withId = backfillItemId(item, outputIndex);
+  if (repaired === content && withId === item) return item;
+  return { ...withId, ...(repaired === content ? {} : { content: repaired }) };
 }
 
 /**
@@ -79,9 +121,9 @@ function backfillResponseOutput(response: unknown): unknown {
   const output = response.output;
   if (!Array.isArray(output)) return response;
   let changed = false;
-  const repaired = output.map((item) => {
+  const repaired = output.map((item, idx) => {
     if (!isPlainObject(item)) return item;
-    const next = backfillOutputItem(item);
+    const next = backfillOutputItem(item, idx);
     if (next !== item) changed = true;
     return next;
   });
@@ -100,7 +142,15 @@ function rewriteEvent(event: Record<string, unknown>): Record<string, unknown> {
   // output_item.added / output_item.done: item.content[] -> output_text parts
   if ((type === "response.output_item.added" || type === "response.output_item.done")
     && isPlainObject(event.item)) {
-    const item = backfillOutputItem(event.item);
+    const rawIndex = event.output_index;
+    // A malformed or absent `output_index` must not collapse to 0: two such events would then
+    // both synthesize `msg_ocx_0`, and duplicate ids are the very thing this backfill exists to
+    // prevent. Fall back to a per-process counter so the synthesized id stays unique. Position
+    // is not recoverable in that case, but a unique id is what strict decoders require, and a
+    // well-formed stream still gets the stable index-derived id.
+    const item = typeof rawIndex === "number" && Number.isInteger(rawIndex) && rawIndex >= 0
+      ? backfillOutputItem(event.item, rawIndex)
+      : backfillOutputItem(event.item, nextSyntheticItemOrdinal());
     if (item !== event.item) {
       next = { ...next, item };
       changed = true;
