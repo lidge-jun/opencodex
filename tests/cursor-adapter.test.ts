@@ -92,6 +92,29 @@ describe("Cursor adapter live transport", () => {
     ]);
   });
 
+  test("runTurn forwards the router-prepared provider fetch to the live transport", async () => {
+    const inputs: CursorTransportFactoryInput[] = [];
+    const pacedFetch = (async () => new Response()) as typeof fetch;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport(input) {
+        inputs.push(input);
+        return {
+          async *run() { yield { type: "done" } satisfies CursorServerMessage; },
+          writeClient() {},
+        };
+      },
+    });
+
+    await adapter.runTurn?.(
+      { ...parsed, context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] } },
+      { headers: new Headers(), providerFetch: pacedFetch },
+      () => {},
+    );
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.fetch).toBe(pacedFetch);
+  });
+
   test("runTurn preserves explicit Cursor Router optimization levels", async () => {
     const requests: CursorRunRequest[] = [];
     const adapter = createCursorAdapter(provider, {

@@ -123,8 +123,10 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
 
 ## `cursor`
 
-**目标：** `api2.cursor.sh` 上采用 HTTP/2 Connect streaming 的
-`agent.v1.AgentService/Run`。
+**目标：** 默认使用 `api2.cursor.sh` 上采用 HTTP/2 Connect streaming 的
+`agent.v1.AgentService/Run`。配置 `upstreamHttpVersion: "http1.1"`（或 `"h1"`）后，改用
+Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 server output，并通过
+`aiserver.v1.BidiService/BidiAppend` 发送 client message。
 **认证：** `provider.apiKey` 或转发 authorization header 中的 Cursor OAuth/access token。
 
 - 使用 `runTurn`，而不是常规 fetch/parse 路径。请求、server event、工具参数、usage checkpoint
@@ -132,6 +134,8 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
   Connect message。
 - 经 content-addressed blob 重放对话状态，把 server tool call 映射回 Codex，用 protobuf
   `GetUsableModels` RPC 发现实时 Cursor 模型，并且只在 run request 尚未 commit 到 wire 前重试。
+- 模型实时发现和推理都会遵守 `upstreamHttpVersion`。`auto`、`http2` 与 `h2` 保持原有 HTTP/2
+  transport；只有 `http1.1` 与 `h1` 会选择兼容模式。
 - 保留 `cursor/grok-4.5-fast` 作为可选模型，但向 Cursor 发送规范的 `grok-4.5` 模型，并将独立的
   `effort` 和 `fast=true` 值放入 `requested_model.parameters`。
 - Cursor 原生本地 filesystem/shell/network 执行默认被拒绝。显式 `mcpServers` 与

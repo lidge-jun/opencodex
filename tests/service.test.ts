@@ -543,8 +543,11 @@ describe("Windows service task", () => {
     expect(script).toContain("installation is incomplete: bundled Bun is missing");
     expect(script).toContain("installation is incomplete: CLI entry is missing");
     expect(script.match(/exit \/b 3/g)).toHaveLength(2);
-    // `goto loop` re-enters both checks before another child spawn.
-    expect(script.slice(loopAt, launchAt).match(/if not exist/g)).toHaveLength(2);
+    // #1942: each missing-artifact branch first attempts a transactional-update backup
+    // restore, then re-checks before the hard stop — 2 artifacts x (probe + recheck).
+    expect(script.slice(loopAt, launchAt).match(/if not exist/g)).toHaveLength(4);
+    expect(script).toContain(":restore_backup");
+    expect(script).toContain(".ocx-backup-*");
   });
 
   test("rewrites profile-relative paths to env indirection so non-ASCII usernames survive OEM-codepage batch parsing", () => {

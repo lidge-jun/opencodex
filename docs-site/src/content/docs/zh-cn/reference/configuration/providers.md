@@ -220,7 +220,15 @@ affinity。这些策略不能规避 provider enforcement。
 
 ## Cursor 提供者（`adapter: "cursor"`）
 
-Cursor 桥接是实验性的。执行 `ocx login cursor` 之后，添加或编辑 `providers.cursor`。Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择器无法渲染 Cursor 特定的模型参数：
+Cursor 桥接是实验性的。执行 `ocx login cursor` 之后，添加或编辑 `providers.cursor`。
+
+如果代理无法承载 Cursor 默认的 HTTP/2 stream，请将 `upstreamHttpVersion` 设置为
+`"http1.1"` 或其别名 `"h1"`。推理会切换到 Cursor 的 `RunSSE` + `BidiAppend` 兼容传输，`GetUsableModels`
+实时发现也会使用 HTTP/1.1。该配置要求 `baseUrl` 使用 HTTPS。保持未设置或使用 `"auto"`，
+则继续使用现有 HTTP/2 行为。
+在仪表板中，可通过 **Providers → Cursor → 设置 → Cursor 传输协议** 进行选择。
+
+Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择器无法渲染 Cursor 特定的模型参数：
 
 | Codex model | Cursor Router mode |
 | --- | --- |
@@ -251,7 +259,7 @@ Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用�
 }
 ```
 
-请将该字段设置在 `providers.cursor` 上，而不是顶层。在仪表板中，使用 **Providers → Cursor → Edit JSON**，保存，然后重启。旧的 `unsafeAllowNativeLocalExec: true` 仅在未设置 `nativeLocalExec` 时，才等同于 `nativeLocalExec: "on"`。MCP、屏幕录制和 computer use 由 `mcpServers` 和 `desktopExecutor` 单独控制。
+请将 `nativeLocalExec` 设置在 `providers.cursor` 上，而不是顶层。在仪表板中，使用 **Providers → Cursor → Edit JSON**，保存，然后重启。旧的 `unsafeAllowNativeLocalExec: true` 仅在未设置 `nativeLocalExec` 时，才等同于 `nativeLocalExec: "on"`。MCP、屏幕录制和 computer use 由 `mcpServers` 和 `desktopExecutor` 单独控制。
 
 每个 `mcpServers.<name>` 都可以接受 `command`（stdio）或 `url`（Streamable HTTP）。stdio 还接受 `args`、`env` 和 `cwd`；HTTP 接受 `headers`。两者都支持 `enabled`（默认 true）和 `toolPrefix`。`desktopExecutor` 接受 `computerUseCommand`、`recordScreenCommand`、`cwd`、`env` 和 `timeoutMs`（默认 `30000`）。命令通过 `sh -c` 执行，从 stdin 读取一个 JSON 请求，并且必须向 stdout 写入一个 JSON 结果。
 

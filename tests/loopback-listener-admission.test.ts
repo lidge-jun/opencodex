@@ -197,5 +197,6 @@ describe("injected Codex provider block", () => {
     const block = buildProviderTableBlock(10200, false, false, "0.0.0.0");
     expect(block).toContain('base_url = "http://127.0.0.1:10200/v1"');
     expect(block).not.toContain("env_http_headers");
+    expect(block).not.toContain("env_key");
   });
 });

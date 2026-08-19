@@ -26,6 +26,7 @@ import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
+import { lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
   retainTranslatedEventBatch,
@@ -215,7 +216,13 @@ function messagesToGeminiFormat(
             const part: Record<string, unknown> = { functionCall };
             // Prefer the metadata that travelled with this exact call; fall back to the legacy
             // field for callers that have not been migrated. Never merge or synthesize.
-            const signature = tc.providerMetadata?.google?.thoughtSignature ?? tc.thoughtSignature;
+            // Final fallback (#1926): the durable store, read AT SERIALIZATION TIME. The
+            // Responses parser runs before the route/credential scope is bound, so its
+            // parse-time lookup can never hit; by the time this adapter serializes, the
+            // credential-scoped identity is bound and the durable lookup is meaningful.
+            const signature = tc.providerMetadata?.google?.thoughtSignature
+              ?? tc.thoughtSignature
+              ?? lookupReplayThoughtSignature(tc.id, parsed._reasoningReplayScope);
             if (isLikelyRealThoughtSignature(signature)) part.thoughtSignature = signature;
             parts.push(part);
           }
@@ -497,6 +504,17 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             applyAntigravityReplay(wireModelId, sessionId, contents);
           } else {
             sanitizeAntigravityClaudeSignatures(contents);
+          }
+          // Claude-on-Antigravity rejects assistant-tail (model-tail in Gemini terms) histories
+          // as prefill: "This model does not support assistant message prefill. The conversation
+          // must end with a user message." Context compaction, previous_response_id expansion,
+          // and interrupted-turn replay can all produce a model-tail history. Append a user
+          // "(continue)" nudge, mirroring the anthropic adapter's tail guard (src/adapters/anthropic.ts).
+          if (/claude/i.test(wireModelId)) {
+            const last = contents.length > 0 ? contents[contents.length - 1] as { role?: string } : undefined;
+            if (!last || last.role === "model") {
+              contents.push({ role: "user", parts: [{ text: "(continue)" }] });
+            }
           }
         }
         const envelope = {

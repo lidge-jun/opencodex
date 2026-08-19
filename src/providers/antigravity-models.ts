@@ -78,9 +78,6 @@ function pickerModelIdForDiscoveredWireId(
   info: Record<string, unknown>,
   available: ReadonlyMap<string, Record<string, unknown>>,
 ): string {
-  const displayModelId = antigravityDisplayModelId(info.displayName, wireId);
-  if (displayModelId) return displayModelId;
-
   const explicitPickerId = Object.hasOwn(ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID, wireId)
     ? ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID[wireId]
     : undefined;
@@ -107,7 +104,33 @@ function pickerModelIdForDiscoveredWireId(
       return baseId;
     }
   }
+
+  // Display labels are a LAST resort, never a first one. CCA labels a tier row
+  // "Gemini 3.7 Flash (High)", which slugs to `gemini-3.7-flash-high` — a per-tier
+  // picker row that re-splits exactly the ladder the collapse rules above just
+  // joined, and that carries no effort ladder of its own. Consulting the label
+  // first (the #1897 regression) turned every collapsed base model back into three
+  // suffix rows and stripped reasoning-effort control from the picker.
+  //
+  // The label still earns its keep where nothing else can speak: an id Google has
+  // renamed on the wire while keeping a stable public name.
+  const displayModelId = antigravityDisplayModelId(info.displayName, wireId);
+  if (displayModelId && !collapsesIntoKnownPickerModel(displayModelId)) return displayModelId;
+
   return wireId;
+}
+
+/**
+ * Whether a display-derived id is really a tier of a picker-visible base model.
+ *
+ * `gemini-3.7-flash-high` looks like a model id and is not one: it is the "high"
+ * rung of `gemini-3.7-flash`, whose ladder lives in ANTIGRAVITY_MODEL_EFFORTS.
+ * Publishing it as its own row is what breaks effort selection.
+ */
+function collapsesIntoKnownPickerModel(candidateId: string): boolean {
+  const effortMatch = /^(.*)-(low|medium|high)$/.exec(candidateId);
+  const baseId = effortMatch?.[1];
+  return baseId !== undefined && isKnownAntigravityPickerModelId(baseId);
 }
 
 // ── Effort ladders per collapsed base model ──
@@ -389,6 +412,16 @@ export function parseAntigravityAvailableModels(
       }
     }
   }
+  // This model is exposed by Antigravity's agent chat surface even though the discovery
+  // response groups it under image generation, so it never appears in agentModelSorts.
+  if (Array.isArray(body.imageGenerationModelIds)
+    && body.imageGenerationModelIds.includes("gemini-3.1-flash-image")
+    && Object.hasOwn(models, "gemini-3.1-flash-image")
+    && antigravityRecord(models["gemini-3.1-flash-image"])
+    && !ids.includes("gemini-3.1-flash-image")) {
+    if (ids.length >= limit) return null;
+    ids.push("gemini-3.1-flash-image");
+  }
   // Newer CCA responses identify tiered Flash models through this index instead of
   // adding their synthetic wire ids to agentModelSorts.
   const tieredModelIds = antigravityRecord(body.tieredModelIds);
@@ -413,6 +446,16 @@ export function parseAntigravityAvailableModels(
   for (const wireId of ids) {
     const info = antigravityRecord(models[wireId]);
     if (!info || available.has(wireId)) continue;
+    // Compatibility aliases are deliberately routed to NEWER wire ids for saved
+    // selections. CCA keeps serving retired generations (3.5/3.6 Flash tiers) in its
+    // agent list long after they stop being the model anyone should pick, so admitting
+    // them as independently discovered rows republishes exactly the dead tiers the
+    // alias map exists to retire. Routing for a saved id still works — it resolves
+    // through ANTIGRAVITY_MODEL_ALIASES — it just no longer gets its own picker row.
+    const alias = Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, wireId)
+      ? ANTIGRAVITY_MODEL_ALIASES[wireId]
+      : undefined;
+    if (alias && alias !== wireId) continue;
     available.set(wireId, info);
   }
 
@@ -479,7 +522,18 @@ export function resolveAntigravityEffortWireModel(
   effort?: string,
   baseUrl?: string,
 ): { wireModelId: string; thinkingLevel?: string } {
-  const discoveredWireModelId = discoveredAntigravityWireModelId(modelId, baseUrl);
+  // A collapsed picker row reports ONE representative wire id (whichever tier CCA
+  // listed first), so live discovery cannot describe a ladder — it can only name a
+  // single rung. Letting it answer for a base model we already have a ladder for
+  // collapses every effort onto that one rung: `gemini-3.1-pro` low and high both
+  // became `gemini-pro-agent`, and `gemini-3.7-flash` sent thinkingLevel=low against
+  // the `-high` wire id, a request that contradicts itself. Rules 1b/2/3 below own
+  // these models; discovery answers only for ids no rule knows.
+  const hasOwnEffortLadder = Object.hasOwn(ANTIGRAVITY_THINKING_LEVEL_MODELS, modelId)
+    || Object.hasOwn(ANTIGRAVITY_EFFORT_WIRE_MAP, modelId);
+  const discoveredWireModelId = hasOwnEffortLadder
+    ? undefined
+    : discoveredAntigravityWireModelId(modelId, baseUrl);
   if (discoveredWireModelId && (discoveredWireModelId !== modelId || isAntigravitySuffixModelId(modelId))) {
     const defaultLevel = ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
     return {

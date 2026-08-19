@@ -51,7 +51,10 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(source).toContain("const latestInvocation = npmInvocation(");
     expect(source).toContain("const installInvocation = npmInvocation(");
     expect(source).toContain("spawnSync(latestInvocation.file, latestInvocation.args");
-    expect(source).toContain("spawnSync(installInvocation.file, installInvocation.args");
+    // #1942: the staged install spawns through the same hardened npmInvocation resolver
+    // inside the transactional runNpm callback.
+    expect(source).toContain("const invocation = npmInvocation(args);");
+    expect(source).toContain("spawnSync(invocation.file, invocation.args");
     expect(source).not.toContain("shell: true");
     expect(source).not.toContain('"npm.cmd"');
   });

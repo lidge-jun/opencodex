@@ -110,8 +110,8 @@ describe("3.7 reasoning control", () => {
   });
 });
 
-describe("live discovery follows the CCA agent catalog", () => {
-  test("a CCA payload still listing 3.6 tiers preserves those live rows", () => {
+describe("stale discovery cannot republish a retired model", () => {
+  test("a CCA payload still listing 3.6 tiers yields no retired picker row", () => {
     const payload = {
       models: Object.fromEntries(
         ["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high", "gemini-3.7-flash"]
@@ -124,12 +124,10 @@ describe("live discovery follows the CCA agent catalog", () => {
       }],
     };
     const ids = parseAntigravityAvailableModels(payload)?.map(model => model.id) ?? [];
-    expect(ids).toEqual([
-      "gemini-3.6-flash-low",
-      "gemini-3.6-flash-medium",
-      "gemini-3.6-flash-high",
-      "gemini-3.7-flash",
-    ]);
+    expect(ids).toContain("gemini-3.7-flash");
+    for (const retired of Object.keys(RETIRED_TIERS)) {
+      expect(ids).not.toContain(retired);
+    }
   });
 });
 

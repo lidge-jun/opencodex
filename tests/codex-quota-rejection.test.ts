@@ -26,10 +26,23 @@ describe("Codex pre-stream quota rejection classification", () => {
     }));
     expect(topLevel).toMatchObject({ kind: "permission-error", denial: "workspace" });
 
+    const detail = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: {
+        code: "codex_workspace_access_denied",
+        message: "workspace access denied",
+      },
+    }));
+    expect(detail).toMatchObject({ kind: "permission-error", denial: "workspace" });
+
     const entitlement = await classifyCodexPreStreamRejection(jsonRejection(403, {
       code: "codex_entitlement_missing",
     }));
     expect(entitlement).toMatchObject({ kind: "permission-error", denial: "entitlement" });
+
+    const detailEntitlement = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: { code: "entitlement_missing" },
+    }));
+    expect(detailEntitlement).toMatchObject({ kind: "permission-error", denial: "entitlement" });
   });
 
   test("a 403 without denial evidence stays an ordinary permission error (#1789)", async () => {
@@ -46,6 +59,11 @@ describe("Codex pre-stream quota rejection classification", () => {
 
     const malformed = await classifyCodexPreStreamRejection(new Response("{not json", { status: 403 }));
     expect(malformed.denial).toBeUndefined();
+
+    const invalidDetail = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: { code: 403 },
+    }));
+    expect(invalidDetail.denial).toBeUndefined();
   });
 
   test.each([

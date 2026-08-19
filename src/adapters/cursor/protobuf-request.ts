@@ -396,6 +396,8 @@ type DecodedResultPart =
   | { kind: "image"; bytes: Uint8Array; mimeType: string }
   | { kind: "undecodable" };
 
+type NormalizedToolResult = { text: string; isError: boolean };
+
 /**
  * Decode a tool result's parts ONCE. `toolCallStep` may re-serialize a step several times while
  * shrinking it to fit blob admission, and decoding base64 on every attempt made that loop
@@ -427,17 +429,24 @@ function toolResultContentItems(
   message: OcxToolResultMessage,
   decoded?: DecodedResultPart[],
   maxImages = Number.POSITIVE_INFINITY,
+  normalizedText?: NormalizedToolResult,
 ) {
   const parts = decoded ?? decodeResultParts(message);
+  const textItem = (text: string) => [create(McpToolResultContentItemSchema, {
+    content: { case: "text" as const, value: create(McpTextContentSchema, { text }) },
+  })];
   if (!parts) {
-    const raw = typeof message.content === "string" ? message.content : "";
+    const normalized = normalizedText
+      ?? normalizedToolResult(message, typeof message.content === "string" ? message.content : "");
+    return textItem(normalized.text);
+  }
+  const normalized = normalizedText ?? normalizedDecodedTextResult(message, parts);
+  if (normalized) {
     // #1920/#1866: empty or failure-state Computer Use / node_repl results are
-    // normalized before they reach the native wire (isError is applied in
-    // toolResultPart via normalizedToolResult below).
-    const { text } = normalizedToolResult(message, raw);
-    return [create(McpToolResultContentItemSchema, {
-      content: { case: "text" as const, value: create(McpTextContentSchema, { text }) },
-    })];
+    // normalized before they reach the native wire. Pure-text part arrays use
+    // the same newline-joined representation this serializer already emitted;
+    // image-bearing and undecodable results stay on the lossless part path.
+    return textItem(normalized.text);
   }
   // Images are dropped OLDEST first when the step must shrink: the most recent screenshot is the
   // one the model is reasoning about, so it is the last to go.
@@ -505,13 +514,26 @@ function toolResultToText(message: OcxToolResultMessage): string {
  * Shared #1920 normalization entry: pure-text results only. Image-bearing or
  * encrypted results pass through untouched (their content is not plain text).
  */
-function normalizedToolResult(message: OcxToolResultMessage, text: string): { text: string; isError: boolean } {
+function normalizedToolResult(message: OcxToolResultMessage, text: string): NormalizedToolResult {
   if (message.containsEncryptedContent) return { text, isError: message.isError };
   return normalizeCursorToolResultText(text, {
     toolName: message.toolName,
     toolNamespace: message.toolNamespace,
     isError: message.isError,
   });
+}
+
+/**
+ * A content-part result is plain text only when every decoded part is text (the empty array is the
+ * empty text result). Join it exactly as toolResultContentItems already did, then share the string
+ * normalization contract. Any image or undecodable part keeps the existing part-preserving path.
+ */
+function normalizedDecodedTextResult(
+  message: OcxToolResultMessage,
+  parts: DecodedResultPart[],
+): NormalizedToolResult | undefined {
+  if (parts.some(part => part.kind !== "text")) return undefined;
+  return normalizedToolResult(message, parts.map(part => part.kind === "text" ? part.text : "").join("\n"));
 }
 
 function argBytes(value: unknown): Uint8Array {
@@ -568,15 +590,15 @@ function toolCallStep(
 
 function toolResultPart(message: OcxToolResultMessage, decoded?: DecodedResultPart[], maxImages?: number) {
   const parts = decoded ?? decodeResultParts(message);
-  const normalizedIsError = parts
-    ? message.isError
-    : normalizedToolResult(message, typeof message.content === "string" ? message.content : "").isError;
+  const normalized = parts
+    ? normalizedDecodedTextResult(message, parts)
+    : normalizedToolResult(message, typeof message.content === "string" ? message.content : "");
   return create(McpToolResultSchema, {
     result: {
       case: "success",
       value: create(McpSuccessSchema, {
-        isError: normalizedIsError,
-        content: toolResultContentItems(message, decoded, maxImages),
+        isError: normalized?.isError ?? message.isError,
+        content: toolResultContentItems(message, parts, maxImages, normalized),
       }),
     },
   });

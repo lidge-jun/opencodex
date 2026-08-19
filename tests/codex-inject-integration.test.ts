@@ -92,6 +92,31 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(1);
   });
 
+  test("upgrade path: a non-loopback legacy env_http_headers config converts to env_key (#2073)", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model_provider = "opencodex"',
+      "",
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://192.168.1.50:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      'env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }',
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.50" }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    expect(config).not.toContain("env_http_headers");
+    // Still exactly one provider block, no duplicate accumulation.
+    expect(config.match(/\[model_providers\.opencodex]/g)?.length).toBe(1);
+  });
+
   test("re-inject over a Design B config is idempotent", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 

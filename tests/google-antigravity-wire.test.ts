@@ -199,64 +199,56 @@ describe("antigravity CCA envelope", () => {
     ]);
   });
 
-  test("uses live CCA display names while retaining their wire ids", async () => {
+  test("collapses live CCA tier labels instead of publishing one row per tier", async () => {
     const payload = {
       models: {
+        "gemini-3.7-flash-low": { displayName: "Gemini 3.7 Flash (Low)", maxTokens: 1_048_576 },
+        "gemini-3.7-flash-medium": { displayName: "Gemini 3.7 Flash (Medium)", maxTokens: 1_048_576 },
         "gemini-3.7-flash-high": { displayName: "Gemini 3.7 Flash (High)", maxTokens: 1_048_576 },
-        "gemini-3.6-flash-high": { displayName: "Gemini 3.6 Flash (High)", maxTokens: 1_048_576 },
-        "gemini-3-flash-agent": { displayName: "Gemini 3.5 Flash (High)", maxTokens: 1_048_576 },
-        "gemini-3.5-flash-low": { displayName: "Gemini 3.5 Flash (Medium)", maxTokens: 1_048_576 },
-        "gemini-3.5-flash-extra-low": { displayName: "Gemini 3.5 Flash (Low)", maxTokens: 1_048_576 },
         "gemini-pro-agent": { displayName: "Gemini 3.1 Pro (High)", maxTokens: 1_048_576 },
         "gemini-3.1-pro-low": { displayName: "Gemini 3.1 Pro (Low)", maxTokens: 1_048_576 },
         "claude-sonnet-4-6": { displayName: "Claude Sonnet 4.6 (Thinking)", maxTokens: 250_000 },
+        // Renamed on the wire, stable in public. Only THIS case may use the label.
+        "internal-codename-x7": { displayName: "Gemini Nebula", maxTokens: 1_048_576 },
       },
       agentModelSorts: [{ groups: [{ modelIds: [
+        "gemini-3.7-flash-low",
+        "gemini-3.7-flash-medium",
         "gemini-3.7-flash-high",
-        "gemini-3.6-flash-high",
-        "gemini-3-flash-agent",
-        "gemini-3.5-flash-low",
-        "gemini-3.5-flash-extra-low",
         "gemini-pro-agent",
         "gemini-3.1-pro-low",
         "claude-sonnet-4-6",
+        "internal-codename-x7",
       ] }] }],
     };
     const rows = parseAntigravityAvailableModels(payload)!;
+    // Collapsed base models, NOT one row per reasoning tier: the effort ladder is
+    // what the picker uses to offer low/medium/high, so a per-tier row destroys it.
     expect(rows.map(model => model.id)).toEqual([
-      "gemini-3.7-flash-high",
-      "gemini-3.6-flash-high",
-      "gemini-3.5-flash-high",
-      "gemini-3.5-flash-medium",
-      "gemini-3.5-flash-low",
-      "gemini-3.1-pro-high",
-      "gemini-3.1-pro-low",
+      "gemini-3.7-flash",
+      "gemini-3.1-pro",
       "claude-sonnet-4-6",
+      "gemini-nebula",
     ]);
-    expect(rows.map(model => [model.id, model.wireModelId])).toEqual([
-      ["gemini-3.7-flash-high", "gemini-3.7-flash-high"],
-      ["gemini-3.6-flash-high", "gemini-3.6-flash-high"],
-      ["gemini-3.5-flash-high", "gemini-3-flash-agent"],
-      ["gemini-3.5-flash-medium", "gemini-3.5-flash-low"],
-      ["gemini-3.5-flash-low", "gemini-3.5-flash-extra-low"],
-      ["gemini-3.1-pro-high", "gemini-pro-agent"],
-      ["gemini-3.1-pro-low", "gemini-3.1-pro-low"],
-      ["claude-sonnet-4-6", "claude-sonnet-4-6"],
-    ]);
+    // The display label still resolves an id Google renamed on the wire.
+    expect(rows.find(model => model.id === "gemini-nebula")?.wireModelId).toBe("internal-codename-x7");
 
     const baseUrl = "https://cca.example";
     registerAntigravityDiscoveredWireModels(baseUrl, rows);
-    expect(resolveAntigravityEffortWireModel("gemini-3.5-flash-high", undefined, baseUrl))
-      .toEqual({ wireModelId: "gemini-3-flash-agent" });
-    expect(resolveAntigravityEffortWireModel("gemini-3.6-flash-high", undefined, baseUrl))
-      .toEqual({ wireModelId: "gemini-3.6-flash-high" });
+    // A discovered representative wire id must NOT override a real effort ladder.
+    expect(resolveAntigravityEffortWireModel("gemini-3.1-pro", "low", baseUrl))
+      .toEqual({ wireModelId: "gemini-3.1-pro-low", thinkingLevel: "low" });
+    expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "low", baseUrl))
+      .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "low" });
+    expect(resolveAntigravityEffortWireModel("gemini-nebula", undefined, baseUrl))
+      .toEqual({ wireModelId: "internal-codename-x7" });
     expect(resolveAntigravityEffortWireModel("claude-sonnet-4-6", "high", baseUrl))
       .toEqual({ wireModelId: "claude-sonnet-4-6", thinkingLevel: "high" });
 
     const req = await createGoogleAdapter({ ...effortProvider, baseUrl }).buildRequest(
-      parsedWithEffort("gemini-3.5-flash-high"),
+      parsedWithEffort("gemini-nebula"),
     );
-    expect(JSON.parse(req.body).model).toBe("gemini-3-flash-agent");
+    expect(JSON.parse(req.body).model).toBe("internal-codename-x7");
   });
 
   test("preserves thinkingLevel for a display-derived tiered Flash model", async () => {

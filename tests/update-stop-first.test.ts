@@ -57,7 +57,9 @@ describe("update stops the running proxy before replacing files", () => {
   test("npm launcher update path stops via its own launcher path before npm install", () => {
     expect(launcherSource).toContain('spawnSync(process.execPath, [launcher, "stop"]');
     const stopAt = launcherSource.indexOf('[launcher, "stop"]');
-    const installAt = launcherSource.indexOf("spawnSync(installInvocation.file, installInvocation.args");
+    // #1942: the destructive step is now the transactional staged update, not a direct
+    // global npm install. The stop must still precede it.
+    const installAt = launcherSource.indexOf("transactionalNpmUpdate({");
     expect(stopAt).toBeGreaterThan(-1);
     expect(installAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(installAt);
@@ -114,7 +116,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
     expect(launcherSource).toContain("if (historyRestoreIncomplete())");
     const warnAt = launcherSource.indexOf("Codex resume history was NOT restored");
-    const installAt = launcherSource.indexOf("spawnSync(installInvocation.file, installInvocation.args");
+    const installAt = launcherSource.indexOf("transactionalNpmUpdate({");
     expect(warnAt).toBeGreaterThan(-1);
     expect(installAt).toBeGreaterThan(-1);
     expect(warnAt).toBeLessThan(installAt);

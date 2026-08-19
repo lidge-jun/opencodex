@@ -38,10 +38,13 @@ describe("Codex config injection", () => {
     expect(block).toContain("supports_websockets = true");
   });
 
-  test("can inject Codex provider API auth header from environment for non-loopback proxy mode", () => {
+  test("non-loopback proxy mode injects the modern env_key admission line (#2073)", () => {
     const block = buildProviderTableBlock(10100, false, true);
 
-    expect(block).toContain('env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }');
+    expect(block).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    // The legacy header table must not come back: codex 0.146+ documents env_key as
+    // the bearer form, and #1686's server-side substitution is keyed to it.
+    expect(block).not.toContain("env_http_headers");
   });
 
   test("injected base_url matches the actual bind: literal 127.0.0.1 for loopback/wildcard (Windows resolves localhost to ::1 first)", () => {
@@ -191,7 +194,8 @@ describe("Codex config injection", () => {
 
     expect(profile).toContain('model_catalog_json = "/tmp/opencodex-catalog.json"');
     expect(profile).toContain("supports_websockets = true");
-    expect(profile).toContain('env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }');
+    expect(profile).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    expect(profile).not.toContain("env_http_headers");
   });
 
   test("honors an explicit unavailable catalog decision", () => {
@@ -363,6 +367,102 @@ describe("Design B openai_base_url injection", () => {
 
     expect(stripped).not.toContain("opencodex");
     expect(stripped).not.toContain("[model_providers.opencodex]");
+    expect(stripped).toContain('model = "gpt-5.5"');
+  });
+
+  test("app-rewritten env_http_headers sub-table strips fully: no nameless provider survives", () => {
+    // A Codex app config rewrite re-serializes the provider's inline env_http_headers table
+    // into a separate [model_providers.opencodex.env_http_headers] sub-table. Cleanup must
+    // remove the provider table AND its sub-table, or the provider survives with no `name`
+    // and Codex rejects the whole config ("provider name must not be empty").
+    const rewritten = [
+      'model = "gpt-5.5"',
+      "",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+      "[agents]",
+      "max_concurrent_threads_per_session = 8",
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(rewritten);
+
+    expect(stripped).not.toContain("opencodex");
+    expect(stripped).toContain("[agents]");
+    expect(stripped).toContain('model = "gpt-5.5"');
+  });
+
+  test("an orphaned env_http_headers sub-table alone is removed (recurrence breaker)", () => {
+    // Once the main table is gone, only the sub-table header defines the provider. The old
+    // exact-match guards never matched that form, so the orphan was journaled as baseline and
+    // re-persisted on every inject/restore cycle while Codex kept failing on startup.
+    const orphan = [
+      'model = "gpt-5.5"',
+      "",
+      "[agents]",
+      "max_concurrent_threads_per_session = 8",
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      '"CF-Access-Client-Id" = "CF_ACCESS_CLIENT_ID"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(orphan);
+
+    expect(stripped).not.toContain("opencodex");
+    expect(stripped).not.toContain("CF-Access-Client-Id");
+    expect(stripped).toContain('model = "gpt-5.5"');
+    expect(stripped).toContain("[agents]");
+  });
+
+  test("a user's similarly named provider table is preserved while opencodex sub-tables strip", () => {
+    const content = [
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+      "[model_providers.opencodex_backup]",
+      'name = "user backup"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(content);
+
+    expect(stripped).not.toContain("env_http_headers");
+    expect(stripped).toContain("[model_providers.opencodex_backup]");
+    expect(stripped).toContain('name = "user backup"');
+  });
+
+  test("a trailing comment on the root provider header is still recognized (TOML allows `[table] # comment`)", () => {
+    const commented = [
+      'model = "gpt-5.5"',
+      "",
+      "[model_providers.opencodex] # managed provider",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(commented);
+
+    expect(stripped).not.toContain("model_providers.opencodex");
+    expect(stripped).not.toContain("OpenCodex Proxy");
+    expect(stripped).toContain('model = "gpt-5.5"');
+  });
+
+  test("a trailing comment on the sub-table header is still recognized", () => {
+    const commented = [
+      'model = "gpt-5.5"',
+      "",
+      "[model_providers.opencodex.env_http_headers] # managed sub-table",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+    ].join("\n");
+    const stripped = stripOpencodexConfig(commented);
+
+    expect(stripped).not.toContain("opencodex");
     expect(stripped).toContain('model = "gpt-5.5"');
   });
 });

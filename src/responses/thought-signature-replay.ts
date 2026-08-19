@@ -20,18 +20,23 @@
  * destination, adapter, model and credential — so a signature can only ever be replayed into
  * the turn that produced it.
  */
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { atomicWriteFileAsync, getConfigDir } from "../config";
 import type { OcxProviderOpaqueToolCallMetadata, OcxReasoningReplayScopeRef } from "../types";
 import { isCarryableSignature, responsesExtraContentFromProviderMetadata } from "./provider-opaque-metadata";
 
 const STORE_FILE_NAME = "thought-signature-replay.json";
+const SALT_FILE_NAME = "thought-signature-replay.salt";
 /**
- * Bumped whenever `keyFor` changes shape. v3 added the durable destination identity, so a
- * v2 file's keys can never match and are dropped on load instead of aging out invisibly.
+ * Bumped whenever `keyFor` changes shape. v3 added the durable destination identity; v4
+ * added the salted durable credential identity (#1926), so a v3 file's keys can never
+ * match and are dropped on load instead of aging out invisibly. v3 rows carried no
+ * credential information, so they are not upgradable — the next Gemini turn re-accumulates
+ * its signatures (bounded, best-effort loss identical to the pre-store status quo).
  */
-const STORE_VERSION = 3;
+const STORE_VERSION = 4;
 
 /** Bound on remembered entries; real signatures are a few hundred bytes, so this stays small. */
 const MAX_ENTRIES = 16_384;
@@ -64,6 +69,45 @@ function storePath(): string {
   return join(getConfigDir(), STORE_FILE_NAME);
 }
 
+function saltPath(): string {
+  return join(getConfigDir(), SALT_FILE_NAME);
+}
+
+let cachedSalt: Buffer | undefined;
+let saltLoaded = false;
+
+/**
+ * Installation-local salt for the durable credential identity (#1926). Created once and
+ * persisted beside the store; losing it invalidates every stored key (the entries then
+ * never match and age out), which is safe — signatures re-accumulate per turn.
+ */
+export function thoughtSignatureReplaySalt(): Buffer | undefined {
+  if (saltLoaded) return cachedSalt;
+  saltLoaded = true;
+  try {
+    const raw = readFileSync(saltPath());
+    if (raw.length >= 16) {
+      // Re-assert owner-only permissions on every load: a pre-existing file may have
+      // been created before this guard or loosened by external tooling.
+      try { chmodSync(saltPath(), 0o600); } catch { /* best effort on exotic filesystems */ }
+      cachedSalt = raw;
+      return cachedSalt;
+    }
+  } catch {
+    // fall through to mint
+  }
+  try {
+    const minted = randomBytes(32);
+    writeFileSync(saltPath(), minted, { mode: 0o600 });
+    cachedSalt = minted;
+  } catch {
+    // Unwritable config dir: no durable credential identity this process; the durable
+    // store fails closed (keyFor returns undefined) rather than keying under a shared id.
+    cachedSalt = undefined;
+  }
+  return cachedSalt;
+}
+
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -84,6 +128,10 @@ function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): 
     || !nonEmpty(identity?.providerName)
     || !nonEmpty(identity?.adapterName)
     || !nonEmpty(identity?.modelId)
+    // v4 (#1926): a missing durable credential identity means we cannot isolate this
+    // entry per credential across restarts. Refusing the key is the fail-closed choice —
+    // "credential:unknown" would let two different credentials share one durable slot.
+    || !nonEmpty(identity?.credentialDurableIdentity)
   ) return undefined;
   return JSON.stringify([
     scope.clientThreadId,
@@ -93,6 +141,7 @@ function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): 
     // reasoning cache's randomBytes-keyed HMAC cannot. Without it, one provider NAME
     // serving two endpoints shares signatures across both.
     identity.providerDestinationDurableIdentity ?? "destination:unknown",
+    identity.credentialDurableIdentity,
     identity.adapterName,
     identity.modelId,
     callId,
@@ -265,6 +314,8 @@ export function resetThoughtSignatureReplayForTests(): void {
   totalBytes = 0;
   loaded = false;
   persistChain = Promise.resolve();
+  cachedSalt = undefined;
+  saltLoaded = false;
 }
 
 export function thoughtSignatureReplayCountForTests(): number {
@@ -274,4 +325,23 @@ export function thoughtSignatureReplayCountForTests(): number {
 /** Test seam: resolve after the queued snapshot write settles. */
 export function flushThoughtSignatureReplayForTests(): Promise<void> {
   return persistChain;
+}
+
+/**
+ * Bounded commit barrier (#1926 gap 2). All durable writes serialize onto
+ * `persistChain`, so awaiting it (with a cap) before a turn's terminal frame becomes
+ * externally visible bounds the restart window in which a handed-out signature could
+ * be lost. Bounded BEST EFFORT: on timeout the turn proceeds — availability wins, and
+ * the miss cost is one turn's re-accumulation (the pre-store status quo). The
+ * in-memory map is updated synchronously at remember() time, so within one process
+ * lifetime replay never races this barrier at all.
+ */
+export function awaitThoughtSignatureDurability(capMs = 250): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, capMs);
+  });
+  return Promise.race([persistChain, cap]).then(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }

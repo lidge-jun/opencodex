@@ -18,6 +18,8 @@ export interface CursorTransportFactoryInput {
   provider: OcxProviderConfig;
   translatorBudget: TranslatorBudget;
   headers?: Headers;
+  /** Router-prepared fetch that preserves provider overrides and per-request pacing. */
+  fetch?: typeof globalThis.fetch;
   /** Pre-first-frame deadline (dial + first server frame). Defaults to 30s when omitted. */
   firstFrameTimeoutMs?: number;
   /** Grace (ms) between close() and the force-destroy fallback after a first-frame timeout. Defaults to 1s. */

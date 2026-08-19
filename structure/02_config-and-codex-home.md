@@ -196,7 +196,7 @@ name = "OpenCodex Proxy"
 base_url = "http://<host>:<port>/v1"
 wire_api = "responses"
 requires_openai_auth = true
-env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
+env_key = "OPENCODEX_API_AUTH_TOKEN"
 ```
 
 Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of

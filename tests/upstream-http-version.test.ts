@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { providerFetch, withUpstreamHttpVersion } from "../src/server/responses/fetch-helpers";
+import { UpstreamHttpVersionTargetError } from "../src/lib/upstream-http-version";
 import type { OcxProviderConfig } from "../src/types";
 
 const HTTPS_URL = "https://opencode.ai/zen/go/v1/chat/completions";
@@ -33,6 +34,14 @@ describe("withUpstreamHttpVersion", () => {
     expect(withUpstreamHttpVersion(HTTPS_URL, undefined, provider({ upstreamHttpVersion: "auto" }))).toBeUndefined();
   });
 
+  test("absent and auto pins leave plaintext and unparseable targets untouched", () => {
+    const init = { method: "POST", headers: {} };
+    expect(withUpstreamHttpVersion(HTTP_URL, init, provider())).toBe(init);
+    expect(withUpstreamHttpVersion(HTTP_URL, init, provider({ upstreamHttpVersion: "auto" }))).toBe(init);
+    expect(withUpstreamHttpVersion("not a url", init, provider())).toBe(init);
+    expect(withUpstreamHttpVersion("not a url", init, provider({ upstreamHttpVersion: "auto" }))).toBe(init);
+  });
+
   test("http1.1 pins the protocol on https targets", () => {
     const init = { method: "POST", headers: {} };
     const out = withUpstreamHttpVersion(HTTPS_URL, init, provider({ upstreamHttpVersion: "http1.1" }))!;
@@ -55,9 +64,17 @@ describe("withUpstreamHttpVersion", () => {
     }
   });
 
-  test("plain-http targets are left untouched (Bun protocol requires https)", () => {
+  test("plain-http targets fail clearly when an explicit pin cannot be honored", () => {
     const init = { method: "POST", headers: {} };
-    expect(withUpstreamHttpVersion(HTTP_URL, init, provider({ upstreamHttpVersion: "http1.1" }))).toBe(init);
+    let failure: unknown;
+    try {
+      withUpstreamHttpVersion(HTTP_URL, init, provider({ upstreamHttpVersion: "http1.1" }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(UpstreamHttpVersionTargetError);
+    expect((failure as UpstreamHttpVersionTargetError).observedProtocol).toBe("http:");
+    expect((failure as Error).message).toContain("received http:");
   });
 
   test("Request objects resolve their url for the https guard", () => {
@@ -67,9 +84,16 @@ describe("withUpstreamHttpVersion", () => {
     expect((out as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
   });
 
-  test("unparseable targets degrade to the untouched init", () => {
+  test("unparseable targets fail clearly when a pin is configured", () => {
     const init = { method: "POST" };
-    expect(withUpstreamHttpVersion("not a url", init, provider({ upstreamHttpVersion: "http1.1" }))).toBe(init);
+    let failure: unknown;
+    try {
+      withUpstreamHttpVersion("not a url", init, provider({ upstreamHttpVersion: "http1.1" }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(UpstreamHttpVersionTargetError);
+    expect((failure as UpstreamHttpVersionTargetError).observedProtocol).toBe("unparseable");
   });
 
   test("absent init still applies the pin (providerFetch without init)", () => {
@@ -133,5 +157,20 @@ describe("providerFetch upstreamHttpVersion propagation", () => {
     await fetcher("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     expect(seen).toHaveLength(1);
     expect((seen[0] as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
+  });
+
+  test("a plaintext target with an explicit pin fails before the provider fetch runs", async () => {
+    let fetchCalls = 0;
+    const fetcher = providerFetch(provider({
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response("must not run");
+      }) as typeof fetch,
+    }));
+
+    await expect(fetcher(HTTP_URL, { method: "POST" }))
+      .rejects.toThrow("upstream HTTP version pin requires an HTTPS target");
+    expect(fetchCalls).toBe(0);
   });
 });

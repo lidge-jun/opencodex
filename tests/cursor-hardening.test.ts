@@ -85,6 +85,21 @@ describe("Cursor live-model discovery hardening", () => {
     expect(result).toEqual({ ok: true, models: ["gpt-5.5-high"] });
   });
 
+  test("filters every shared model-id control-character class", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [
+        create(ModelDetailsSchema, { modelId: "good-model" }),
+        create(ModelDetailsSchema, { modelId: "bad-del\u007f" }),
+        create(ModelDetailsSchema, { modelId: "bad-c1\u0085" }),
+        create(ModelDetailsSchema, { modelId: "bad-line\u2028separator" }),
+      ],
+    }));
+    const result = await withDiscoveryServer(respond(200, body), baseUrl =>
+      fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+
+    expect(result).toEqual({ ok: true, models: ["good-model"] });
+  });
+
   test("rejects a cleartext non-loopback discovery URL before connecting", async () => {
     const result = await fetchCursorUsableModels({
       apiKey: "test-token",
@@ -96,6 +111,142 @@ describe("Cursor live-model discovery hardening", () => {
       error: "transport",
       detail: "Cursor discovery URL must use HTTPS",
     });
+  });
+
+  test("HTTP/1.1 discovery uses fetch with Bun's protocol pin", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "claude-opus-5" })],
+    }));
+    let seenUrl = "";
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seenUrl = String(input);
+      seenInit = init;
+      return new Response(body, { status: 200, headers: { "content-type": "application/proto" } });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({ ok: true, models: ["claude-opus-5"] });
+    expect(seenUrl).toBe("https://api2.cursor.sh/agent.v1.AgentService/GetUsableModels");
+    expect(seenInit?.method).toBe("POST");
+    expect(seenInit?.redirect).toBe("manual");
+    expect((seenInit as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
+    expect(new Headers(seenInit?.headers).get("authorization")).toBe("Bearer test-token");
+  });
+
+  test("HTTP/1.1 discovery rejects announced and streamed 4 MiB overflow before decode", async () => {
+    let announcedCalls = 0;
+    const announced = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        announcedCalls += 1;
+        return new Response(new Uint8Array(), {
+          status: 200,
+          headers: { "content-length": String(4 * 1024 * 1024 + 1) },
+        });
+      }) as typeof fetch,
+    });
+    expect(announced).toMatchObject({ ok: false, error: "too_large" });
+    expect(announcedCalls).toBe(1);
+
+    let streamedCalls = 0;
+    const streamed = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        streamedCalls += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+            controller.enqueue(Uint8Array.of(0));
+            controller.close();
+          },
+        }), { status: 200 });
+      }) as typeof fetch,
+    });
+    expect(streamed).toMatchObject({ ok: false, error: "too_large" });
+    expect(streamedCalls).toBe(1);
+  });
+
+  test("discovery rejects a cleartext non-loopback URL before exposing the token, even with an HTTP/1.1 pin", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "must-not-leave-process",
+      baseUrl: "http://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({ ok: false, error: "transport", detail: "Cursor discovery URL must use HTTPS" });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("HTTP/1.1 discovery rejects an admitted loopback URL without retrying or invoking fetch", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "must-not-leave-process",
+      baseUrl: "http://127.0.0.1:1",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "policy",
+      detail: "Cursor HTTP/1.1 discovery requires HTTPS",
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("Cursor catalog propagates the provider HTTP/1.1 pin to discovery", async () => {
+    const providerName = "cursor-http1-discovery";
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "claude-opus-5" })],
+    }));
+    let seenProtocol: string | undefined;
+    const fetchImpl = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seenProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      return new Response(body, { status: 200, headers: { "content-type": "application/proto" } });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [providerName]: {
+            adapter: "cursor",
+            baseUrl: "https://api2.cursor.sh",
+            apiKey: "test-token",
+            upstreamHttpVersion: "http1.1",
+            models: ["claude-opus-5"],
+            fetch: fetchImpl,
+          } as Parameters<typeof gatherRoutedModels>[0]["providers"][string] & { fetch: typeof fetch },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toContain(`${providerName}/claude-opus-5`);
+      expect(seenProtocol).toBe("http1.1");
+    } finally {
+      clearModelCache(providerName);
+    }
   });
 
   test("classifies authentication failures", async () => {

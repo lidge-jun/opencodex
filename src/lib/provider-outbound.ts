@@ -149,16 +149,12 @@ async function providerOutboundRequest(
       context: "provider URL",
       allowPrivateNetwork: allowPrivate,
       // Clash/Surge/Mihomo fake-IP DNS (198.18.0.0/15) answers are admitted only
-      // when an outbound proxy is configured: the hostname then rides the proxy as
-      // an ordinary CONNECT instead of failing as a private destination or being
-      // pin-connected to the fake-IP (credit #1748). Without a proxy, benchmark
-      // answers keep rejecting. Image/Lab fetch never passes this flag.
-      // Known corner: the opt-in arms on the GLOBAL proxy config, not per-host. If
-      // NO_PROXY excludes this host, Bun bypasses the proxy and direct-connects to
-      // the benchmark answer — non-routable space typically intercepted by the
-      // local fake-IP TUN, so not an SSRF widening, but the CONNECT claim does not
-      // hold for NO_PROXY-excluded hosts.
-      allowBenchmarkAddresses: proxyConfigured,
+      // when this exact host will use the configured outbound proxy: the hostname
+      // then rides the proxy as an ordinary CONNECT instead of failing as a private
+      // destination or being pin-connected to the fake-IP (credit #1748). A NO_PROXY
+      // match is a direct route, so it keeps the benchmark answer rejected. Image/Lab
+      // fetch never passes this flag.
+      allowBenchmarkAddresses: proxyConfigured && !noProxyMatches(parsed),
     });
   } catch (error) {
     const dnsResolutionFailed = error instanceof DestinationDnsResolutionError

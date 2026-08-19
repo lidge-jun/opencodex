@@ -1535,6 +1535,9 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli, "path"),
+    // Package root for the transactional-update restore path (#1942): cli is
+    // <pkg>\src\cli\index.ts, so the package dir is three levels up.
+    'for %%I in ("%OCX_CLI%\\..\\..\\..") do set "OCX_PKG_DIR=%%~fI"',
     'if exist "%OCX_API_TOKEN_FILE%" (',
     '  set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"',
     ")",
@@ -1547,8 +1550,14 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo token_file="%OCX_API_TOKEN_FILE%"',
     'if not exist "%OCX_BUN%" (',
+    "  call :restore_backup",
+    ")",
+    'if not exist "%OCX_BUN%" (',
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: bundled Bun is missing; reinstall opencodex, then run ocx service repair',
     "  exit /b 3",
+    ")",
+    'if not exist "%OCX_CLI%" (',
+    "  call :restore_backup",
     ")",
     'if not exist "%OCX_CLI%" (',
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: CLI entry is missing; reinstall opencodex, then run ocx service repair',
@@ -1563,6 +1572,26 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     "  goto loop",
     ")",
     "endlocal",
+    "goto :eof",
+    "",
+    // #1942/#1849: a power loss mid-swap leaves the live package dir missing/broken and
+    // a sibling .ocx-backup-* holding the previous version. This wrapper lives OUTSIDE
+    // the package tree, so it can restore when the launcher itself is gone — the exact
+    // window the in-launcher boot probe cannot reach.
+    ":restore_backup",
+    '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] install incomplete - looking for a transactional-update backup to restore',
+    'for /f "delims=" %%B in (\'dir /b /ad /o-n "%OCX_PKG_DIR%\\..\\.ocx-backup-*" 2^>nul\') do (',
+    '  if exist "%OCX_PKG_DIR%\\..\\%%B\\opencodex\\package.json" (',
+    '    if exist "%OCX_PKG_DIR%" rmdir /s /q "%OCX_PKG_DIR%" 2>nul',
+    '    move "%OCX_PKG_DIR%\\..\\%%B\\opencodex" "%OCX_PKG_DIR%" >nul 2>&1',
+    '    if exist "%OCX_PKG_DIR%\\package.json" (',
+    '      >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] restored previous install from %%B',
+    "      goto :eof",
+    "    )",
+    "  )",
+    ")",
+    '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] no restorable backup found',
+    "goto :eof",
   ].filter((line): line is string => Boolean(line));
   return `${lines.join("\r\n")}\r\n`;
 }

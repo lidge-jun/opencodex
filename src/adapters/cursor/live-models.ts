@@ -1,5 +1,6 @@
 /**
- * Live Cursor model discovery via the `GetUsableModels` RPC (HTTP/2 + Connect-unary protobuf).
+ * Live Cursor model discovery via the `GetUsableModels` Connect-unary protobuf RPC.
+ * HTTP/2 remains the default; an explicit HTTP/1.1 provider pin uses Bun fetch instead.
  *
  * Returns the account's actually-usable model ids (the full effort-suffixed variants Cursor offers
  * for THIS plan), so the routed catalog reflects reality instead of a static superset. Failures are
@@ -14,6 +15,14 @@
  */
 import http2 from "node:http2";
 import { fromBinary } from "@bufbuild/protobuf";
+import type { UpstreamHttpVersion } from "../../types";
+import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import {
+  isPinnedHttp1,
+  UpstreamHttpVersionTargetError,
+  withUpstreamHttpVersionValue,
+} from "../../lib/upstream-http-version";
+import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { GetUsableModelsResponseSchema } from "./gen/agent_pb";
 
 const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
@@ -27,11 +36,14 @@ export interface CursorUsableModelsOptions {
   baseUrl?: string;
   clientVersion?: string;
   timeoutMs?: number;
+  upstreamHttpVersion?: UpstreamHttpVersion;
+  /** Test/embedding seam. Production discovery uses Bun's global fetch in HTTP/1.1 mode. */
+  fetch?: typeof globalThis.fetch;
 }
 
 export type CursorUsableModelsResult =
   | { ok: true; models: string[] }
-  | { ok: false; error: "auth" | "http" | "transport" | "timeout" | "decode" | "empty" | "too_large"; detail?: string };
+  | { ok: false; error: "auth" | "http" | "policy" | "transport" | "timeout" | "decode" | "empty" | "too_large"; detail?: string };
 
 /** Test-only seam for management connectivity probes; production callers retain the HTTP/2 path. */
 export function setFetchCursorUsableModelsForTests(next: CursorUsableModelsFetcher | null): void {
@@ -40,10 +52,11 @@ export function setFetchCursorUsableModelsForTests(next: CursorUsableModelsFetch
 
 const RETRYABLE_DISCOVERY_ERRORS = new Set(["timeout", "transport"]);
 const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
+const CURSOR_MAX_DISCOVERED_MODELS = 500;
 
 /**
- * Live discovery with ONE bounded retry for transient pre-response failures (fresh HTTP/2
- * session each attempt). Completed non-2xx responses ("http"), auth, decode, and empty are
+ * Live discovery with ONE bounded retry for transient pre-response failures (a fresh transport
+ * attempt each time). Completed non-2xx responses ("http"), auth, decode, and empty are
  * deterministic and never retried. The retry attempt's deadline is capped so a cache-miss
  * catalog poll cannot stall much past the primary timeout (~11.5s worst case, accepted in
  * devlog 260723_cursor_context_continuity/030).
@@ -83,6 +96,104 @@ function resolveCursorDiscoveryBaseUrl(raw: string): { ok: true; baseUrl: string
 }
 
 async function fetchCursorUsableModelsOnce(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
+  if (isPinnedHttp1(opts.upstreamHttpVersion)) return fetchCursorUsableModelsHttp1Once(opts);
+  return fetchCursorUsableModelsHttp2Once(opts);
+}
+
+function cursorDiscoveryHeaders(opts: CursorUsableModelsOptions): Record<string, string> {
+  return {
+    "content-type": "application/proto",
+    "connect-protocol-version": "1",
+    authorization: `Bearer ${opts.apiKey}`,
+    "x-ghost-mode": "true",
+    "x-cursor-client-version": opts.clientVersion ?? CURSOR_DISCOVERY_CLIENT_VERSION,
+    "x-cursor-client-type": "cli",
+    "x-session-id": crypto.randomUUID(),
+  };
+}
+
+function decodeCursorUsableModels(bytes: Uint8Array): CursorUsableModelsResult {
+  try {
+    const response = fromBinary(GetUsableModelsResponseSchema, bytes);
+    // Account filtering uses wire `model_id` values only. Aliases like `composer-2-5` must not
+    // make stale configured ids such as `composer-2` look activated.
+    const ids: string[] = [];
+    const seenIds = new Set<string>();
+    for (const model of response.models ?? []) {
+      const rawId = (model as { modelId?: string }).modelId;
+      if (typeof rawId !== "string") continue;
+      const id = rawId.trim();
+      if (!isValidModelDiscoveryModelId(id) || seenIds.has(id)) continue;
+      seenIds.add(id);
+      ids.push(id);
+      if (ids.length >= CURSOR_MAX_DISCOVERED_MODELS) break;
+    }
+    return ids.length > 0 ? { ok: true, models: ids } : { ok: false, error: "empty" };
+  } catch {
+    return { ok: false, error: "decode", detail: "Invalid GetUsableModels protobuf response" };
+  }
+}
+
+async function fetchCursorUsableModelsHttp1Once(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
+  let requestUrl: string;
+  try {
+    const parsed = new URL(CURSOR_GET_USABLE_MODELS_PATH, opts.baseUrl ?? "https://api2.cursor.sh");
+    if (parsed.protocol !== "https:") {
+      return { ok: false, error: "policy", detail: "Cursor HTTP/1.1 discovery requires HTTPS" };
+    }
+    requestUrl = parsed.toString();
+  } catch {
+    return { ok: false, error: "transport", detail: "Cursor HTTP/1.1 discovery base URL is invalid" };
+  }
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException(`No response within ${timeoutMs}ms`, "TimeoutError"));
+  }, timeoutMs);
+  try {
+    const init = withUpstreamHttpVersionValue(requestUrl, {
+      method: "POST",
+      headers: cursorDiscoveryHeaders(opts),
+      redirect: "manual",
+      signal: controller.signal,
+    }, opts.upstreamHttpVersion);
+    const response = await (opts.fetch ?? globalThis.fetch)(requestUrl, init);
+    if (response.status === 401 || response.status === 403) {
+      void response.body?.cancel().catch(() => undefined);
+      return { ok: false, error: "auth", detail: `HTTP ${response.status}` };
+    }
+    if (response.status !== 200) {
+      void response.body?.cancel().catch(() => undefined);
+      return { ok: false, error: "http", detail: `HTTP ${response.status || "unknown"}` };
+    }
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (Number.isFinite(contentLength) && contentLength > CURSOR_MODEL_DISCOVERY_MAX_BYTES) {
+      void response.body?.cancel().catch(() => undefined);
+      return { ok: false, error: "too_large", detail: "GetUsableModels response exceeds 4 MiB" };
+    }
+    const body = await readBoundedResponseBytes(response, {
+      maxBytes: CURSOR_MODEL_DISCOVERY_MAX_BYTES,
+      signal: controller.signal,
+    });
+    if (body.oversized) {
+      return { ok: false, error: "too_large", detail: "GetUsableModels response exceeds 4 MiB" };
+    }
+    return decodeCursorUsableModels(body.bytes);
+  } catch (error) {
+    if (error instanceof UpstreamHttpVersionTargetError) {
+      return { ok: false, error: "policy", detail: error.message };
+    }
+    return timedOut
+      ? { ok: false, error: "timeout", detail: `No response within ${timeoutMs}ms` }
+      : { ok: false, error: "transport", detail: "HTTP/1.1 request failed" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchCursorUsableModelsHttp2Once(opts: CursorUsableModelsOptions): Promise<CursorUsableModelsResult> {
   const baseUrl = (opts.baseUrl ?? "https://api2.cursor.sh").replace(/\/+$/, "");
   const timeoutMs = opts.timeoutMs ?? 8000;
 
@@ -118,13 +229,7 @@ async function fetchCursorUsableModelsOnce(opts: CursorUsableModelsOptions): Pro
       req = client.request({
         ":method": "POST",
         ":path": CURSOR_GET_USABLE_MODELS_PATH,
-        "content-type": "application/proto",
-        "connect-protocol-version": "1",
-        authorization: `Bearer ${opts.apiKey}`,
-        "x-ghost-mode": "true",
-        "x-cursor-client-version": opts.clientVersion ?? CURSOR_DISCOVERY_CLIENT_VERSION,
-        "x-cursor-client-type": "cli",
-        "x-session-id": crypto.randomUUID(),
+        ...cursorDiscoveryHeaders(opts),
       });
     } catch {
       return close({ ok: false, error: "transport", detail: "HTTP/2 request setup failed" });
@@ -161,25 +266,7 @@ async function fetchCursorUsableModelsOnce(opts: CursorUsableModelsOptions): Pro
         return close({ ok: false, error: "auth", detail: `HTTP ${status}` });
       }
       if (status !== 200) return close({ ok: false, error: "http", detail: `HTTP ${status || "unknown"}` });
-      try {
-        const response = fromBinary(GetUsableModelsResponseSchema, new Uint8Array(Buffer.concat(chunks)));
-        // Account filtering uses wire `model_id` values only. Aliases like `composer-2-5` must not
-        // make stale configured ids such as `composer-2` look activated.
-        const ids: string[] = [];
-        const seenIds = new Set<string>();
-        for (const model of response.models ?? []) {
-          const rawId = (model as { modelId?: string }).modelId;
-          if (typeof rawId !== "string") continue;
-          const id = rawId.trim();
-          if (id.length === 0 || /[\x00-\x1f]/.test(id) || seenIds.has(id)) continue;
-          seenIds.add(id);
-          ids.push(id);
-          if (ids.length === 500) break;
-        }
-        close(ids.length > 0 ? { ok: true, models: ids } : { ok: false, error: "empty" });
-      } catch {
-        close({ ok: false, error: "decode", detail: "Invalid GetUsableModels protobuf response" });
-      }
+      close(decodeCursorUsableModels(new Uint8Array(Buffer.concat(chunks))));
     });
 
     req.end(); // CRITICAL: no body argument (empty Buffer breaks Bun's HTTP/2 framing).

@@ -170,6 +170,40 @@ describe("provider outbound GET transport", () => {
     expect(resolveOptions).toEqual([{ allowBenchmarkAddresses: false }]);
   });
 
+  test("NO_PROXY-matched hosts do not receive the fake-IP benchmark exception", async () => {
+    const proxyUrl = "http://127.0.0.1:9";
+    process.env.HTTPS_PROXY = proxyUrl;
+    process.env.https_proxy = proxyUrl;
+    process.env.NO_PROXY = "www.packyapi.com";
+    process.env.no_proxy = "www.packyapi.com";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../src/lib/provider-outbound");
+      const resolveOptions: { allowBenchmarkAddresses?: boolean }[] = [];
+      const { dependencies, captured } = directDependencies(new Response(null, { status: 500 }));
+      dependencies.resolveAddresses = mock(async (_url: string, options?: { allowBenchmarkAddresses?: boolean }) => {
+        resolveOptions.push({ allowBenchmarkAddresses: options?.allowBenchmarkAddresses });
+        throw new Error("provider URL hostname www.packyapi.com resolves to benchmark address (198.18.56.214)");
+      }) as ProviderOutboundDependencies["resolveAddresses"];
+
+      await expect(providerOutboundGet(
+        "packy",
+        { baseUrl: "https://www.packyapi.com/v1" },
+        "https://www.packyapi.com/v1/models",
+        {},
+        dependencies,
+      )).rejects.toThrow(/benchmark address/);
+
+      expect(resolveOptions).toEqual([{ allowBenchmarkAddresses: false }]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(captured.address).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../src/lib/provider-outbound");

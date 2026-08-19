@@ -130,6 +130,7 @@ describe("Antigravity live model discovery", () => {
         "future-flash-high",
         "future-flash-low",
         "future-flash-medium",
+        "gemini-3.1-flash-image",
         "gemini-3.1-pro-low",
         "gemini-3.7-flash",
       ]);

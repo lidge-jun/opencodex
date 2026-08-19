@@ -15,6 +15,7 @@ import { rememberReasoningForCall } from "./responses/reasoning-replay-cache";
 import {
   rememberAndSerializeExtraContent,
   rememberExtraContentForReplay,
+  awaitThoughtSignatureDurability,
 } from "./responses/thought-signature-replay";
 import { resolveStallTimeoutSec } from "./stall-timeout";
 import { usageDisplayTotalTokens } from "./usage/totals";
@@ -1202,6 +1203,9 @@ export function bridgeToResponsesSSE(
               if (truncationReasonFor(event.stopReason)) {
                 // Upstream stopped before a normal completion. Surface as incomplete so the
                 // client can distinguish a truncated/filtered turn from a finished one.
+                // #1926 gap 2: bound the window in which a handed-out thought signature is
+                // not yet durable before the turn becomes externally terminal.
+                await awaitThoughtSignatureDurability();
                 const response = {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
@@ -1216,6 +1220,7 @@ export function bridgeToResponsesSSE(
                 emit("response.incomplete", { response });
                 reportTerminal("incomplete");
               } else {
+                await awaitThoughtSignatureDurability();
                 const response = { ...responseSnapshot("completed", finishedItems, event.endTurn), usage: responsesUsage(event.usage) };
                 options?.onCompletedResponse?.(response, event.providerState);
                 options?.onUsage?.(event.usage);
@@ -1236,6 +1241,7 @@ export function bridgeToResponsesSSE(
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               flushHiddenReasoningEnvelope();
               options?.onUsage?.(event.usage);
+              await awaitThoughtSignatureDurability();
               emit("response.incomplete", {
                 response: {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
@@ -1264,6 +1270,7 @@ export function bridgeToResponsesSSE(
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               const failure = adapterFailureFromEvent(event);
               if (event.usage) options?.onUsage?.(event.usage);
+              await awaitThoughtSignatureDurability();
               emit("response.failed", {
                 response: {
                   ...responseSnapshot("failed", finishedItems),
@@ -1325,6 +1332,7 @@ export function bridgeToResponsesSSE(
         if (currentToolCall) failCurrentToolCall();
         if (currentWebSearch) closeCurrentWebSearch("failed", []);
         options?.onUsage?.(undefined);
+        await awaitThoughtSignatureDurability();
         emit("response.incomplete", {
           response: {
             ...responseSnapshot("incomplete", finishedItems),
@@ -1365,6 +1373,10 @@ export function bridgeToResponsesSSE(
             flushHiddenRawReasoning();
             if (currentToolCall) failCurrentToolCall();
             if (currentWebSearch) closeCurrentWebSearch("failed", []);
+            // #1926 gap 2 residual: this beat callback is synchronous, so the durability
+            // barrier is not awaited on the stall-timeout kill path. The in-memory store is
+            // already updated; only a crash between here and the queued write loses it,
+            // which is the pre-#1926 status quo for an already-abnormal termination.
             emit("response.incomplete", {
               response: {
                 ...responseSnapshot("incomplete", finishedItems),

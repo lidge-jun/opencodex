@@ -33,7 +33,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage, UpstreamHttpVersion } from "../../types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -103,7 +103,9 @@ import {
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
+import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 
+export { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 
 export function disableResponsesRequestTimeout(req: Request, server: Pick<Server<WsData>, "timeout"> | undefined): boolean {
   if (!server) return false;
@@ -147,38 +149,8 @@ export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
 export interface ProviderFetchOptions {
   providerName?: string;
   modelId?: string;
-}
-
-/**
- * Bun's fetch accepts a non-standard `protocol` init to pin the HTTP version
- * (BunFetchRequestInit.protocol). The DOM lib types do not include it, so the
- * value is carried on an intersection and stripped before non-Bun callers.
- * The accepted values are the shared UPSTREAM_HTTP_VERSION_VALUES enum from types.
- */
-const UPSTREAM_HTTP_VERSION_PROTOCOL: Record<Exclude<UpstreamHttpVersion, "auto">, string> = {
-  "http1.1": "http1.1",
-  h1: "h1",
-  http2: "http2",
-  h2: "h2",
-};
-
-/** Attach Bun's `protocol` pin when the provider opted into a fixed HTTP version. */
-export function withUpstreamHttpVersion(
-  input: Parameters<typeof globalThis.fetch>[0],
-  init: RequestInit | undefined,
-  provider: OcxProviderConfig,
-): RequestInit | undefined {
-  const version = provider.upstreamHttpVersion;
-  if (!version || version === "auto") return init;
-  // Bun's protocol pin requires an https: target; local/plaintext upstreams keep
-  // their existing transport untouched.
-  const target = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  try {
-    if (new URL(target).protocol !== "https:") return init;
-  } catch {
-    return init;
-  }
-  return { ...(init ?? {}), protocol: UPSTREAM_HTTP_VERSION_PROTOCOL[version] } as RequestInit;
+  /** One pacing slot was acquired immediately before this fetch wrapper was created. */
+  pacingSlotAcquired?: boolean;
 }
 
 export function providerFetch(
@@ -196,9 +168,16 @@ export function providerFetch(
     }
     return base(input, withUpstreamHttpVersion(input, init, provider));
   };
-  const waitForPacing = (signal?: AbortSignal) => options.providerName
-    ? waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal)
-    : Promise.resolve();
+  let pacingSlotAcquired = options.pacingSlotAcquired === true;
+  const waitForPacing = (signal?: AbortSignal) => {
+    if (pacingSlotAcquired) {
+      pacingSlotAcquired = false;
+      return Promise.resolve();
+    }
+    return options.providerName
+      ? waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal)
+      : Promise.resolve();
+  };
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     await waitForPacing(init?.signal ?? undefined);
     return unpaced(input, init);

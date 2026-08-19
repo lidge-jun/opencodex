@@ -227,9 +227,13 @@ export function buildProviderTableBlock(
     "requires_openai_auth = true",
   ];
   if (includeApiAuthHeader) {
-    lines.push(
-      'env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }',
-    );
+    // codex-cli 0.146+ contract (#2073): env_key sends Authorization: Bearer $VAR and
+    // hard-errors on a missing/empty variable instead of silently omitting auth. It
+    // coexists with requires_openai_auth (env_key wins wire auth; the flag keeps the
+    // login/account UX), and the server substitutes stored main auth for our admission
+    // bearer (#1686), so the modern form is strictly better than the legacy
+    // env_http_headers table this line used to emit.
+    lines.push('env_key = "OPENCODEX_API_AUTH_TOKEN"');
   }
   if (supportsWebsockets) lines.push("supports_websockets = true");
   return lines.join("\n") + "\n";
@@ -735,7 +739,7 @@ export async function injectCodexConfig(
   // Design B form FIRST: removeOcxSection also keys on the marker line, so a root-level
   // marker + openai_base_url pair must be gone before it scans or it would swallow root keys.
   content = stripInjectedOpenaiBaseUrl(content);
-  if (content.includes("[model_providers.opencodex]")) {
+  if (hasOcxProviderTable(content)) {
     content = removeOcxSection(content);
   }
   content = removeProfileSection(content);
@@ -1095,6 +1099,30 @@ export async function injectCodexConfig(
   };
 }
 
+/**
+ * Sub-table headers like `[model_providers.opencodex.env_http_headers]` appear when a Codex app
+ * config rewrite re-serializes the provider's inline `env_http_headers` table. They define the
+ * same `model_providers.opencodex` provider, so cleanup must remove them too — otherwise the
+ * provider survives with no `name` and Codex rejects the whole config
+ * ("provider name must not be empty"). The dot terminator keeps a user's
+ * `[model_providers.opencodex_backup]`-style tables out of scope.
+ */
+function isOcxProviderHeaderLine(trimmedLine: string): boolean {
+  // Root form matched by regex, not equality: TOML v1.0 allows a trailing comment
+  // (`[model_providers.opencodex] # comment`), and an exact compare would miss that form.
+  // The sub-table prefix check already tolerates trailing comments by construction.
+  return (
+    /^\[model_providers\.opencodex\]\s*(?:#.*)?$/.test(trimmedLine) ||
+    trimmedLine.startsWith("[model_providers.opencodex.")
+  );
+}
+
+function hasOcxProviderTable(content: string): boolean {
+  return content
+    .split("\n")
+    .some((line) => isOcxProviderHeaderLine(line.trim()));
+}
+
 function removeOcxSection(content: string): string {
   const lines = content.split("\n");
   const filtered: string[] = [];
@@ -1102,18 +1130,16 @@ function removeOcxSection(content: string): string {
   for (const line of lines) {
     if (
       line.includes(OCX_SECTION_MARKER) ||
-      line.trim() === "[model_providers.opencodex]"
+      isOcxProviderHeaderLine(line.trim())
     ) {
       inOcxSection = true;
       continue;
     }
     if (inOcxSection) {
-      // End the injected section at the next table header that ISN'T our own — exact match so a
-      // user's "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
-      if (
-        /^\s*\[/.test(line) &&
-        line.trim() !== "[model_providers.opencodex]"
-      ) {
+      // End the injected section at the next table header that ISN'T our own. Exact match on the
+      // provider name (plus our own sub-tables) so a user's
+      // "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
+      if (/^\s*\[/.test(line) && !isOcxProviderHeaderLine(line.trim())) {
         inOcxSection = false;
         filtered.push(line);
       }
@@ -1153,7 +1179,7 @@ function stripOpencodexConfigResult(
     || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
   out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl);
-  if (out.includes("[model_providers.opencodex]")) {
+  if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
   }
   out = removeProfileSection(out);
@@ -1182,7 +1208,7 @@ export function stripOpencodexConfig(content: string): string {
 
 function hasOpencodexRouting(content: string): boolean {
   return (
-    content.includes("[model_providers.opencodex]") ||
+    hasOcxProviderTable(content) ||
     /^\s*model_provider\s*=\s*"opencodex"/m.test(content) ||
     hasInjectedOpenaiBaseUrl(content)
   );

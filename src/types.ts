@@ -14,6 +14,12 @@ export interface OcxReasoningReplayIdentity {
   modelId: string;
   /** Opaque process-local credential identity; never a raw token or API key. */
   credentialIdentity: string;
+  /**
+   * Salted-HMAC credential identity that survives restarts, for the durable
+   * thought-signature store (#1926). Absent when no durable identity could be
+   * derived — the durable store then refuses to key the entry (fail closed).
+   */
+  credentialDurableIdentity?: string;
 }
 
 /**
@@ -1450,8 +1456,10 @@ export interface OcxProviderConfig {
    * HTTP/2 via TLS ALPN by default; some Cloudflare-fronted SSE endpoints hang on
    * HTTP/2 streaming responses (issue #1668). "http1.1" / "h1" forces HTTP/1.1,
    * "http2" / "h2" forces HTTP/2. Absent or "auto" keeps Bun's default negotiation
-   * (current behavior unchanged). Only meaningful for https: base URLs.
-  */
+   * (current behavior unchanged). Explicit pins require an https: target and fail locally when the
+   * pin cannot be honored. Cursor additionally maps an HTTP/1.1 pin onto its RunSSE + BidiAppend
+   * compatibility transport.
+   */
   upstreamHttpVersion?: UpstreamHttpVersion;
   /**
    * Google only. When `false`, the AI Studio (direct) path sends Gemini Flash ids

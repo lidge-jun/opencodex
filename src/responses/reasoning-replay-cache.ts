@@ -123,6 +123,36 @@ export function durableReplayDestinationIdentity(baseUrl: string | undefined): s
   return `destination:${createHash("sha256").update("destination\0").update(canonical).digest("hex")}`;
 }
 
+/**
+ * Restart-stable credential identity for the DURABLE thought-signature store (#1926).
+ *
+ * Unlike the destination, credential material may be secret (an API key), so a plain
+ * unsalted digest would turn the store file into an offline verifier for candidate keys.
+ * The identity is therefore an HMAC under a random salt persisted NEXT TO the store: the
+ * salt is not a secret escrow (it holds no credential material) but it makes every digest
+ * useless outside this installation. Full 256-bit output — no truncation.
+ *
+ * OAuth accounts use the persisted account-slot id (not the rotating token/generation):
+ * relinking a slot to a different upstream account keeps the id, but the upstream then
+ * validates signatures against the new credential and rejects stale ones — the same
+ * fail-closed backstop the destination identity relies on. Credential-scoped header
+ * overrides participate so two provider entries sharing one key but different
+ * authorization headers stay distinct, mirroring the process-local identity.
+ */
+export function durableReplayCredentialIdentity(
+  kind: "key" | "oauth" | "codex",
+  material: string | undefined,
+  headers: Record<string, string> | undefined,
+  salt: Buffer | undefined,
+): string | undefined {
+  if (!nonEmpty(material) || !salt || salt.length < 16) return undefined;
+  const overrides = credentialHeaderOverrides(headers);
+  return `credential:${createHmac("sha256", salt)
+    .update(`credential\0${kind}\0`)
+    .update(JSON.stringify([material, overrides]))
+    .digest("hex")}`;
+}
+
 /** Produce a non-reversible process-local identity for credential material. */
 export function reasoningReplayCredentialIdentity(
   kind: "key" | "oauth" | "codex",

@@ -71,15 +71,29 @@ async function denialFromResponse(
   }
 }
 
-/** Own-property `code` lookup at the top level or under `error`. No coercion, no accessors. */
+function ownStringField(container: Record<string, unknown>, field: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(container, field);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
+}
+
+/** Own-property `code` lookup at the top level or under `error` / `detail`. No coercion or accessors. */
 function structuredDenialCode(payload: unknown): string | undefined {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-  const direct = (payload as Record<string, unknown>).code;
-  if (typeof direct === "string") return direct;
-  const error = (payload as Record<string, unknown>).error;
-  if (error === null || typeof error !== "object" || Array.isArray(error)) return undefined;
-  const nested = (error as Record<string, unknown>).code;
-  return typeof nested === "string" ? nested : undefined;
+  const record = payload as Record<string, unknown>;
+  const direct = ownStringField(record, "code");
+  if (direct !== undefined) return direct;
+
+  for (const field of ["error", "detail"] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, field);
+    if (!descriptor || !("value" in descriptor)) continue;
+    const nested = descriptor.value;
+    if (nested === null || typeof nested !== "object" || Array.isArray(nested)) continue;
+    const code = ownStringField(nested as Record<string, unknown>, "code");
+    if (code !== undefined) return code;
+  }
+  return undefined;
 }
 
 const RESET_ELIGIBLE_CODES: ReadonlySet<string> = new Set(RESET_ELIGIBLE_CODE_VALUES);

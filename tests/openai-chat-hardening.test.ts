@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
 import { stripResponsesOnlyEncryptedMarker } from "../src/adapters/responses-tool-schema";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
@@ -790,6 +790,38 @@ describe("openai-chat response_format emission", () => {
     expect(bodyOf(colonVariant).response_format).toEqual({
       type: "json_schema",
       json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+  });
+
+  // The native Chat ingress reads the same provider option and must draw the same
+  // boundary. It used to match through modelInList, so a `<listed>:<tag>` sibling
+  // lost response_format on this wire while keeping it on Responses.
+  describe("native chat passthrough draws the same exact boundary", () => {
+    const passthrough = (modelId: string, noStructuredOutputModels: string[]) =>
+      JSON.parse(buildOpenAIChatPassthroughRequest(
+        provider({ noStructuredOutputModels }),
+        { messages: [{ role: "user", content: "hi" }], response_format: { type: "json_object" } },
+        modelId,
+        false,
+      ).body as string) as Record<string, unknown>;
+
+    test("omits response_format for the exact listed id", () => {
+      expect(passthrough("test-model", ["test-model"]).response_format).toBeUndefined();
+    });
+
+    test("keeps response_format for a :tag sibling the operator never listed", () => {
+      expect(passthrough("test-model:structured", ["test-model"]).response_format)
+        .toEqual({ type: "json_object" });
+    });
+
+    test("listing the full :tag id opts that id out", () => {
+      expect(passthrough("test-model:structured", ["test-model:structured"]).response_format)
+        .toBeUndefined();
+    });
+
+    test("leaves an unrelated model untouched", () => {
+      expect(passthrough("supported-model", ["test-model"]).response_format)
+        .toEqual({ type: "json_object" });
     });
   });
 });

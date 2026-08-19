@@ -10,7 +10,7 @@ import {
   GetBlobArgsSchema,
   KvServerMessageSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
-import type { OcxMessage } from "../src/types";
+import type { OcxMessage, OcxToolResultMessage } from "../src/types";
 
 function blobData(blobId: Uint8Array): Uint8Array {
   const reply = fromBinary(AgentClientMessageSchema, handleCursorNativeKv(create(KvServerMessageSchema, {
@@ -44,7 +44,15 @@ function decodedToolResult(bytes: Uint8Array) {
   return undefined;
 }
 
-function requestWith(resultContent: string, toolOverrides: Partial<{ toolName: string; toolNamespace?: string; isError: boolean }> = {}) {
+function requestWith(
+  resultContent: OcxToolResultMessage["content"],
+  toolOverrides: Partial<{
+    toolName: string;
+    toolNamespace?: string;
+    isError: boolean;
+    containsEncryptedContent: boolean;
+  }> = {},
+) {
   const rawMessages: OcxMessage[] = [
     { role: "user", content: "run it", timestamp: 1 },
     {
@@ -60,6 +68,7 @@ function requestWith(resultContent: string, toolOverrides: Partial<{ toolName: s
       toolNamespace: "toolNamespace" in toolOverrides ? toolOverrides.toolNamespace : "mcp__node_repl",
       content: resultContent,
       isError: toolOverrides.isError ?? false,
+      containsEncryptedContent: toolOverrides.containsEncryptedContent,
       timestamp: 3,
     },
   ];
@@ -133,6 +142,47 @@ describe("native wire decode (#1920 disposition: formatted text at toolResultPar
     expect(result!.isError).toBe(true);
     const first = result!.content[0];
     expect(first.content.case === "text" ? first.content.value.text : "").toContain("recovery");
+  });
+
+  test("an empty text-part result receives the same normalization as an empty string", () => {
+    const result = decodedToolResult(requestWith([{ type: "text", text: "" }]));
+    expect(result).toBeDefined();
+    expect(result!.isError).toBe(true);
+    const first = result!.content[0];
+    expect(first.content.case === "text" ? first.content.value.text : "").toContain("[empty output");
+  });
+
+  test("a failure-state text-part result receives recovery guidance and isError=true", () => {
+    const result = decodedToolResult(requestWith([{ type: "text", text: "ReferenceError: sky is not defined" }]));
+    expect(result).toBeDefined();
+    expect(result!.isError).toBe(true);
+    const first = result!.content[0];
+    expect(first.content.case === "text" ? first.content.value.text : "").toContain("recovery");
+  });
+
+  test("image-bearing results keep their text and image parts without failure normalization", () => {
+    const failureText = "ReferenceError: sky is not defined";
+    const result = decodedToolResult(requestWith([
+      { type: "text", text: failureText },
+      { type: "image", imageUrl: "data:image/png;base64,iVBORw0KGgo=" },
+    ]));
+    expect(result).toBeDefined();
+    expect(result!.isError).toBe(false);
+    expect(result!.content).toHaveLength(2);
+    expect(result!.content[0]?.content.case === "text" ? result!.content[0].content.value.text : "").toBe(failureText);
+    expect(result!.content[1]?.content.case).toBe("image");
+  });
+
+  test("encrypted text-part results remain unmodified", () => {
+    const failureText = "ReferenceError: sky is not defined";
+    const result = decodedToolResult(requestWith(
+      [{ type: "text", text: failureText }],
+      { containsEncryptedContent: true },
+    ));
+    expect(result).toBeDefined();
+    expect(result!.isError).toBe(false);
+    const first = result!.content[0];
+    expect(first.content.case === "text" ? first.content.value.text : "").toBe(failureText);
   });
 
   test("a normal tool result decodes byte-identical (no normalization side effects)", () => {

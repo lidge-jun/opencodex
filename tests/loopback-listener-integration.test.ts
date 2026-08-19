@@ -615,6 +615,7 @@ describe("Codex injection targets the loopback listener", () => {
       expect(written).toContain("http://127.0.0.1:10200/v1");
       expect(written).not.toContain("http://127.0.0.1:10100/v1");
       expect(written).not.toContain("env_http_headers");
+      expect(written).not.toContain("env_key");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

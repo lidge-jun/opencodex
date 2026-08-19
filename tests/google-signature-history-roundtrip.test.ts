@@ -54,6 +54,8 @@ function scopeFor(
       adapterName: "google",
       modelId,
       credentialIdentity: `cred-${providerName}`,
+      // v4 (#1926): the durable store fails closed without a durable credential identity.
+      credentialDurableIdentity: `credential:test-${providerName}`,
     },
   };
 }
@@ -334,5 +336,32 @@ describe("#1735 thought signature survives history replay", () => {
     await flushThoughtSignatureReplayForTests();
     resetThoughtSignatureReplayForTests();
     expect(lookupReplayThoughtSignature("call_dest_restart", scopeFor())).toBe(SIGNATURE);
+  });
+
+  test("adapter serialization reads the durable store with the post-parse bound scope (#1926 wiring)", async () => {
+    // The server parses BEFORE the route/credential scope exists, so the parser's own
+    // lookup cannot hit; the google adapter's serialization-time fallback must read the
+    // durable store once the scope identity has been bound.
+    rememberThoughtSignatureForReplay("call_wire_1", SIGNATURE, scopeFor());
+    await flushThoughtSignatureReplayForTests();
+    const scope: { clientThreadId: string; current?: unknown } = { clientThreadId: "thread-a" };
+    const parsed = parseRequestScoped({
+      model: MODEL,
+      stream: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "run pwd" }] },
+        { type: "function_call", call_id: "call_wire_1", name: "shell_command", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_wire_1", output: "ok" },
+      ],
+      tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
+    }, scope as never);
+    // Identity binds after parse, as bindRouteReasoningReplayScope does server-side.
+    scope.current = scopeFor().current;
+    parsed._reasoningReplayScope = scope as never;
+    const adapter = createGoogleAdapter(provider);
+    const req = await adapter.buildRequest(parsed, { headers: new Headers() });
+    const parts = modelParts(String(req.body));
+    const fnPart = parts.find(p => (p as { functionCall?: unknown }).functionCall) as { thoughtSignature?: string } | undefined;
+    expect(fnPart?.thoughtSignature).toBe(SIGNATURE);
   });
 });
