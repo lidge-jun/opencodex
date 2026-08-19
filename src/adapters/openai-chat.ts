@@ -1156,7 +1156,11 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
   if (!isXaiObjectSchema(parameters)) return undefined;
   const resolved = resolveXaiSchemaRefs(parameters, parameters);
   if (!isXaiObjectSchema(resolved)) return undefined;
-  const variants = expandXaiRootObjectSchemas(resolved);
+
+  const normalizedRoot = { ...resolved };
+  delete normalizedRoot.$schema;
+
+  const variants = expandXaiRootObjectSchemas(normalizedRoot);
   if (!variants) return undefined;
   if (variants.length === 1) {
     return xaiVariantIsConcreteObject(variants[0]) ? variants[0] : undefined;
@@ -1166,7 +1170,7 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
   if (!additionalProperties.ok) return undefined;
   if (!xaiPropertyMergeIsLossless(variants)) return undefined;
 
-  const metadata = Object.fromEntries(Object.entries(resolved).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
+  const metadata = Object.fromEntries(Object.entries(normalizedRoot).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
   delete metadata.properties;
   delete metadata.required;
   delete metadata.additionalProperties;
@@ -1180,6 +1184,7 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
       propertyValues.set(name, values);
     }
   }
+
   const properties = Object.fromEntries(
     [...propertyValues].map(([name, values]) => [name, mergeXaiPropertySchemas(values)]),
   );

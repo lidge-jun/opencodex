@@ -36,6 +36,8 @@ Usage:
                               Refresh Codex's model cache from the active catalog
   ocx status                  Check proxy server status
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
+  ocx doctor --reclaim-response-temps
+                              Reclaim abandoned response-state temp files (works without a running proxy)
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
   ocx login <provider>        OAuth or API-key provider login
   ocx logout <provider>       Remove a stored OAuth login

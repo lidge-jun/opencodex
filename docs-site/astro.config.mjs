@@ -155,6 +155,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: "Windows Memory Growth", translations: { fr: "Augmentation de la mémoire sous Windows", ko: "Windows 메모리 증가", "zh-CN": "Windows 内存增长", "zh-TW": "Windows 記憶體增長", ru: "Рост памяти в Windows", ja: "Windows メモリ増加", tr: "Windows Bellek Artışı" }, slug: "troubleshooting/windows-memory" },
+            { label: "Disk Usage from Temp Files", translations: { fr: "Espace disque et fichiers temporaires", ko: "임시 파일 디스크 사용량", "zh-CN": "临时文件磁盘占用", "zh-TW": "暫存檔磁碟用量", ru: "Использование диска временными файлами", ja: "一時ファイルのディスク使用量", tr: "Geçici Dosya Disk Kullanımı" }, slug: "troubleshooting/disk-usage-temp-files" },
           ],
         },
         { label: "Contributing", translations: { fr: "Contribuer", ko: "기여하기", "zh-CN": "贡献", "zh-TW": "貢獻", ru: "Как внести вклад", ja: "コントリビュート", tr: "Katkıda Bulunma" }, slug: "contributing" },

@@ -72,6 +72,12 @@ const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.en
 }, {});
 
 const ANTIGRAVITY_DISCOVERY_EFFORTS = ["low", "medium", "high"] as const;
+type AntigravityDiscoveryEffort = typeof ANTIGRAVITY_DISCOVERY_EFFORTS[number];
+type AntigravityEffortWireModelIds = Partial<Record<AntigravityDiscoveryEffort, string>>;
+
+function isAntigravityDiscoveryEffort(value: string): value is AntigravityDiscoveryEffort {
+  return (ANTIGRAVITY_DISCOVERY_EFFORTS as readonly string[]).includes(value);
+}
 
 function pickerModelIdForDiscoveredWireId(
   wireId: string,
@@ -150,6 +156,25 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
     high: "gemini-pro-agent",
   },
 };
+
+function completeDiscoveredEffortWireModelIds(
+  pickerId: string,
+  available: ReadonlyMap<string, Record<string, unknown>>,
+): AntigravityEffortWireModelIds | undefined {
+  const explicitEffortMap = ANTIGRAVITY_EFFORT_WIRE_MAP[pickerId];
+  if (explicitEffortMap && Object.values(explicitEffortMap).every(wireId => available.has(wireId))) {
+    return { ...explicitEffortMap };
+  }
+
+  if (!isKnownAntigravityPickerModelId(pickerId)) return undefined;
+  const suffixEffortMap: AntigravityEffortWireModelIds = {};
+  for (const effort of ANTIGRAVITY_DISCOVERY_EFFORTS) {
+    const wireId = `${pickerId}-${effort}`;
+    if (!available.has(wireId)) return undefined;
+    suffixEffortMap[effort] = wireId;
+  }
+  return suffixEffortMap;
+}
 
 // ── Default effort per Gemini base model ──
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
@@ -270,6 +295,8 @@ export interface AntigravityAvailableModel {
   id: string;
   /** CCA model id used by the agent envelope when `id` comes from display metadata. */
   wireModelId: string;
+  /** Complete effort-to-wire mapping retained for collapsed discovered tier sets. */
+  effortWireModelIds?: AntigravityEffortWireModelIds;
   contextWindow?: number;
   inputModalities?: string[];
 }
@@ -286,6 +313,7 @@ function antigravityPositiveInteger(value: unknown): number | undefined {
 
 interface DiscoveredWireModelMapping {
   readonly models: ReadonlyMap<string, string>;
+  readonly effortModels: ReadonlyMap<string, AntigravityEffortWireModelIds>;
   readonly generation?: { provider: string; cacheGeneration: string };
 }
 
@@ -327,17 +355,21 @@ export function registerAntigravityDiscoveredWireModels(
   const key = antigravityBaseUrlKey(baseUrl);
   if (!key) return;
   const wireModels = new Map<string, string>();
-  for (const model of models) wireModels.set(model.id, model.wireModelId);
+  const effortModels = new Map<string, AntigravityEffortWireModelIds>();
+  for (const model of models) {
+    wireModels.set(model.id, model.wireModelId);
+    if (model.effortWireModelIds) effortModels.set(model.id, { ...model.effortWireModelIds });
+  }
   discoveredWireModelsByBaseUrl.set(key, {
     models: wireModels,
+    effortModels,
     ...(generation ? { generation } : {}),
   });
 }
 
-function discoveredAntigravityWireModelId(
-  modelId: string,
+function discoveredAntigravityMapping(
   baseUrl: string | undefined,
-): string | undefined {
+): DiscoveredWireModelMapping | undefined {
   const key = antigravityBaseUrlKey(baseUrl);
   if (!key) return undefined;
   const mapping = discoveredWireModelsByBaseUrl.get(key);
@@ -347,7 +379,35 @@ function discoveredAntigravityWireModelId(
     discoveredWireModelsByBaseUrl.delete(key);
     return undefined;
   }
-  return mapping.models.get(modelId);
+  return mapping;
+}
+
+function discoveredAntigravityWireModelId(
+  modelId: string,
+  baseUrl: string | undefined,
+): string | undefined {
+  return discoveredAntigravityMapping(baseUrl)?.models.get(modelId);
+}
+
+function discoveredAntigravityEffortWireModelId(
+  modelId: string,
+  effort: string | undefined,
+  baseUrl: string | undefined,
+): string | undefined {
+  const effortMap = discoveredAntigravityMapping(baseUrl)?.effortModels.get(modelId);
+  if (!effortMap) return undefined;
+
+  const requestedEffort = effort ? resolveAntigravityThinkingLevel(effort) : undefined;
+  if (requestedEffort && isAntigravityDiscoveryEffort(requestedEffort) && effortMap[requestedEffort]) {
+    return effortMap[requestedEffort];
+  }
+
+  const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]
+    ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
+  if (defaultEffort && isAntigravityDiscoveryEffort(defaultEffort) && effortMap[defaultEffort]) {
+    return effortMap[defaultEffort];
+  }
+  return Object.values(effortMap)[0];
 }
 
 /**
@@ -465,9 +525,11 @@ export function parseAntigravityAvailableModels(
     const id = pickerModelIdForDiscoveredWireId(wireId, info, available);
     if (seen.has(id)) continue;
     seen.add(id);
+    const effortWireModelIds = completeDiscoveredEffortWireModelIds(id, available);
     out.push({
       id,
       wireModelId: wireId,
+      ...(effortWireModelIds ? { effortWireModelIds } : {}),
       ...(antigravityPositiveInteger(info.maxTokens) ? { contextWindow: antigravityPositiveInteger(info.maxTokens) } : {}),
       // Tri-state, deliberately not a ternary: `true` asserts image support,
       // `false` asserts against it, and ABSENT is unknown. Collapsing absent into
@@ -522,6 +584,9 @@ export function resolveAntigravityEffortWireModel(
   effort?: string,
   baseUrl?: string,
 ): { wireModelId: string; thinkingLevel?: string } {
+  const discoveredEffortWireModelId = discoveredAntigravityEffortWireModelId(modelId, effort, baseUrl);
+  if (discoveredEffortWireModelId) return { wireModelId: discoveredEffortWireModelId };
+
   // A collapsed picker row reports ONE representative wire id (whichever tier CCA
   // listed first), so live discovery cannot describe a ladder — it can only name a
   // single rung. Letting it answer for a base model we already have a ladder for

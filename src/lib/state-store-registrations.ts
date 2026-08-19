@@ -35,7 +35,7 @@ import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/st
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
 import { reconcileProviderRequestPacing } from "../providers/request-pacing";
-import { sweepExpiredResponseStates } from "../responses/state";
+import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates } from "../responses/state";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { reconcileProviderAccountQuotaRows } from "../providers/quota";
 import { reconcileRouterWarningMemos } from "../router";
@@ -84,7 +84,13 @@ export const STATE_STORE_REGISTRATIONS = [
   },
   { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
-  { name: "responses-continuation", sweepExpired: sweepExpiredResponseStates },
+  {
+    name: "responses-continuation",
+    sweepExpired: sweepExpiredResponseStates,
+    // Disk reclaim rides the liveness tick, not the TTL tick: sweepExpiredOnWrite puts
+    // sweepExpired on hot write paths, where a directory scan does not belong.
+    sweepLiveness: sweepAbandonedResponseStateTemps,
+  },
   { name: "antigravity-replay", sweepExpired: sweepExpiredAntigravityReplay },
   { name: "config-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileConfigWarningMemos(context.generation) },
   { name: "catalog-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileCatalogWarningMemos(context.generation) },
