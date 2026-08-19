@@ -448,6 +448,113 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     }
   });
 
+  test("a superseded OAuth flow cannot commit after its replacement owns the provider", async () => {
+    saveConfig(config());
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    let loginCalls = 0;
+    OAUTH_PROVIDERS.xai.login = async (ctrl) => {
+      loginCalls += 1;
+      const call = loginCalls;
+      ctrl.onAuth({ url: `https://auth.example.test/${call}`, deviceCode: `flow-${call}` });
+      return {
+        access: `access-${call}`,
+        refresh: `refresh-${call}`,
+        accountId: `account-${call}`,
+        email: `account-${call}@example.test`,
+        expires: Date.now() + 60_000,
+      };
+    };
+
+    let releaseHead!: () => void;
+    let signalHeadStarted!: () => void;
+    const headStarted = new Promise<void>(resolve => { signalHeadStarted = resolve; });
+    const headGate = new Promise<void>(resolve => { releaseHead = resolve; });
+    const blockingMutation = oauthStore.mutateStore(async () => {
+      signalHeadStarted();
+      await headGate;
+    });
+
+    const waitForMutationCount = async (minimum: number): Promise<void> => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (oauthStore.oauthMutationTailSnapshot().active >= minimum) return;
+        await Bun.sleep(5);
+      }
+      throw new Error(`OAuth mutation queue did not reach ${minimum} active rows`);
+    };
+
+    try {
+      await headStarted;
+      await startLoginFlow("xai");
+      await waitForMutationCount(2);
+      expect(cancelLoginFlow("xai")).toBe(true);
+
+      await startLoginFlow("xai");
+      await waitForMutationCount(3);
+      releaseHead();
+      await blockingMutation;
+
+      const status = await waitForOAuthDone("xai");
+      expect(status).toMatchObject({ done: true, loggedIn: true });
+      expect(getCredential("xai")).toMatchObject({
+        access: "access-2",
+        accountId: "account-2",
+      });
+      expect(oauthStore.getAccountSet("xai")?.accounts.map(account => account.credential.accountId))
+        .toEqual(["account-2"]);
+    } finally {
+      releaseHead();
+      await blockingMutation.catch(() => {});
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+      clearLoginState("xai");
+    }
+  });
+
+  test("Kiro does not start a replacement until the canceled external CLI flow settles", async () => {
+    saveConfig(config());
+    const originalLogin = OAUTH_PROVIDERS.kiro.login;
+    let loginCalls = 0;
+    OAUTH_PROVIDERS.kiro.login = async (ctrl) => {
+      loginCalls += 1;
+      const call = loginCalls;
+      ctrl.onAuth({ url: "", deviceCode: `kiro-flow-${call}` });
+      if (call === 1) {
+        await new Promise<never>((_, reject) => {
+          ctrl.signal.addEventListener("abort", () => reject(new Error("Kiro login cancelled")), { once: true });
+        });
+      }
+      return {
+        access: "kiro-replacement-access",
+        refresh: "kiro-replacement-refresh",
+        accountId: "kiro-replacement-account",
+        email: "kiro-replacement@example.test",
+        expires: Date.now() + 60_000,
+      };
+    };
+
+    try {
+      await startLoginFlow("kiro");
+      expect(cancelLoginFlow("kiro")).toBe(true);
+      await expect(startLoginFlow("kiro")).rejects.toThrow("A login for kiro is already in progress");
+
+      let replacement: Awaited<ReturnType<typeof startLoginFlow>> | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        try {
+          replacement = await startLoginFlow("kiro");
+          break;
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes("already in progress")) throw error;
+          await Bun.sleep(5);
+        }
+      }
+      expect(replacement).toMatchObject({ deviceCode: "kiro-flow-2" });
+      expect(await waitForOAuthDone("kiro")).toMatchObject({ done: true, loggedIn: true });
+      expect(loginCalls).toBe(2);
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = originalLogin;
+      clearLoginState("kiro");
+    }
+  });
+
   test("management OAuth safely reconciles live config after a late namespace claim", async () => {
     const liveConfig = config();
     liveConfig.hostname = "0.0.0.0";
