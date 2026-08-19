@@ -56,6 +56,21 @@ function backfillItemId(item: Record<string, unknown>, outputIndex: number): Rec
 }
 
 /**
+ * Monotonic ordinal for an event whose `output_index` is absent or malformed.
+ *
+ * Starts far above any plausible real index so a synthesized id can never collide with an
+ * index-derived one inside the same response. Process-global rather than per-response because
+ * this module is stateless by design and the value only has to be unique, not meaningful.
+ */
+const SYNTHETIC_ITEM_ORDINAL_BASE = 1_000_000;
+let syntheticItemOrdinal = 0;
+function nextSyntheticItemOrdinal(): number {
+  syntheticItemOrdinal += 1;
+  return SYNTHETIC_ITEM_ORDINAL_BASE + syntheticItemOrdinal;
+}
+
+
+/**
  * Backfill annotations: [] on an output_text content part if missing.
  * Returns the same object reference if no change is needed.
  */
@@ -129,8 +144,14 @@ function rewriteEvent(event: Record<string, unknown>): Record<string, unknown> {
   if ((type === "response.output_item.added" || type === "response.output_item.done")
     && isPlainObject(event.item)) {
     const rawIndex = event.output_index;
-    const index = typeof rawIndex === "number" && Number.isInteger(rawIndex) && rawIndex >= 0 ? rawIndex : 0;
-    const item = backfillOutputItem(event.item, index);
+    // A malformed or absent `output_index` must not collapse to 0: two such events would then
+    // both synthesize `msg_ocx_0`, and duplicate ids are the very thing this backfill exists to
+    // prevent. Fall back to a per-process counter so the synthesized id stays unique. Position
+    // is not recoverable in that case, but a unique id is what strict decoders require, and a
+    // well-formed stream still gets the stable index-derived id.
+    const item = typeof rawIndex === "number" && Number.isInteger(rawIndex) && rawIndex >= 0
+      ? backfillOutputItem(event.item, rawIndex)
+      : backfillOutputItem(event.item, nextSyntheticItemOrdinal());
     if (item !== event.item) {
       next = { ...next, item };
       changed = true;
