@@ -210,3 +210,26 @@ supersede stands.
 Ordered by score, not by dependency, because no dependency exists. Each is independently
 reviewable and independently mergeable, which is what DEV-STACK-01 actually asks for.
 
+
+## Correction 4 — #2130 merged mid-cycle; #2029 is now superseded in fact, not in prospect
+
+`gh pr view 2130`: `MERGED` at 2026-08-19T17:25:26Z. The probe lane's verdict was conditional
+("SUPERSEDED, once #2130 merges"); that condition is now satisfied.
+
+Consequence for `060`: **#2029 (@yzxcj797)** moves from a prospective close to an immediate one.
+`dev` now carries `busUnreachable()` — a superset of #2029's two stderr strings — plus the
+on-disk unit check that #2029's own reviewer demanded. Landing #2029 on top would REGRESS that
+disk check back to an unconditional `absent`. Nothing from #2029 needs to be carried over; its
+one unique behavior (keeping `DBUS_SESSION_BUS_ADDRESS not set` as `unknown`) is precisely what
+the merged disk check replaces.
+
+This also removes #2130 from the open-bug-PR set: the fresh count at wp1 close is 26 open bug
+PRs, of which exactly one (#2134) is lidge-jun's and 25 are not.
+
+## wp1 close-out evidence
+
+`gh pr list --repo lidge-jun/opencodex --state open --label bug --limit 100` at close:
+26 total, mine = [2134], non-mine = 25. Every one of those 25 numbers appears in §1/§3 of this
+document (verified by a grep loop over the list, exit 0). No open bug PR is left without a
+disposition.
+
