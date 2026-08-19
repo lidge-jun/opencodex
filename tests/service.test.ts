@@ -7,7 +7,7 @@ import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, prepareServiceInstall, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
-import { resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
+import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
 import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../src/lib/config-ownership";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
@@ -2218,5 +2218,39 @@ describe("service definitions are not world-readable", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// A pre-promotion audit flagged that this file's proxy-credential write used a soft-failing
+// Windows ACL while the two adjacent secret writes — the API token and the install state —
+// both fail closed. On Windows the POSIX mode bits are advisory, so a soft ACL failure can
+// leave a proxy password readable by other local principals.
+describe("credential-bearing definitions harden the Windows ACL strictly", () => {
+  test("a proxy URL with userinfo is treated as a secret publication", () => {
+    // `pw@chatgpt.com` is the repo's existing URL-userinfo fixture: the privacy scanner
+    // reads "pw@host" as an email otherwise, and this exact pair is already allowlisted for
+    // tests/ (scripts/privacy-scan.ts:102). The shape under test is the userinfo authority,
+    // not the particular credential.
+    const unit = buildUnit(resolvedProxyEnv({ HTTPS_PROXY: "https://user:pw@chatgpt.com:8080" }));
+
+    expect(definitionCarriesCredential(unit)).toBe(true);
+  });
+
+  test("a bare proxy URL is not a secret, so an icacls stall must not fail the install", () => {
+    // Before #2107 these files had no hardening at all; refusing an install over a stall
+    // would regress a user who has nothing to protect.
+    const unit = buildUnit(resolvedProxyEnv({ HTTP_PROXY: "http://127.0.0.1:7890", NO_PROXY: "localhost" }));
+
+    expect(definitionCarriesCredential(unit)).toBe(false);
+  });
+
+  test("lower-case spellings and the plist form are covered too", () => {
+    const plist = buildPlist(resolvedProxyEnv({ all_proxy: "socks5://u:p@127.0.0.1:1080" }));
+
+    expect(definitionCarriesCredential(plist)).toBe(true);
+  });
+
+  test("a definition with no proxy env at all carries no credential", () => {
+    expect(definitionCarriesCredential(buildUnit(resolvedProxyEnv({})))).toBe(false);
   });
 });

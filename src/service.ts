@@ -1960,13 +1960,38 @@ function uninstallLaunchd(): void {
  *
  * The explicit `chmodSync` is not redundant: `mode` only applies when the file is
  * created, so an install over a definition left at 0644 by an earlier version would keep
- * the loose mode. On Windows the POSIX bits are advisory, so the real ACL is applied
- * there the same way the token file does it.
+ * the loose mode.
+ *
+ * On Windows the POSIX bits are advisory, so the ACL is the real boundary — and whether it
+ * may soft-fail depends on what the definition actually contains. A definition carrying a
+ * proxy credential is a secret publication and fails closed like the API token and the
+ * install state do; one carrying only paths and a port is not worth refusing an install
+ * over, since before #2107 these files had no hardening at all and a failure here would
+ * regress a user who has no credential to protect.
  */
 export function writeServiceDefinitionFile(path: string, content: string, encoding: "utf8" | "utf16le"): void {
   writeFileSync(path, content, { encoding, mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* best-effort; the Windows ACL below is authoritative */ }
-  if (process.platform === "win32") hardenSecretPath(path, { required: false });
+  try { chmodSync(path, 0o600); } catch { /* superseded by the Windows ACL below */ }
+  if (process.platform === "win32") {
+    hardenSecretPath(path, { required: definitionCarriesCredential(content) });
+  }
+}
+
+/**
+ * Does this service definition embed a credential-bearing proxy URL?
+ *
+ * Only the userinfo form leaks something: `http://user:pass@host` in any of the four proxy
+ * variables. A bare `http://127.0.0.1:7890` is not a secret, and treating it as one would
+ * make an icacls stall fail an install that had nothing to protect.
+ *
+ * The scan is over any URL in the rendered definition rather than over a `KEY=value` shape,
+ * because the three formats render differently — systemd writes `Environment="K=V"`, the
+ * plist writes `<key>K</key><string>V</string>`, and the Windows wrapper writes
+ * `set "K=V"`. Keying on the assignment syntax silently missed the plist.
+ */
+export function definitionCarriesCredential(content: string): boolean {
+  // A userinfo authority: scheme, then anything that is not a delimiter, then '@'.
+  return /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>/@]+@/i.test(content);
 }
 
 // ── Windows (Task Scheduler) ──
