@@ -127,7 +127,7 @@ is the known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex fails safely instead of forwarding an empty or unreadable task:
 
-- A direct non-native route returns HTTP 400 with
+- An ineligible direct non-native route returns HTTP 400 with
   `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext.
 - A combo considers only canonical native ChatGPT targets and explicitly trusted Responses targets
   for that task, including retries. If none is available, it returns the same 400 error.

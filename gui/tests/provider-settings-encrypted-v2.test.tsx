@@ -10,10 +10,14 @@ import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
+let confirmCalls: string[];
+let confirmResult: boolean;
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/#providers/workspace" });
+  confirmCalls = [];
+  confirmResult = true;
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -21,7 +25,7 @@ beforeEach(() => {
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
   });
-  Object.defineProperty(testWindow, "confirm", { configurable: true, value: () => true });
+  Object.defineProperty(testWindow, "confirm", { configurable: true, value: (message: string) => { confirmCalls.push(message); return confirmResult; } });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
@@ -55,6 +59,8 @@ test("settings explicitly opt a Responses provider into encrypted V2 task passth
   expect(optInLabel).toBeTruthy();
   expect(optInLabel?.textContent).toContain("opaque encrypted V2 child-task ciphertext");
   await act(async () => { optInLabel!.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+  expect(confirmCalls).toHaveLength(1);
+  expect(confirmCalls[0]).toContain("opaque encrypted V2 child-task ciphertext");
   await act(async () => {
     container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
     await Promise.resolve();
@@ -62,5 +68,38 @@ test("settings explicitly opt a Responses provider into encrypted V2 task passth
 
   expect(patches).toHaveLength(1);
   expect(patches[0]).toMatchObject({ allowEncryptedV2AgentTasks: true });
+  await act(async () => { root.unmount(); });
+});
+
+test("cancelling the encrypted V2 confirmation does not save the trust opt-in", async () => {
+  confirmResult = false;
+  const item: WorkspaceItem = {
+    name: "relay",
+    adapter: "openai-responses",
+    baseUrl: "https://relay.example.test/v1",
+    authMode: "key",
+  };
+  const patches: ProviderUpdatePatch[] = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><ProviderSettings
+      item={item}
+      onUpdateProvider={async (_name, patch) => { patches.push(patch); return { ok: true }; }}
+    /></LanguageProvider>);
+  });
+
+  const optInLabel = [...container.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("encrypted V2 agent tasks"));
+  const checkbox = optInLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(checkbox).toBeTruthy();
+  await act(async () => { checkbox!.click(); });
+  expect(confirmCalls).toHaveLength(1);
+  expect(checkbox!.checked).toBe(false);
+  expect(container.querySelector(".pwi-settings-sticky-bar")).toBeNull();
+  expect(patches).not.toContainEqual(expect.objectContaining({ allowEncryptedV2AgentTasks: true }));
   await act(async () => { root.unmount(); });
 });

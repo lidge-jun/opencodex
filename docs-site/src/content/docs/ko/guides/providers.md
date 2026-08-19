@@ -81,6 +81,13 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`)도 들어갑니다. 실제 호출 가능 여부는 계정 권한에
 따라 달라집니다.
 
+암호화된 V2 하위 작업에서는 정규 ChatGPT 포워딩을 암묵적으로 신뢰합니다. 비정규
+`openai-responses` 프로바이더는 업스트림이 불투명한 암호문을 그대로 처리하거나 중계할 수
+있음을 확인한 뒤에만 `allowEncryptedV2AgentTasks: true`를 설정할 수 있습니다. 이 옵션은 기본적으로
+꺼져 있고 모델의 최종 wire가 `openai-responses`일 때만 적용됩니다. `modelAdapters`가
+`openai-chat`으로 해석되면 대상에서 제외되며, opencodex는 payload를 복호화·번역·복구하지 않고
+부적격 경로를 `unreadable_encrypted_agent_task`로 fail closed 처리합니다.
+
 ## 2. 계정 로그인 (OAuth)
 
 OAuth 로그인을 사용하는 프로바이더 프리셋은 여덟 개이며, 여기에 실험적 비공식 디바이스 플로우

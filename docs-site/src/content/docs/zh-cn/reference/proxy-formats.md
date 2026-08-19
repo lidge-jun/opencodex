@@ -230,7 +230,7 @@ Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex D
 | 401 | `authentication_error` | 所需的代理准入凭证缺失或无效 |
 | 403 | `origin_rejected` | 一条 Responses/OpenAI 数据平面请求或 WebSocket 升级来自不允许的 origin |
 | 503 | `combo_unavailable` | 所选 combo 中的所有目标都不可用、处于冷却、已禁用或以其他方式不具备资格 |
-| 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何可消费它的合格原生 ChatGPT 目标 |
+| 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何能够不透明消费或中继它的合格原生 ChatGPT 目标或明确允许的 Responses 目标 |
 | 426 | `upgrade_required` | Responses WebSocket 传输被禁用，或升级失败；请改用 HTTP |
 
 Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方言中的 origin 拒绝会是
@@ -240,5 +240,5 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 
 代理把真正的后端密文视为不透明数据。结构有效的密文会逐字节保留：opencodex 不会对其解密、翻译其内容，或为另一个提供方重新加密。
 
-某些 agent hook 历史上会把明文控制文本放进 `encrypted_content` 槽。为兼容起见，代理会把那部分明文拆分为文本片段，同时保持任何结构有效的 Fernet 片段不变。如果一个 `agent_message` 在该修复过程中失去了所有加密部分，它就会变成普通的 user message。如果当前的 v2 task 仍然真的是加密的，但所选路由目标无法读取原生 ChatGPT 密文，opencodex 会以
+某些 agent hook 历史上会把明文控制文本放进 `encrypted_content` 槽。为兼容起见，代理会把那部分明文拆分为文本片段，同时保持任何结构有效的 Fernet 片段不变。如果一个 `agent_message` 在该修复过程中失去了所有加密部分，它就会变成普通的 user message。如果当前的 v2 task 仍然真的是加密的，但没有合格的原生 ChatGPT 消费者或明确允许的不透明中继 Responses 目标，opencodex 会以
 `unreadable_encrypted_agent_task` 失败，而不是把不可读字节发送给该提供方。有关 worker task 周边的客户端行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。

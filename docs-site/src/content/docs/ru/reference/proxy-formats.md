@@ -270,7 +270,7 @@ Direct, поэтому remote proxy key здесь обязан идти чер�
 | 401 | `authentication_error` | Отсутствует обязательный credential для proxy-admission или он неверен |
 | 403 | `origin_rejected` | Data-plane запрос или WebSocket-upgrade Responses/OpenAI пришёл с запрещённого origin |
 | 503 | `combo_unavailable` | Все цели выбранной combo недоступны, в cooldown, отключены или иным образом не подходят |
-| 400 | `unreadable_encrypted_agent_task` | У шифрованной задачи воркера v2 нет подходящей нативной цели ChatGPT, способной её прочитать |
+| 400 | `unreadable_encrypted_agent_task` | У шифрованной задачи воркера v2 нет подходящего канонического потребителя ChatGPT или явно разрешённой Responses-цели, способной прозрачно обработать или передать ciphertext |
 | 426 | `upgrade_required` | Транспорт Responses WebSocket выключен или upgrade не удался; используйте HTTP |
 
 Сбои, пришедшие с Anthropic-side, отрисовываются в error envelope Anthropic, поэтому отклонение
@@ -286,7 +286,7 @@ ciphertext сохраняется байт в байт: opencodex его не р
 совместимости proxy отделяет такой plaintext в текстовые части, сохраняя нетронутыми все
 структурно валидные фрагменты Fernet. Если после такой починки у `agent_message` не остаётся ни
 одной шифрованной части, сообщение становится обычным user-message. Если текущая задача v2
-остаётся по-настоящему зашифрованной, а выбранная routed-цель не умеет читать ciphertext нативного
-ChatGPT, opencodex завершит запрос ошибкой `unreadable_encrypted_agent_task`, вместо того чтобы
+остаётся по-настоящему зашифрованной, а подходящего канонического потребителя ChatGPT или явно
+разрешённой Responses-цели нет, opencodex завершит запрос ошибкой `unreadable_encrypted_agent_task`, вместо того чтобы
 отправить нечитаемые байты этому провайдеру. О поведении клиента вокруг worker-task'ов см.
 [Поверхность подагентов](/guides/sub-agent-surface/).
