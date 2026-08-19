@@ -815,7 +815,11 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     // buildRequest first to set the per-adapter model/session, then parseResponse to observe.
     await adapter.buildRequest(parsed("hello world"));
     const body = { response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } };
-    await adapter.parseResponse!(sseResponse([body]));
+    const events = await adapter.parseResponse!(sseResponse([
+      body,
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]));
+    expect(events.at(-1)?.type).toBe("done");
     // A follow-up request's history should now get the signature re-injected.
     const followup = parsed("hello world");
     const contents = [{ role: "model", parts: [{ functionCall: { name: "do_x", args: { a: 1 } } }] }];
