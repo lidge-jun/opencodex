@@ -37,6 +37,8 @@ export type ModelWireDefault = string | {
   wire: string;
   inbound: readonly InboundWire[];
   authModes?: readonly ProviderAuthKind[];
+  /** Whether this registry-selected route may relay a caller-owned service_tier. */
+  forwardCallerServiceTier?: boolean;
 };
 
 export interface ResponsesTerminalRepairPolicy {
@@ -1026,8 +1028,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Codex Responses traffic can relay xAI's SSE as it arrives instead of waiting for the
     // Chat Completions compatibility stream to flush at the end of a reasoning turn.
     modelWireDefaults: {
-      "grok-4.6": { wire: "openai-responses", inbound: ["responses"], authModes: ["oauth"] },
-      "grok-4.5": { wire: "openai-responses", inbound: ["responses"], authModes: ["oauth"] },
+      "grok-4.6": {
+        wire: "openai-responses",
+        inbound: ["responses"],
+        authModes: ["oauth"],
+        forwardCallerServiceTier: false,
+      },
+      "grok-4.5": {
+        wire: "openai-responses",
+        inbound: ["responses"],
+        authModes: ["oauth"],
+        forwardCallerServiceTier: false,
+      },
     },
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
     // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves

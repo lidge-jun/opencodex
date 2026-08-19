@@ -51,7 +51,9 @@ requires a compatible FastWire mapping on the final adapter and an eligible poli
 `fastMode: false` drops it. On classified Chat routes, `chatServiceTier` separately authorizes
 foreign caller values; an exact-model `true` does not grant that forwarding permission. On
 unclassified Chat routes it gates every caller tier because no canonical Fast capability has been
-validated. Exact `false`
+validated. An object-form registry wire default may also set `forwardCallerServiceTier: false` to
+close a known subscription gateway while leaving generic unclassified Responses passthrough
+unchanged. Exact `false`
 narrows provider defaults, and provider-level `supportsServiceTier: false` cannot be reopened.
 Capability is namespaced by the selected provider and model; model-name similarity and adapter type
 alone never opt a gateway in.
@@ -75,7 +77,9 @@ declares the Grok 4.5 and 4.6 subscription models as Responses backends, so only
 Responses traffic for those exact models selects `openai-responses`. API-key requests, translated
 Chat/Anthropic callers, other Grok models, and explicit model adapter overrides retain their
 existing wire. This lets Codex receive native xAI SSE deltas as they arrive without widening the
-credential or compatibility boundary.
+credential or compatibility boundary. These OAuth subscription defaults drop caller-owned
+`service_tier`; they neither advertise nor inject Fast. The API-key transport remains governed by
+its separate capability declaration.
 
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and

@@ -51,6 +51,9 @@ function cloneRegistryWireDefaults(
           ...(declaration.authModes
             ? { authModes: Object.freeze([...declaration.authModes]) }
             : {}),
+          ...(declaration.forwardCallerServiceTier !== undefined
+            ? { forwardCallerServiceTier: declaration.forwardCallerServiceTier }
+            : {}),
         });
   }
   return Object.freeze(clone);
@@ -248,13 +251,11 @@ export function serviceTierSupportFromPolicy(
 ): boolean | undefined {
   if (policy.eligibility === "eligible") return true;
   if (policy.eligibility === "unclassified") {
-    // B1 regression guard: an unclassified chat-wire route whose final adapter will not
-    // forward any tier cannot serialize service_tier, so projecting "unknown" would let
-    // require.serviceTier: "unsupported" routing stop matching groq/ollama-class providers
-    // that main projected as false. Chat + no forwarding stays a definitive false; a
-    // chat route with chatServiceTier: true (forwarding allowed) keeps the historical
-    // unknown, as does every unclassified Responses-wire route.
-    if (policy.adapter === "openai-chat" && !policy.forwardCallerTier) return false;
+    // An unclassified route that cannot forward a caller tier has definitive negative
+    // evidence even when its adapter can normally serialize service_tier. This covers both
+    // Chat routes without chatServiceTier and a registry default that explicitly closes a
+    // subscription gateway. Generic unclassified Responses routes still project unknown.
+    if (!policy.forwardCallerTier) return false;
     return undefined;
   }
   return false;

@@ -116,7 +116,7 @@ function registryDefaultForModel(
   modelId: string,
   inbound: InboundWire,
   authMode: ProviderAuthKind | undefined,
-): string | undefined {
+): { adapter: string; forwardCallerServiceTier?: boolean } | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
   if (!Object.hasOwn(defaults, normalizedModelId)) return undefined;
   const declared = defaults[normalizedModelId];
@@ -128,14 +128,20 @@ function registryDefaultForModel(
     }
   }
   const wire = typeof declared === "string" ? declared : declared.wire;
-  return MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire) ? wire : undefined;
+  if (!MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire)) return undefined;
+  return {
+    adapter: wire,
+    ...(typeof declared !== "string" && declared.forwardCallerServiceTier !== undefined
+      ? { forwardCallerServiceTier: declared.forwardCallerServiceTier }
+      : {}),
+  };
 }
 
 function resolvePolicyAdapter(
   authority: FastPolicyAuthority,
   modelId: string,
   inbound: InboundWire,
-): { adapter: string; hardPinned: boolean } {
+): { adapter: string; hardPinned: boolean; forwardCallerServiceTier?: boolean } {
   // Hard pins and configured overrides deliberately use the same exact-key semantics as
   // resolveWireProtocolOverride(). Registry defaults alone normalize ids at their boundary.
   const hardPin = Object.hasOwn(authority.hardPins, modelId)
@@ -156,7 +162,15 @@ function resolvePolicyAdapter(
         inbound,
         authority.providerAuthMode,
       );
-      if (registryDefault !== undefined) return { adapter: registryDefault, hardPinned: false };
+      if (registryDefault !== undefined) {
+        return {
+          adapter: registryDefault.adapter,
+          hardPinned: false,
+          ...(registryDefault.forwardCallerServiceTier !== undefined
+            ? { forwardCallerServiceTier: registryDefault.forwardCallerServiceTier }
+            : {}),
+        };
+      }
     }
   }
   return { adapter: authority.providerAdapter, hardPinned: false };
@@ -167,7 +181,11 @@ export function resolveFastPolicy(
   modelId: string,
   inbound: InboundWire = "responses",
 ): ResolvedFastPolicy {
-  const { adapter, hardPinned } = resolvePolicyAdapter(authority, modelId, inbound);
+  const { adapter, hardPinned, forwardCallerServiceTier } = resolvePolicyAdapter(
+    authority,
+    modelId,
+    inbound,
+  );
   const exactCapability = exactModelValue(authority.capability.models, modelId);
   const capability = authority.capability.provider === false
     ? false
@@ -185,6 +203,7 @@ export function resolveFastPolicy(
   // tier still needs the final wire's forwarding permission.
   const forwardCallerTier = capability !== false
     && callerWireAvailable
+    && forwardCallerServiceTier !== false
     && (adapter !== "openai-chat" || authority.capability.chatServiceTier === true);
 
   let eligibility: ResolvedFastPolicy["eligibility"];

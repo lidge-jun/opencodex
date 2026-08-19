@@ -49,6 +49,7 @@ function config(): OcxConfig {
     port: 0,
     hostname: "127.0.0.1",
     defaultProvider: "xai",
+    fastMode: true,
     providers: {
       xai: {
         adapter: "openai-chat",
@@ -169,6 +170,7 @@ describe("xAI OAuth Responses streaming", () => {
           input: "hello",
           stream: true,
           store: false,
+          service_tier: "priority",
           reasoning: { effort: "xhigh", summary: "auto" },
         }),
       });
@@ -196,6 +198,7 @@ describe("xAI OAuth Responses streaming", () => {
       expect(outboundBody?.model).toBe("grok-4.6");
       expect(outboundBody?.input).toBe("hello");
       expect(outboundBody?.stream).toBe(true);
+      expect(outboundBody?.service_tier).toBeUndefined();
       expect(outboundBody?.reasoning).toMatchObject({ effort: "xhigh" });
       expect(outboundBody?.messages).toBeUndefined();
       expect(outboundBody?.reasoning_effort).toBeUndefined();

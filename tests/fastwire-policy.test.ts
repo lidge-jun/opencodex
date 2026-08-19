@@ -268,8 +268,11 @@ describe("resolveFastPolicy matrix", () => {
       authMode: "key" as const,
     });
 
-    expect(fastPolicyForModel(oauthProvider, "grok-4.6", "xai").adapter)
-      .toBe("openai-responses");
+    expect(fastPolicyForModel(oauthProvider, "grok-4.6", "xai")).toMatchObject({
+      adapter: "openai-responses",
+      eligibility: "unclassified",
+      forwardCallerTier: false,
+    });
     expect(fastPolicyForModel(keyProvider, "grok-4.6", "xai").adapter)
       .toBe("openai-chat");
   });
