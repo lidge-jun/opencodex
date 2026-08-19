@@ -64,7 +64,17 @@ function context(
   };
 }
 
+// The responses-continuation store now reclaims abandoned atomic-write temps on the liveness
+// tick, so any test that drives a real tick performs filesystem work under OPENCODEX_HOME.
+// Without this isolation the suite would scan (and could unlink inside) a developer's real
+// ~/.opencodex as a side effect of a unit test.
+let sweeperHome: string;
+let previousSweeperHome: string | undefined;
+
 beforeEach(() => {
+  previousSweeperHome = process.env.OPENCODEX_HOME;
+  sweeperHome = mkdtempSync(join(tmpdir(), "ocx-sweeper-home-"));
+  process.env.OPENCODEX_HOME = sweeperHome;
   resetStateStoreSweeperForTests();
   resetAppOwnedMemoryForTests();
   clearResponseStateMemoryForTests();
@@ -77,6 +87,9 @@ afterEach(() => {
   __resetAntigravityReplayCache();
   setOcxStartProcessCacheForTests([]);
   setOcxStartProcessProbeForTests(null);
+  if (previousSweeperHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousSweeperHome;
+  rmSync(sweeperHome, { recursive: true, force: true });
 });
 
 describe("state-store sweeper", () => {
@@ -151,10 +164,17 @@ describe("state-store sweeper", () => {
 
     sweepExpired(123);
     sweepLiveness();
-    expect(visits).toEqual(STATE_STORE_REGISTRATIONS.flatMap(registration => [
-      ...(registration.sweepExpired ? [`${registration.name}:ttl:123`] : []),
-      ...(registration.sweepLiveness ? [`${registration.name}:liveness`] : []),
-    ]));
+    // Two separate passes over the table, not one interleaved pass: sweepExpired visits every
+    // TTL owner, then sweepLiveness visits every liveness owner. The previous per-registration
+    // flatMap only matched because the single liveness owner happened to sit last in the table.
+    expect(visits).toEqual([
+      ...STATE_STORE_REGISTRATIONS.flatMap(registration => (
+        registration.sweepExpired ? [`${registration.name}:ttl:123`] : []
+      )),
+      ...STATE_STORE_REGISTRATIONS.flatMap(registration => (
+        registration.sweepLiveness ? [`${registration.name}:liveness`] : []
+      )),
+    ]);
   });
 
   test("expiry boundary removes expired rows and preserves live rows", () => {

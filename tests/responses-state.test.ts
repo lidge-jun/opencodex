@@ -36,6 +36,7 @@ import {
   previousResponseScopeMismatch,
   recoverStaleResponseStateTemps,
   rememberResponseState,
+  sweepAbandonedResponseStateTemps,
   responseAdmissionCountersForTests,
   responseStateMetrics,
   responseStatePersistPendingForTests,
@@ -1521,6 +1522,10 @@ describe("Responses previous_response_id state", () => {
 
     const result = recoverStaleResponseStateTemps(home, {
       isProcessAlive: pid => pid === 5252,
+      // Pin the boot floor out of this case: it ages fixtures by exactly 60 minutes, so on a
+      // host booted more recently (a normal CI runner) the floor would retire the liveness
+      // probe and reclaim `live` too. The floor has its own tests below.
+      bootTime: () => 0,
     });
 
     expect(result).toMatchObject({ matched: 5, removed: 1, failed: 0 });
@@ -1575,6 +1580,7 @@ describe("Responses previous_response_id state", () => {
     const result = recoverStaleResponseStateTemps(home, {
       isProcessAlive: () => false,
       unlink: () => { throw new Error("locked"); },
+      bootTime: () => 0,
     });
 
     expect(result).toMatchObject({ matched: 1, removed: 0, failed: 1, bytesRemoved: 0 });
@@ -1617,7 +1623,231 @@ describe("Responses previous_response_id state", () => {
       },
     });
 
-    expect(result).toEqual({ matched: 0, removed: 0, failed: 0, bytesRemoved: 0 });
+    expect(result).toEqual({
+      matched: 0, removed: 0, failed: 0, bytesRemoved: 0, eligible: 0, eligibleBytes: 0,
+      // A read failure is not a budget stop: the caller must not be told the backlog was
+      // merely truncated when enumeration actually broke.
+      truncated: false,
+    });
+  });
+
+  test("periodic reclaim frees abandoned temps without any continuation access", () => {
+    // The defect this fixes: the reclaim ran only from ensureLoaded, which every
+    // schedulePersist site sits downstream of, so a process had its only look BEFORE it
+    // wrote anything. Here nothing touches the continuation store at all.
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const stale = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
+    const young = join(home, "responses-state.json.ocx.6262.4.tmp");
+    for (const path of [stale, young]) writeFileSync(path, "private state");
+    utimesSync(stale, old, old);
+
+    const removed = sweepAbandonedResponseStateTemps();
+
+    expect(removed).toBe(1);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(young)).toBe(true);
+  });
+
+  test("boot floor reclaims a pre-boot temp whose pid has been reused", () => {
+    // Without the floor this file is immortal: the liveness probe matches a recycled pid
+    // and the 15-minute grace is a lower bound that never expires the skip.
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const path = join(home, "responses-state.json.ocx.9101.1.tmp");
+    writeFileSync(path, "private state");
+    utimesSync(path, old, old);
+
+    const result = recoverStaleResponseStateTemps(home, {
+      isProcessAlive: () => true,
+      bootTime: () => Date.now() - 30 * 60 * 1_000,
+    });
+
+    expect(result).toMatchObject({ matched: 1, removed: 1, failed: 0 });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("the 15-minute grace outranks the boot floor", () => {
+    // A temp written after boot but younger than the grace must survive even though the
+    // floor would otherwise retire its liveness probe. This ordering is the safety argument.
+    const path = join(home, "responses-state.json.ocx.9102.1.tmp");
+    writeFileSync(path, "private state");
+
+    const result = recoverStaleResponseStateTemps(home, {
+      isProcessAlive: () => true,
+      bootTime: () => Date.now() - 24 * 60 * 60 * 1_000,
+    });
+
+    expect(result).toMatchObject({ matched: 1, removed: 0, failed: 0 });
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("this process's own temps are never reclaimed, even before boot", () => {
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const path = join(home, `responses-state.json.ocx.${process.pid}.1.tmp`);
+    writeFileSync(path, "private state");
+    utimesSync(path, old, old);
+
+    const result = recoverStaleResponseStateTemps(home, {
+      isProcessAlive: () => false,
+      bootTime: () => Date.now(),
+    });
+
+    expect(result).toMatchObject({ matched: 1, removed: 0, failed: 0 });
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("a future or non-finite boot time disables the floor instead of trusting it", () => {
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const path = join(home, "responses-state.json.ocx.9103.1.tmp");
+    writeFileSync(path, "private state");
+    utimesSync(path, old, old);
+
+    for (const bootTime of [() => Date.now() + 60 * 60 * 1_000, () => Number.NaN]) {
+      const result = recoverStaleResponseStateTemps(home, { isProcessAlive: () => true, bootTime });
+      expect(result).toMatchObject({ matched: 1, removed: 0, failed: 0 });
+      expect(existsSync(path)).toBe(true);
+    }
+  });
+
+  test("a temp another process already removed counts as reclaimed, not failed", () => {
+    // Two proxies sharing one config dir race every tick. Reporting the loser's ENOENT as a
+    // failure would tell an operator a file is "in use or locked" when nobody holds it.
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const path = join(home, "responses-state.json.ocx.9104.1.tmp");
+    writeFileSync(path, "private state");
+    utimesSync(path, old, old);
+
+    const result = recoverStaleResponseStateTemps(home, {
+      isProcessAlive: () => false,
+      bootTime: () => 0,
+      unlink: () => {
+        const error = new Error("gone") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      },
+    });
+
+    expect(result).toMatchObject({ matched: 1, removed: 1, failed: 0 });
+  });
+
+  test("a dry run reports exactly what a reclaim then removes", () => {
+    // Report and reclaim must share one predicate. If they drift, doctor tells an operator
+    // to reclaim files it will then refuse to touch (or vice versa).
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const stale = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
+    const live = join(home, "responses-state.json.ocx.5252.2.tmp");
+    const young = join(home, "responses-state.json.ocx.6262.3.tmp");
+    for (const path of [stale, live, young]) writeFileSync(path, "private state");
+    for (const path of [stale, live]) utimesSync(path, old, old);
+
+    const io = { isProcessAlive: (pid: number) => pid === 5252, bootTime: () => 0 };
+    const report = recoverStaleResponseStateTemps(home, { ...io, dryRun: true });
+
+    // matched counts every name-matching entry, including the live and young ones; only
+    // eligible survives every gate. Reporting matched would overstate by 2 here.
+    expect(report).toMatchObject({ matched: 3, eligible: 1, removed: 0, failed: 0 });
+    expect(report.eligibleBytes).toBe("private state".length);
+    for (const path of [stale, live, young]) expect(existsSync(path)).toBe(true);
+
+    const reclaim = recoverStaleResponseStateTemps(home, io);
+    expect(reclaim.removed).toBe(report.eligible);
+    expect(reclaim.bytesRemoved).toBe(report.eligibleBytes);
+    expect(existsSync(stale)).toBe(false);
+    for (const path of [live, young]) expect(existsSync(path)).toBe(true);
+  });
+
+  test("a dry run is not truncated by the cleanup budget", () => {
+    // maxCleanups counts removals. A report removes nothing, so bounding it by that budget
+    // would under-report precisely the large backlog an operator needs to see.
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const names = [7301, 7302, 7303].map(pid => `responses-state.json.ocx.${pid}.1.tmp`);
+    for (const name of names) {
+      const path = join(home, name);
+      writeFileSync(path, "private state");
+      utimesSync(path, old, old);
+    }
+
+    const report = recoverStaleResponseStateTemps(home, {
+      list: () => names,
+      isProcessAlive: () => false,
+      bootTime: () => 0,
+      maxCleanups: 1,
+      dryRun: true,
+    });
+
+    expect(report.eligible).toBe(3);
+    for (const name of names) expect(existsSync(join(home, name))).toBe(true);
+  });
+
+  test("the periodic scan stops at its wall-clock deadline", () => {
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const names = ["responses-state.json.ocx.9201.1.tmp", "responses-state.json.ocx.9202.2.tmp"];
+    for (const name of names) {
+      const path = join(home, name);
+      writeFileSync(path, "private state");
+      utimesSync(path, old, old);
+    }
+    // The fake clock must stay ANCHORED to real time, or this test proves nothing: an
+    // `io.now()` of 10_000 against real epoch mtimes makes every age negative, so the files
+    // survive the 15-minute grace whether or not a deadline check exists. Anchoring instead
+    // means the only reason a file survives is the deadline itself.
+    const base = Date.now();
+    let ticks = 0;
+    const result = recoverStaleResponseStateTemps(home, {
+      list: () => names,
+      isProcessAlive: () => false,
+      bootTime: () => 0,
+      // First read is startedAt; every later read is past the 25 ms budget.
+      now: () => (ticks++ === 0 ? base : base + 10_000),
+      deadlineMs: 25,
+    });
+
+    expect(result.removed).toBe(0);
+    for (const name of names) expect(existsSync(join(home, name))).toBe(true);
+
+    // Ablation guard: the SAME inputs without a deadline must remove both files. If this
+    // half ever fails, the assertions above stopped depending on the deadline.
+    ticks = 0;
+    const unbounded = recoverStaleResponseStateTemps(home, {
+      list: () => names,
+      isProcessAlive: () => false,
+      bootTime: () => 0,
+      now: () => (ticks++ === 0 ? base : base + 10_000),
+    });
+    expect(unbounded.removed).toBe(2);
+  });
+
+  test("a truncated scan closes the directory iterator", () => {
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    const names = ["responses-state.json.ocx.9301.1.tmp", "responses-state.json.ocx.9302.2.tmp"];
+    for (const name of names) {
+      const path = join(home, name);
+      writeFileSync(path, "private state");
+      utimesSync(path, old, old);
+    }
+
+    // Production enumerates with a generator that closes its directory handle in a finally.
+    // A finally only runs if the consumer calls return() -- abandoning the iterator leaks the
+    // handle, once per truncated scan, and the periodic reclaim truncates by design.
+    let closed = false;
+    const list = function* list(): Generator<string> {
+      try {
+        for (const name of names) yield name;
+      } finally {
+        closed = true;
+      }
+    };
+
+    const result = recoverStaleResponseStateTemps(home, {
+      list,
+      isProcessAlive: () => false,
+      bootTime: () => 0,
+      maxEntries: 1,
+    });
+
+    expect(result.removed).toBe(1);
+    expect(closed).toBe(true);
   });
 
   test("v1 Cursor snapshot migrates to versioned provider state", () => {
