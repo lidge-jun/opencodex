@@ -2178,7 +2178,15 @@ describe("service serving confirmation", () => {
 describe("service definitions are not world-readable", () => {
   const modeOf = (path: string): string => (statSync(path).mode & 0o777).toString(8);
 
-  test("a freshly written definition is owner-only", () => {
+  // Windows does not implement POSIX permission bits — Bun reports 0666 for an ordinary
+  // file regardless of what `mode` asked for, and the real boundary there is the NTFS ACL
+  // applied by hardenSecretPath. Asserting the octal on Windows tests the emulation layer
+  // rather than the security property, so these three pin the POSIX half only. The Windows
+  // half is covered by the credential-detection tests below, which decide whether that ACL
+  // is applied strictly.
+  const posixOnly = process.platform === "win32" ? test.skip : test;
+
+  posixOnly("a freshly written definition is owner-only", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-service-mode-"));
     try {
       const path = join(dir, "unit");
@@ -2192,7 +2200,7 @@ describe("service definitions are not world-readable", () => {
     }
   });
 
-  test("an install over a loose definition from an older version tightens it", () => {
+  posixOnly("an install over a loose definition from an older version tightens it", () => {
     // `mode` applies only on creation, so a reinstall would otherwise leave 0644 standing.
     const dir = mkdtempSync(join(tmpdir(), "ocx-service-mode-"));
     try {
@@ -2208,7 +2216,7 @@ describe("service definitions are not world-readable", () => {
     }
   });
 
-  test("utf16le scheduler assets take the same mode", () => {
+  posixOnly("utf16le scheduler assets take the same mode", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-service-mode-"));
     try {
       const path = join(dir, "task.xml");
