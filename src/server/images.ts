@@ -38,6 +38,8 @@ import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
+import { findXaiProvider, resolveXaiImageAuthToken } from "../images/plan";
+import { callXaiImages } from "../images/xai-client";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 
@@ -382,6 +384,125 @@ async function tryCcaImageGeneration(
   }
 }
 
+/**
+ * Codex's client-side image_gen POSTs here. When the Grok Imagine bridge is
+ * opted in, send that request to api.x.ai instead of ChatGPT.
+ */
+async function tryXaiImageRelay(
+  body: unknown,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  signal: AbortSignal | undefined,
+  endpoint: ImagesEndpoint,
+): Promise<Response | undefined> {
+  if (config.images?.bridgeEnabled !== true) return undefined;
+  const found = findXaiProvider(config);
+  if (!found) return undefined;
+  const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
+  const linkedSignal = signalWithTimeout(timeoutMs, signal);
+  try {
+    let token: string | undefined;
+    try {
+      token = await abortableRace(resolveXaiImageAuthToken(found.provider), linkedSignal.signal);
+    } catch {
+      if (signal?.aborted) {
+        return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
+      }
+      if (linkedSignal.signal.aborted) {
+        return formatErrorResponse(504, "upstream_error", `xAI image ${endpoint} timed out during authentication`);
+      }
+      return undefined;
+    }
+    if (!token) return undefined;
+    const obj = body && typeof body === "object" && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : {};
+    const prompt = typeof obj.prompt === "string" ? obj.prompt
+      : typeof obj.input === "string" ? obj.input
+      : "";
+    if (!prompt.trim()) {
+      return formatErrorResponse(400, "invalid_request_error", "image generation requires a prompt");
+    }
+    const n = typeof obj.n === "number" && Number.isFinite(obj.n) ? Math.max(1, Math.min(4, Math.floor(obj.n))) : 1;
+    const size = typeof obj.size === "string" ? obj.size : undefined;
+    const quality = typeof obj.quality === "string" ? obj.quality : undefined;
+    const aspectRatio = typeof obj.aspect_ratio === "string" ? obj.aspect_ratio : undefined;
+    let imageUrl: string | undefined;
+    if (endpoint === "edits") {
+      const images = obj.images;
+      const first = Array.isArray(images) ? images[0] : undefined;
+      if (typeof obj.image === "string") imageUrl = obj.image;
+      else if (typeof obj.image_url === "string") imageUrl = obj.image_url;
+      else if (first && typeof first === "object" && first !== null) {
+        const rec = first as Record<string, unknown>;
+        if (typeof rec.image_url === "string") imageUrl = rec.image_url;
+        else if (typeof rec.url === "string") imageUrl = rec.url;
+      }
+      if (!imageUrl?.trim()) {
+        return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
+      }
+      imageUrl = imageUrl.trim();
+    }
+    logCtx.provider = "xai";
+    logCtx.model = config.images?.bridgeModel ?? "grok-imagine-image-quality";
+    const result = await callXaiImages(
+      {
+        prompt,
+        model: logCtx.model,
+        n,
+        size,
+        quality,
+        aspectRatio,
+        imageUrl,
+      },
+      { baseUrl: "https://api.x.ai/v1", token },
+      linkedSignal.signal,
+      timeoutMs,
+    );
+    const data: Array<{ b64_json: string }> = [];
+    for (const img of result.images) {
+      if (typeof img.b64_json === "string" && img.b64_json) {
+        data.push({ b64_json: img.b64_json });
+        continue;
+      }
+      if (typeof img.url !== "string" || !img.url) continue;
+      const fetched = await fetch(img.url, { signal: linkedSignal.signal, redirect: "follow" });
+      if (!fetched.ok) continue;
+      const observed = await readImageResponseBytes(fetched, {
+        maxBytes: IMAGES_RESPONSE_MAX_BYTES,
+        signal: linkedSignal.signal,
+      });
+      if (observed.oversized || observed.bytes.byteLength === 0) continue;
+      data.push({ b64_json: Buffer.from(observed.bytes).toString("base64") });
+    }
+    if (data.length === 0) {
+      return formatErrorResponse(502, "upstream_error", "xAI image generation returned no usable images");
+    }
+    return new Response(JSON.stringify({ created: Math.floor(Date.now() / 1000), data }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  } catch (err) {
+    if (signal?.aborted) {
+      return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
+    }
+    if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {
+      return formatErrorResponse(504, "upstream_error", `xAI image ${endpoint} timed out`);
+    }
+    const status = typeof err === "object" && err && "status" in err && typeof (err as { status: unknown }).status === "number"
+      ? (err as { status: number }).status
+      : 502;
+    const message = err instanceof Error ? err.message : String(err);
+    return formatErrorResponse(
+      status >= 400 && status < 600 ? status : 502,
+      "upstream_error",
+      `xAI image ${endpoint} failed: ${message}`,
+    );
+  } finally {
+    linkedSignal.cleanup();
+  }
+}
+
 export async function handleImages(
   req: Request,
   config: OcxConfig,
@@ -389,6 +510,18 @@ export async function handleImages(
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await readJsonRequestBody(req);
+  } catch (err) {
+    return decodeRequestErrorResponse(err, "images");
+  }
+  const model = (body as { model?: unknown } | null)?.model;
+  if (typeof model === "string" && model) logCtx.model = model;
+
+  const xaiRelay = await tryXaiImageRelay(body, config, logCtx, req.signal, endpoint);
+  if (xaiRelay) return xaiRelay;
+
   const candidates = selectImagesProvider(config);
   if (candidates.error) {
     return formatErrorResponse(400, "invalid_request_error", candidates.error);
@@ -408,14 +541,6 @@ export async function handleImages(
       }
     }
   }
-  let body: unknown;
-  try {
-    body = await readJsonRequestBody(req);
-  } catch (err) {
-    return decodeRequestErrorResponse(err, "images");
-  }
-  const model = (body as { model?: unknown } | null)?.model;
-  if (typeof model === "string" && model) logCtx.model = model;
 
   const canUseOpenAiForward = !skipOpenAiForwardForAdmissionBearer && candidates.forwardCandidates.length > 0;
 

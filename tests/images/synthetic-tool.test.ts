@@ -83,4 +83,11 @@ describe("buildImageTool", () => {
     expect(tool.name).toBe("image_gen");
     expect(tool.imageGeneration).toBe(true);
   });
+
+  test("exposes aspect_ratio literals including auto", () => {
+    const tool = buildImageTool();
+    const aspect = (tool.parameters as { properties?: { aspect_ratio?: { enum?: string[] } } })
+      .properties?.aspect_ratio;
+    expect(aspect?.enum).toEqual(["1:1", "16:9", "9:16", "4:3", "3:4", "auto"]);
+  });
 });
