@@ -341,9 +341,9 @@ saklanır:
 | Alan | Gerekli | Varsayılan | Kurallar |
 | --- | --- | --- | --- |
 | `targets` | Evet | — | Yapılandırılmış `{ provider, model, weight? }` hedeflerinin boş olmayan sıralı dizisi. Yinelenen sağlayıcı/model çiftleri reddedilir. |
-| `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. Round-robin tarafından kullanılır; yük devretme tarafından yok sayılır. |
-| `strategy` | Hayır | `"failover"` | `"failover"` veya `"round-robin"`. |
-| `stickyLimit` | Hayır | `1` | Round-robin seçimi başına 1 ile 100 arasında başarılı istek tam sayısı. |
+| `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. Round-robin ve random tarafından kullanılır; diğer stratejilerce yok sayılır. |
+| `strategy` | Hayır | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"` veya `"reset-window"`. |
+| `stickyLimit` | Hayır | `1` | Round-robin seçimi başına 1 ile 100 arasında başarılı istek tam sayısı; diğer stratejilerce yok sayılır. |
 | `defaultEffort` | Hayır | `null` | `low`, `medium`, `high`, `xhigh`, `max` veya `ultra`; yalnızca arayan çabayı atladığında ve hedef desteği bildirdiğinde uygulanır. |
 | `alias` | Hayır | yok | İsteğe bağlı kırpılmış genel model kimliği; yukarıdaki takma ad kurallarını kullanın. Boş bir değer takma ad yok olarak saklanır. |
 | `nativeAlias` | Hayır | `false` | Şu anda desteklenen yalın bir yerel `alias`'ın yönlendirme ve katalog önceliği almasına açıkça izin verin. Asla takma addan çıkarılmaz. |
@@ -380,5 +380,4 @@ tam doğrulama mesajını görüntüler.
 Hata hedefe özgü olmaktan ziyade uç (terminal) bir hataydı. Geçersiz girdiyi
 düzeltin, aşırı büyük bir bağlamı azaltın, bir politika reddini işleyin veya
 reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapmaz.
-
 

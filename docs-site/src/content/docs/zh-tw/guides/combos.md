@@ -249,9 +249,9 @@ Combo 儲存於頂層 `combos` 物件中，以 combo id 為 key：
 | 欄位 | 必填 | 預設值 | 規則 |
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 已設定 `{ provider, model, weight? }` 目標的非空有序陣列。重複的供應商/模型對會被拒絕。 |
-| `targets[].weight` | 否 | `1` | 1 到 10,000 的整數。由 round-robin 使用；failover 忽略。 |
-| `strategy` | 否 | `"failover"` | `"failover"` 或 `"round-robin"`。 |
-| `stickyLimit` | 否 | `1` | 每次 round-robin 選擇的成功請求數，1 到 100 的整數。 |
+| `targets[].weight` | 否 | `1` | 1 到 10,000 的整數。由 round-robin 與 random 使用；其他策略忽略。 |
+| `strategy` | 否 | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"` 或 `"reset-window"`。 |
+| `stickyLimit` | 否 | `1` | 每次 round-robin 選擇的成功請求數，1 到 100 的整數；其他策略忽略。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；僅在呼叫者省略 effort 且目標宣告支援時套用。 |
 | `alias` | 否 | 無 | 可選的修剪後公開模型 id；使用上述別名規則。空值儲存為無別名。 |
 

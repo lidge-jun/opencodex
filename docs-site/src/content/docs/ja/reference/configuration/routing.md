@@ -57,8 +57,8 @@ picker catalog の convergence だけが保留中で routing change は失われ
 |キー |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` |必須 |具体的なルートを指示しました。 `weight` は 1 ～ 10000 で、デフォルトは `1` です。 |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` |選択戦略。ターゲットの順序はフェイルオーバーの優先順位です。重みはスムーズな重み付きラウンドロビンを形成します。 |
-| `stickyLimit?` | `number` | `1` |成功したリクエストは 1 つのラウンドロビン バッチに保持されます。範囲は 1 ～ 100。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` |選択戦略。ターゲット順は同点を解決し、重みは round-robin と random に使用されます。 |
+| `stickyLimit?` | `number` | `1` |1 つの round-robin バッチに保持する成功リクエスト数。範囲は 1 ～ 100。他の戦略では無視されます。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` |設定を解除する |呼び出し元が努力を省略し、選択されたターゲットが要求されたラングをアドバタイズする場合にのみ適用されます。 |
 | `alias?` | `string` | — |正規のピッカー スラグの代わりのオプションのパブリック モデル ID。 |
 | `nativeAlias?` | `boolean` | `false` | 現在サポートされている bare native id に限り、その未修飾 id で優先します。アカウント修飾およびプロバイダー修飾の OpenAI ルートは別のままです。 |

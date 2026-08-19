@@ -241,9 +241,9 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | 字段 | 必填 | 默认值 | 规则 |
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 非空、有顺序的数组，元素为已配置的 `{ provider, model, weight? }` 目标。重复的 provider/model 对会被拒绝。 |
-| `targets[].weight` | 否 | `1` | 1 到 10,000 的整数。轮询会使用它；故障切换会忽略它。 |
-| `strategy` | 否 | `"failover"` | `"failover"` 或 `"round-robin"`。 |
-| `stickyLimit` | 否 | `1` | 每次轮询选择可连续处理的成功请求数，范围为 1 到 100。 |
+| `targets[].weight` | 否 | `1` | 1 到 10,000 的整数。round-robin 和 random 会使用它；其他策略会忽略它。 |
+| `strategy` | 否 | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"` 或 `"reset-window"`。 |
+| `stickyLimit` | 否 | `1` | 每次 round-robin 选择可连续处理的成功请求数，范围为 1 到 100；其他策略会忽略它。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
 | `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |

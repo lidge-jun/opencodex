@@ -51,7 +51,7 @@ Codex. При переходах mode и feature flag текущий число�
 
 ### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
 
-Управляйте virtual-моделями combo с failover и round-robin. `ocx route combo` — это иерархический
+Управляйте virtual-моделями combo с несколькими стратегиями выбора. `ocx route combo` — это иерархический
 alias; на данный момент combo — единственный поддерживаемый routing-resource. Цели используют
 форму `provider/model[:weight],provider/model[:weight]`.
 

@@ -309,9 +309,9 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | Champ | Obligatoire | Par défaut | Règles |
 | --- | --- | --- | --- |
 | `targets` | Oui | — | Tableau ordonné non vide de `{ provider, model, weight? }` cibles configurées. Les paires provider/model en double sont rejetées. |
-| `targets[].weight` | Non | `1` | Entier de 1 à 10 000. Utilisé en round-robin ; ignoré par le basculement. |
-| `strategy` | Non | `"failover"` | `"failover"` ou `"round-robin"`. |
-| `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. |
+| `targets[].weight` | Non | `1` | Entier de 1 à 10 000. Utilisé en round-robin et random ; ignoré par les autres stratégies. |
+| `strategy` | Non | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"` ou `"reset-window"`. |
+| `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection round-robin ; ignoré par les autres stratégies. |
 | `defaultEffort` | Non | `null` | `low`, `medium`, `high`, `xhigh`, `max` ou `ultra` ; appliqué uniquement lorsque l'appelant omet ses efforts et que la cible annonce son soutien. |
 | `imageInput` | Non | `"auto"` | `"auto"` ou `"disabled"`. `"auto"` publie les images uniquement si toutes les cibles les prennent en charge ; `"disabled"` impose le texte seul, retire les images des modalités publiées et rejette les requêtes qui en contiennent avant leur distribution. |
 | `alias` | Non | aucun | Identifiant de modèle public tronqué facultatif ; utilisez les règles d'alias ci-dessus. Une valeur vide est stockée sans alias. |

@@ -1,5 +1,7 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
+import { getCachedProviderQuota } from "../providers/quota-routing-cache";
 import { coolComboTarget, isComboTargetInCooldown } from "./failover";
+import { quotaResetRemainingMs } from "./reset-window";
 import { getCombo, resolveComboId, targetKey } from "./types";
 import type { NormalizedComboConfig } from "./types";
 import {
@@ -19,6 +21,7 @@ interface SelectionState {
   activeKey?: string;
   successes: number;
   currentWeights: Map<string, number>;
+  successfulUses: Map<string, number>;
 }
 
 const selectionState = new Map<string, SelectionState>();
@@ -82,6 +85,36 @@ function smoothWeightedIndex(
   return best;
 }
 
+/**
+ * Select the eligible target whose earliest known quota reset is nearest.
+ *
+ * Only reads the last successfully cached provider-quota snapshot; it never
+ * triggers an upstream quota probe. When no target has fresh reset data,
+ * every remaining value is Infinity and configured order becomes the
+ * fallback. Targets with elapsed or stale reset timestamps are treated as
+ * unknown (Infinity).
+ */
+function resetWindowIndex(
+  targets: Required<OcxComboTarget>[],
+  eligible: (target: Required<OcxComboTarget>) => boolean,
+  now = Date.now(),
+): number {
+  let selected = -1;
+  let smallestRemaining = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < targets.length; index++) {
+    const target = targets[index]!;
+    if (!eligible(target)) continue;
+    const remaining = quotaResetRemainingMs(getCachedProviderQuota(target.provider, now), now);
+    // Strict comparison deliberately retains configured order for ties,
+    // including the no-snapshot fallback where every value is Infinity.
+    if (selected < 0 || remaining < smallestRemaining) {
+      selected = index;
+      smallestRemaining = remaining;
+    }
+  }
+  return selected;
+}
+
 export function pickComboTarget(
   config: OcxConfig,
   comboId: string,
@@ -103,7 +136,7 @@ export function pickComboTarget(
   if (combo.strategy === "round-robin") {
     let state = selectionState.get(comboId);
     if (!state) {
-      state = { successes: 0, currentWeights: new Map() };
+      state = { successes: 0, currentWeights: new Map(), successfulUses: new Map() };
       selectionState.set(comboId, state);
     }
     if (state.activeKey) {
@@ -120,6 +153,41 @@ export function pickComboTarget(
         state.successes = 0;
       }
     }
+  } else if (combo.strategy === "random") {
+    // Weighted random selection happens independently for every request.
+    const eligibleTargets = combo.targets
+      .map((target, index) => ({ target, index }))
+      .filter(({ target }) => eligible(target));
+    if (eligibleTargets.length > 0) {
+      const totalWeight = eligibleTargets.reduce((sum, entry) => sum + entry.target.weight, 0);
+      let random = Math.random() * totalWeight;
+      for (const entry of eligibleTargets) {
+        random -= entry.target.weight;
+        if (random <= 0) {
+          targetIndex = entry.index;
+          break;
+        }
+      }
+      if (targetIndex < 0) targetIndex = eligibleTargets[eligibleTargets.length - 1]!.index;
+    }
+  } else if (combo.strategy === "least-used") {
+    let state = selectionState.get(comboId);
+    if (!state) {
+      state = { successes: 0, currentWeights: new Map(), successfulUses: new Map() };
+      selectionState.set(comboId, state);
+    }
+    let fewestUses = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < combo.targets.length; index++) {
+      const target = combo.targets[index]!;
+      if (!eligible(target)) continue;
+      const uses = state.successfulUses.get(targetKey(target)) ?? 0;
+      if (targetIndex < 0 || uses < fewestUses) {
+        targetIndex = index;
+        fewestUses = uses;
+      }
+    }
+  } else if (combo.strategy === "reset-window") {
+    targetIndex = resetWindowIndex(combo.targets, eligible);
   } else {
     targetIndex = combo.targets.findIndex(eligible);
   }
@@ -141,9 +209,18 @@ export function noteComboSuccess(
   target: Required<OcxComboTarget>,
   writerGeneration = captureConfigGeneration(),
 ): void {
-  if (combo.strategy !== "round-robin") return;
   const key = targetKey(target);
   if (!mayCommitComboState(comboId, key, writerGeneration)) return;
+  if (combo.strategy === "least-used") {
+    let state = selectionState.get(comboId);
+    if (!state) {
+      state = { successes: 0, currentWeights: new Map(), successfulUses: new Map() };
+      selectionState.set(comboId, state);
+    }
+    state.successfulUses.set(key, (state.successfulUses.get(key) ?? 0) + 1);
+    return;
+  }
+  if (combo.strategy !== "round-robin") return;
   const state = selectionState.get(comboId);
   if (!state || state.activeKey !== key) return;
   state.successes += 1;
@@ -204,6 +281,11 @@ export function reconcileComboRotationState(context: GenerationContext): number 
     for (const key of state.currentWeights.keys()) {
       if (context.comboTargets.has(comboTargetOwnerKey(comboId, key))) continue;
       state.currentWeights.delete(key);
+      removed += 1;
+    }
+    for (const key of state.successfulUses.keys()) {
+      if (context.comboTargets.has(comboTargetOwnerKey(comboId, key))) continue;
+      state.successfulUses.delete(key);
       removed += 1;
     }
   }

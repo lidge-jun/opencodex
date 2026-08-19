@@ -7,7 +7,7 @@ import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-mo
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
 
-export type ComboStrategy = "failover" | "round-robin";
+export type ComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export const COMBO_EFFORTS: ComboEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -85,6 +85,9 @@ export interface ComboItem {
 export interface ComboSections {
   failover: ComboItem[];
   roundRobin: ComboItem[];
+  weighted: ComboItem[];
+  leastUsed: ComboItem[];
+  resetWindow: ComboItem[];
 }
 
 export interface ComboAttentionItem {
@@ -130,7 +133,15 @@ function normalizeAlias(raw: unknown): string | null {
 }
 
 export function normalizeStrategy(raw: unknown): ComboStrategy {
-  return raw === "round-robin" ? "round-robin" : "failover";
+  return raw === "round-robin"
+    ? "round-robin"
+    : raw === "random"
+      ? "random"
+      : raw === "least-used"
+        ? "least-used"
+        : raw === "reset-window"
+          ? "reset-window"
+          : "failover";
 }
 
 export function normalizeStickyLimit(raw: unknown): number {
@@ -193,11 +204,17 @@ export function parseComboList(payload: unknown): ComboItem[] {
 export function groupCombos(items: ComboItem[]): ComboSections {
   const failover: ComboItem[] = [];
   const roundRobin: ComboItem[] = [];
+  const weighted: ComboItem[] = [];
+  const leastUsed: ComboItem[] = [];
+  const resetWindow: ComboItem[] = [];
   for (const item of items) {
     if (item.strategy === "round-robin") roundRobin.push(item);
+    else if (item.strategy === "random") weighted.push(item);
+    else if (item.strategy === "least-used") leastUsed.push(item);
+    else if (item.strategy === "reset-window") resetWindow.push(item);
     else failover.push(item);
   }
-  return { failover, roundRobin };
+  return { failover, roundRobin, weighted, leastUsed, resetWindow };
 }
 
 export function filterCombos(items: ComboItem[], query: string): ComboItem[] {
@@ -270,7 +287,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     id: item.id.trim(),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
     combo: {
-      targets: item.targets.map((target) => item.strategy === "round-robin"
+      targets: item.targets.map((target) => (item.strategy === "round-robin" || item.strategy === "random")
         ? { provider: target.provider.trim(), model: target.model.trim(), weight: target.weight ?? 1 }
         : { provider: target.provider.trim(), model: target.model.trim() }),
       strategy: item.strategy,
@@ -360,6 +377,8 @@ export function validateComboDraft(
     if (!Number.isInteger(item.stickyLimit) || item.stickyLimit < 1 || item.stickyLimit > 100) {
       return "invalidStickyLimit";
     }
+  }
+  if (item.strategy === "round-robin" || item.strategy === "random") {
     for (const target of item.targets) {
       const weight = target.weight ?? 1;
       if (!Number.isInteger(weight) || weight < 1 || weight > 10000) return "invalidWeight";
