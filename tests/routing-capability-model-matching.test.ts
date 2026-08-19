@@ -49,14 +49,16 @@ describe("candidateCapabilityEvidence model matching", () => {
   });
 
   test("the window does not fall through to the provider-wide value", () => {
-    // The specific regression: 8_000 here is not "unknown", it is a definite answer
-    // belonging to a different model, and routing would act on it.
+    // The specific regression: the provider-wide 8_000 is not "unknown", it is a
+    // definite answer belonging to a different model, and routing would act on it.
+    // Asserted as the exact expected number rather than `not.toBe(8_000)`, which
+    // would also pass for `undefined` or any other wrong value.
     const evidence = candidateCapabilityEvidence(
       configFor(providerWithFamilyEntries()),
       "custom",
       "gpt-oss:120b",
     );
-    expect(evidence.contextWindow).not.toBe(8_000);
+    expect(evidence.contextWindow).toBe(131_072);
   });
 
   test("an exact entry still wins over the family entry", () => {
@@ -98,6 +100,39 @@ describe("candidateCapabilityEvidence model matching", () => {
     expect(evidence.contextWindow).toBe(registryEntry.modelContextWindows![family]);
     expect(evidence.image).toBe(registryEntry.modelInputModalities![family].includes("image"));
     expect(evidence.reasoningEfforts).toEqual(registryEntry.modelReasoningEfforts![family]);
+  });
+
+  test("noVisionModels beats an exact modality entry, as isModelTextOnly does", () => {
+    // `isModelTextOnly` matches the no-vision list and returns true before it ever
+    // reads `modelInputModalities`, so the `gpt-oss` no-vision entry wins over an
+    // exact `gpt-oss:120b` entry listing "image". Evidence that disagrees here is
+    // worse than a wrong window: routing selects the candidate for image work and
+    // execution then refuses it.
+    const provider = {
+      ...providerWithFamilyEntries(),
+      noVisionModels: ["gpt-oss"],
+      modelInputModalities: { "gpt-oss:120b": ["text", "image"] },
+    } as unknown as OcxProviderConfig;
+
+    // Ground truth first: the resolver this evidence claims to describe says text-only.
+    expect(isModelTextOnly(provider, "gpt-oss:120b")).toBe(true);
+
+    const evidence = candidateCapabilityEvidence(configFor(provider), "custom", "gpt-oss:120b");
+    expect(evidence.image).toBe(false);
+  });
+
+  test("a model outside noVisionModels keeps its declared image modality", () => {
+    // The negative half: the no-vision check must not spread to models the list does
+    // not cover, or the fix would trade a false positive for a false negative.
+    const provider = {
+      ...providerWithFamilyEntries(),
+      models: ["gpt-oss:120b", "llava:13b"],
+      noVisionModels: ["gpt-oss"],
+      modelInputModalities: { "llava:13b": ["text", "image"] },
+    } as unknown as OcxProviderConfig;
+
+    expect(isModelTextOnly(provider, "llava:13b")).toBe(false);
+    expect(candidateCapabilityEvidence(configFor(provider), "custom", "llava:13b").image).toBe(true);
   });
 
   test("a prototype-shaped model id resolves nothing", () => {

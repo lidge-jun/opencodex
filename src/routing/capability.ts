@@ -10,7 +10,7 @@
  * how that affects eligibility.
  */
 
-import type { OcxConfig } from "../types";
+import { modelInList, type OcxConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { serviceTierSupportForModel } from "../providers/service-tier";
 import { PROVIDER_REGISTRY } from "../providers/registry";
@@ -176,10 +176,21 @@ export function candidateCapabilityEvidence(
     ? (nativeOpenAiContextWindow(modelId, nativeContextLimits(config)) ?? rawContextWindow)
     : rawContextWindow;
 
-  const modalities = modelRecordValue(provider?.modelInputModalities, modelId)
-    ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)
-    ?? catalogRow?.inputModalities
-    ?? (isNative ? nativeInputModalities(modelId) : undefined);
+  // `noVisionModels` is checked before the modality chain because that is the order
+  // `isModelTextOnly` uses: it matches the no-vision list and returns true before it
+  // ever reads `modelInputModalities` (`src/vision/index.ts:32`). So a `gpt-oss`
+  // no-vision entry beats an exact `gpt-oss:120b` entry that lists "image", and
+  // deriving `image` from the modality chain alone reported vision on a model the
+  // runtime refuses it for. That matters more here than on the CLI surface fixed in
+  // #2086: routing *acts* on this evidence, so it would select the candidate for image
+  // work that execution then rejects.
+  const noVision = modelInList(provider?.noVisionModels, modelId);
+  const modalities = noVision
+    ? ["text"]
+    : (modelRecordValue(provider?.modelInputModalities, modelId)
+      ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)
+      ?? catalogRow?.inputModalities
+      ?? (isNative ? nativeInputModalities(modelId) : undefined));
   const image = Array.isArray(modalities)
     ? modalities.includes("image")
     : undefined;
