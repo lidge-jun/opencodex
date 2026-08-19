@@ -142,7 +142,10 @@ requiring the `ocx claude` wrapper. Already-open shells are unaffected and must 
 
 `ocx stop` and proxy shutdown **unset the injected keys** (it does not restore previous values —
 only the keys opencodex injected are removed). The proxy also writes `~/.opencodex/claude-env.sh`;
-`ocx start` installs a `.zshrc` source hook that loads it automatically.
+`ocx start` installs a `.zshrc` source hook that loads it automatically only when an executable
+Claude Code CLI is present on `PATH`. Startup and `ocx ensure` remove the OpenCodex-owned hook when
+Claude Code is absent or system environment integration is inactive. Claude Desktop uses its
+separate profile and does not cause shell-hook installation.
 
 Disable with `claudeCode.systemEnv: false` in the configuration or with the GUI toggle. This
 feature is macOS-only; on other platforms, use `ocx claude`.
