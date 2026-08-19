@@ -7,6 +7,7 @@ import {
   type OcxMessage,
 } from "../types";
 
+/** Collect authoritative system/developer text plus only the latest user turn. */
 export function effectiveInstructionText(messages: readonly OcxMessage[] | undefined, system?: readonly string[]): string[] {
   const out = [...(system ?? [])];
   let latestUserText: string[] = [];
@@ -77,6 +78,31 @@ function isOpenAIBrandedDestination(hostname: string): boolean {
   // native OpenAI, but injecting an aggressive non-OpenAI tool policy would be unsafe too.
   const labels = hostname.toLowerCase().split(".");
   return labels.includes("openai") || labels.includes("chatgpt");
+}
+
+function declaredToolsBlock(description: string): string | undefined {
+  const declaration = /(?:declare\s+)?const\s+tools\s*:\s*\{/i.exec(description);
+  if (!declaration) return undefined;
+  const open = declaration.index + declaration[0].lastIndexOf("{");
+  let depth = 0;
+  let quote: "'" | '"' | "`" | undefined;
+  let escaped = false;
+  for (let index = open; index < description.length; index += 1) {
+    const character = description[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return description.slice(open + 1, index);
+  }
+  return undefined;
 }
 
 export function shouldInjectNonOpenAIToolCatalogNudge(provider: Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>): boolean {
@@ -187,11 +213,12 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
   );
   if (!base || !codeModeExecTool) return base;
   const description = codeModeExecTool.description ?? "";
-  const hasApplyPatch = /(?:declare\s+)?const\s+tools\s*:\s*\{[^}]*\bapply_patch\s*\(\s*input\s*:\s*string\s*\)/is.test(description);
+  const helperDeclarations = declaredToolsBlock(description);
+  const hasApplyPatch = !!helperDeclarations && /\bapply_patch\s*\(\s*input\s*:\s*string\s*\)/i.test(helperDeclarations);
   if (!hasApplyPatch) return base;
   const instructions = (effectiveInstructions ?? []).join("\n");
   if (/<collaboration_mode>\s*#?\s*Collaboration Mode:\s*Plan\b|You are in \*\*Plan Mode\*\*|\b(?:do not|must not|never)\s+(?:make|perform)\s+(?:any\s+)?mutations?\b|\b(?:do not|must not|never)\s+(?:edit|modify|write|use\s+apply_patch)\b|\buse\s+(?:the\s+)?shell\s+for\s+(?:file\s+)?edits\b/i.test(instructions)) return base;
-  const mentionsExecCommand = /(?:declare\s+)?const\s+tools\s*:\s*\{[^}]*\bexec_command\s*\(/is.test(description);
+  const mentionsExecCommand = !!helperDeclarations && /\bexec_command\s*\(/i.test(helperDeclarations);
   const nested = mentionsExecCommand
     ? " Use nested `tools.exec_command` for reads, searches, tests, builds, formatters, and genuinely mechanical transformations; do not print a pretend tool call."
     : "";

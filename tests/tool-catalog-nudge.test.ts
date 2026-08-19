@@ -229,6 +229,9 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("tools.apply_patch");
     expect(note).toContain("@@");
     expect(note).toContain("tools.exec_command");
+    const nestedInput = buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { exec_command(input: { cmd: string }): Promise<unknown>; apply_patch(input: string): Promise<unknown> }")]);
+    expect(nestedInput).toContain("targeted code edits");
+    expect(nestedInput).toContain("tools.exec_command");
     expect(buildNonOpenAIToolCatalogNudgeForTools([exec("JavaScript; apply_patch is mentioned in prose")])).not.toContain("targeted code edits");
     expect(buildNonOpenAIToolCatalogNudgeForTools([exec("For example, tools.apply_patch({ patch: '...' }) may exist")])).not.toContain("targeted code edits");
     expect(buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { apply_patch(input: string): Promise<unknown> }")])).not.toContain("exec_command");
