@@ -17,7 +17,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -38,13 +49,20 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 
 Grok Build 的 `/effort`（以及 `--effort`）只對目錄條目宣告了階梯的模型有效：它的模型清單擷取會讀取
 原始的 `GET /v1/models` 回應，而該處的條目必須帶有 `supports_reasoning_effort` 以及
-`reasoning_efforts` 選單選項。對已路由的模型條目，opencodex 會把設定的供應商階梯
-（`reasoningEfforts` / `modelReasoningEfforts`，以及 `modelDefaultReasoningEfforts` 的預設值）
-映象到該回應上。這份中繼資料描述的是 proxy 設定的路由階梯——它不代表原生產品的 reasoning 支援，
-而 adapter 可能模擬 reasoning 或把檔位對映到供應商專用欄位。設定了階梯的路由模型在 Grok Build 中
-會顯示 effort 控制項，就像在 Codex 中一樣。階梯清單為空的模型不會保留 effort 控制項，這也與
-Codex 行為一致。原生 GPT-5.6 條目則分開處理：它們保留並暴露固定於上游的 reasoning 階梯，而不是
-供應商設定的路由中繼資料。
+`reasoning_efforts` 選單選項。這組階梯經 Grok 相容投影後會寫入每個受管理的 `[model.*]` 表格，包括
+`supports_reasoning_effort`、預設 `reasoning_effort`，以及
+`[[model.<alias>.reasoning_efforts]]` 選項列。對已路由的模型條目，opencodex 會映射設定的
+供應商階梯（`reasoningEfforts` / `modelReasoningEfforts`，以及
+`modelDefaultReasoningEfforts` 的預設值）。這份中繼資料描述 proxy 設定的路由階梯；adapter 可以模擬
+reasoning，或把檔位對映到供應商專用欄位。階梯清單為空的模型不會顯示 effort 控制項。原生 GPT-5.6
+條目會保留固定於上游的 reasoning 階梯。模型宣告的有效 Grok 檔位（包括 `none` 與 `minimal`）都會
+保留。不受支援或重複的檔位（包括 Codex 專用的 `ultra`）會從檔案省略，確保寫出的每個選項都能實際使用。
+
+Grok Build 透過 Chat Completions 與 opencodex 通訊，並在條目宣告階梯時送出
+`reasoning_effort`。在這種情況下，Chat Completions 入站轉換器會把內部 Responses 的
+`reasoning.summary` 預設設為 `auto`，因此推理軌跡會以 `delta.reasoning_content` 傳給 Grok。
+需要模型執行推理且不回傳軌跡的用戶端，可以設定 `include_reasoning: false`（或
+`reasoning.summary: "none"`）。兩個選項同時出現時，明確設定的 `reasoning.summary` 優先。
 
 ## 認證注意事項
 
@@ -84,6 +102,7 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 
 ## 已知限制
 
-- **以服務安裝的 `ocx restart`：** 當 opencodex 在服務管理員下執行時，`ocx restart` 目前會停止服務並以非受管程序取代——服務持續性（自動重啟、開機啟動）會遺失，直到下次 `ocx service` 設定；若該非受管程序死亡，受管理區塊可能指向已死的代理程式，直到下一次 `ocx start`/`ocx ensure` 重新整理它。
-- **設定讀取時機：** 先啟動 opencodex，再啟動 `grok`，結果最可預期。Grok Build 會監看 `~/.grok/config.toml`，並在 `[model]` 表格實際變更時重新載入（約一秒 debounce，依內容比對），因此重新整理後的區塊可在不重啟的情況下到達開啟中的工作階段。若要確認 Grok 解析了什麼，執行 `grok inspect`：它會列出已載入的設定來源，並對任何被拒絕的欄位發出警告。它不會印出解析後的模型清單。請注意，單一 TOML 錯誤會使*整個*使用者設定層失效，這也是 opencodex 以原子方式寫入檔案的原因——Grok 永遠看不到半寫入的設定。
+- **以服務安裝的 `ocx restart`：** 執行中的代理負責重啟授權與排空協調；舊行程結束後，由已安裝且可用的服務管理員再拉起替換行程。服務監督會維持安裝狀態。在 loopback 自動註冊下，受管理區塊也會在交接期間保留；非 loopback 部署則改用手動管理的 Grok 設定。只有在同一連接埠上確認另一個經過身分驗證且健康的行程後，此命令才會成功。
+- **以服務安裝的 `ocx restart`：** 執行中的代理負責重啟授權與排空協調；舊行程結束後，由已安裝且可用的服務管理員再拉起替換行程。服務監督會維持安裝狀態。在 loopback 自動註冊下，受管理區塊也會在交接期間保留；非 loopback 部署則改用手動管理的 Grok 設定。只有在同一連接埠上確認另一個經過身分驗證且健康的行程後，此命令才會成功。
+- **設定讀取時機：** 先啟動 opencodex，再啟動 `grok`，結果最可預期。Grok Build 會監看 `~/.grok/config.toml`，並在 `[model]` 表格實際變更時重新載入（約一秒 debounce，依內容比對），因此重新整理後的區塊可在不重啟的情況下到達開啟中的工作階段。若要確認 Grok 解析了什麼，執行 `grok inspect`：它會列出已載入的設定來源，並對任何被拒絕的欄位發出警告。它不會印出解析後的模型清單。目前的 Grok Build 會回報並略過無效的模型欄位，同時保留該模型條目的其餘內容。TOML 語法錯誤仍會阻止檔案載入。opencodex 會以原子方式寫入檔案，因此 Grok 每次重新載入時都會看到完整文件。
 - **目錄更新：** 圍欄區塊反映注入當下的目錄。新增供應商或模型後，請執行 `ocx ensure`（或重啟代理程式）以重新整理它。

@@ -21,7 +21,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -51,15 +62,22 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 Grok Build's `/effort` (and `--effort`) only works for models whose catalog entry
 advertises the ladder: its model list fetch reads the raw `GET /v1/models` response, and
 entries there must carry `supports_reasoning_effort` plus `reasoning_efforts` menu
-options. For routed model entries, opencodex mirrors the configured provider tiers
-(`reasoningEfforts` / `modelReasoningEfforts`, and the default from
-`modelDefaultReasoningEfforts`) onto that response. This metadata describes the
-proxy-configured routed ladder — it does not claim native upstream reasoning support,
-and adapters may emulate reasoning or map levels onto provider-specific fields. Routed
-models with a configured ladder show the effort control in Grok Build just like they do
-in Codex. Models with an empty tier list keep no effort control, matching Codex
-behavior. Native GPT-5.6 entries are separate: they preserve and expose their pinned
-upstream reasoning ladders rather than provider-configured routed metadata.
+options. A Grok-compatible projection of that ladder is written into each managed
+`[model.*]` table
+(`supports_reasoning_effort`, default `reasoning_effort`, and
+`[[model.<alias>.reasoning_efforts]]` picker rows) so the menu is present when Grok
+reads the model from `config.toml`. For routed model entries, opencodex mirrors the
+configured provider tiers (`reasoningEfforts` / `modelReasoningEfforts`, and the default
+from `modelDefaultReasoningEfforts`). This metadata describes the proxy-configured
+routed ladder. Adapters may emulate reasoning or map levels onto provider-specific
+fields. Routed models with a configured ladder show the effort control in Grok Build
+just like they do in Codex.
+Models with an empty tier list keep no effort control, matching Codex behavior. Native
+GPT-5.6 entries are separate: they preserve and expose their pinned upstream reasoning
+ladders rather than provider-configured routed metadata. Valid Grok rungs, including
+`none` and `minimal`, are preserved when advertised. Unsupported or duplicate rungs,
+including Codex-only `ultra`, are omitted from the file, keeping every emitted picker
+option selectable.
 
 Grok Build talks to opencodex over the Responses API. When the route advertises a reasoning
 ladder, the Responses passthrough forwards `reasoning.summary` as configured, so thinking
@@ -139,8 +157,9 @@ the id `grok-4.5`. Generated aliases avoid dots entirely for this reason.
   `[model]` table actually changes (roughly a one-second debounce, compared by content), so
   a refreshed block reaches an open session without a restart. To confirm what Grok parsed,
   run `grok inspect`: it lists the config sources it loaded and warns about any field it
-  rejected. It does not print the resolved model list. Note that a single TOML error
-  invalidates the *entire* user config layer, which is why opencodex writes the file
-  atomically — Grok never sees a half-written config.
+  rejected. It does not print the resolved model list. Current Grok Build reports and skips
+  invalid model fields while retaining the rest of the model entry. A TOML syntax error still
+  prevents the file from loading. opencodex writes atomically, so Grok observes a complete
+  document on every reload.
 - **Catalog updates:** the fenced block reflects the catalog at injection time. After
   adding providers or models, run `ocx ensure` (or restart the proxy) to refresh it.
