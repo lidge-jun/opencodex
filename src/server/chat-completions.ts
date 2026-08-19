@@ -46,6 +46,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { handleNativeChatCompletions, isNativeChatRouteEligible } from "./chat-native";
+import { warnRetainedModel404Once } from "../codex/catalog/provider-fetch";
 
 type Rec = Record<string, unknown>;
 
@@ -316,6 +317,7 @@ async function handleChatCompletionsWithBudget(
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+      if (settledRoute) warnRetainedModel404Once(settledRoute.providerName, settledRoute.modelId);
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
@@ -398,6 +400,7 @@ async function handleChatCompletionsWithBudget(
       // Same deliberate preserve as the non-OK path: structured code beats generic classify.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+      if (settledRoute) warnRetainedModel404Once(settledRoute.providerName, settledRoute.modelId);
     }
     return chatCompletionsErrorResponse(
       classified.code === "translation_buffer_limit"

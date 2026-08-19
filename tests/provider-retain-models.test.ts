@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mergeConfiguredModelsIntoLiveCatalog } from "../src/codex/catalog/provider-fetch";
+import { nonBlankStringArrayConfigError } from "../src/config";
 import type { CatalogModel } from "../src/codex/catalog/parsing";
 import type { OcxProviderConfig } from "../src/types";
 
@@ -109,5 +110,57 @@ describe("#1690 retainModels provider configuration", () => {
 
     expect(models.map(m => m.id)).toEqual(["gemini-3.7-flash", "claude-sonnet-4-6"]);
     expect(droppedConfiguredIds).toEqual(["dropped-model"]);
+  });
+
+  test("reports retainedConfiguredIds only for retainModels-kept models omitted by live discovery", () => {
+    const prov: OcxProviderConfig = {
+      adapter: "google",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      retainModels: ["gemini-3.7-flash", "claude-sonnet-4-6"],
+    };
+    const live = [model("gemini-3.5-flash")];
+    const configured = [
+      model("gemini-3.7-flash"),
+      model("claude-sonnet-4-6"),
+      model("unrelated-model"),
+    ];
+
+    const { models, droppedConfiguredIds, retainedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "google-antigravity",
+      provider: prov,
+      models: live,
+      configured,
+    });
+
+    expect(models.map(m => m.id)).toEqual(["gemini-3.5-flash", "gemini-3.7-flash", "claude-sonnet-4-6"]);
+    expect(retainedConfiguredIds.sort()).toEqual(["claude-sonnet-4-6", "gemini-3.7-flash"]);
+    expect(droppedConfiguredIds).toEqual(["unrelated-model"]);
+  });
+
+  test("does not report live-discovered models as retainedConfiguredIds", () => {
+    const prov: OcxProviderConfig = {
+      adapter: "google",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      retainModels: ["gemini-3.7-flash"],
+    };
+    const live = [model("gemini-3.7-flash")];
+    const configured = [model("gemini-3.7-flash")];
+
+    const { models, retainedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "google-antigravity",
+      provider: prov,
+      models: live,
+      configured,
+    });
+
+    expect(models.map(m => m.id)).toEqual(["gemini-3.7-flash"]);
+    expect(retainedConfiguredIds).toEqual([]);
+  });
+
+  test("rejects whitespace-only retainModels entries via nonBlankStringArrayConfigError", () => {
+    const error = nonBlankStringArrayConfigError(["   "], "retainModels");
+    expect(error).not.toBeNull();
+    expect(error).toContain("nonblank");
+    expect(nonBlankStringArrayConfigError(["gemini-3.7-flash", " gemini-3.5-flash "], "retainModels")).toBeNull();
   });
 });

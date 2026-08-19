@@ -903,6 +903,30 @@ export function warnDroppedConfiguredIdsOnce(name: string, droppedConfiguredIds:
 }
 
 /**
+ * Model ids on each provider that `retainModels` kept in the catalog even though live
+ * discovery did not report them. Used by dispatch error paths to explain a later
+ * upstream 404 (model_not_found) instead of letting the operator blame the proxy.
+ */
+const retainedWithoutDiscoveryRefs = new Map<string, Set<string>>();
+const warnedRetained404Refs = new Set<string>();
+
+/**
+ * Emit a one-shot warning when a model retained via `retainModels` is rejected by the
+ * upstream (HTTP 404 / model_not_found). Only fires for models that were actually
+ * retained without live-discovery confirmation, and only once per provider/model.
+ */
+export function warnRetainedModel404Once(providerName: string, modelId: string): void {
+  const refs = retainedWithoutDiscoveryRefs.get(providerName);
+  if (!refs || !refs.has(modelId)) return;
+  const signature = `${providerName}/${modelId}`;
+  if (warnedRetained404Refs.has(signature)) return;
+  warnedRetained404Refs.add(signature);
+  console.warn(
+    `[opencodex] Model "${modelId}" on provider "${providerName}" is retained via retainModels but upstream returned 404/model_not_found; the account or project may not be provisioned for it. Remove it from retainModels if it should not be callable.`,
+  );
+}
+
+/**
  * Z.AI and Neuralwatt advertise GLM reasoning as a bare boolean, which would otherwise
  * collapse to the four-tier default ladder that omits `max`. These two helpers name the
  * ladder each GLM generation actually honours on the wire.
@@ -1152,7 +1176,7 @@ async function fetchProviderModelsWithAuth(
     models: CatalogModel[],
     options?: { retainComboTargets?: boolean; warnDrops?: boolean },
   ): CatalogModel[] => {
-    const { models: merged, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+    const { models: merged, droppedConfiguredIds, retainedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
       name,
       provider: prov,
       models,
@@ -1162,6 +1186,7 @@ async function fetchProviderModelsWithAuth(
       seedVertexDefault,
       retainComboTargets: options?.retainComboTargets,
     });
+    if (retainedConfiguredIds.length > 0) retainedWithoutDiscoveryRefs.set(name, new Set(retainedConfiguredIds));
     if (
       options?.warnDrops === true
       && droppedConfiguredIds.length > 0
@@ -1238,7 +1263,17 @@ async function fetchProviderModelsWithAuth(
     });
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
-      const result = available.length > 0 ? available : configured;
+      // retainModels is a config-level allowlist: fold retained ids back in so the
+      // merge below keeps them even when the Cursor plan does not report them.
+      const retainedIds = new Set(prov.retainModels ?? []);
+      const result = available.length > 0
+        ? [
+            ...available,
+            ...configured.filter(
+              candidate => retainedIds.has(candidate.id) && !available.some(existing => existing.id === candidate.id),
+            ),
+          ]
+        : configured;
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
@@ -1521,7 +1556,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   contextCap?: number;
   seedVertexDefault?: boolean;
   retainComboTargets?: boolean;
-}): { models: CatalogModel[]; droppedConfiguredIds: string[] } {
+}): { models: CatalogModel[]; droppedConfiguredIds: string[]; retainedConfiguredIds: string[] } {
   const {
     name,
     provider: prov,
@@ -1534,6 +1569,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   const out = [...opts.models];
   const present = new Set(out.map(model => model.id));
   const droppedConfiguredIds: string[] = [];
+  const retainedConfiguredIds: string[] = [];
   const providerRetainModels = Array.isArray(prov.retainModels) ? new Set(prov.retainModels) : undefined;
   for (const candidate of configured) {
     if (present.has(candidate.id)) continue;
@@ -1551,11 +1587,12 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     ) {
       out.push(candidate);
       present.add(candidate.id);
+      if (providerRetainModels?.has(candidate.id) === true) retainedConfiguredIds.push(candidate.id);
       continue;
     }
     droppedConfiguredIds.push(candidate.id);
   }
-  return { models: out, droppedConfiguredIds };
+  return { models: out, droppedConfiguredIds, retainedConfiguredIds };
 }
 
 export function filterCatalogVisibleModels(

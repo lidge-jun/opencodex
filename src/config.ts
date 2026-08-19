@@ -1566,6 +1566,17 @@ const configSchema = z.object({
         message: structuredOutputOptOutError,
       });
     }
+    const retainModelsError = nonBlankStringArrayConfigError(
+      (provider as { retainModels?: unknown }).retainModels,
+      "retainModels",
+    );
+    if (retainModelsError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "retainModels"],
+        message: retainModelsError,
+      });
+    }
     if (Object.hasOwn(provider, "codexAccountMode") && provider.codexAccountMode !== undefined) {
       // Persisted account mode is valid ONLY on the canonical built-in `openai` forward provider.
       // Old openai-multi rows stay parseable (they never carry a mode) so startup can migrate them.

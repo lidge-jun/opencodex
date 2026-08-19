@@ -50,6 +50,7 @@ import {
   isTranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
+import { warnRetainedModel404Once } from "../codex/catalog/provider-fetch";
 
 type Rec = Record<string, unknown>;
 
@@ -679,8 +680,10 @@ async function handleClaudeMessagesWithBudget(
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   let nativeRoute = false;
+  let settledRoute: ReturnType<typeof routeModel> | null = null;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    settledRoute = route;
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
@@ -786,6 +789,8 @@ async function handleClaudeMessagesWithBudget(
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
 
   if (!response.ok) {
+    // Retained-but-unprovisioned models surface here as upstream 404; explain once.
+    if (response.status === 404 && settledRoute) warnRetainedModel404Once(settledRoute.providerName, settledRoute.modelId);
     // Re-shape the OpenAI-style error envelope into the Anthropic one, preserving status.
     let message = `upstream error (${response.status})`;
     try {

@@ -42,6 +42,7 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
+import { warnRetainedModel404Once } from "../codex/catalog/provider-fetch";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 
 type Rec = Record<string, unknown>;
@@ -301,6 +302,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     } else if (upstreamCode === "model_not_found") {
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+      warnRetainedModel404Once(route.providerName, route.modelId);
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
