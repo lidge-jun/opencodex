@@ -233,3 +233,57 @@ PRs, of which exactly one (#2134) is lidge-jun's and 25 are not.
 document (verified by a grep loop over the list, exit 0). No open bug PR is left without a
 disposition.
 
+
+---
+
+# A-gate amendment 2 — retired auditor returned late with VERDICT: FAIL; findings adjudicated
+
+The adversarial lane retired under DISPATCH-RETIRE-01 (three empty wait cycles) delivered after
+retirement. Its verdict is FAIL. It is adjudicated here rather than discarded, because a late
+reviewer is still a reviewer.
+
+**Findings 1 and 2 — CONFIRMED, and already corrected.** It independently measured the same
+`gh pr diff --name-only` evidence and reached the same conclusion as amendment 1: #2131 does not
+touch `core.ts`, no dependency edge exists, and rooting a stack on #2134 (which only touches
+`agent-settings-routes.ts`) is a second DEV-STACK-01 violation. Two independent measurements now
+agree. Recorded as settled.
+
+**Finding 5 — CONFIRMED, and it is the sharpest catch.** Doc 010 said to gate substitution on
+"the native ChatGPT **pool**". That would exclude `codexAccountMode: "direct"` and re-break
+#1686, whose whole point is that Direct bearer admission is only safe *because* substitution
+still runs. The implemented fix uses `route.codexAccountMode !== undefined`, which covers both
+`pool` and `direct` and matches the issue reporter's own suggested gate. 010's prose is
+superseded by this line; the code is correct.
+
+**Finding 3 — CONFIRMED and material.** Overlap was measured only inside the absorb set. Three
+OTHER open PRs edit `src/server/responses/core.ts`:
+
+| PR | Overlap with the #2132 fix |
+|---|---|
+| #2104 (@olddonkey) | `src/server/responses/core.ts` — review-ready, MERGEABLE |
+| #2101 (@Ingwannu) | `core.ts` + `compact.ts` + `auth-context.ts` — all three files this fix touches |
+| #2040 (@Ingwannu) | `core.ts` |
+
+Verified by `gh pr diff --name-only`. The #2132 change is 5 lines across two files and does not
+restructure either function, so a textual conflict is possible but small. This is a merge-order
+hazard to state on the PR, not a reason to withhold the fix. #2104 is reclassified from `n/a`
+to KEEP (review-ready, not a conflicting draft — the auditor is right that grouping it with
+CONFLICTING #2075 and draft #2127 was an error, and its inventory row's "adapters/xai" file
+attribution was wrong).
+
+**Finding 4 — CONFIRMED. #2105 would have been lost.** It is scored 60 ABSORB in §3, has no
+decade doc, and appears in no row of 060. An above-threshold item with no execution path is
+exactly how a contributor's work disappears without a close comment. Disposition corrected to
+**KEEP — remains open**, because no replacement exists. It is not closed.
+
+**Nits accepted:** "strict superset" overstates #2056 vs #2062 (#2062 uniquely adds
+`tests/rate-limit-reset-credits.test.ts`); #2130 has empty `closingIssuesReferences` so
+#1939/#2114/#2108 will not auto-close; the rubric is recorded as a single integer, so the
+component arithmetic is not independently auditable.
+
+## Net effect on the plan
+
+No absorbed item is dropped and no new one is added. Two dispositions change (#2104 n/a -> KEEP,
+#2105 ABSORB -> KEEP), one prose invariant in 010 is superseded by the implemented predicate,
+and one merge hazard is now stated. The sibling shape from amendment 1 stands, reinforced.
+
