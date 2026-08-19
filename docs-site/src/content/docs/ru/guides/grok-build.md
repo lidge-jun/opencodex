@@ -3,7 +3,7 @@ title: Grok Build
 description: Используйте любую модель, маршрутизируемую opencodex, из CLI xAI Grok Build — пока прокси работает, модели автоматически регистрируются в ~/.grok/config.toml.
 ---
 
-opencodex отдаёт OpenAI-совместимый `POST /v1/chat/completions` (и `/v1/responses`) на своём
+opencodex отдаёт OpenAI-совместимый `POST /v1/responses` на своём
 локальном порту, а Grok Build поддерживает custom-модели поверх OpenAI-совместимых серверов.
 Начиная с этой интеграции, opencodex автоматически регистрирует весь свой видимый каталог в
 Grok Build — вручную редактировать конфигурацию не нужно.

@@ -3,7 +3,7 @@ title: グロクビルド
 description: xAI の Grok Build CLI から opencodex でルーティングされたモデルを使用します。モデルはプロキシの実行中に ~/.grok/config.toml に自動登録されます。
 ---
 
-opencodex はローカル ポート上で OpenAI 互換の `POST /v1/chat/completions` (および `/v1/responses`) を提供し、Grok Build は OpenAI 互換サーバーに対するカスタム モデルをサポートします。この統合により、opencodex は表示されているカタログ全体を Grok Build に自動的に登録します。手動による構成編集は必要ありません。
+opencodex はローカル ポート上で OpenAI 互換の `POST /v1/responses` を提供し、Grok Build は OpenAI 互換サーバーに対するカスタム モデルをサポートします。この統合により、opencodex は表示されているカタログ全体を Grok Build に自動的に登録します。手動による構成編集は必要ありません。
 
 ## 自動登録
 

@@ -3,8 +3,8 @@ title: Grok Build
 description: Utilisez n’importe quel modèle routé par opencodex depuis la CLI Grok Build de xAI — les modèles sont automatiquement enregistrés dans ~/.grok/config.toml pendant l’exécution du proxy.
 ---
 
-opencodex expose un point de terminaison compatible OpenAI `POST /v1/chat/completions` (ainsi que `/v1/responses`) sur son
-port local, tandis que Grok Build prend en charge les modèles personnalisés hébergés sur des serveurs compatibles OpenAI. Avec
+opencodex expose un point de terminaison compatible OpenAI `POST /v1/responses` sur son port local,
+tandis que Grok Build prend en charge les modèles personnalisés hébergés sur des serveurs compatibles OpenAI. Avec
 cette intégration, opencodex enregistre automatiquement l’intégralité de son catalogue visible dans Grok Build :
 aucune modification manuelle de la configuration n’est nécessaire.
 
@@ -61,12 +61,11 @@ dans Codex. Ceux dont la liste de niveaux est vide n’affichent aucun contrôle
 de Codex. Les entrées GPT-5.6 natives sont distinctes : elles conservent et exposent leurs échelles de raisonnement
 en amont fixes, et non les métadonnées configurées pour les modèles routés.
 
-Grok Build communique avec opencodex au moyen de Chat Completions et envoie `reasoning_effort` lorsque
-l’échelle est annoncée. Dans ce cas, le traducteur Chat Completions entrant définit par défaut le champ Responses
-`reasoning.summary` sur `auto` ; les traces de raisonnement parviennent donc à Grok sous la forme
-`delta.reasoning_content` au lieu d’être masquées. Réglez `include_reasoning: false` (ou
-`reasoning.summary: "none"`) si un client souhaite que le modèle réfléchisse sans renvoyer le
-tracé. Une valeur explicite de `reasoning.summary` prévaut lorsque les deux options sont présentes.
+Grok Build communique avec opencodex au moyen de l’API Responses. Lorsque la route annonce une échelle
+de raisonnement, la passerelle Responses transmet `reasoning.summary` telle que configurée, de sorte que
+les traces de raisonnement parviennent nativement à Grok sous forme d’éléments de raisonnement Responses.
+Réglez `reasoning.summary: "none"` si un client souhaite que le modèle réfléchisse sans renvoyer le
+tracé. Une valeur explicite de `reasoning.summary` prévaut sur la valeur par défaut de la route.
 
 ## Note d'authentification
 

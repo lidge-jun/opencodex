@@ -3,7 +3,7 @@ title: Grok Build 안내
 description: xAI의 Grok Build CLI에서 opencodex로 라우팅되는 모든 모델을 사용합니다. 프로세스가 실행되는 동안 모델은 `~/.grok/config.toml`에 자동 등록됩니다.
 ---
 
-opencodex는 로컬 포트에서 OpenAI 호환 `POST /v1/chat/completions`(및 `/v1/responses`)를 제공합니다. Grok Build는 OpenAI 호환 서버를 상대로 사용자 정의 모델을 지원합니다. 이 통합은 opencodex가 노출하는 전체 카탈로그를 Grok Build에 자동 등록합니다. 수동으로 설정 파일을 편집할 필요가 없습니다.
+opencodex는 로컬 포트에서 OpenAI 호환 `POST /v1/responses`를 제공합니다. Grok Build는 OpenAI 호환 서버를 상대로 사용자 정의 모델을 지원합니다. 이 통합은 opencodex가 노출하는 전체 카탈로그를 Grok Build에 자동 등록합니다. 수동으로 설정 파일을 편집할 필요가 없습니다.
 
 ## 자동 등록
 

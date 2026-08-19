@@ -3,7 +3,7 @@ title: Grok Build
 description: 在 xAI 的 Grok Build CLI 中使用任何由 opencodex 路由的模型——在代理运行期间，模型会自动注册到 ~/.grok/config.toml。
 ---
 
-opencodex 在本地端口提供一个与 OpenAI 兼容的 `POST /v1/chat/completions`（以及 `/v1/responses`），而 Grok Build 支持针对与 OpenAI 兼容的服务器使用自定义模型。从这次集成开始，opencodex 会将其全部可见目录自动注册到 Grok Build 中，无需手动编辑配置。
+opencodex 在本地端口提供一个与 OpenAI 兼容的 `POST /v1/responses`，而 Grok Build 支持针对与 OpenAI 兼容的服务器使用自定义模型。从这次集成开始，opencodex 会将其全部可见目录自动注册到 Grok Build 中，无需手动编辑配置。
 
 ## 自动注册
 

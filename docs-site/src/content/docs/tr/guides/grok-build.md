@@ -3,8 +3,7 @@ title: Grok Build
 description: xAI Grok Build CLI içerisinden opencodex ile yönlendirilen herhangi bir modeli kullanın — proxy çalışırken modeller ~/.grok/config.toml içine otomatik olarak kaydedilir.
 ---
 
-opencodex, yerel portunda OpenAI uyumlu bir `POST /v1/chat/completions` (ve
-`/v1/responses`) sunar ve Grok Build, OpenAI uyumlu sunuculara karşı özel
+opencodex, yerel portunda OpenAI uyumlu bir `POST /v1/responses` sunar ve Grok Build, OpenAI uyumlu sunuculara karşı özel
 modelleri destekler. Bu entegrasyonla başlayarak opencodex, görünür kataloğunun
 tamamını otomatik olarak Grok Build'e kaydeder — manuel yapılandırma düzenlemesi
 gerekmez.
@@ -159,4 +158,3 @@ adlar bu nedenle noktalardan tamamen kaçınır.
 - **Katalog güncellemeleri:** çitle çevrili blok, enjeksiyon anındaki kataloğu
   yansıtır. Sağlayıcılar veya modeller ekledikten sonra yenilemek için `ocx
   ensure` çalıştırın (veya proxy'yi yeniden başlatın).
-
