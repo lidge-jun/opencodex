@@ -279,4 +279,4 @@ OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입�
 작업이 실제로 암호화된 상태이고 적격 네이티브 ChatGPT 소비자 또는 명시적으로 허용된 Responses
 대상이 없다면 opencodex는 읽을 수 없는 바이트를 프로바이더에 보내는 대신
 `unreadable_encrypted_agent_task`로 실패합니다. worker task와 관련된 클라이언트 동작은
-[서브에이전트 표면](/guides/sub-agent-surface/)을 참조하세요.
+[서브에이전트 표면](/ko/guides/sub-agent-surface/)을 참조하세요.

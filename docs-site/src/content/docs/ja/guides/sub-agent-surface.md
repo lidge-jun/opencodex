@@ -76,7 +76,7 @@ v1 では、opencodex は、`max` または `ultra` の取り組みでアップ�
 
 ## 暗号化された v2 タスク配信
 
-Codex は、v2 ネイティブからルーティングされた子タスクを、バックエンドで暗号化された `encrypted_content` としてのみ送信できます。そのペイロードは、ネイティブ ChatGPT バックエンド、または互換性を確認して明示的に許可された Responses プロバイダーによって不透明なまま処理できます。これは既知の [#92 の制限](https://github.com/lidge-jun/opencodex/issues/92) です。
+Codex は、v2 ネイティブからルーティングされた子タスクを、バックエンドで暗号化された `encrypted_content` としてのみ送信できます。そのペイロードは、ネイティブ ChatGPT バックエンドで処理されるか、互換性を確認して明示的に許可された Responses プロバイダーによって不透明なまま処理または中継されます。これは既知の [#92 の制限](https://github.com/lidge-jun/opencodex/issues/92) です。
 
 opencodex は、空のタスクまたは読み取り不可能なタスクを転送するのではなく、安全に失敗します。
 

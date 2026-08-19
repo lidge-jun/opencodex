@@ -76,7 +76,7 @@ fallback 不会让不兼容的加密任务变得可读。当子任务为 ChatGPT
 
 ## 加密的 v2 任务传递
 
-Codex 只能把 v2 原生到路由的子任务作为后端加密的 `encrypted_content` 发送。这个载荷可以被原生 ChatGPT 后端读取，但外部 provider 不能读取。这就是已知的 [#92](https://github.com/lidge-jun/opencodex/issues/92) 限制。
+Codex 只能把 v2 原生到路由的子任务作为后端加密的 `encrypted_content` 发送。这个载荷可以由原生 ChatGPT 后端读取；明确信任且设置了 `allowEncryptedV2AgentTasks: true` 的 Responses 提供商只能原样、不透明地中继密文，不能读取、解密或翻译它。这就是已知的 [#92](https://github.com/lidge-jun/opencodex/issues/92) 限制。
 
 opencodex 会安全失败，而不是转发空任务或不可读任务：
 

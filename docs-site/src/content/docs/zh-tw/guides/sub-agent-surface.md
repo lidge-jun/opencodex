@@ -93,8 +93,9 @@ Responses provider。
 
 ## 加密的 v2 任務傳輸
 
-Codex 可能只以後端加密的 `encrypted_content` 傳送 v2 原生→路由子任務。該載荷可以被原生 ChatGPT
-後端或明確信任、能不透明中繼密文的 Responses provider 讀取。這是已知的
+Codex 可能只以後端加密的 `encrypted_content` 傳送 v2 原生→路由子任務。原生 ChatGPT
+後端可以讀取該載荷；明確信任、能不透明中繼密文的 Responses provider 則只能逐位元組中繼，不能讀取。
+這是已知的
 [#92 限制](https://github.com/lidge-jun/opencodex/issues/92)。
 
 opencodex 會安全失敗，而不是轉發空或無法讀取的任務：

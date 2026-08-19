@@ -76,7 +76,7 @@ v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트�
 
 ## 암호화된 v2 작업 전달
 
-Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `encrypted_content`로만 보낼 수 있습니다. 이 페이로드는 네이티브 ChatGPT 백엔드가 읽을 수 있지만 외부 프로바이더는 읽을 수 없습니다. 이것이 알려진 [#92 제한](https://github.com/lidge-jun/opencodex/issues/92)입니다.
+Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `encrypted_content`로만 보낼 수 있습니다. 이 페이로드는 네이티브 ChatGPT 백엔드가 읽거나, 호환성을 확인하고 명시적으로 허용된 Responses 프로바이더가 불투명하게 처리하거나 중계할 수 있습니다. 이것이 알려진 [#92 제한](https://github.com/lidge-jun/opencodex/issues/92)입니다.
 
 opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안전하게 실패합니다.
 
