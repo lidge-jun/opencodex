@@ -1628,20 +1628,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               // name or arguments value fails closed through the #1325 channel here rather
               // than escaping later as a TypeError from string handling at flush time.
               const rawFunction = (rawToolCall as { function?: unknown }).function;
-              if (rawFunction !== undefined && rawFunction !== null) {
-                if (!isRecord(rawFunction)) {
-                  logInvalidToolCalls("stream", rawToolCalls);
-                  return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
-                }
-                const rawName = rawFunction.name;
-                const rawArguments = rawFunction.arguments;
-                // Some OpenAI-compatible streamers repeat already-sent fields as null on
-                // continuation deltas. Treat only null/undefined as absent; every other
-                // non-string value still fails closed before entering the accumulator.
-                if (isInvalidStreamStringField(rawName) || isInvalidStreamStringField(rawArguments)) {
-                  logInvalidToolCalls("stream", rawToolCalls);
-                  return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
-                }
+              if (rawFunction !== undefined && rawFunction !== null && !isRecord(rawFunction)) {
+                logInvalidToolCalls("stream", rawToolCalls);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
               }
               if (isInvalidStreamStringField(tc.id)) {
                 logInvalidToolCalls("stream", rawToolCalls);
@@ -1660,14 +1649,34 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
                 budget.openCall(call.key);
               }
               if (tc.id && !call.id) call.id = tc.id;
-              if (tc.function?.name && !call.name) call.name = tc.function.name;
-              if (tc.function?.arguments) {
+              // #1731 generalization: some gateways repeat the function envelope on
+              // continuation deltas with wrong JSON types (an object `name` observed from
+              // opencode.ai/zen) instead of null. Once the pending call carries its
+              // canonical name, a non-string repeat adds nothing — ignore it, and let only
+              // string fragments reach the accumulator. A non-string value while the call is
+              // still unnamed fails closed (#1531): it was the field's only chance to be
+              // established, and nothing else can name or parameterize the call.
+              const fnRecord = isRecord(rawFunction) ? rawFunction : undefined;
+              const hasCanonicalName = typeof call.name === "string" && call.name.trim().length > 0;
+              if (isInvalidStreamStringField(fnRecord?.name) && !hasCanonicalName) {
+                logInvalidToolCalls("stream", rawToolCalls);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
+              }
+              if (isInvalidStreamStringField(fnRecord?.arguments) && !hasCanonicalName) {
+                logInvalidToolCalls("stream", rawToolCalls);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
+              }
+              if (typeof tc.function?.name === "string" && !hasCanonicalName) call.name = tc.function.name;
+              // Only string fragments enter the accumulator: an accepted non-string repeat
+              // (padding, guarded above) must not concatenate "[object Object]" into args.
+              const argsDelta = typeof tc.function?.arguments === "string" ? tc.function.arguments : "";
+              if (argsDelta) {
                 const previousBytes = call.argsBytes;
-                const nextBytes = previousBytes + budgetEncoder.encode(tc.function.arguments).byteLength;
+                const nextBytes = previousBytes + budgetEncoder.encode(argsDelta).byteLength;
                 const scope = { kind: "tool_args" as const, callId: call.key };
                 const reservation = budget.reserveTransient(nextBytes, scope);
                 try {
-                  call.args += tc.function.arguments;
+                  call.args += argsDelta;
                   reservation.commitRetained();
                   budget.releaseRetained(previousBytes, scope);
                   call.argsBytes = nextBytes;

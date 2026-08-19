@@ -476,6 +476,111 @@ describe("openai-chat stream response hardening", () => {
     expect(lines).toContain('"callIndex":1');
     expect(lines).not.toContain('"tool_call_function_name_invalid"');
   });
+
+  test("non-string repeated name/arguments on a resolved call are padding, not terminal", async () => {
+    // opencode.ai/zen continuation deltas: the first chunk carries id+name; later repeats
+    // can arrive with wrong JSON types (object name) instead of the null #1731 describes.
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "chatcmpl-tool-abc",
+        type: "function",
+        function: { name: "terminal", arguments: "" },
+      }] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: null,
+        type: null,
+        function: { name: { unexpected: true }, arguments: { no: "string" } },
+      }] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: null,
+        type: null,
+        function: { name: null, arguments: "{\"command\":\"ls\"}" },
+      }] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 7, completion_tokens: 3 } })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([
+      { type: "tool_call_start", id: "chatcmpl-tool-abc", name: "terminal" },
+      { type: "tool_call_delta", arguments: '{"command":"ls"}' },
+      { type: "tool_call_end" },
+      { type: "done", usage: { inputTokens: 7, outputTokens: 3 } },
+    ]);
+  });
+
+  test("non-string name on a call without its canonical value still fails closed", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "chatcmpl-tool-abc",
+        type: "function",
+        function: { name: { unexpected: true }, arguments: "" },
+      }] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (tool_call_function_name_invalid; callIndex=0; valueType=object)",
+    }]);
+  });
+
+  test("non-string arguments on a call that has accumulated nothing still fails closed", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "chatcmpl-tool-abc",
+        type: "function",
+        function: { name: "terminal", arguments: { command: "ls" } },
+      }] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (tool_call_function_arguments_invalid; callIndex=0; valueType=object)",
+    }]);
+  });
+
+  test("whitespace-only initial name followed by non-string delta fails closed", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "chatcmpl-tool-abc",
+        type: "function",
+        function: { name: "   ", arguments: "" },
+      }] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: null,
+        type: null,
+        function: { name: { unexpected: true }, arguments: { no: "string" } },
+      }] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (tool_call_function_name_invalid; callIndex=0; valueType=object)",
+    }]);
+  });
 });
 
 describe("openai-chat credential hardening", () => {
