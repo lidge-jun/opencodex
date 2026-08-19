@@ -571,12 +571,6 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     return `provider ${name} must not include codexAccountMode`;
   }
   const typed = provider as unknown as OcxProviderConfig;
-  if (raw.allowEncryptedV2AgentTasks !== undefined && typeof raw.allowEncryptedV2AgentTasks !== "boolean") {
-    return `provider ${name} allowEncryptedV2AgentTasks must be a boolean`;
-  }
-  if (raw.allowEncryptedV2AgentTasks === true && typed.adapter !== "openai-responses") {
-    return `provider ${name} allowEncryptedV2AgentTasks requires adapter=openai-responses`;
-  }
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
   if (effectiveGoogleMode(name, typed) === "vertex" && typed.location !== undefined) {
@@ -701,7 +695,6 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     for (const key of [
       "defaultModel",
       "disabled",
-      "allowEncryptedV2AgentTasks",
       "allowPrivateNetwork",
       "authMode",
       "apiKeyTransport",

@@ -75,7 +75,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { providerServiceTierConfigError } from "./provider-capability-config";
+import { providerEncryptedV2ConfigError, providerServiceTierConfigError } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -447,6 +447,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const provider = diskConfig.providers[name]!;
     const providerError = providerManagementConfigError(name, provider);
     if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
+    const encryptedV2Error = providerEncryptedV2ConfigError(name, provider);
+    if (encryptedV2Error) return jsonResponse({ error: "provider reload target invalid" }, 409);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
       diskConfig.codexAccountNamespaces,
       name,
@@ -506,6 +508,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const providerError = providerManagementConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
+    const encryptedV2Error = providerEncryptedV2ConfigError(name, body.provider);
+    if (encryptedV2Error) return jsonResponse({ error: encryptedV2Error }, 400);
     const serviceTierError = providerServiceTierConfigError(name, body.provider);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
@@ -663,6 +667,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (applied.editorTouched && !pacingOnly) {
       const providerError = providerManagementConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
+      const encryptedV2Error = providerEncryptedV2ConfigError(name, next);
+      if (encryptedV2Error) return jsonResponse({ error: encryptedV2Error }, 400);
       const serviceTierError = providerServiceTierConfigError(name, next);
       if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
       const resolvedError = await providerDestinationResolvedError(name, next);
@@ -693,6 +699,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const syncError = providerManagementConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;
+          return;
+        }
+        const encryptedV2Error = providerEncryptedV2ConfigError(name, replay.next);
+        if (encryptedV2Error) {
+          replayError = encryptedV2Error;
           return;
         }
         const serviceTierError = providerServiceTierConfigError(name, replay.next);
