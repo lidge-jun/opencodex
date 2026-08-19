@@ -24,7 +24,7 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
-import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { buildNonOpenAIToolCatalogNudgeForTools, effectiveInstructionText } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 
@@ -615,6 +615,7 @@ function messagesToAnthropicFormat(
     parsed.context.tools,
     parsed.options.toolChoice,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
+    effectiveInstructionText(parsed.context.messages, parsed.context.systemPrompt),
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
   const system = systemParts.length

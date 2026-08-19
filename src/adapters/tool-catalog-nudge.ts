@@ -4,7 +4,22 @@ import {
   type OcxRequestOptions,
   type OcxTool,
   type OcxProviderConfig,
+  type OcxMessage,
 } from "../types";
+
+export function effectiveInstructionText(messages: readonly OcxMessage[] | undefined, system?: readonly string[]): string[] {
+  const out = [...(system ?? [])];
+  let latestUserText: string[] = [];
+  for (const message of messages ?? []) {
+    if (message.role !== "developer" && message.role !== "user") continue;
+    const text = typeof message.content === "string"
+      ? [message.content]
+      : message.content.filter(part => part.type === "text").map(part => part.text);
+    if (message.role === "developer") out.push(...text);
+    else latestUserText = text;
+  }
+  return [...out, ...latestUserText];
+}
 
 // Tool names that exist only in OTHER agent harnesses (Claude Code and friends). Naming one
 // here tells a routed model not to call it unless this turn's catalog really lists it.
@@ -57,18 +72,36 @@ function uniqueNames(names: readonly string[]): string[] {
   return [...new Set(names.filter(name => name.trim().length > 0))];
 }
 
-function isOpenAIOrChatGPTHost(hostname: string): boolean {
-  return hostname === "openai.com"
-    || hostname.endsWith(".openai.com")
-    || hostname === "chatgpt.com"
-    || hostname.endsWith(".chatgpt.com");
+function isOpenAIBrandedDestination(hostname: string): boolean {
+  // A custom endpoint containing an OpenAI/ChatGPT DNS label is ambiguous: it is not canonical
+  // native OpenAI, but injecting an aggressive non-OpenAI tool policy would be unsafe too.
+  const labels = hostname.toLowerCase().split(".");
+  return labels.includes("openai") || labels.includes("chatgpt");
 }
 
-export function shouldInjectNonOpenAIToolCatalogNudge(provider: Pick<OcxProviderConfig, "baseUrl">): boolean {
+export function shouldInjectNonOpenAIToolCatalogNudge(provider: Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>): boolean {
   try {
-    return !isOpenAIOrChatGPTHost(new URL(provider.baseUrl).hostname);
+    const host = new URL(provider.baseUrl).hostname;
+    return !isOpenAIBrandedDestination(host);
   } catch {
     return true;
+  }
+}
+
+/** True only for the two routes on which OpenAI's native tool contract is authoritative. */
+export function isCanonicalNativeOpenAIRoute(
+  provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl">,
+): boolean {
+  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") return false;
+  try {
+    const url = new URL(provider.baseUrl);
+    if (url.port || url.search || url.hash || url.username || url.password) return false;
+    const auth = provider.authMode;
+    const openai = url.protocol === "https:" && url.hostname === "api.openai.com" && url.pathname.replace(/\/$/, "") === "/v1";
+    const chatgpt = url.protocol === "https:" && url.hostname === "chatgpt.com" && url.pathname.replace(/\/$/, "") === "/backend-api/codex";
+    return (openai && (auth === undefined || auth === "key")) || (chatgpt && provider.adapter === "openai-responses" && auth === "forward");
+  } catch {
+    return false;
   }
 }
 
@@ -120,7 +153,7 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
     "Call only listed names with their listed argument keys; do not invent, translate, or rename tools.",
     "Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.",
     verifiedCodeModeExecName
-      ? "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, for example `await tools.exec_command({cmd: \"ls\"})` or `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names."
+      ? "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, such as `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names."
       : "If a listed tool exposes nested helpers such as a tools.* API, call the listed parent tool and use those helpers only inside that tool's input.",
     unavailableNeighborNames.length > 0
       ? "Do not use neighboring-agent tool names " + quoteNames(unavailableNeighborNames) + " unless this turn's catalog lists those exact names."
@@ -131,9 +164,10 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
 }
 
 export function buildNonOpenAIToolCatalogNudgeForTools(
-  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform" | "description">[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
   toWireName: (tool: Pick<OcxTool, "namespace" | "name">) => string = tool => namespacedToolName(tool.namespace, tool.name),
+  effectiveInstructions?: readonly string[],
 ): string | undefined {
   const visible = tools?.filter(toolChoiceToolPredicate(toolChoice));
   const visibleNames = visible?.map(toWireName);
@@ -146,9 +180,20 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
     ? toWireName(codeModeExecTool)
     : undefined;
   // Neighbor names are bare and un-namespaced, so probe the same transform with a bare tool.
-  return buildNonOpenAIToolCatalogNudgeFromNames(
+  const base = buildNonOpenAIToolCatalogNudgeFromNames(
     visibleNames,
     name => toWireName({ name }),
     codeModeExecName,
   );
+  if (!base || !codeModeExecTool) return base;
+  const description = codeModeExecTool.description ?? "";
+  const hasApplyPatch = /(?:declare\s+)?const\s+tools\s*:\s*\{[^}]*\bapply_patch\s*\(\s*input\s*:\s*string\s*\)/is.test(description);
+  if (!hasApplyPatch) return base;
+  const instructions = (effectiveInstructions ?? []).join("\n");
+  if (/<collaboration_mode>\s*#?\s*Collaboration Mode:\s*Plan\b|You are in \*\*Plan Mode\*\*|\b(?:do not|must not|never)\s+(?:make|perform)\s+(?:any\s+)?mutations?\b|\b(?:do not|must not|never)\s+(?:edit|modify|write|use\s+apply_patch)\b|\buse\s+(?:the\s+)?shell\s+for\s+(?:file\s+)?edits\b/i.test(instructions)) return base;
+  const mentionsExecCommand = /(?:declare\s+)?const\s+tools\s*:\s*\{[^}]*\bexec_command\s*\(/is.test(description);
+  const nested = mentionsExecCommand
+    ? " Use nested `tools.exec_command` for reads, searches, tests, builds, formatters, and genuinely mechanical transformations; do not print a pretend tool call."
+    : "";
+  return base + " For targeted code edits, prefer a focused patch using the nested `tools.apply_patch` helper, for example `await tools.apply_patch(\"*** Begin Patch\\n*** Update File: path\\n@@\\n-old\\n+new\\n*** End Patch\")`. Do not use shell, Node, Python, sed, or heredoc commands for targeted edits; call the helper directly, then wait for its real tool result (a real tool event, not printed text)." + nested;
 }

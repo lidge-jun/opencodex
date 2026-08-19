@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   buildNonOpenAIToolCatalogNudgeForTools,
   buildNonOpenAIToolCatalogNudgeFromNames,
+  effectiveInstructionText,
   shouldInjectNonOpenAIToolCatalogNudge,
+  isCanonicalNativeOpenAIRoute,
 } from "../src/adapters/tool-catalog-nudge";
 import type { OcxTool } from "../src/types";
 
@@ -200,5 +202,47 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://api.openai.com/v1" })).toBe(false);
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(false);
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://api.kimi.com/coding/v1" })).toBe(true);
+  });
+
+  test("classifies only canonical native routes", () => {
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-chat", authMode: "key", baseUrl: "https://api.openai.com/v1" })).toBe(true);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1" })).toBe(true);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(true);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-chat", authMode: "oauth", baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(false);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-chat", authMode: "key", baseUrl: "https://api.openai.com.proxy/v1" })).toBe(false);
+    expect(shouldInjectNonOpenAIToolCatalogNudge({ adapter: "openai-chat", authMode: "key", baseUrl: "https://api.openai.com.proxy/v1" })).toBe(false);
+    expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://fooopenai.com/v1" })).toBe(true);
+  });
+
+  test("preserves structured developer instructions for mutation gating", () => {
+    const instructions = effectiveInstructionText([
+      { role: "developer", timestamp: 1, content: [{ type: "text", text: "Do not modify files." }, { type: "image", imageUrl: "data:image/png;base64,AA==" }] },
+      { role: "user", timestamp: 2, content: "stale user text" },
+      { role: "user", timestamp: 3, content: [{ type: "text", text: "current user text" }] },
+    ], ["system"]);
+    expect(instructions).toEqual(["system", "Do not modify files.", "current user text"]);
+  });
+
+  test("injects contextual patch guidance only for declared nested helpers", () => {
+    const exec = (description: string): OcxTool => ({ name: "exec", freeform: true, description, parameters: {} });
+    const note = buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { apply_patch(input: string): Promise<unknown>; exec_command(cmd: string): Promise<unknown> }")]);
+    expect(note).toContain("tools.apply_patch");
+    expect(note).toContain("@@");
+    expect(note).toContain("tools.exec_command");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec("JavaScript; apply_patch is mentioned in prose")])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec("For example, tools.apply_patch({ patch: '...' }) may exist")])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { apply_patch(input: string): Promise<unknown> }")])).not.toContain("exec_command");
+  });
+
+  test("suppresses contextual guidance for disallowed, planned, structured, and MCP tools", () => {
+    const exec = { name: "exec", freeform: true, description: "declare const tools: { apply_patch(input: string): Promise<unknown> }", parameters: {} } as OcxTool;
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], "none") ?? "").not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], { mode: "required", allowedTools: ["other"] }) ?? "").not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["You are in **Plan Mode**"])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["do not make any mutations"])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["<collaboration_mode># Collaboration Mode: Plan"])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["Do not use apply_patch"])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([{ ...exec, freeform: undefined }])).not.toContain("targeted code edits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([{ ...exec, namespace: "mcp__tools" }])).not.toContain("targeted code edits");
   });
 });

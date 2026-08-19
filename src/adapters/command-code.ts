@@ -10,7 +10,7 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { configuredReasoningEfforts } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
-import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { buildNonOpenAIToolCatalogNudgeForTools, effectiveInstructionText } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
 
 // Retain the short ids emitted by the first local integration. New requests use the live catalog's
@@ -454,7 +454,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       if (!provider.apiKey) throw new Error("Command Code credential missing — run ocx login command-code");
       const cwd = currentWorkingDirectory();
       const tools = visibleTools(parsed);
-      const toolNudge = buildNonOpenAIToolCatalogNudgeForTools(tools, parsed.options.toolChoice);
+      const toolNudge = buildNonOpenAIToolCatalogNudgeForTools(tools, parsed.options.toolChoice, undefined, effectiveInstructionText(parsed.context.messages, parsed.context.systemPrompt));
       const choiceInstruction = toolChoiceInstruction(parsed);
       const system = identifyRoutedModel([
         ...(parsed.context.systemPrompt ?? []),

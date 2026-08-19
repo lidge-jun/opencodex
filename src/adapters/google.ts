@@ -32,7 +32,7 @@ import {
   retainTranslatedEventBatch,
   type TranslatorBudget,
 } from "../lib/translator-budget";
-import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { buildNonOpenAIToolCatalogNudgeForTools, effectiveInstructionText } from "./tool-catalog-nudge";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -150,7 +150,7 @@ function messagesToGeminiFormat(
 ): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
-  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
+  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice, undefined, effectiveInstructionText(parsed.context.messages, parsed.context.systemPrompt));
   const systemText = identifyRoutedModel([
     ...(parsed.context.systemPrompt ?? []),
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
