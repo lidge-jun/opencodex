@@ -822,6 +822,57 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.prompt_cache_retention).toBe("24h");
   });
 
+  test.each([
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+  ])("drops deprecated prompt_cache_retention for %s without inventing replacement options", modelId => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: modelId,
+        input: "hi",
+        prompt_cache_retention: "24h",
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as {
+      prompt_cache_retention?: string;
+      prompt_cache_options?: unknown;
+    };
+
+    expect(body.prompt_cache_retention).toBeUndefined();
+    expect(body.prompt_cache_options).toBeUndefined();
+  });
+
+  test("preserves caller prompt_cache_options while dropping GPT-5.6 legacy retention", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const promptCacheOptions = { mode: "explicit", ttl: "30m" };
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: "hi",
+        prompt_cache_retention: "24h",
+        prompt_cache_options: promptCacheOptions,
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as {
+      prompt_cache_retention?: string;
+      prompt_cache_options?: unknown;
+    };
+
+    expect(body.prompt_cache_retention).toBeUndefined();
+    expect(body.prompt_cache_options).toEqual(promptCacheOptions);
+  });
+
   const expandedRawBody = {
     model: "gpt-5.5",
     previous_response_id: "resp_1",

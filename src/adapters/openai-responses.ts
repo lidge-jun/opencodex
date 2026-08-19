@@ -186,6 +186,20 @@ function stripUnsupportedReasoningParams(body: unknown): unknown {
 }
 
 /**
+ * GPT-5.6 replaced the legacy 24-hour retention field with `prompt_cache_options.ttl`.
+ * Do not translate `24h` to the new field: GPT-5.6 currently accepts a different TTL contract,
+ * and implicit caching remains available when the caller did not send the replacement options.
+ */
+function stripDeprecatedPromptCacheRetention(body: unknown, modelId: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  if (typeof modelId !== "string") return body;
+  if (modelId !== "gpt-5.6" && !modelId.startsWith("gpt-5.6-")) return body;
+  if (!Object.hasOwn(body, "prompt_cache_retention")) return body;
+  const { prompt_cache_retention: _retention, ...rest } = body;
+  return rest;
+}
+
+/**
  * A false model capability prevents Codex from emitting summary fields after the catalog refresh.
  * Strip them here as well so an already-running client with a stale catalog cannot keep sending an
  * upstream-rejected `reasoning_summary_delivery` value (issue #323).
@@ -1522,6 +1536,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
+      outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
