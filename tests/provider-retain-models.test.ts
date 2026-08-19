@@ -28,11 +28,30 @@ describe("#1690 retainModels provider configuration", () => {
     expect(droppedConfiguredIds).toEqual(["unrelated-model"]);
   });
 
-  test("drops unlisted models when retainModels is empty or undefined", () => {
+  test("drops unlisted models when retainModels is empty", () => {
     const prov: OcxProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://api.example.com/v1",
       retainModels: [],
+    };
+    const live = [model("live-model-1")];
+    const configured = [model("configured-model-1")];
+
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "custom-prov",
+      provider: prov,
+      models: live,
+      configured,
+    });
+
+    expect(models.map(m => m.id)).toEqual(["live-model-1"]);
+    expect(droppedConfiguredIds).toEqual(["configured-model-1"]);
+  });
+
+  test("drops unlisted models when retainModels is undefined", () => {
+    const prov: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.com/v1",
     };
     const live = [model("live-model-1")];
     const configured = [model("configured-model-1")];
