@@ -133,11 +133,28 @@ describe("antigravity CCA envelope", () => {
       agentModelSorts: [{ groups: [{ modelIds }] }],
     });
 
-    expect(parseAntigravityAvailableModels(payload([
+    const rows = parseAntigravityAvailableModels(payload([
       "gemini-3.7-flash-low",
       "gemini-3.7-flash-medium",
       "gemini-3.7-flash-high",
-    ]))?.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
+    ]))!;
+    expect(rows.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
+    expect(rows[0]?.wireModelId).toBe("gemini-3.7-flash-low");
+    expect(rows[0]?.effortWireModelIds).toEqual({
+      low: "gemini-3.7-flash-low",
+      medium: "gemini-3.7-flash-medium",
+      high: "gemini-3.7-flash-high",
+    });
+    const baseUrl = "https://cca-tiered-set.example";
+    registerAntigravityDiscoveredWireModels(baseUrl, rows);
+    for (const [effort, wireModelId] of [
+      ["low", "gemini-3.7-flash-low"],
+      ["medium", "gemini-3.7-flash-medium"],
+      ["high", "gemini-3.7-flash-high"],
+    ] as const) {
+      expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", effort, baseUrl))
+        .toEqual({ wireModelId });
+    }
     expect(parseAntigravityAvailableModels(payload([
       "future-flash-low",
       "future-flash-medium",
@@ -232,14 +249,24 @@ describe("antigravity CCA envelope", () => {
     ]);
     // The display label still resolves an id Google renamed on the wire.
     expect(rows.find(model => model.id === "gemini-nebula")?.wireModelId).toBe("internal-codename-x7");
+    expect(rows.find(model => model.id === "gemini-3.1-pro")?.effortWireModelIds).toEqual({
+      low: "gemini-3.1-pro-low",
+      high: "gemini-pro-agent",
+    });
 
     const baseUrl = "https://cca.example";
     registerAntigravityDiscoveredWireModels(baseUrl, rows);
-    // A discovered representative wire id must NOT override a real effort ladder.
+    // A complete discovery preserves each discovered suffix for the requested effort.
     expect(resolveAntigravityEffortWireModel("gemini-3.1-pro", "low", baseUrl))
-      .toEqual({ wireModelId: "gemini-3.1-pro-low", thinkingLevel: "low" });
+      .toEqual({ wireModelId: "gemini-3.1-pro-low" });
+    expect(resolveAntigravityEffortWireModel("gemini-3.1-pro", "high", baseUrl))
+      .toEqual({ wireModelId: "gemini-pro-agent" });
     expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "low", baseUrl))
-      .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "low" });
+      .toEqual({ wireModelId: "gemini-3.7-flash-low" });
+    expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "medium", baseUrl))
+      .toEqual({ wireModelId: "gemini-3.7-flash-medium" });
+    expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "high", baseUrl))
+      .toEqual({ wireModelId: "gemini-3.7-flash-high" });
     expect(resolveAntigravityEffortWireModel("gemini-nebula", undefined, baseUrl))
       .toEqual({ wireModelId: "internal-codename-x7" });
     expect(resolveAntigravityEffortWireModel("claude-sonnet-4-6", "high", baseUrl))

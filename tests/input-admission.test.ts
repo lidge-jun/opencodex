@@ -5,6 +5,7 @@ import {
   estimateInputTokens,
   resolveInputCeiling,
 } from "../src/server/responses/input-admission";
+import { modelRecordValue } from "../src/reasoning-effort";
 import type { OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../src/types";
 
 const CANONICAL_NATIVE: OcxProviderConfig = {
@@ -90,6 +91,42 @@ describe("resolveInputCeiling", () => {
   test("an explicit user window still wins over native metadata", () => {
     const pinned: OcxProviderConfig = { ...CANONICAL_NATIVE, modelContextWindows: { "gpt-5.6-sol": 50_000 } };
     expect(resolveInputCeiling(pinned, "openai", "gpt-5.6-sol")).toBe(50_000);
+  });
+
+  test("a family entry covers its tagged siblings, like the catalog", () => {
+    // The catalog resolves modelContextWindows through modelRecordValue, so it advertises
+    // 131_072 for gpt-oss:120b off this config. A bare lookup here resolved nothing and
+    // fell back to contextWindow, leaving the gate refusing turns the model can hold.
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      contextWindow: 8_000,
+      modelContextWindows: { "gpt-oss": 131_072 },
+    };
+    expect(modelRecordValue(provider.modelContextWindows, "gpt-oss:120b")).toBe(131_072);
+    expect(resolveInputCeiling(provider, "custom", "gpt-oss:120b")).toBe(131_072);
+    // An id with no tag and no entry still falls back to the provider-wide window.
+    expect(resolveInputCeiling(provider, "custom", "other")).toBe(8_000);
+  });
+
+  test("an exact entry still beats the family entry", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      modelContextWindows: { "gpt-oss": 131_072, "gpt-oss:20b": 32_000 },
+    };
+    expect(resolveInputCeiling(provider, "custom", "gpt-oss:20b")).toBe(32_000);
+    expect(resolveInputCeiling(provider, "custom", "gpt-oss:120b")).toBe(131_072);
+  });
+
+  test("a family modelMaxInputTokens tightens its tagged siblings", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      modelContextWindows: { "gpt-oss": 131_072 },
+      modelMaxInputTokens: { "gpt-oss": 40_000 },
+    };
+    expect(resolveInputCeiling(provider, "custom", "gpt-oss:120b")).toBe(40_000);
   });
 });
 

@@ -2470,6 +2470,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // The gateway validates the ladder strictly and rejects anything above `high`.
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
+    // Live token-plan verification (#1927): the Pro route rejects image input while
+    // mimo-v2.5 accepts it natively. Keep this provider-scoped so a hand-rolled
+    // provider with the same id but another destination does not inherit the claim.
+    noVisionModels: ["mimo-v2.5-pro"],
     // A user may already have hand-rolled a provider under this id against a different host;
     // without this, routedProviderConfig() would canonicalize their base URL onto ours and send
     // their key somewhere they did not choose.
