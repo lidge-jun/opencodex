@@ -1,11 +1,11 @@
 # Default reviewers
-* @lidge-jun @Ingwannu @Wibias
+* @lidge-jun @Ingwannu
 
 # High-impact runtime behavior
-/src/adapters/ @lidge-jun @Ingwannu @Wibias
-/src/providers/ @lidge-jun @Ingwannu @Wibias
-/src/codex/ @lidge-jun @Ingwannu @Wibias
-/src/server/ @lidge-jun @Ingwannu @Wibias
+/src/adapters/ @lidge-jun @Ingwannu
+/src/providers/ @lidge-jun @Ingwannu
+/src/codex/ @lidge-jun @Ingwannu
+/src/server/ @lidge-jun @Ingwannu
 
 # Repository automation and release security
 /.github/ @lidge-jun @Ingwannu
