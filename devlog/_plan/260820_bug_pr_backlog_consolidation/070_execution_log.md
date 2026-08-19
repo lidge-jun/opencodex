@@ -103,3 +103,46 @@ reversible direction, and the one this reconcile wants.
 This closes the finding the auditor raised at #2105: it was scored ABSORB with no execution path
 and would have been lost. It now has one.
 
+
+# Campaign close — CI state and honest end state
+
+All six shipped PRs are green on exact head and MERGEABLE:
+
+| PR | Fixes | Checks |
+|---|---|---|
+| #2137 | issue #2132 | 25 pass / 0 fail |
+| #2138 | issue #2092 (absorbs #2102) | 25 pass / 0 fail |
+| #2140 | absorbs #2100 + #2077 | 25 pass / 0 fail |
+| #2141 | issue #2047 (absorbs #2056) | 25 pass / 0 fail |
+| #2142 | absorbs #2131 | 23 pass / 0 fail |
+| #2144 | absorbs #2105 | 29 pass / 0 fail |
+
+#2140 first showed `npm-global-smoke` failing on windows-latest with
+`EBUSY: resource busy or locked, unlink ...bun.exe` during dependency install — a Windows file
+lock during Bun installation, not a defect in the routing change. Rerunning the failed jobs
+turned it green, which is the evidence that it was infrastructure rather than the patch.
+
+## Eleven PRs closed with attribution
+
+#2102, #2099, #2091, #2029, #2063, #2100, #2077, #2056, #2062, #2131, #2105.
+
+Each carries a comment naming its replacement, what was carried over, and what was deliberately
+not. Where a contributor's own assertion had to be replaced (#2056's `shortPercent: 0` scorer
+case, #2131's `msg_ocx_0` collapse case), the replacement is disclosed in both the closing
+comment and the superseding PR body rather than done silently.
+
+## Fourteen PRs deliberately still open
+
+- **Security holds:** #2109, #2110 (override gate), #2053 (C4 OAuth, MAINTAINERS.md review).
+- **Own-cycle scale:** #2101 (20 files), #2040 (14 files).
+- **Deserves review, not supersession:** #2104 — review-ready, MERGEABLE, and touching
+  `core.ts` alongside #2137.
+- **Below the 60 threshold:** #2115, #2082, #2027, #2067, #2054, #2032, #2075, #2127.
+
+Nothing here is an omission. Every one is a recorded decision with a reason.
+
+## Merging
+
+Not done. DEV-STACK-04 and DEV-GIT-PUSH-01 both put merge authorization with the user, and
+nothing in this campaign changes that.
+
