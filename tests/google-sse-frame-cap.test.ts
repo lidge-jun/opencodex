@@ -114,6 +114,52 @@ describe("google SSE frame byte cap", () => {
     });
   });
 
+  test("rejects a split oversized multibyte line before decoding the completing chunk", async () => {
+    const zhong = new TextEncoder().encode("中");
+    expect(zhong.byteLength).toBe(3);
+    const prefix = new TextEncoder().encode("data: ");
+    const fill = new Uint8Array(CAP + 1 - prefix.byteLength - zhong.byteLength).fill(0x61);
+    const first = new Uint8Array(prefix.byteLength + fill.byteLength + 1);
+    first.set(prefix, 0);
+    first.set(fill, prefix.byteLength);
+    first.set(zhong.subarray(0, 1), prefix.byteLength + fill.byteLength);
+    const completing = zhong.subarray(1);
+    expect(first.byteLength).toBe(CAP - 1);
+    expect(first.byteLength + completing.byteLength).toBe(CAP + 1);
+
+    setGoogleSseFrameMaxBytesForTests(CAP);
+    let decodedCompletingChunk = false;
+    TextDecoder.prototype.decode = function (
+      this: TextDecoder,
+      input?: AllowSharedBufferSource,
+      options?: TextDecodeOptions,
+    ): string {
+      const view = input instanceof Uint8Array
+        ? input
+        : input && typeof (input as ArrayBufferView).byteLength === "number"
+          ? new Uint8Array(input as ArrayBufferView)
+          : null;
+      if (
+        view
+        && view.byteLength === completing.byteLength
+        && completing.every((byte, index) => view[index] === byte)
+      ) {
+        decodedCompletingChunk = true;
+      }
+      return originalDecode.call(this, input as ArrayBuffer, options);
+    };
+
+    const events = await collect(
+      createGoogleAdapter(googleProvider()).parseStream(byteStreamResponse([first, completing])),
+    );
+
+    expect(decodedCompletingChunk).toBe(false);
+    expect(events).toContainEqual({
+      type: "error",
+      message: `upstream SSE data frame exceeds ${CAP} bytes`,
+    });
+  });
+
   test("accepts multiple sub-cap data frames delivered in one oversized chunk", async () => {
     const cap = 96;
     const body = [

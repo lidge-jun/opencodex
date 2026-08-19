@@ -394,15 +394,18 @@ export function setGoogleSseFrameMaxBytesForTests(bytes?: number): void {
   sseFrameMaxBytes = bytes ?? MAX_SSE_FRAME_BYTES;
 }
 
-function maxSseLineBytes(bufferBytes: number, incoming: Uint8Array): number {
-  let lineBytes = bufferBytes;
+function scanSseLineBytes(incompleteLineBytes: number, incoming: Uint8Array): {
+  maximum: number;
+  residual: number;
+} {
+  let lineBytes = incompleteLineBytes;
   let maximum = lineBytes;
   for (const byte of incoming) {
     lineBytes += 1;
     maximum = Math.max(maximum, lineBytes);
     if (byte === 0x0a) lineBytes = 0;
   }
-  return maximum;
+  return { maximum, residual: lineBytes };
 }
 
 // Note: imagen-* models use a different API surface (prediction/image-generation
@@ -845,6 +848,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
+      // Raw unterminated-line bytes, independent of TextDecoder's pending UTF-8
+      // state. `bufferBytes` is the decoded residual and can undercount by 1–3
+      // bytes when a chunk ends mid-character.
+      let incompleteLineBytes = 0;
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
@@ -1039,17 +1046,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const incomingBytes = value?.byteLength ?? 0;
-          // Cap each incomplete line before decode and before waiting for a newline —
-          // otherwise a single unterminated data: payload can grow without bound, and
-          // buffer.length is UTF-16 units rather than bytes. Reset at each newline so
-          // several sub-cap frames delivered in one network chunk are not rejected as
-          // one oversized frame.
-          if (maxSseLineBytes(bufferBytes, value) > sseFrameMaxBytes) {
+          const incoming = value ?? new Uint8Array();
+          // Cap each incomplete line on raw bytes before decode and before waiting
+          // for a newline — otherwise a single unterminated data: payload can grow
+          // without bound, buffer.length is UTF-16 units, and a mid-character
+          // decode residual undercounts the true line. Reset at each newline so
+          // several sub-cap frames in one network chunk are not rejected as one
+          // oversized frame.
+          const lineScan = scanSseLineBytes(incompleteLineBytes, incoming);
+          if (lineScan.maximum > sseFrameMaxBytes) {
             yield { type: "error", message: `upstream SSE data frame exceeds ${sseFrameMaxBytes} bytes` };
             try { await reader.cancel(); } catch { /* ignore */ }
             return;
           }
+          incompleteLineBytes = lineScan.residual;
           const nextBuffer = buffer + decoder.decode(value, { stream: true });
           const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
           const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
