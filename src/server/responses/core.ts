@@ -2639,6 +2639,98 @@ async function handleResponsesInner(
       request.releaseBodyObservation?.();
     }
 
+    // Native Responses providers return before the generic adapter recovery loop below. Keep
+    // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one
+    // rebuilt replay. xAI's current subscription models use this branch now that their official
+    // Grok CLI catalog declares the Responses backend.
+    if (upstreamResponse.status === 401 && isOAuth401ReplayProvider && sentOAuthSnapshot) {
+      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      let refreshed: OAuthAccessSnapshot;
+      try {
+        refreshed = await forceRefreshOAuthAccessSnapshot(sentOAuthSnapshot);
+      } catch (err) {
+        upstream.abort();
+        releaseCodexAuthContextProbeLease(authCtx);
+        return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+      }
+      sentOAuthSnapshot = refreshed;
+      replayOAuthCredentialSnapshot = {
+        accountId: refreshed.accountId,
+        generation: refreshed.generation,
+      };
+      if (route.providerName === "kiro") {
+        parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
+      }
+      const refreshedProvider = resolveProviderTransport(
+        route.providerName,
+        { ...route.provider, apiKey: refreshed.accessToken },
+        parsed.options.promptCacheKey,
+        route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+      );
+      route.provider = refreshedProvider;
+      const refreshedAdapter = resolveAdapter(
+        resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+        config.cacheRetention,
+      );
+      if (!("passthrough" in refreshedAdapter) || !refreshedAdapter.passthrough) {
+        upstream.abort();
+        return formatErrorResponse(502, "upstream_error", "OAuth refresh changed the provider wire unexpectedly");
+      }
+      bindRouteReasoningReplayScope({
+        parsed,
+        providerName: route.providerName,
+        provider: refreshedProvider,
+        adapterName: refreshedAdapter.name,
+        oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+      });
+      logCtx.providerAdapter = refreshedAdapter.name;
+      sealRequestAttemptIdentity(
+        logCtx.activeAttempt,
+        logCtx.provider,
+        refreshedAdapter.name,
+        logCtx.accountLogLabel,
+      );
+      try {
+        request = await refreshedAdapter.buildRequest(parsed, {
+          headers: selectedForwardHeaders,
+          translatorBudget,
+        });
+        recordAdapterReasoning(logCtx, request);
+        recordAdapterTier(logCtx, request);
+      } catch (err) {
+        upstream.abort();
+        if (options.abortSignal?.aborted) return clientCancelledResponse();
+        const msg = err instanceof Error ? err.message : String(err);
+        return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
+      }
+      try {
+        upstreamResponse = await fetchWithTransientRetry(
+          recovery => {
+            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "oauth-401");
+            return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
+              method: request.method,
+              headers: request.headers,
+              body: request.body,
+            }, recovery), upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
+              route.provider.authMode === "forward")
+              .then(res => {
+                settleObservedHostResponse();
+                return res;
+              });
+          },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        );
+      } catch (err) {
+        return transportFailureResponse(err);
+      } finally {
+        request.releaseBodyObservation?.();
+      }
+    }
+
     // Same-target 429 wait-and-retry (opt-in `retryOn429`) for key-auth providers on the
     // passthrough wire. This branch returns before the recovery loop below, so Responses-shaped
     // key-auth gateways (e.g. the built-in DeepSeek preset) would otherwise surface 429

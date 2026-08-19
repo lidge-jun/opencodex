@@ -7,7 +7,7 @@ import type {
 } from "../types";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../types";
 import { sanitizeLogMetadataString } from "../lib/redact";
-import type { InboundWire, ModelWireDefault } from "./registry";
+import type { InboundWire, ModelWireDefault, ProviderAuthKind } from "./registry";
 
 const SERVICE_TIER_ADAPTERS = new Set(["openai-chat", "openai-responses"]);
 const FAST_WIRE_ADAPTERS: Readonly<Record<FastWire["kind"], ReadonlySet<string>>> = {
@@ -31,6 +31,7 @@ export type FastPolicyAuthTransport =
 
 export interface FastPolicyAuthority {
   readonly providerAdapter: string;
+  readonly providerAuthMode?: ProviderAuthKind;
   readonly fastWireDeclaration: FastWire | null | undefined;
   readonly modelWireOverrideAllowed: boolean;
   readonly authTransport: FastPolicyAuthTransport;
@@ -114,21 +115,33 @@ function registryDefaultForModel(
   defaults: Readonly<Record<string, ModelWireDefault>>,
   modelId: string,
   inbound: InboundWire,
-): string | undefined {
+  authMode: ProviderAuthKind | undefined,
+): { adapter: string; forwardCallerServiceTier?: boolean } | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
   if (!Object.hasOwn(defaults, normalizedModelId)) return undefined;
   const declared = defaults[normalizedModelId];
   if (declared === undefined) return undefined;
-  if (typeof declared !== "string" && !declared.inbound.includes(inbound)) return undefined;
+  if (typeof declared !== "string") {
+    if (!declared.inbound.includes(inbound)) return undefined;
+    if (declared.authModes && (authMode === undefined || !declared.authModes.includes(authMode))) {
+      return undefined;
+    }
+  }
   const wire = typeof declared === "string" ? declared : declared.wire;
-  return MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire) ? wire : undefined;
+  if (!MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire)) return undefined;
+  return {
+    adapter: wire,
+    ...(typeof declared !== "string" && declared.forwardCallerServiceTier !== undefined
+      ? { forwardCallerServiceTier: declared.forwardCallerServiceTier }
+      : {}),
+  };
 }
 
 function resolvePolicyAdapter(
   authority: FastPolicyAuthority,
   modelId: string,
   inbound: InboundWire,
-): { adapter: string; hardPinned: boolean } {
+): { adapter: string; hardPinned: boolean; forwardCallerServiceTier?: boolean } {
   // Hard pins and configured overrides deliberately use the same exact-key semantics as
   // resolveWireProtocolOverride(). Registry defaults alone normalize ids at their boundary.
   const hardPin = Object.hasOwn(authority.hardPins, modelId)
@@ -143,8 +156,21 @@ function resolvePolicyAdapter(
       return { adapter: configured, hardPinned: false };
     }
     if (MODEL_ADAPTER_OVERRIDE_ALLOWED.has(authority.providerAdapter)) {
-      const registryDefault = registryDefaultForModel(authority.registryWireDefaults, modelId, inbound);
-      if (registryDefault !== undefined) return { adapter: registryDefault, hardPinned: false };
+      const registryDefault = registryDefaultForModel(
+        authority.registryWireDefaults,
+        modelId,
+        inbound,
+        authority.providerAuthMode,
+      );
+      if (registryDefault !== undefined) {
+        return {
+          adapter: registryDefault.adapter,
+          hardPinned: false,
+          ...(registryDefault.forwardCallerServiceTier !== undefined
+            ? { forwardCallerServiceTier: registryDefault.forwardCallerServiceTier }
+            : {}),
+        };
+      }
     }
   }
   return { adapter: authority.providerAdapter, hardPinned: false };
@@ -155,7 +181,11 @@ export function resolveFastPolicy(
   modelId: string,
   inbound: InboundWire = "responses",
 ): ResolvedFastPolicy {
-  const { adapter, hardPinned } = resolvePolicyAdapter(authority, modelId, inbound);
+  const { adapter, hardPinned, forwardCallerServiceTier } = resolvePolicyAdapter(
+    authority,
+    modelId,
+    inbound,
+  );
   const exactCapability = exactModelValue(authority.capability.models, modelId);
   const capability = authority.capability.provider === false
     ? false
@@ -173,6 +203,7 @@ export function resolveFastPolicy(
   // tier still needs the final wire's forwarding permission.
   const forwardCallerTier = capability !== false
     && callerWireAvailable
+    && forwardCallerServiceTier !== false
     && (adapter !== "openai-chat" || authority.capability.chatServiceTier === true);
 
   let eligibility: ResolvedFastPolicy["eligibility"];

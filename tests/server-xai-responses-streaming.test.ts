@@ -1,0 +1,223 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../src/config";
+import { saveCredential } from "../src/oauth/store";
+import {
+  XAI_GROK_CLI_BASE_URL,
+  XAI_GROK_CLIENT_VERSION,
+} from "../src/providers/xai-transport";
+import { startServer } from "../src/server";
+import type { OcxConfig } from "../src/types";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+const RESPONSES_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/responses`;
+const encoder = new TextEncoder();
+
+let testDir = "";
+let previousHome: string | undefined;
+let isolatedCodexHome: IsolatedCodexHome | null = null;
+let originalFetch: typeof fetch;
+
+beforeEach(async () => {
+  originalFetch = globalThis.fetch;
+  previousHome = process.env.OPENCODEX_HOME;
+  isolatedCodexHome = installIsolatedCodexHome("ocx-xai-responses-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ocx-xai-responses-"));
+  process.env.OPENCODEX_HOME = testDir;
+  await saveCredential("xai", {
+    access: "stream-access",
+    refresh: "stream-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId: "xai-stream-account",
+    source: "oauth",
+  });
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
+  if (testDir) rmSync(testDir, { recursive: true, force: true });
+});
+
+function config(): OcxConfig {
+  return {
+    port: 0,
+    hostname: "127.0.0.1",
+    defaultProvider: "xai",
+    fastMode: true,
+    providers: {
+      xai: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.x.ai/v1",
+        authMode: "oauth",
+        models: ["grok-4.6"],
+      },
+    },
+  } as OcxConfig;
+}
+
+function sse(payload: unknown): Uint8Array {
+  return encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+describe("xAI OAuth Responses streaming", () => {
+  test("uses the native Responses wire and relays the first delta before completion", async () => {
+    let releaseCompletion!: () => void;
+    const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });
+    let completionReleased = false;
+    let outboundBody: Record<string, unknown> | undefined;
+    let outboundHeaders: Headers | undefined;
+    let upstreamCalls = 0;
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
+      upstreamCalls += 1;
+      outboundHeaders = new Headers(init?.headers);
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(sse({
+            type: "response.created",
+            sequence_number: 0,
+            response: {
+              id: "resp_xai_stream",
+              object: "response",
+              status: "in_progress",
+              model: "grok-4.6",
+              output: [],
+            },
+          }));
+          controller.enqueue(sse({
+            type: "response.output_item.added",
+            sequence_number: 1,
+            output_index: 0,
+            item: { id: "msg_xai_stream", type: "message", status: "in_progress", role: "assistant", content: [] },
+          }));
+          controller.enqueue(sse({
+            type: "response.content_part.added",
+            sequence_number: 2,
+            item_id: "msg_xai_stream",
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "", annotations: [] },
+          }));
+          controller.enqueue(sse({
+            type: "response.output_text.delta",
+            sequence_number: 3,
+            item_id: "msg_xai_stream",
+            output_index: 0,
+            content_index: 0,
+            delta: "first",
+          }));
+          void completionGate.then(() => {
+            completionReleased = true;
+            const message = {
+              id: "msg_xai_stream",
+              type: "message",
+              status: "completed",
+              role: "assistant",
+              content: [{ type: "output_text", text: "first second", annotations: [] }],
+            };
+            controller.enqueue(sse({
+              type: "response.output_text.delta",
+              sequence_number: 4,
+              item_id: "msg_xai_stream",
+              output_index: 0,
+              content_index: 0,
+              delta: " second",
+            }));
+            controller.enqueue(sse({
+              type: "response.output_item.done",
+              sequence_number: 5,
+              output_index: 0,
+              item: message,
+            }));
+            controller.enqueue(sse({
+              type: "response.completed",
+              sequence_number: 6,
+              response: {
+                id: "resp_xai_stream",
+                object: "response",
+                status: "completed",
+                model: "grok-4.6",
+                output: [message],
+                usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
+              },
+            }));
+            controller.close();
+          });
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          input: "hello",
+          stream: true,
+          store: false,
+          service_tier: "priority",
+          reasoning: { effort: "xhigh", summary: "auto" },
+        }),
+      });
+      expect(response.status).toBe(200);
+      reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let received = "";
+      await Promise.race([
+        (async () => {
+          while (!received.includes("response.output_text.delta")) {
+            const chunk = await reader!.read();
+            if (chunk.done) throw new Error("stream ended before the first xAI delta");
+            received += decoder.decode(chunk.value, { stream: true });
+          }
+        })(),
+        new Promise<never>((_, reject) => setTimeout(
+          () => reject(new Error("the first xAI delta was not relayed before completion")),
+          1_500,
+        )),
+      ]);
+
+      expect(received).toContain("first");
+      expect(completionReleased).toBe(false);
+      expect(upstreamCalls).toBe(1);
+      expect(outboundBody?.model).toBe("grok-4.6");
+      expect(outboundBody?.input).toBe("hello");
+      expect(outboundBody?.stream).toBe(true);
+      expect(outboundBody?.service_tier).toBeUndefined();
+      expect(outboundBody?.reasoning).toMatchObject({ effort: "xhigh" });
+      expect(outboundBody?.messages).toBeUndefined();
+      expect(outboundBody?.reasoning_effort).toBeUndefined();
+      expect(outboundHeaders?.get("authorization")).toBe("Bearer stream-access");
+      expect(outboundHeaders?.get("x-grok-client-identifier")).toBe("opencodex");
+      expect(outboundHeaders?.get("x-grok-client-version")).toBe(XAI_GROK_CLIENT_VERSION);
+
+      releaseCompletion();
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(received).toContain("response.completed");
+      expect(received).toContain(" second");
+    } finally {
+      releaseCompletion();
+      await reader?.cancel().catch(() => {});
+      await server.stop(true);
+    }
+  }, 10_000);
+});
