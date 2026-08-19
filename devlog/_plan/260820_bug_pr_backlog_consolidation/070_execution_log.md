@@ -146,3 +146,35 @@ Nothing here is an omission. Every one is a recorded decision with a reason.
 Not done. DEV-STACK-04 and DEV-GIT-PUSH-01 both put merge authorization with the user, and
 nothing in this campaign changes that.
 
+
+## wp9 — PR #2101 (@Ingwannu): the ONE real stack layer
+
+**PR #2146**, branch `codex/absorb-account-entitlement-stacked`, base **`codex/fix-bearer-admission-2132`** (the #2137 branch), not `dev`.
+
+This is the single genuine dependency edge in the entire backlog. #2101 passes
+`substituteMainCredentialForDirect: substituteMainCredential` into `resolveCodexAuthContext` —
+the exact value #2137 corrects. Landing it on `dev` alone would silently reintroduce #2132 for
+every routed provider. Everything else absorbed in this campaign was disjoint and shipped as a
+sibling; this one is stacked because the code says so, not because a plan said so.
+
+Three corrections on top of @Ingwannu's work:
+
+1. **Selector compact bypassed the wire rewrite** — `accountGatedCompactWireModel` came from
+   `raw.model`, which never matches the gated map for `side/gpt-daybreak-blue-latest`, so a
+   selector-form compact still hit the native endpoint. Now derived from `route.modelId`.
+2. **Direct callers evicted catalog evidence** — one 64-entry LRU shared between per-credential
+   Direct keys and the main/Pool keys the catalog projects from. Split into two eviction classes;
+   pinned by a test verified to fail against the shared LRU.
+3. **Comment rot** — `native-models.ts` claimed routing never collapses Daybreak into
+   `gpt-5.6-sol`, which the wire normalization does.
+
+Evidence: full suite 13554 pass / 0 fail at the stacked tip; the composition check
+(`codex-model-entitlements` + `bearer-admission-routed-provider` + `codex-auth-context` +
+`server-auth`) is 146 pass / 0 fail, which is what proves the two layers agree.
+Stack integrity: `git log parent..layer` shows exactly 1 commit, and a stack map was added to
+#2137 so a reviewer arriving at the parent sees the chain.
+
+Two gaps named in the PR rather than carried silently: Direct `/v1/models` can still advertise a
+Pool-only grant (advertisement only; dispatch still checks the caller credential), and
+same-account gated-400 retry stays Pool-only.
+
