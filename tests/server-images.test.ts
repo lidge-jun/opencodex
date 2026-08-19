@@ -155,6 +155,46 @@ test("image response byte reader enforces the stream cap when Content-Length is 
   expect(tailPulled).toBe(false);
 });
 
+test("POST /v1/images/generations relays to xAI Imagine when the image bridge is enabled", async () => {
+  const captured: CapturedRequest[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("api.x.ai")) {
+      captured.push({
+        path: new URL(url).pathname,
+        headers: new Headers(init?.headers),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json({ data: [{ b64_json: "dHJhaW4=" }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2", size: "1024x1024" }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data?: Array<{ b64_json?: string }> };
+    expect(json.data?.[0]?.b64_json).toBe("dHJhaW4=");
+    expect(captured.some(call => call.path === "/v1/images/generations" && JSON.stringify(call.body).includes("grok-imagine-image-quality"))).toBe(true);
+    expect(captured.every(call => !call.path.includes("/backend-api/codex"))).toBe(true);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);

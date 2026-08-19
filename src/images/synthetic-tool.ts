@@ -80,6 +80,11 @@ export function buildImageTool(): OcxTool {
       properties: {
         prompt: { type: "string", description: "Detailed image generation prompt. Required." },
         n: { type: "integer", minimum: 1, maximum: 4 },
+        aspect_ratio: {
+          type: "string",
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "auto"],
+          description: "Image aspect ratio. Default auto.",
+        },
       },
       required: ["prompt"],
     },
