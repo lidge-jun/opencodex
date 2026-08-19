@@ -418,4 +418,66 @@ describe("fetchProviderAccountQuotas", () => {
 
     expect(getCachedProviderAccountQuota("anthropic", first!.id)).toBeNull();
   });
+
+  test("reports Google Antigravity per-account Gem/Cla quota keyed by account credentials (#1082)", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-1",
+      refresh: "refresh-agy-1",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+    await saveCredential("google-antigravity", {
+      access: "token-agy-2",
+      refresh: "refresh-agy-2",
+      expires: Date.now() + 3600_000,
+      projectId: "project-2",
+      accountId: "acct-agy-2",
+      email: "agy2@example.com",
+    });
+
+    const seenProjects: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/v1internal:fetchAvailableModels");
+      const body = JSON.parse(String(init?.body)) as { project?: string };
+      seenProjects.push(body.project ?? "");
+      if (body.project === "project-1") {
+        return new Response(JSON.stringify({
+          models: {
+            "gemini-3.7-flash": {
+              quotaInfo: { remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
+            },
+            "claude-sonnet-4-6": {
+              quotaInfo: { remainingFraction: 0.21, resetTime: "2026-07-05T15:00:00Z" },
+            },
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": {
+            quotaInfo: { remainingFraction: 0.90, resetTime: "2026-07-05T14:00:00Z" },
+          },
+          "claude-sonnet-4-6": {
+            quotaInfo: { remainingFraction: 0.85, resetTime: "2026-07-05T15:00:00Z" },
+          },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("google-antigravity");
+    expect(rows.length).toBe(2);
+    expect(seenProjects.sort()).toEqual(["project-1", "project-2"]);
+
+    const byProject = Object.fromEntries(rows.map(r => [
+      r.quota?.customWindows?.find(w => w.label === "Gem")?.percent,
+      r.quota?.customWindows?.find(w => w.label === "Cla")?.percent,
+    ]));
+    // 1 - 0.64 = 36% used, 1 - 0.21 = 79% used for project 1
+    // 1 - 0.90 = 10% used, 1 - 0.85 = 15% used for project 2
+    expect(byProject[36]).toBe(79);
+    expect(byProject[10]).toBe(15);
+  });
 });
