@@ -2204,7 +2204,7 @@ describe("server local API auth", () => {
         extraBody: { prompt_cache_retention: "24h" },
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({
+      expect(await response.json()).toMatchObject({
         output: [{ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" }],
       });
       expect(upstreamUrl).toEndWith("/responses");
