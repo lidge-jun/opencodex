@@ -10,7 +10,7 @@
  * how that affects eligibility.
  */
 
-import type { OcxConfig } from "../types";
+import { modelInList, type OcxConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { serviceTierSupportForModel } from "../providers/service-tier";
 import { PROVIDER_REGISTRY } from "../providers/registry";
@@ -21,6 +21,7 @@ import {
   nativeReasoningEfforts,
 } from "../codex/catalog/metadata";
 import { readCatalog, readCodexCatalogPath } from "../codex/catalog/parsing";
+import { modelRecordValue } from "../reasoning-effort";
 import { statSync } from "node:fs";
 import type { RouteCapabilityEvidence } from "./trace";
 
@@ -159,9 +160,14 @@ export function candidateCapabilityEvidence(
   const catalogRow = cachedCatalogModels().find(model => model.provider === providerName && model.id === modelId);
   const isNative = providerName === OPENAI_CODEX_PROVIDER_ID && !modelId.includes("/");
 
-  const rawContextWindow = provider?.modelContextWindows?.[modelId]
+  // `modelRecordValue`, not a bare lookup: every runtime reader of these three maps
+  // resolves them that way, so a `gpt-oss` entry covers `gpt-oss:120b`. Reading raw
+  // made the evidence disagree with the resolver it claims to describe — and for the
+  // window it did not even degrade to unknown, it fell through to the provider-wide
+  // value, which is a definite wrong answer rather than an absent one.
+  const rawContextWindow = modelRecordValue(provider?.modelContextWindows, modelId)
     ?? provider?.contextWindow
-    ?? registryEntry?.modelContextWindows?.[modelId]
+    ?? modelRecordValue(registryEntry?.modelContextWindows, modelId)
     ?? catalogRow?.contextWindow
     ?? (isNative ? nativeOpenAiContextWindow(modelId, nativeContextLimits(config)) : undefined);
   // Native rows go through the accessor (raise-to-ceiling + opt-in). Routed rows keep
@@ -170,10 +176,21 @@ export function candidateCapabilityEvidence(
     ? (nativeOpenAiContextWindow(modelId, nativeContextLimits(config)) ?? rawContextWindow)
     : rawContextWindow;
 
-  const modalities = provider?.modelInputModalities?.[modelId]
-    ?? registryEntry?.modelInputModalities?.[modelId]
-    ?? catalogRow?.inputModalities
-    ?? (isNative ? nativeInputModalities(modelId) : undefined);
+  // `noVisionModels` is checked before the modality chain because that is the order
+  // `isModelTextOnly` uses: it matches the no-vision list and returns true before it
+  // ever reads `modelInputModalities` (`src/vision/index.ts:32`). So a `gpt-oss`
+  // no-vision entry beats an exact `gpt-oss:120b` entry that lists "image", and
+  // deriving `image` from the modality chain alone reported vision on a model the
+  // runtime refuses it for. That matters more here than on the CLI surface fixed in
+  // #2086: routing *acts* on this evidence, so it would select the candidate for image
+  // work that execution then rejects.
+  const noVision = modelInList(provider?.noVisionModels, modelId);
+  const modalities = noVision
+    ? ["text"]
+    : (modelRecordValue(provider?.modelInputModalities, modelId)
+      ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)
+      ?? catalogRow?.inputModalities
+      ?? (isNative ? nativeInputModalities(modelId) : undefined));
   const image = Array.isArray(modalities)
     ? modalities.includes("image")
     : undefined;
@@ -196,8 +213,8 @@ export function candidateCapabilityEvidence(
     || provider?.parallelToolCalls === true
     || undefined;
 
-  const reasoningEfforts = provider?.modelReasoningEfforts?.[modelId]
-    ?? registryEntry?.modelReasoningEfforts?.[modelId]
+  const reasoningEfforts = modelRecordValue(provider?.modelReasoningEfforts, modelId)
+    ?? modelRecordValue(registryEntry?.modelReasoningEfforts, modelId)
     ?? (isNative ? nativeReasoningEfforts(modelId) : undefined);
 
   const tierSupport = provider
