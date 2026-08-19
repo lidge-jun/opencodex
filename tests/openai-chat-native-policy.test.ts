@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildOpenAIChatPassthroughRequest,
   createOpenAIChatAdapter,
@@ -7,6 +10,7 @@ import {
   decideTier,
   tierValueAfterDecision,
 } from "../src/providers/fastwire";
+import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { fastPolicyForModel } from "../src/providers/service-tier";
 import { handleChatCompletions } from "../src/server/chat-completions";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -17,6 +21,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearKeyCooldowns(PROVIDER_NAME);
 });
 
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -31,8 +36,9 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
 
 function nativeBody(
   target: OcxProviderConfig,
-  callerTier: string,
+  callerTier: string | undefined,
   modelId = MODEL_ID,
+  fastMode?: boolean,
 ): Record<string, unknown> {
   const policy = fastPolicyForModel(target, modelId, PROVIDER_NAME, "chat");
   const request = buildOpenAIChatPassthroughRequest(
@@ -40,22 +46,24 @@ function nativeBody(
     {
       model: modelId,
       messages: [{ role: "user", content: "ping" }],
-      service_tier: callerTier,
+      ...(callerTier === undefined ? {} : { service_tier: callerTier }),
     },
     modelId,
     false,
     policy,
+    fastMode,
   );
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
 function mainPathBody(
   target: OcxProviderConfig,
-  callerTier: string,
+  callerTier: string | undefined,
   modelId = MODEL_ID,
+  fastMode?: boolean,
 ): Record<string, unknown> {
   const policy = fastPolicyForModel(target, modelId, PROVIDER_NAME, "chat");
-  const tierDecision = decideTier(policy, undefined, callerTier);
+  const tierDecision = decideTier(policy, fastMode, callerTier);
   const serviceTier = tierValueAfterDecision(tierDecision, callerTier);
   const parsed: OcxParsedRequest = {
     modelId,
@@ -116,6 +124,20 @@ describe("native Chat passthrough service-tier policy", () => {
       callerTier: "flex",
       expectedTier: "flex",
     },
+    {
+      name: "classified foreign-tier drop overrides CallerTierForward",
+      config: {
+        supportsServiceTier: true,
+        chatServiceTier: true,
+        fastWire: {
+          kind: "service-tier",
+          canonicalToWire: { priority: "priority" },
+          foreignCallerTiers: "drop",
+        },
+      },
+      callerTier: "flex",
+      expectedTier: undefined,
+    },
   ] as const)("$name", ({ config, callerTier, expectedTier }) => {
     const body = nativeBody(provider(config), callerTier);
     if (expectedTier === undefined) expect(body).not.toHaveProperty("service_tier");
@@ -156,6 +178,79 @@ describe("native Chat passthrough service-tier policy", () => {
     expect(response.status).toBe(200);
     expect(captured).toHaveLength(1);
     expect(captured[0]).not.toHaveProperty("service_tier");
+  });
+
+  test("forced Fast injects the policy wire value and forced default drops the caller tier", () => {
+    const target = provider({ supportsServiceTier: true, chatServiceTier: true });
+
+    expect(nativeBody(target, "flex", MODEL_ID, true).service_tier).toBe("priority");
+    expect(nativeBody(target, undefined, MODEL_ID, true).service_tier).toBe("priority");
+    expect(nativeBody(target, "priority", MODEL_ID, false)).not.toHaveProperty("service_tier");
+  });
+
+  test("key failover rebuilds the request without reintroducing a dropped foreign tier", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-native-tier-failover-"));
+    process.env.OPENCODEX_HOME = home;
+    const captured: Array<{ authorization: string | null; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push({
+        authorization: new Headers(init?.headers).get("authorization"),
+        body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      });
+      if (captured.length === 1) {
+        return Response.json({ error: { message: "rate limited" } }, {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+      }
+      return Response.json({
+        id: "chatcmpl_native_tier_failover",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      });
+    }) as typeof fetch;
+    const target = provider({
+      supportsServiceTier: true,
+      chatServiceTier: true,
+      fastWire: {
+        kind: "service-tier",
+        canonicalToWire: { priority: "priority" },
+        foreignCallerTiers: "drop",
+      },
+      apiKey: "key-one",
+      apiKeyPool: [{ id: "one", key: "key-one" }, { id: "two", key: "key-two" }],
+    });
+    const config = {
+      port: 0,
+      defaultProvider: PROVIDER_NAME,
+      providers: { [PROVIDER_NAME]: target },
+    } as OcxConfig;
+
+    try {
+      const response = await handleChatCompletions(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: `${PROVIDER_NAME}/${MODEL_ID}`,
+            messages: [{ role: "user", content: "ping" }],
+            service_tier: "flex",
+          }),
+        }),
+        config,
+        { model: "", provider: "" },
+      );
+
+      expect(response.status).toBe(200);
+      expect(captured.map(entry => entry.authorization)).toEqual(["Bearer key-one", "Bearer key-two"]);
+      expect(captured).toHaveLength(2);
+      for (const entry of captured) expect(entry.body).not.toHaveProperty("service_tier");
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -205,6 +300,20 @@ describe("main and native Chat tier authorization parity", () => {
       mainTier: "flex",
       nativeTier: "flex",
     },
+    {
+      name: "classified foreign-tier drop with CallerTierForward",
+      config: {
+        supportsServiceTier: true,
+        chatServiceTier: true,
+        fastWire: {
+          kind: "service-tier",
+          canonicalToWire: { priority: "priority" },
+          foreignCallerTiers: "drop",
+        },
+      },
+      callerTier: "flex",
+      forwarded: false,
+    },
   ] as const)("$name makes the same forward/drop decision", row => {
     const target = provider(row.config);
     const main = mainPathBody(target, row.callerTier);
@@ -216,6 +325,17 @@ describe("main and native Chat tier authorization parity", () => {
     if (row.forwarded) {
       expect(main.service_tier).toBe(row.mainTier);
       expect(native.service_tier).toBe(row.nativeTier);
+    }
+  });
+
+  test("forced Fast and forced default make the same decision on both Chat paths", () => {
+    const target = provider({ supportsServiceTier: true, chatServiceTier: true });
+
+    for (const fastMode of [true, false] as const) {
+      const main = mainPathBody(target, "flex", MODEL_ID, fastMode);
+      const native = nativeBody(target, "flex", MODEL_ID, fastMode);
+      expect(forwardsTier(native)).toBe(forwardsTier(main));
+      expect(native.service_tier).toBe(main.service_tier);
     }
   });
 });

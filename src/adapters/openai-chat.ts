@@ -14,11 +14,13 @@ import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalo
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import {
   canForwardForeignServiceTierForChatModel,
+  fastPolicyForModel,
   supportsServiceTierForModel,
 } from "../providers/service-tier";
 import {
   canonicalFastTierMarker,
   createAdapterTierMetadata,
+  decideTier,
   type ResolvedFastPolicy,
 } from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
@@ -96,7 +98,8 @@ export function buildOpenAIChatPassthroughRequest(
   rawBody: Record<string, unknown>,
   modelId: string,
   stream: boolean,
-  fastPolicy: ResolvedFastPolicy,
+  fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
+  fastMode?: boolean,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
@@ -124,10 +127,16 @@ export function buildOpenAIChatPassthroughRequest(
   // `<listed>:<tag>` siblings the operator never opted out, silently returning prose.
   if (provider.noStructuredOutputModels?.includes(modelId)) delete body.response_format;
 
-  // Share the ordinary openai-chat adapter's capability gate, while preserving the
-  // caller's exact wire representation promised by this passthrough contract. The
-  // Responses surface may normalize canonical Fast spelling; this difference is intentional.
-  if (canSerializeOpenAIChatServiceTier(provider, modelId, rawBody.service_tier, undefined, fastPolicy)) {
+  // Run the same complete Fast policy as the translated Chat path, including explicit
+  // fastMode and foreign-tier handling. On inherited canonical Fast, the passthrough still
+  // retains the caller's exact spelling; forced Fast uses the policy-owned wire value.
+  const callerTier = typeof rawBody.service_tier === "string" ? rawBody.service_tier : undefined;
+  const tierDecision = decideTier(fastPolicy, fastMode, callerTier);
+  if (tierDecision.kind === "set") {
+    body.service_tier = fastMode === undefined && canonicalFastTierMarker(callerTier) !== undefined
+      ? callerTier
+      : tierDecision.value;
+  } else if (tierDecision.kind === "forward-caller" && rawBody.service_tier !== undefined) {
     body.service_tier = rawBody.service_tier;
   }
   if (provider.promptCacheKey && rawBody.prompt_cache_key !== undefined) {
@@ -1294,7 +1303,6 @@ function canSerializeOpenAIChatServiceTier(
   modelId: string,
   serviceTier: unknown,
   tierDecision?: OcxParsedRequest["options"]["tierDecision"],
-  resolvedPolicy?: Pick<ResolvedFastPolicy, "capability">,
 ): boolean {
   if (serviceTier === undefined) return false;
   if (tierDecision !== undefined) {
@@ -1302,9 +1310,7 @@ function canSerializeOpenAIChatServiceTier(
   }
   const callerTier = typeof serviceTier === "string" ? serviceTier : undefined;
   const callerCanonicalFast = canonicalFastTierMarker(callerTier) !== undefined;
-  const capability = resolvedPolicy === undefined
-    ? supportsServiceTierForModel(provider, modelId)
-    : resolvedPolicy.capability;
+  const capability = supportsServiceTierForModel(provider, modelId);
   const callerTierForwardAllowed = canForwardForeignServiceTierForChatModel(provider, modelId);
   return callerTierForwardAllowed || (callerCanonicalFast && capability === true);
 }

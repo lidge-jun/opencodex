@@ -161,6 +161,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     route.modelId,
     requestedStream,
     fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
+    config.fastMode,
   );
   try {
     activeRequest = buildActiveRequest();
