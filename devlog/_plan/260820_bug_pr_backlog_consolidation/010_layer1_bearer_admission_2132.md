@@ -1,3 +1,15 @@
+> **SUPERSEDED IN PART — read `000_research_inventory.md` amendments 1 and 2 first.**
+>
+> Two things in this document are wrong and were corrected after it was written:
+>
+> 1. **It is NOT a stack layer and does NOT root on #2134.** No dependency edge exists;
+>    the shipped PR (#2137) is based on `dev` as a sibling.
+> 2. **The substitution predicate is NOT "native ChatGPT pool".** Pool-only would exclude
+>    `codexAccountMode: "direct"` and re-break #1686, whose Direct admission is only safe
+>    BECAUSE substitution still runs. The shipped predicate is
+>    `route.codexAccountMode !== undefined`, covering pool AND direct. Do not "correct" it back.
+
+
 # 010 — Layer 1 (stack bottom): fix issue #2132, bearer admission must not force a ChatGPT credential
 
 Work-phase: wp2. Branch: `codex/fix-bearer-admission-2132`. Base: `codex/fix-subagent-roster-truncation` (PR #2134).
