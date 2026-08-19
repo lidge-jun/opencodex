@@ -41,7 +41,13 @@ const roots: Fixture[] = [];
 
 type CliResult = { exitCode: number; stdout: string; stderr: string };
 type RuntimeRecord = { pid: number; port: number; hostname?: string };
-type StartedServer = { process: ReturnType<typeof Bun.spawn>; runtime: RuntimeRecord };
+type StartedServer = {
+  process: ReturnType<typeof Bun.spawn>;
+  runtime: RuntimeRecord;
+  /** Captured during start(): the child's streams can only be read once. */
+  stdout: Promise<string>;
+  stderr: Promise<string>;
+};
 
 /** A byte manifest: paths plus bytes, not mtimes or parsed JSON. */
 function manifest(root: string): Record<string, string> {
@@ -176,6 +182,23 @@ class Fixture {
   async start(): Promise<StartedServer> {
     const child = this.spawnCli(["start"]);
     const runtimePath = join(this.ocx, "runtime-port.json");
+    // Capture the child's streams while we wait. Without this, a start that dies for a
+    // concrete reason — a throw, a port bind refusal, a missing artifact — surfaces only as
+    // "timed out waiting for runtime-port record", which is the symptom and never the cause.
+    // That is exactly how the Windows failures read for two CI rounds.
+    const stderr = new Response(child.stderr).text();
+    const stdout = new Response(child.stdout).text();
+    const diagnose = async (label: string): Promise<never> => {
+      const exited = child.exitCode ?? (await Promise.race([
+        child.exited,
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
+      ]));
+      const [err, out] = await Promise.all([
+        Promise.race([stderr, new Promise<string>(resolve => setTimeout(() => resolve("<stderr still open>"), 500))]),
+        Promise.race([stdout, new Promise<string>(resolve => setTimeout(() => resolve("<stdout still open>"), 500))]),
+      ]);
+      throw new Error(`${label}; child exit=${String(exited)}\n--- stderr ---\n${err.slice(-4000)}\n--- stdout ---\n${out.slice(-2000)}`);
+    };
     const runtime = await waitFor(() => {
       if (!existsSync(runtimePath)) return null;
       try {
@@ -186,7 +209,7 @@ class Fixture {
       } catch {
         return null;
       }
-    }, "runtime-port record");
+    }, "runtime-port record").catch(() => diagnose("timed out waiting for runtime-port record"));
     const health = await waitFor(async () => {
       try {
         const response = await fetch(`http://127.0.0.1:${runtime.port}/healthz`, { signal: AbortSignal.timeout(500) });
@@ -197,7 +220,7 @@ class Fixture {
       }
     }, "child /healthz");
     expect(health).toMatchObject({ pid: child.pid, port: runtime.port });
-    return { process: child, runtime };
+    return { process: child, runtime, stdout, stderr };
   }
 
   async stop(server: StartedServer): Promise<void> {
@@ -570,7 +593,7 @@ describe("WP13 composed toggle acceptance", () => {
       await fx.stop(first);
     }
     const second = await fx.start();
-    const secondOutput = new Response(second.process.stdout).text();
+    const secondOutput = second.stdout;
     try {
       expect(readFileSync(join(grokHome, "config.toml"), "utf8")).not.toContain("opencodex managed block");
     } finally {
