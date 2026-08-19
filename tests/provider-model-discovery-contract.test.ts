@@ -172,15 +172,15 @@ describe("registry-owned provider model discovery", () => {
       authMode: "oauth",
     };
 
-    await withRegistryDiscovery("anthropic", { path: "catalog" }, () => {
-      const relative = buildModelsRequest(staleConfig, "oauth-token", "anthropic");
-      expect(relative.url).toBe("https://api.anthropic.com/catalog");
+    await withRegistryDiscovery("kimi", { path: "catalog" }, () => {
+      const relative = buildModelsRequest(staleConfig, "oauth-token", "kimi");
+      expect(relative.url).toBe("https://api.kimi.com/coding/v1/catalog");
       expect(relative.headers.Authorization).toBe("Bearer oauth-token");
     });
 
-    await withRegistryDiscovery("anthropic", { maxModels: 25 }, () => {
-      const defaultEndpoint = buildModelsRequest(staleConfig, "oauth-token", "anthropic");
-      expect(defaultEndpoint.url).toBe("https://api.anthropic.com/v1/models?limit=1000");
+    await withRegistryDiscovery("kimi", { maxModels: 25 }, () => {
+      const defaultEndpoint = buildModelsRequest(staleConfig, "oauth-token", "kimi");
+      expect(defaultEndpoint.url).toBe("https://api.kimi.com/coding/v1/models");
     });
   });
 
@@ -604,3 +604,4 @@ describe("same-named custom provider preservation", () => {
     });
   });
 });
+

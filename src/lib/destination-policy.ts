@@ -131,6 +131,44 @@ function registryAllowsPrivateNetwork(name: string): boolean {
 }
 
 /**
+ * OAuth registry entries that opt into `allowBaseUrlOverride` send bearer credentials to a
+ * user-configured endpoint (review findings, PR #2109 / PR #2110): a cleartext `http:`
+ * override would expose the OAuth token on the wire. `https:` is therefore required for
+ * every non-local destination. Loopback/localhost/private relays keep working over
+ * `http:` because they already sit behind the explicit `allowPrivateNetwork` opt-in
+ * enforced by {@link providerDestinationConfigError}. Keyed/local providers (Ollama,
+ * vLLM, LM Studio, LiteLLM, Moonshot, Qwen, Alibaba) are untouched: they are not
+ * `authKind: "oauth"`, so this check never fires for them.
+ */
+function registrySendsOAuthToOverriddenBaseUrl(name: string): boolean {
+  const entry = getProviderRegistryEntry(name);
+  return entry?.authKind === "oauth" && entry.allowBaseUrlOverride === true;
+}
+
+export function providerSecureTransportConfigError(
+  name: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">,
+): string | null {
+  if (!registrySendsOAuthToOverriddenBaseUrl(name)) return null;
+  // An explicit allowPrivateNetwork opt-in is the documented "intentionally local/self-hosted"
+  // contract; a named local relay (http://relay.corp.internal) stays reachable through it.
+  if (providerAllowsPrivateNetwork(name, provider)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(provider.baseUrl.trim());
+  } catch {
+    return null; // invalid URLs are providerBaseUrlConfigError's concern
+  }
+  if (parsed.protocol !== "http:") return null;
+  const assessment = assessDestination(provider.baseUrl);
+  if (!assessment) return null;
+  if (assessment.kind === "localhost" || assessment.kind === "loopback" || assessment.kind === "private") {
+    return null; // local relays; the private-network gate below still applies
+  }
+  return "baseUrl must use https: this provider sends OAuth credentials to its endpoint, and http is allowed only for loopback/private relays";
+}
+
+/**
  * Whether a provider may reach loopback/private addresses.
  *
  * Two sources, and both have to be consulted at every boundary: the operator's explicit
@@ -150,6 +188,8 @@ export function providerAllowsPrivateNetwork(
 }
 
 export function providerDestinationConfigError(name: string, provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">): string | null {
+  const secureTransportError = providerSecureTransportConfigError(name, provider);
+  if (secureTransportError) return secureTransportError;
   const assessment = assessDestination(provider.baseUrl);
   if (!assessment) return null;
   if (assessment.kind === "public" || assessment.kind === "hostname") return null;
@@ -331,3 +371,4 @@ export async function resolvePublicAddresses(
 export async function assertUrlResolvesPublic(url: string): Promise<void> {
   await resolvePublicAddresses(url);
 }
+

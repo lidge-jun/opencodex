@@ -1083,6 +1083,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "anthropic",
     baseUrl: "https://api.anthropic.com",
     authKind: "oauth",
+    allowBaseUrlOverride: true,
     featured: true,
     oauthId: "anthropic",
     jawcodeBundle: "anthropic",

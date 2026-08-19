@@ -56,7 +56,7 @@ for (const { id, registryBaseUrl } of OVERRIDE_PROVIDERS) {
 
 for (const { id, registryBaseUrl, adapter } of [
   { id: "ollama-cloud", registryBaseUrl: "https://ollama.com/v1", adapter: "openai-chat" },
-  { id: "anthropic", registryBaseUrl: "https://api.anthropic.com", adapter: "anthropic" },
+  { id: "google", registryBaseUrl: "https://generativelanguage.googleapis.com", adapter: "google" },
 ] as const) {
   test(`${id} keeps its fixed remote registry endpoint authoritative`, () => {
     const config = configFor(id, {
@@ -100,3 +100,4 @@ for (const { id, adapter, registryTemplate, resolvedBaseUrl } of [
     expect(routeModel(config, `${id}/model`).provider.baseUrl).toBe(registryTemplate);
   });
 }
+
