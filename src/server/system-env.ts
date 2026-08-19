@@ -153,6 +153,14 @@ export function claudeCodeCliInstalled(pathValue = process.env.PATH): boolean {
  * Keep the shell hook aligned with the integration that can actually consume it.
  * Claude Desktop uses its own profile and does not source `.zshrc`; this hook exists
  * only for plain Claude Code CLI launches.
+ *
+ * Reconciliation is PATH-sensitive by construction: "Claude Code is installed" is answered
+ * from the PATH of whichever process calls this. A launchd/service context with a stripped
+ * PATH can therefore fail to see a `claude` the user's interactive shell finds, and this will
+ * remove the hook. That is the intended failure direction — removing an OpenCodex-owned block
+ * is reversible on the next foreground `ocx start`, whereas leaving a hook pointing at an
+ * uninstalled CLI is the stale state this reconciliation exists to clear. Only the block
+ * carrying our own marker is ever touched; user lines are preserved.
  */
 export function reconcileShellHook(systemEnvInjected: boolean): {
   changed: boolean;
