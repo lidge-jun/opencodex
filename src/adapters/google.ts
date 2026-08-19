@@ -21,6 +21,7 @@ import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
+import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "./google-antigravity-tools";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
@@ -159,9 +160,10 @@ function messagesToGeminiFormat(
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
+  const messages = repairGoogleToolPairs(parsed.context.messages);
 
   const callIds = createToolCallIdAllocator();
-  for (const msg of parsed.context.messages) {
+  for (const msg of messages) {
     if (msg.role === "assistant") {
       for (const part of (msg as OcxAssistantMessage).content) {
         if (part.type === "toolCall") callIds.reserve((part as OcxToolCall).id);
@@ -170,7 +172,7 @@ function messagesToGeminiFormat(
       callIds.reserve((msg as OcxToolResultMessage).toolCallId);
     }
   }
-  for (const msg of parsed.context.messages) {
+  for (const msg of messages) {
     switch (msg.role) {
       case "user":
       case "developer": {
@@ -315,6 +317,29 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
  */
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_SSE_FRAME_BYTES = MAX_RESPONSE_BYTES;
+let sseFrameMaxBytes = MAX_SSE_FRAME_BYTES;
+
+/** Test-only: lower the SSE frame byte cap without allocating a 100 MiB fixture. */
+export function setGoogleSseFrameMaxBytesForTests(bytes?: number): void {
+  sseFrameMaxBytes = bytes ?? MAX_SSE_FRAME_BYTES;
+}
+
+function scanSseLineBytes(incompleteLineBytes: number, incoming: Uint8Array): {
+  maximum: number;
+  residual: number;
+} {
+  let lineBytes = incompleteLineBytes;
+  let maximum = lineBytes;
+  for (const byte of incoming) {
+    if (byte === 0x0a) {
+      lineBytes = 0;
+      continue;
+    }
+    lineBytes += 1;
+    maximum = Math.max(maximum, lineBytes);
+  }
+  return { maximum, residual: lineBytes };
+}
 
 // Note: imagen-* models use a different API surface (prediction/image-generation
 // schema) and must NOT be treated as responseModalities-capable Gemini models.
@@ -446,8 +471,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
-      const method = parsed.stream ? "streamGenerateContent" : "generateContent";
-      const streamParam = parsed.stream ? "?alt=sse" : "";
+      const ccaAlwaysSse = provider.googleMode === "cloud-code-assist";
+      const method = ccaAlwaysSse || parsed.stream ? "streamGenerateContent" : "generateContent";
+      const streamParam = ccaAlwaysSse || parsed.stream ? "?alt=sse" : "";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (provider.headers) Object.assign(headers, provider.headers);
 
@@ -482,6 +508,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // nested) — matching CLIProxyAPI `generateStableSessionID`. An extra top-level/snake_case
         // spelling is a non-first-party key, so we send the single canonical location.
         const draftRequest: Record<string, unknown> = { ...body, sessionId };
+        if (systemInstruction) {
+          draftRequest.preambleConfig = { mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" };
+        }
         // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
         if (/claude/i.test(wireModelId)) {
           // VALIDATED would defeat a client's tool_choice "none": honor it by dropping the
@@ -496,10 +525,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         const compiled = compileGoogleWireBody(draftRequest);
         const request = compiled.body;
+        if (systemInstruction) {
+          request.preambleConfig = { mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" };
+        }
         restoreGoogleToolName = compiled.restoreToolName;
         // Compile names before replay: signatures are keyed by the exact provider-visible name.
         if (Array.isArray((request as { contents?: unknown[] }).contents)) {
           const contents = (request as { contents: unknown[] }).contents;
+          if (/claude/i.test(wireModelId)) stripTrailingClaudePrefill(contents);
           if (antigravityUsesReplayCache(wireModelId)) {
             applyAntigravityReplay(wireModelId, sessionId, contents);
           } else {
@@ -530,6 +563,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         };
         headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
         headers["Authorization"] = `Bearer ${token}`;
+        if (/claude/i.test(wireModelId)) {
+          headers["anthropic-beta"] = "interleaved-thinking-2025-05-14";
+        }
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }
 
@@ -596,6 +632,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
+      // Raw unterminated-line bytes, independent of TextDecoder's pending UTF-8
+      // state. `bufferBytes` is the decoded residual and can undercount by 1–3
+      // bytes when a chunk ends mid-character.
+      let incompleteLineBytes = 0;
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
@@ -605,8 +645,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const handleDataLine = async function* (line: string): AsyncGenerator<AdapterEvent, "continue" | "content" | "terminate"> {
         const payload = line.slice(5).trim();
         if (!payload) return "continue";
-        if (payload.length > MAX_SSE_FRAME_BYTES) {
-          yield { type: "error", message: `upstream SSE data frame exceeds ${MAX_SSE_FRAME_BYTES} bytes` };
+        if (budgetEncoder.encode(payload).byteLength > sseFrameMaxBytes) {
+          yield { type: "error", message: `upstream SSE data frame exceeds ${sseFrameMaxBytes} bytes` };
           return "terminate";
         }
         let emittedContentEvent = false;
@@ -744,6 +784,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          const incoming = value ?? new Uint8Array();
+          // Cap each incomplete line on raw bytes before decode and before waiting
+          // for a newline — otherwise a single unterminated data: payload can grow
+          // without bound, buffer.length is UTF-16 units, and a mid-character
+          // decode residual undercounts the true line. Reset at each newline so
+          // several sub-cap frames in one network chunk are not rejected as one
+          // oversized frame.
+          const lineScan = scanSseLineBytes(incompleteLineBytes, incoming);
+          if (lineScan.maximum > sseFrameMaxBytes) {
+            yield { type: "error", message: `upstream SSE data frame exceeds ${sseFrameMaxBytes} bytes` };
+            try { await reader.cancel(); } catch { /* ignore */ }
+            return;
+          }
+          incompleteLineBytes = lineScan.residual;
           const nextBuffer = buffer + decoder.decode(value, { stream: true });
           const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
           const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
@@ -751,13 +805,6 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           appendReservation.commitRetained();
           budget.releaseRetained(bufferBytes, { kind: "live_transient" });
           bufferBytes = nextBufferBytes;
-          // Cap incomplete frames before waiting for a newline — otherwise a single
-          // unterminated data: payload can grow without bound.
-          if (buffer.length > MAX_SSE_FRAME_BYTES) {
-            yield { type: "error", message: `upstream SSE data frame exceeds ${MAX_SSE_FRAME_BYTES} bytes` };
-            try { await reader.cancel(); } catch { /* ignore */ }
-            return;
-          }
 
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
@@ -830,6 +877,15 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
+      // Cloud Code Assist exposes only the SSE transport. Unary callers still use this
+      // buffered adapter entry point, so collect the exact same events parseStream emits
+      // instead of maintaining a second CCA JSON parser.
+      if (provider.googleMode === "cloud-code-assist") {
+        const events: AdapterEvent[] = [];
+        for await (const event of this.parseStream(response, budget)) events.push(event);
+        retainTranslatedEventBatch(events, budget);
+        return events;
+      }
       // Reject oversized responses before JSON parse. Prefer Content-Length when
       // present and truthful; always stream-read with a hard byte cap so a missing
       // or lying Content-Length cannot force a full in-memory buffer + parse.
@@ -900,15 +956,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const err = raw.error as { message?: string };
         return finish([{ type: "error", message: err.message ?? "upstream error" }]);
       }
-      // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.
-      let json = raw;
-      if (provider.googleMode === "cloud-code-assist") {
-        const wrapped = raw.response;
-        if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-          return finish([{ type: "error", message: "google-antigravity response missing response wrapper" }]);
-        }
-        json = wrapped as Record<string, unknown>;
-      }
+      const json = raw;
       const events: AdapterEvent[] = [];
 
       const candidates = json.candidates as { content?: { parts?: GoogleResponsePart[] }; finishReason?: string }[] | undefined;
@@ -920,10 +968,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (candidates?.[0]?.content?.parts) {
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-          && replayModel && replaySession) {
+        const replayModel = vertexReplayModel;
+        const replaySession = vertexReplaySession;
+        if (provider.googleMode === "vertex" && replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
         for (const part of candidates[0].content.parts) {
@@ -960,7 +1007,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+      if (provider.googleMode === "vertex"
         && isVertexTruncatedTurn(candidates?.[0]?.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
       }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
+import { anthropicToolCallId } from "../src/adapters/tool-call-id";
 import type { OcxParsedRequest } from "../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
@@ -133,6 +134,30 @@ describe("google adapter — tool-call ids on the wire", () => {
     expect(frPart.functionResponse.id).toBe("call_abc");
   });
 
+  test("orphan tool results are omitted instead of emitting an unmatched functionResponse", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
+      { role: "user", content: "continue" },
+    ]));
+
+    expect(contents.flatMap(content => content.parts).some(part => "functionResponse" in part)).toBe(false);
+    expect(JSON.stringify(contents)).not.toContain("orphan");
+  });
+
+  test("orphan result ids do not reserve allocator slots", async () => {
+    const rawId = "call:a";
+    const normalizedId = anthropicToolCallId(rawId)!;
+    const contents = await geminiContents(parsedWith([
+      { role: "assistant", content: [{ type: "toolCall", id: rawId, name: "bash", arguments: {} }] },
+      { role: "toolResult", toolCallId: rawId, toolName: "bash", content: "ok", isError: false },
+      { role: "toolResult", toolCallId: normalizedId, toolName: "missing", content: "discard", isError: false },
+    ]));
+
+    const functionCall = contents.find(content => content.role === "model")!.parts
+      .find(part => "functionCall" in part) as { functionCall: { id?: string } };
+    expect(functionCall.functionCall.id).toBe(normalizedId);
+  });
+
   test("ids are normalized to Anthropic's tool_use.id charset, preserving call/response pairing", async () => {
     const contents = await geminiContents(parsedWith([
       { role: "assistant", content: [{ type: "toolCall", id: "fc:weird/id#1", name: "bash", arguments: {} }] },
@@ -153,6 +178,8 @@ describe("google adapter — tool-call ids on the wire", () => {
         { type: "toolCall", id: "call:a", name: "bash", arguments: {} },
         { type: "toolCall", id: "call/a", name: "bash", arguments: {} },
       ] },
+      { role: "toolResult", toolCallId: "call:a", toolName: "bash", content: "one", isError: false },
+      { role: "toolResult", toolCallId: "call/a", toolName: "bash", content: "two", isError: false },
     ]));
     const ids = contents.find(c => c.role === "model")!.parts
       .filter(p => "functionCall" in p)

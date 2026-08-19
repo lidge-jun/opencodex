@@ -15,6 +15,12 @@ function googleErrorDetail(payloadText: string): { message?: string; status?: st
   };
 }
 
+const ANTIGRAVITY_GEO_BLOCKED_MARKER = "user location is not supported for the api use";
+
+export function isAntigravityGeoBlockedBody(payloadText: string): boolean {
+  return payloadText.toLowerCase().includes(ANTIGRAVITY_GEO_BLOCKED_MARKER);
+}
+
 function classifyGoogle(label: string, status: number | undefined, enumStatus: string | undefined, text: string): string {
   const lower = `${enumStatus ?? ""} ${text}`.toLowerCase();
   const quotaExhausted =
@@ -29,6 +35,7 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
   if (status === 401 || enumStatus === "UNAUTHENTICATED" || lower.includes("unauthenticated") || lower.includes("invalid authentication") || lower.includes("expired")) {
     return `${label} authentication failed`;
   }
+  if (isAntigravityGeoBlockedBody(lower)) return `${label} location not supported`;
   if (status === 403 || enumStatus === "PERMISSION_DENIED" || lower.includes("permission denied") || lower.includes("access denied")) {
     return `${label} access denied`;
   }
