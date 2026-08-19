@@ -15,6 +15,7 @@ import {
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
+import { buildSelectedContext, CURSOR_VISION_IMAGE_HISTORY_MARKER } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import { parseDataUrl } from "../image";
 import {
@@ -218,7 +219,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {
-      const text = contentText(message).trim();
+      const text = historyContentText(message).trim();
       // Cursor root replay expects OpenAI-style content parts for historical user messages.
       // A bare string survives blob hydration but external workers reject the completed replay
       // before tokenization (`usedTokens: 0`, then invalid_argument).
@@ -335,7 +336,7 @@ function contentText(message: OcxMessage): string {
     .map(part => {
       if (part.type === "text") return part.text;
       if (part.type === "thinking") return part.thinking;
-      if (part.type === "image") return `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`;
+      if (part.type === "image") return undefined;
       return undefined;
     })
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -345,7 +346,26 @@ function contentText(message: OcxMessage): string {
 function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
-    .map(part => part.type === "text" ? part.text : `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`)
+    .map(part => {
+      if (part.type === "text") return part.text;
+      if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+}
+
+/** History serializer. Replayed turns are text-only; never embed image bytes. */
+function historyContentText(message: OcxMessage): string {
+  if (message.role === "toolResult" || typeof message.content === "string") return contentText(message);
+  return message.content
+    .map(part => {
+      if (part.type === "text") return part.text;
+      if (part.type === "thinking") return part.thinking;
+      if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
 }
 
@@ -720,8 +740,10 @@ function conversationTurns(
     flush();
     current = {
       userMessage: storeCursorBlob(toBinary(UserMessageSchema, create(UserMessageSchema, {
-        text: contentText(message),
+        text: historyContentText(message),
         messageId: crypto.randomUUID(),
+        selectedContext: buildSelectedContext([], requestScope),
+        mode: 1,
       })), requestScope),
       steps: [],
     };
@@ -791,11 +813,16 @@ function buildPreparedCursorRunRequest(
     ? appendCursorGenericToolUseHint(request.tools, rawText)
     : rawText;
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
+  const selectedImages = request.selectedImages ?? [];
   // Native models resume the remembered Cursor conversation. External wire
   // models continue as userMessageAction so history-blob tool results stay
   // visible without a ResumeAction.
   const externalToolContinuation = lastRawIsToolResult && isCursorExternalWireModel(request.modelId);
-  const actionCase = (externalToolContinuation || (!lastRawIsToolResult && text.trim().length > 0))
+  // Image-only active turns (including soft-omitted images) stay userMessageAction.
+  const actionCase = (
+    externalToolContinuation
+    || (!lastRawIsToolResult && (text.trim().length > 0 || selectedImages.length > 0))
+  )
     ? "userMessageAction"
     : "resumeAction";
   const actionText = externalToolContinuation
@@ -809,6 +836,9 @@ function buildPreparedCursorRunRequest(
             userMessage: create(UserMessageSchema, {
               text: actionText,
               messageId: crypto.randomUUID(),
+              selectedContext: buildSelectedContext(selectedImages, requestScope),
+              // OmniRoute / cursor-agent always send mode=1 on UserMessage.
+              mode: 1,
             }),
             requestContext: buildRequestContext(),
           }),

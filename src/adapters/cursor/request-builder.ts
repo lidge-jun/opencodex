@@ -25,6 +25,7 @@ import {
   isCursorWaitTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
+import { extractCursorImageUrls } from "./images";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -205,15 +206,8 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "thinking":
       return part.thinking;
     case "image":
-      // User-message images are still flattened here: this path builds the plain-text prompt, and
-      // the schema slot that could carry them (UserMessage.selectedContext.selectedImages) is not
-      // populated by this adapter. The tool-result ENCODER does build real McpImageContent
-      // (see protobuf-request.ts), so the old "unsupported by Cursor adapter" wording is no
-      // longer true of the encoder — but note that nothing reaches Cursor today either way:
-      // every Cursor model is in noVisionModels (providers/registry.ts), so the vision sidecar
-      // describes or strips images before this adapter runs. Kept the same length to avoid
-      // shifting any byte-budgeted prompt path.
-      return `[image omitted from this Cursor text prompt: ${part.detail ?? "auto"}]`;
+      // Images ride UserMessage.selected_context (SelectedImage) instead of text.
+      return undefined;
     case "toolCall":
       // Cursor does not accept OpenAI Responses assistant tool-call parts as native history here.
       // Rendering them as visible "[tool_call]" text leaks synthetic protocol markers back into
@@ -246,15 +240,38 @@ function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
   switch (message.role) {
     case "user":
     case "developer":
-      return { role: message.role, content: contentToText(message.content) };
+      {
+        const content = contentToText(message.content);
+        // Image-only turns survive as empty content; the encoder keeps them userMessageAction.
+        if (content.length === 0 && extractCursorImageUrls(message.content).length === 0) {
+          return undefined;
+        }
+        return { role: message.role, content };
+      }
     case "assistant":
-      return { role: "assistant", content: contentToText(message.content) };
+      {
+        const content = contentToText(message.content);
+        return content.length > 0 ? { role: "assistant", content } : undefined;
+      }
     case "toolResult":
       return {
         role: "tool",
         content: toolResultToText(message),
       };
   }
+}
+
+/**
+ * Rebuild the text `messages` channel from prepared `rawMessages` so omission markers
+ * and JPEG-rewritten parts stay visible to activePromptText after image preparation.
+ */
+export function cursorRequestMessagesFromRaw(
+  messages: readonly OcxMessage[] | undefined,
+): CursorRequestMessage[] {
+  if (!messages?.length) return [];
+  return messages
+    .map(requestMessage)
+    .filter((message): message is CursorRequestMessage => !!message);
 }
 
 export function generatedCursorConversationId(): string {
@@ -307,9 +324,7 @@ export function createCursorRequest(
   parsed: OcxParsedRequest,
   options: CreateCursorRequestOptions = {},
 ): CursorRunRequest {
-  const messages = parsed.context.messages
-    .map(requestMessage)
-    .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0);
+  const messages = cursorRequestMessagesFromRaw(parsed.context.messages);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);

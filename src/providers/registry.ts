@@ -10,6 +10,7 @@ import {
   MOONSHOT_BASE_URL_CHOICES, MOONSHOT_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
+  CURSOR_NO_VISION_MODELS,
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
   cursorModelIds,
@@ -984,11 +985,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
     // routes (kimi, kimi-code, opencode-go).
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
-    // Cursor's wire protocol never forwards image parts (request-builder emits an unsupported-
-    // content marker), so the vision sidecar covers ALL cursor models regardless of what the
-    // upstream model could natively do. Live-discovered models outside the static list fall back
-    // to the same marker until they appear here.
-    noVisionModels: cursorModelIds(CURSOR_STATIC_MODELS),
+    // Blind Cursor models (Auto routers, Composer, GLM-5.2, GLM-5.3) go through the vision sidecar;
+    // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
+    // still advertises image for noVision members so Codex can attach (sidecar option B).
+    noVisionModels: [...CURSOR_NO_VISION_MODELS],
   },
   {
     id: "xai",

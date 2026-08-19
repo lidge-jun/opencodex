@@ -1,6 +1,7 @@
 import type { OcxUsage } from "../../types";
 import type { OcxMessage, OcxRequestOptions, OcxTool } from "../../types";
 import type { CursorRoutingLevel } from "./discovery";
+import type { ResolvedCursorImage } from "./images";
 
 export interface CursorRequestedModelParameter {
   id: string;
@@ -16,7 +17,13 @@ export interface CursorRunRequest {
   conversationId: string;
   system: string[];
   messages: CursorRequestMessage[];
-  rawMessages?: OcxMessage[];
+  rawMessages?: readonly OcxMessage[];
+  /**
+   * Images for the active user/developer turn. Encoded as SelectedImage blobIdWithData refs under
+   * UserMessage.selected_context (bytes live in the request-scoped KV store for getBlobArgs
+   * hydration). History stays text-only. data: URLs only in this slice.
+   */
+  selectedImages?: readonly ResolvedCursorImage[];
   tools?: OcxTool[];
   toolChoice?: OcxRequestOptions["toolChoice"];
   parallelToolCalls?: boolean;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex/catalog";
+import { CURSOR_NO_VISION_MODELS } from "../src/adapters/cursor/discovery";
 import { getModelMetadata, resolveMetadataProvider } from "../src/generated/model-metadata";
 import { buildInitProviders } from "../src/cli/init";
 import { OAUTH_PROVIDERS } from "../src/oauth";
@@ -655,6 +656,13 @@ describe("provider registry parity", () => {
     expect(seed.modelContextWindows?.["gpt-5.6-luna"]).toBe(1_000_000);
     expect(seed.modelReasoningEfforts?.["gpt-5.5"]).toEqual(["low", "medium", "high"]);
     expect(seed.modelReasoningEfforts?.["gpt-5.6-sol"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cursor?.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
+    expect(seed.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
+    expect(seed.noVisionModels).toContain("composer-2.5");
+    expect(seed.noVisionModels).toContain("glm-5.3");
+    expect(seed.noVisionModels).not.toContain("grok-4.5");
+    expect(seed.modelInputModalities?.auto).toEqual(["text", "image"]);
+    expect(seed.modelInputModalities?.["composer-2.5"]).toEqual(["text", "image"]);
 
     const savedCursor: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
     enrichProviderFromCatalog("cursor", savedCursor);
