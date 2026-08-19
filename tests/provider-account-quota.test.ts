@@ -486,4 +486,94 @@ describe("fetchProviderAccountQuotas", () => {
     expect(byProject[36]).toBe(79);
     expect(byProject[10]).toBe(15);
   });
+
+  test("uses the configured provider baseUrl for Antigravity account quota probes", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-1",
+      refresh: "refresh-agy-1",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+
+    const seenUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seenUrls.push(String(input));
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.5, resetTime: "2026-07-05T14:00:00Z" } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("google-antigravity", true, "https://custom-antigravity.example.com");
+    expect(rows.length).toBe(1);
+    expect(seenUrls).toEqual(["https://custom-antigravity.example.com/v1internal:fetchAvailableModels"]);
+  });
+
+  test("skips Antigravity accounts without projectId instead of throwing or flagging unavailable", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-with-project",
+      refresh: "refresh-with-project",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+    await saveCredential("google-antigravity", {
+      access: "token-no-project",
+      refresh: "refresh-no-project",
+      expires: Date.now() + 3600_000,
+      accountId: "acct-agy-2",
+      email: "agy2@example.com",
+    });
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.5, resetTime: "2026-07-05T14:00:00Z" } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("google-antigravity", true);
+    expect(rows.length).toBe(2);
+    expect(fetchCalls).toBe(1);
+    const nullQuotaRows = rows.filter(r => r.quota === null);
+    expect(nullQuotaRows.length).toBe(1);
+    expect(nullQuotaRows[0]!.unavailable).toBeUndefined();
+    const quotaRows = rows.filter(r => r.quota !== null);
+    expect(quotaRows.length).toBe(1);
+    expect(quotaRows[0]!.quota?.customWindows?.length).toBeGreaterThan(0);
+  });
+
+  test("negative-caches Antigravity upstream 404 so probes are not repeated within the TTL", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-1",
+      refresh: "refresh-agy-1",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response("not found", { status: 404, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const first = await fetchProviderAccountQuotas("google-antigravity", true);
+    expect(first[0]!.unavailable).toBe(true);
+    expect(fetchCalls).toBe(1);
+
+    const second = await fetchProviderAccountQuotas("google-antigravity", false);
+    expect(fetchCalls).toBe(1);
+  });
 });

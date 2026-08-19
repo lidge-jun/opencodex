@@ -7,7 +7,7 @@ import {
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { codexPlanKey } from "../codex/plan";
-import { loadConfig, resolveEnvValue } from "../config";
+import { resolveEnvValue } from "../config";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
@@ -1503,6 +1503,7 @@ async function fetchAccountQuota(
   provider: string,
   accountId: string,
   forceRefresh: boolean,
+  baseUrl?: string,
 ): Promise<AccountQuotaCacheEntry> {
   const key = accountCacheKey(provider, accountId);
   const writerGeneration = captureConfigGeneration();
@@ -1519,10 +1520,19 @@ async function fetchAccountQuota(
         quota = await fetchAnthropicUsageQuota(token);
       } else if (provider === "google-antigravity") {
         const stored = getAccountCredential(provider, accountId);
-        if (!stored?.projectId) throw new Error("google-antigravity account projectId missing");
+        if (!stored?.projectId) {
+          // Permanent configuration gap (projectId only appears after a fresh login):
+          // skip silently without marking the row unavailable, so the GUI does not
+          // surface a spurious quota error on every poll.
+          const entry: AccountQuotaCacheEntry = { ts: Date.now(), quota: null };
+          if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+            accountQuotaCache.set(key, entry);
+            sweepExpiredOnWrite(entry.ts);
+          }
+          return entry;
+        }
         const token = await getTokenForAccountQuotaProbe(provider, accountId);
-        const provBaseUrl = loadConfig().providers?.["google-antigravity"]?.baseUrl;
-        quota = await fetchAntigravityUsageQuota(token, stored.projectId, provBaseUrl);
+        quota = await fetchAntigravityUsageQuota(token, stored.projectId, baseUrl);
       }
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
@@ -1570,12 +1580,13 @@ async function fetchAccountQuota(
 export async function fetchProviderAccountQuotas(
   provider: string,
   forceRefresh = false,
+  baseUrl?: string,
 ): Promise<ProviderAccountQuota[]> {
   if (!supportsPerAccountQuota(provider)) return [];
   const set = getAccountSet(provider);
   if (!set) return [];
   return await Promise.all(set.accounts.map(async account => {
-    const entry = await fetchAccountQuota(provider, account.id, forceRefresh);
+    const entry = await fetchAccountQuota(provider, account.id, forceRefresh, baseUrl);
     return {
       accountId: account.id,
       quota: entry.quota,
