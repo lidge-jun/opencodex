@@ -3,13 +3,15 @@ import { fetchAntigravityLiveQuota } from "../src/providers/antigravity-quota";
 import { QUOTA_RESPONSE_MAX_BYTES } from "../src/providers/quota";
 
 test("does not classify an unlabelled daily summary window as weekly", async () => {
+  const requestOptions: Array<{ url: string; init?: RequestInit }> = [];
   const result = await fetchAntigravityLiveQuota({
     accessToken: "agy-access-secret",
     projectId: "agy-project-secret",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
     timeoutMs: 1_000,
-    fetchImpl: async (input: RequestInfo | URL) => {
+    fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      requestOptions.push({ url, init });
       if (url.endsWith(":retrieveUserQuota")) {
         return new Response(JSON.stringify({
           models: {
@@ -28,6 +30,11 @@ test("does not classify an unlabelled daily summary window as weekly", async () 
 
   expect(result?.customWindows?.[0]?.label).toBe("Gem");
   expect(result?.weeklyPercent).toBeUndefined();
+  expect(
+    requestOptions
+      .filter(({ url }) => url.includes(":retrieveUserQuota"))
+      .map(({ init }) => init?.redirect),
+  ).toEqual(["error", "error"]);
 });
 
 test("keeps the daily quota when the summary RPC fails", async () => {
