@@ -178,3 +178,24 @@ Two gaps named in the PR rather than carried silently: Direct `/v1/models` can s
 Pool-only grant (advertisement only; dispatch still checks the caller credential), and
 same-account gated-400 retry stays Pool-only.
 
+
+## wp12 — PR #2053 (@Ingwannu), the C4 OAuth hold
+
+**PR #2149**, branch `codex/absorb-oauth-superseded-commit`, base `dev`.
+
+Applied unchanged, rebased from 145 commits behind. The persist-boundary placement is the whole
+design: `assertBeforePersist` runs inside the file lock, after `fn(store)` and before
+`persist()`, so a superseded flow's in-memory mutation is discarded rather than written.
+Ownership is identity-checked against the flow's own `AbortController`, not a timestamp.
+
+**This was a wp1 HOLD and it is resolved by shipping, not by absorbing quietly.** The PR states
+plainly that MAINTAINERS.md mandates security review and asks that it not be merged on my
+verification alone, and it names three residuals rather than letting the original claim stand:
+
+1. the description claimed reauth coverage; the diff wires the hook but adds no reauth test
+2. `OAuthLoginSupersededError` is not in the public allowlist, so it projects to the generic string
+3. a never-finishing Kiro rollback blocks all replacements, by design
+
+Evidence: reverting `src/oauth/` fails 2 tests including the cancel-then-replace round trip;
+full suite 13536 pass / 0 fail.
+
