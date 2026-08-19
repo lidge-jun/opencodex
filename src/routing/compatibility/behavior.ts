@@ -1,3 +1,4 @@
+import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList } from "../../types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { PROVIDER_REGISTRY } from "../../providers/registry";
@@ -51,8 +52,22 @@ function includesModel(list: string[] | undefined, modelId: string): boolean {
   return modelInList(list, modelId);
 }
 
+/**
+ * Per-model override lookup for the report rows.
+ *
+ * Delegates to modelRecordValue so the report reads these maps the way the
+ * runtime does -- own properties only, then the pre-colon family, then a
+ * case-folded key. A bare index disagreed on all three: it missed the
+ * `gpt-oss` entry ollama-cloud's `gpt-oss:120b` actually resolves, missed a
+ * differently-cased key, and walked the prototype chain, so a routed model id
+ * of `constructor`/`toString` yielded an Object.prototype function. That last
+ * one made buildBehaviorFingerprintV1 throw ("unsupported value type
+ * function"), which resolvePassiveRouteSubjectId swallows -- the subject is
+ * silently dropped, and the linker contract says implementations do not throw.
+ * openai-responses.ts guards modelPreferHostedTools for the same reason.
+ */
 function modelValue<T>(map: Record<string, T> | undefined, modelId: string): T | undefined {
-  return map?.[modelId];
+  return modelRecordValue(map, modelId);
 }
 
 const CREDENTIAL_HEADER = /(authorization|api[-_]?key|token|secret|credential|cookie)/i;

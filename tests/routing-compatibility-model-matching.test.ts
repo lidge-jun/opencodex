@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { resolveProductionBehaviorValues } from "../src/routing/compatibility/behavior";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { buildBehaviorFingerprintV1 } from "../src/lab/subject/behavior-fingerprint";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 // ollama-cloud ships `gpt-oss:120b` verbatim (src/providers/registry.ts) and the same
@@ -70,5 +71,70 @@ describe("behavior report must agree with the wire the adapter actually builds",
     const v = resolveProductionBehaviorValues(config, "ollama-cloud", "glm-5.3", effective, "salt")!;
     expect(v["sampling.omitTemperature"]!.value).toBe(false);
     expect(v["reasoning.budgetMode"]!.value).toBe(false);
+  });
+});
+
+// The list-shaped options above are one half of the report. The other half is the
+// per-model override maps, which the runtime reads through modelRecordValue: own
+// properties, then the pre-colon family, then a case-folded key.
+
+const OVERRIDES: OcxProviderConfig = {
+  adapter: "openai-chat",
+  baseUrl: "https://ollama.com/v1",
+  apiKey: "sk-test",
+  authMode: "key",
+  modelMaxOutputTokens: { "gpt-oss": 1234 },
+  modelContextWindows: { "GPT-OSS": 55_555 },
+};
+
+const overrideConfig = { providers: { "ollama-cloud": OVERRIDES } } as unknown as OcxConfig;
+
+const overrideValues = (modelId: string) =>
+  resolveProductionBehaviorValues(overrideConfig, "ollama-cloud", modelId, OVERRIDES, "salt")!;
+
+describe("behavior report reads per-model overrides the way the runtime does", () => {
+  test("the adapter really applies the bare-family override to the :tag model (ground truth)", () => {
+    const parsed: OcxParsedRequest = {
+      modelId: MODEL,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      stream: false,
+      options: {},
+    };
+    const body = JSON.parse(createOpenAIChatAdapter(OVERRIDES).buildRequest(parsed).body as string);
+    expect(body.max_tokens).toBe(1234);
+  });
+
+  test("report agrees: limits.maxOutputTokens for the :tag model", () => {
+    expect(overrideValues(MODEL)["limits.maxOutputTokens"]!.value).toBe(1234);
+  });
+
+  test("a case-folded key still resolves", () => {
+    expect(overrideValues("gpt-oss")["limits.contextWindow"]!.value).toBe(55_555);
+  });
+
+  test("an unrelated model gets no override (control)", () => {
+    expect(overrideValues("glm-5.3")["limits.maxOutputTokens"]!.value).toBeNull();
+  });
+});
+
+// Model ids are operator-controlled, so one can collide with Object.prototype.
+// openai-responses.ts already guards modelPreferHostedTools for exactly this.
+describe("a prototype-shaped model id resolves to no override", () => {
+  test.each(["constructor", "toString", "valueOf", "hasOwnProperty"])(
+    "%s yields null rather than an inherited function",
+    (modelId) => {
+      const v = overrideValues(modelId);
+      expect(v["limits.contextWindow"]!.value).toBeNull();
+      expect(v["limits.maxOutputTokens"]!.value).toBeNull();
+      expect(typeof v["modalities.input"]!.value).not.toBe("function");
+    },
+  );
+
+  test("so the behavior fingerprint stays computable", () => {
+    // jcsStringify rejects a function, and resolvePassiveRouteSubjectId swallows the
+    // throw -- the subject would silently never link.
+    expect(() => buildBehaviorFingerprintV1(overrideValues("constructor"))).not.toThrow();
+    expect(buildBehaviorFingerprintV1(overrideValues("constructor")))
+      .toBe(buildBehaviorFingerprintV1(overrideValues("toString")));
   });
 });
