@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   accountBoundNativeOpenAiSlugs,
   accountBoundNativeDisplayName,
@@ -23,6 +23,13 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import { applyMultiAgentMode, applyNativeOpenAiContextOverride } from "../src/codex/catalog/parsing";
 import type { OcxConfig } from "../src/types";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
+import {
+  resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
+} from "../src/codex/model-entitlements";
+
+afterEach(() => resetCodexModelEntitlementCacheForTests());
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;
@@ -63,13 +70,32 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(filtered.length).toBe(all.length - 1);
   });
 
-  test("nativeModelRows lists the full static supported set regardless of disabled state", () => {
+  test("nativeModelRows hides account-gated ids until an authenticated roster confirms them", () => {
     const rows = nativeModelRows({ disabledModels: ["gpt-5.6-sol"] });
-    expect(rows.map(r => r.slug)).toEqual([...NATIVE_OPENAI_MODELS]);
+    expect(rows.map(r => r.slug)).toEqual(
+      NATIVE_OPENAI_MODELS.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
+    );
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.disabled).toBe(true);
     expect(rows.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
     // Known context metadata rides along for the dashboard.
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(272_000);
+
+    seedCodexModelEntitlementsForTests("main", ["gpt-daybreak-blue-latest"]);
+    expect(nativeModelRows({ disabledModels: [] }).map(row => row.slug))
+      .toContain("gpt-daybreak-blue-latest");
+  });
+
+  test("Direct bare rows use only main entitlement while Pool may use any eligible account", () => {
+    seedCodexModelEntitlementsForTests("pool-a", ["gpt-daybreak-blue-latest"]);
+    const direct = makeConfig({
+      providers: { openai: { authMode: "forward", codexAccountMode: "direct" } },
+    });
+    const pool = makeConfig({
+      providers: { openai: { authMode: "forward", codexAccountMode: "pool" } },
+    });
+
+    expect(nativeModelRows(direct).map(row => row.slug)).not.toContain("gpt-daybreak-blue-latest");
+    expect(nativeModelRows(pool).map(row => row.slug)).toContain("gpt-daybreak-blue-latest");
   });
 
   test("a per-model window sets the native row and never exceeds the measured ceiling", () => {
@@ -276,7 +302,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(observedAccountBoundNativeOpenAiSlugs(observedEntries)).toEqual(["gpt-future-unlisted"]);
   });
 
-  test("gpt-daybreak-blue-latest ships as a global native row without an observation", () => {
+  test("gpt-daybreak-blue-latest has one native capability template when selected for emission", () => {
     const entries = buildCatalogEntries(
       nativeTemplate(),
       [...NATIVE_OPENAI_MODELS],
@@ -290,8 +316,8 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       new Set(),
     );
     const bare = entries.filter(entry => entry.slug === "gpt-daybreak-blue-latest");
-    // Exactly one row: the slug sits in BOTH NATIVE_OPENAI_MODELS and
-    // NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS, and that overlap must not duplicate it.
+    // Exactly one row: entitlement decides whether the caller passes this slug into the builder;
+    // once selected, its overlap with the capability-alias list must not duplicate it.
     expect(bare).toHaveLength(1);
     // Capability is inherited from gpt-5.6-sol, so it is a recursive-capable v2 delegate.
     expect(bare[0]?.multi_agent_version).toBe("v2");
@@ -590,7 +616,9 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     );
     const rows = await modelsRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>;
     const nativeRows = rows.filter(r => r.native);
-    expect(nativeRows.map(r => r.namespaced)).toEqual([...NATIVE_OPENAI_MODELS]);
+    expect(nativeRows.map(r => r.namespaced)).toEqual(
+      NATIVE_OPENAI_MODELS.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
+    );
     expect(nativeRows.find(r => r.namespaced === "gpt-5.6-sol")?.disabled).toBe(true);
     // Native rows lead the response so the GUI pins the group first.
     expect(rows[0]?.native).toBe(true);

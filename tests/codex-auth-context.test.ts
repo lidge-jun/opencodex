@@ -65,6 +65,7 @@ import {
   codexAccountSelectionForTurn,
   tryAdmitTurn,
 } from "../src/server/lifecycle";
+import type { CodexModelEntitlementSnapshot } from "../src/codex/model-entitlements";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
@@ -340,6 +341,122 @@ describe("Codex auth context", () => {
       .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
     await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer   " }), config(), "direct"))
       .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
+  });
+
+  test("direct account-gated routing checks the caller credential, not local account state", async () => {
+    let callerChecks = 0;
+    let localDiscoveries = 0;
+    const headers = new Headers({ authorization: "Bearer caller", "chatgpt-account-id": "caller-account" });
+    await expect(resolveCodexAuthContext(headers, config(), "direct", {
+      modelId: "gpt-daybreak-blue-latest",
+      isDirectCallerEntitledToCodexModel: async (received, modelId) => {
+        callerChecks += 1;
+        expect(received).toBe(headers);
+        expect(modelId).toBe("gpt-daybreak-blue-latest");
+        return true;
+      },
+      resolveCodexModelEntitlements: async () => {
+        localDiscoveries += 1;
+        throw new Error("must not inspect local accounts");
+      },
+    })).resolves.toEqual({ kind: "main", accountId: null });
+    expect(callerChecks).toBe(1);
+    expect(localDiscoveries).toBe(0);
+  });
+
+  test("Direct admission-bearer substitution checks the stored main account grant", async () => {
+    const entitledMain: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([[MAIN_CODEX_ACCOUNT_ID, new Set(["gpt-daybreak-blue-latest"])]]),
+      confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID]),
+      credentialIdentities: new Map(),
+    };
+    let callerChecks = 0;
+    await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer ocx-admission" }),
+      config(),
+      "direct",
+      {
+        modelId: "gpt-daybreak-blue-latest",
+        substituteMainCredentialForDirect: true,
+        resolveCodexModelEntitlements: async () => entitledMain,
+        isDirectCallerEntitledToCodexModel: async () => {
+          callerChecks += 1;
+          return false;
+        },
+      },
+    )).resolves.toEqual({ kind: "main", accountId: null });
+    expect(callerChecks).toBe(0);
+  });
+
+  test("account-gated native routing skips an active account without the model grant", async () => {
+    const cfg = config();
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-token", account_id: "main-account" },
+    }));
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    const entitlementSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([
+        [MAIN_CODEX_ACCOUNT_ID, new Set(["gpt-daybreak-blue-latest"])],
+        ["pool-a", new Set(["gpt-5.6-sol"])],
+      ]),
+      confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID, "pool-a"]),
+      credentialIdentities: new Map(),
+    };
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: "gpt-daybreak-blue-latest",
+      isMainAccountTokenLive: () => true,
+      getMainAccountToken: () => ({ accessToken: "main-token", chatgptAccountId: "main-account" }),
+      resolveCodexModelEntitlements: async () => entitlementSnapshot,
+      primeCodexPoolQuotas: async () => {},
+    })).resolves.toMatchObject({
+      kind: "main-pool",
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+  });
+
+  test("exact account-gated routing fails closed for an unentitled account", async () => {
+    const cfg = config();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    const entitlementSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([["pool-a", new Set(["gpt-5.6-sol"])]]),
+      confirmedAccountIds: new Set(["pool-a"]),
+      credentialIdentities: new Map(),
+    };
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      accountId: "pool-a",
+      modelId: "gpt-daybreak-blue-latest",
+      resolveCodexModelEntitlements: async () => entitlementSnapshot,
+    })).rejects.toThrow("Selected Codex account does not support this model");
+  });
+
+  test("ordinary native models do not pay the entitlement discovery path", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    let discoveries = 0;
+    await expect(resolveCodexAuthContext(new Headers(), config(), "pool", {
+      modelId: "gpt-5.6-sol",
+      resolveCodexModelEntitlements: async () => {
+        discoveries += 1;
+        throw new Error("must not run");
+      },
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(discoveries).toBe(0);
   });
 
   test("exact account resolution overrides Direct without consulting Pool selection", async () => {

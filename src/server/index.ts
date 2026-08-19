@@ -59,6 +59,12 @@ import {
   cooldownErrorMessage,
 } from "../codex/auth-context";
 import { codexAccountNamespaceForModel } from "../codex/account-namespace-match";
+import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../codex/account-namespaces";
+import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
+import {
+  availableAccountGatedNativeModels,
+  resolveCodexModelEntitlements,
+} from "../codex/model-entitlements";
 export {
   clearThreadAccountMap,
   formatCodexProviderForLog,
@@ -900,8 +906,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         let goModels;
+        let modelEntitlements;
         try {
-          goModels = await fetchAllModels(config);
+          [goModels, modelEntitlements] = await Promise.all([
+            fetchAllModels(config),
+            resolveCodexModelEntitlements(config),
+          ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {
             return withCors(new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
@@ -912,24 +922,57 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           throw error;
         }
         const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
+        const bareEligibleAccountIds = providerCodexAccountMode(
+          OPENAI_CODEX_PROVIDER_ID,
+          config.providers[OPENAI_CODEX_PROVIDER_ID],
+        ) === "direct" ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined;
+        const availableBareGatedNativeSlugs = availableAccountGatedNativeModels(
+          modelEntitlements,
+          bareEligibleAccountIds,
+        );
+        const availableAccountGatedNativeSlugs = availableAccountGatedNativeModels(modelEntitlements);
+        const availableBareNativeSlugs = NATIVE_OPENAI_MODELS.filter(slug => (
+          !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableBareGatedNativeSlugs.has(slug)
+        ));
+        const availableAccountNativeSlugs = NATIVE_OPENAI_MODELS.filter(slug => (
+          !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableAccountGatedNativeSlugs.has(slug)
+        ));
         const nativeSlugs = includeNativeOpenAi
-          ? nativeOpenAiSlugs()
+          ? nativeOpenAiSlugs().filter(slug => (
+              !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableBareGatedNativeSlugs.has(slug)
+            ))
           : [];
         const disabledNatives = disabledNativeSlugs(config);
         const disabledModels = new Set(config.disabledModels ?? []);
         const shadowedNativeSlugs = configuredNativeAliasSlugs(config);
-        const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
+        const suppressedBareNativeSlugs = new Set([
+          ...desktopAllowlistSuppressedNativeSlugs(config),
+          ...[...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(slug => !availableBareGatedNativeSlugs.has(slug)),
+        ]);
         const accountSelectors = includeAccountBoundNativeOpenAi
           ? visibleCodexAccountSelectors(config)
           : [];
+        const accountTargets = new Map(codexAccountNamespaceEntries(config));
         const accountNativeSlugsBySelector = includeAccountBoundNativeOpenAi
-          ? accountBoundNativeOpenAiSlugsBySelector(config)
+          ? new Map([...accountBoundNativeOpenAiSlugsBySelector(config)].map(([selector, slugs]) => {
+            const target = accountTargets.get(selector);
+            const accountId = target && isMainCodexAccountTarget(target) ? MAIN_CODEX_ACCOUNT_ID : target;
+            const entitled = accountId ? modelEntitlements.modelsByAccount.get(accountId) : undefined;
+            const confirmed = accountId ? modelEntitlements.confirmedAccountIds.has(accountId) : false;
+            return [selector, slugs.filter(slug => (
+              !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || (confirmed && entitled?.has(slug) === true)
+            ))] as const;
+          }))
           : new Map<string, readonly string[]>();
         const accountNativeSlugs = [...new Set(
           [...accountNativeSlugsBySelector.values()].flatMap(slugs => [...slugs]),
         )];
+        const desktopNativeSlugs = desktopVisibleNativeSlugs(config).filter(slug => (
+          !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableBareGatedNativeSlugs.has(slug)
+        ));
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
@@ -946,7 +989,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
           buildDesktop3pRegistry(
-            [...desktopVisibleNativeSlugs(config)],
+            desktopNativeSlugs,
             goOrdered.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
             config.claudeCode?.desktopProfile,
           );
@@ -963,7 +1006,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             : idsParam === "desktop"
               ? "desktop3p" as const
               : (/^claude-code\//i.test(req.headers.get("user-agent") ?? "") ? "readable" as const : "desktop3p" as const);
-          const data = buildAnthropicModelInfos([...desktopVisibleNativeSlugs(config)], goOrdered, resolveAutoContext(config.claudeCode), idStyle, activeDesktop3pAlias, nativeContextLimits(config));
+          const data = buildAnthropicModelInfos(desktopNativeSlugs, goOrdered, resolveAutoContext(config.claudeCode), idStyle, activeDesktop3pAlias, nativeContextLimits(config));
           return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
@@ -977,7 +1020,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // newly re-enabled native reappear under each selector before the next sync, while the
           // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
           const catalogNativeSlugs = accountSelectors.length > 0
-            ? [...new Set([...NATIVE_OPENAI_MODELS, ...accountNativeSlugs])]
+            ? [...new Set([
+              ...availableAccountNativeSlugs,
+              ...accountNativeSlugs,
+            ])]
             : nativeSlugs;
           const entries = buildCatalogEntries(
             loadCatalogTemplate(),
@@ -1042,7 +1088,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
         // bare availability.
         const selectorNativeSlugs = accountSelectors.length > 0
-          ? NATIVE_OPENAI_MODELS.filter(slug => !disabledNatives.has(slug))
+          ? availableBareNativeSlugs.filter(slug => !disabledNatives.has(slug))
           : [];
         const bareSelectorNativeSlugs = accountSelectors.length > 0
           ? selectorNativeSlugs

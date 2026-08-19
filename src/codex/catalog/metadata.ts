@@ -12,7 +12,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
+import { getProviderRegistryEntry, providerCodexAccountMode } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
@@ -38,6 +38,7 @@ import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexMod
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import {
+  ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -45,6 +46,8 @@ import {
   isNativeOpenAiCapabilityAliasModel,
   nativeOpenAiCapabilitySourceSlug,
 } from "./native-models";
+import { cachedAvailableAccountGatedNativeModels } from "../model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   NATIVE_DAYBREAK_BLUE_MODEL,
@@ -390,7 +393,14 @@ export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "comb
   // Both user levers, not just the cap: a per-model window set from the dashboard has to show
   // up on the row the dashboard itself renders.
   const limits = nativeContextLimits(config);
-  return NATIVE_OPENAI_MODELS.filter(slug => !shadowed.has(slug)).map(slug => {
+  const bareEligibleAccountIds = providerCodexAccountMode(
+    OPENAI_CODEX_PROVIDER_ID,
+    config.providers?.[OPENAI_CODEX_PROVIDER_ID],
+  ) === "direct" ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined;
+  const availableGated = cachedAvailableAccountGatedNativeModels(Date.now(), bareEligibleAccountIds);
+  return NATIVE_OPENAI_MODELS
+    .filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableGated.has(slug))
+    .filter(slug => !shadowed.has(slug)).map(slug => {
     const contextWindow = nativeOpenAiContextWindow(slug, limits);
     const maxInputTokens = nativeOpenAiMaxInputTokens(slug, limits);
     return {
@@ -475,7 +485,11 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
 
 export function nativeOpenAiSlugs(): string[] {
   const live = catalogNativeSlugs();
-  return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+  const availableGated = cachedAvailableAccountGatedNativeModels();
+  const candidates = live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+  return candidates.filter(slug => (
+    !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableGated.has(slug)
+  ));
 }
 
 const ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX = /^(?:gpt-|o1-|o3-|o4-)/;

@@ -23,9 +23,17 @@ the bare or API-key model list. The row is matched on the field shape a real cat
 which filters malformed entries — it does not prove the id came from an upstream response, since
 the cache is a user-owned file. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
 
-`gpt-daybreak-blue-latest` follows that observation-only rule for account-qualified rows and is not
-added to the bare native allowlist. A separate, explicit `customModels` entry can expose the same
-wire id as `openai/gpt-daybreak-blue-latest` through the canonical Codex-login forward provider:
+`gpt-daybreak-blue-latest` is account-gated. opencodex checks each authenticated ChatGPT account's
+own Codex model roster before advertising or routing it. In Pool mode, the bare row exists only when
+at least one eligible Pool account reports the slug. In Direct mode, the bare row follows the main
+account used by the local catalog, and each request also checks the forwarded caller credential (or
+the stored main credential when an OpenCodex admission bearer is substituted). A
+`<selector>/gpt-daybreak-blue-latest` row exists only when that selector's mapped account reports it.
+Pool routing excludes unentitled accounts. If no roster can be confirmed, the gated row fails closed
+instead of spending a prompt on an upstream 400.
+
+A separate, explicit `customModels` entry can expose the same wire id as
+`openai/gpt-daybreak-blue-latest` through the canonical Codex-login forward provider:
 
 ```json
 {
@@ -41,8 +49,8 @@ wire id as `openai/gpt-daybreak-blue-latest` through the canonical Codex-login f
 
 Only that exact provider, endpoint, and model id receive the pinned Sol capability snapshot:
 922,000 context, 829,800 automatic compaction, the native reasoning ladder, and native Codex tool
-metadata. The request still sends `gpt-daybreak-blue-latest`; opencodex does not rewrite it to Sol,
-does not create a bare row, and does not grant account entitlement. The separately billed
+metadata. The request still sends `gpt-daybreak-blue-latest`; opencodex does not rewrite it to Sol
+or grant account entitlement. The separately billed
 `openai-apikey/daybreak-blue-latest` API row is a different route and its 1,050,000 / 922,000 limits
 are never copied into the Codex-login row.
 
@@ -68,7 +76,7 @@ gpt-5.6-sol                         # bare Codex-login route via Pool or Direct
 <selector>/gpt-5.6-sol              # stored Codex account mapped by that selector
 openai-apikey/gpt-5.6-sol           # API key
 openai/gpt-daybreak-blue-latest     # explicit Codex-forward custom row (922,000)
-<selector>/gpt-daybreak-blue-latest # observed account-qualified native id, when available
+<selector>/gpt-daybreak-blue-latest # account-qualified native id, only when that account reports it
 openai-apikey/daybreak-blue-latest  # separate API-key route (1,050,000 / 922,000)
 ```
 

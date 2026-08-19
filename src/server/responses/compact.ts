@@ -126,6 +126,7 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 
 import {
+  codexAccountGatedCanonicalWireModel,
   decodeRequestErrorResponse,
   handleResponses,
   preAuthUpstreamHostCircuitKey,
@@ -304,6 +305,12 @@ export async function handleResponsesCompact(
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   const selectedModelId = route.modelId;
+  // Derive from the RESOLVED route model, not the caller's raw string. An account-qualified
+  // selector like `side/gpt-daybreak-blue-latest` does not match the gated map — `slugsEquivalent`
+  // reads the account namespace as a routed provider prefix — so keying on `raw.model` sent
+  // exactly the selector form back down the native compact endpoint this guard exists to avoid.
+  // `route.modelId` is the same value `applyCodexAccountGatedWireNormalization` uses in core.ts.
+  const accountGatedCompactWireModel = codexAccountGatedCanonicalWireModel(selectedModelId);
   logCtx.requestedModel = raw.model;
   logCtx.model = selectedModelId;
   logCtx.routeDecision = route.routeDecision;
@@ -337,7 +344,7 @@ export async function handleResponsesCompact(
   // Native /responses/compact exists on the canonical ChatGPT backend and on the
   // official OpenAI API. Any other Responses-shaped gateway must take the routed
   // summarizer path below, or compaction fails against an endpoint it never had (#422).
-  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider)) {
+  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel) {
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
@@ -371,6 +378,7 @@ export async function handleResponsesCompact(
         authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
           accountId: route.codexAccountId,
           modelId: selectedModelId,
+          substituteMainCredentialForDirect: substituteMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
@@ -668,7 +676,10 @@ export async function handleResponsesCompact(
   const inputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   const internalBody = {
     ...raw,
-    stream: false,
+    // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
+    // native compact endpoint either, so run its synthetic compaction as SSE and collapse
+    // the completed event back into the v1 compact JSON contract below.
+    stream: accountGatedCompactWireModel ? true : false,
     input: [...inputItems, { type: "compaction_trigger" }],
   };
   const internalHeaders = new Headers({ "content-type": "application/json" });
@@ -684,10 +695,36 @@ export async function handleResponsesCompact(
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
-  try {
-    json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
-  } catch {
-    return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
+  if (response.headers.get("content-type")?.includes("text/event-stream")) {
+    if (!response.body) {
+      return formatErrorResponse(502, "server_error", "compaction turn returned an empty event stream");
+    }
+    const terminal = { status: "incomplete" as "completed" | "failed" | "incomplete" };
+    let completed: { id?: unknown; output?: unknown; status?: unknown } | undefined;
+    await new Promise<void>(resolve => {
+      consumeForInspection(
+        response.body!,
+        status => { terminal.status = status; },
+        req.signal,
+        resolve,
+        undefined,
+        undefined,
+        value => { completed = value; },
+      );
+    });
+    if (req.signal.aborted) {
+      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    }
+    if (terminal.status !== "completed" || !completed) {
+      return formatErrorResponse(502, "upstream_error", `compaction turn did not complete (status: ${terminal.status})`);
+    }
+    json = completed as { output?: unknown[]; status?: unknown; error?: unknown };
+  } else {
+    try {
+      json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
+    } catch {
+      return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
+    }
   }
   // The internal turn answers 200 even when it failed or was truncated, so the body
   // has to be inspected. Reporting a failure beats installing "(no summary
@@ -715,6 +752,13 @@ export async function handleResponsesCompact(
       "invalid_response_error",
       `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
     );
+  }
+  // The canonical Responses stream returns a real OpenAI-encrypted compaction item. OCX cannot
+  // and should not decrypt it; /responses/compact callers can consume that item directly.
+  if (accountGatedCompactWireModel) {
+    return new Response(JSON.stringify({ output: compactionItems }), {
+      headers: { "Content-Type": "application/json" },
+    });
   }
   const encrypted = compactionItems[0]!.encrypted_content;
   const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;

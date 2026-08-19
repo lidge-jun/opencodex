@@ -44,6 +44,13 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
+Account-gated native ids are a stricter subset. Their authenticated ChatGPT `/models` roster is
+cached per credential generation with a bounded timeout. A bare gated row is emitted only when at
+least one confirmed eligible account reports it; a selector-qualified row is emitted only when the
+mapped account reports it. A failed or malformed discovery is not positive evidence and therefore
+hides the gated row until a later refresh. The same snapshot gates Pool selection, so the catalog
+and runtime cannot disagree by advertising through one account and dispatching through another.
+
 The app-server's model list comes from this shared catalog, not from patching the App. Codex Desktop
 may still apply its remote native-only allowlist after `model/list`; an explicitly configured combo
 `nativeAlias` is the bounded compatibility path. It replaces one supported bare native row with a

@@ -110,6 +110,12 @@ import {
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
+  entitledCodexAccountIdsForModel,
+  invalidateCodexModelEntitlementsForAccount,
+  resolveCodexModelEntitlements,
+} from "../../codex/model-entitlements";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
+import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
@@ -532,6 +538,39 @@ type CodexPoolAccountRetryResult =
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   };
 
+const CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS: ReadonlyMap<string, string> = new Map([
+  // The authenticated catalog currently advertises Daybreak Blue, while successful responses
+  // identify the serving model as gpt-5.6-sol. Sending the selector itself is shard-dependent:
+  // live traffic can receive the exact unsupported-model 400 repeatedly from the same entitled
+  // account. Keep Daybreak as the admission/catalog identity, but use the stable serving id on
+  // the credential-bearing wire after entitlement selection has completed.
+  ["gpt-daybreak-blue-latest", "gpt-5.6-sol"],
+]);
+
+export function codexAccountGatedCanonicalWireModel(modelId: string): string | undefined {
+  const exact = CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS.get(modelId);
+  if (exact) return exact;
+  for (const [selector, wireModel] of CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS) {
+    if (slugsEquivalent(modelId, selector)) return wireModel;
+  }
+  return undefined;
+}
+
+function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest, route: RouteResult): void {
+  if (!isCanonicalOpenAiForwardProvider(route.provider)) return;
+  const wireModel = codexAccountGatedCanonicalWireModel(route.modelId);
+  if (!wireModel) return;
+
+  parsed.modelId = wireModel;
+  if (!parsed._rawBody || typeof parsed._rawBody !== "object") return;
+  const raw = parsed._rawBody as Record<string, unknown>;
+  raw.model = wireModel;
+  // Daybreak's authenticated catalog does not advertise retention support, and the upstream
+  // rejects this optional Codex hint before model execution. Removing it preserves request
+  // semantics while avoiding an otherwise terminal pre-stream 400.
+  delete raw.prompt_cache_retention;
+}
+
 /**
  * Workspace-denial evidence for a 403, read from the upstream body.
  *
@@ -582,22 +621,32 @@ async function retryCodexPoolOnAlternateAccount(
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
   } = args;
-  // Defense in depth: exact account selectors must never reach alternate-account resolution,
-  // even if a future caller forgets to guard this helper.
-  if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   const inboundWire = options.inboundWire ?? "responses";
   let retryAuthCtx: CodexAuthContext | undefined;
+  if (outcomeStatus === 400 && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)) {
+    invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
+    const refreshed = await resolveCodexModelEntitlements(config);
+    if (entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(firstAuthCtx.accountId)) {
+      // The authenticated roster still grants this exact model. Retry on the same account:
+      // upstream shards can briefly disagree during a gated-model rollout, but a pre-stream 400
+      // proves no output was committed and keeps this replay bounded.
+      retryAuthCtx = firstAuthCtx;
+    }
+  }
+  // Exact account selectors may retry the same confirmed account above, but must never resolve
+  // an alternate. Quota failures and a refreshed entitlement miss remain terminal.
+  if (!retryAuthCtx && firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   try {
-    retryAuthCtx = await resolveCodexAuthContext(
-      req.headers,
-      config,
-      "pool",
-      {
-        excludeAccountId: firstAuthCtx.accountId,
-        modelId: route.modelId,
-        beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-      },
-    );
+    retryAuthCtx ??= await resolveCodexAuthContext(
+        req.headers,
+        config,
+        "pool",
+        {
+          excludeAccountId: firstAuthCtx.accountId,
+          modelId: route.modelId,
+          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        },
+      );
   } catch (error) {
     if (
       !(error instanceof CodexPoolAuthenticationError)
@@ -679,27 +728,50 @@ async function retryCodexPoolOnAlternateAccount(
     logCtx.accountLogLabel,
   );
 
-  noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+  const retrySameConfirmedAccount = outcomeStatus === 400
+    && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)
+    && retryAuthCtx.accountId === firstAuthCtx.accountId;
+  // Live Daybreak traffic has produced long runs of unsupported-model 400s from different
+  // upstream shards even while the authenticated roster continues to grant the model. Permit
+  // seven additional same-account sends (eight total including the original), re-checking the
+  // exact allow-listed body and fresh entitlement before every later send. Alternate-account and
+  // quota recovery retain their historical one-send bound.
+  const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
+  let retrySendCount = 0;
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetchWithHeaderTimeout(
-      request.url,
-      {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      },
-      upstream.signal,
-      connectMs,
-      stream,
-      providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-        providerName: route.providerName,
-        modelId: route.modelId,
-      }),
-      // Credential-bearing forward send: never follow a redirect into a
-      // dead-host rejection after the credential was seen (#914).
-      route.provider.authMode === "forward",
-    );
+    while (true) {
+      noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+      upstreamResponse = await fetchWithHeaderTimeout(
+        request.url,
+        {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        },
+        upstream.signal,
+        connectMs,
+        stream,
+        providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+          providerName: route.providerName,
+          modelId: route.modelId,
+        }),
+        // Credential-bearing forward send: never follow a redirect into a
+        // dead-host rejection after the credential was seen (#914).
+        route.provider.authMode === "forward",
+      );
+      retrySendCount += 1;
+      if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
+      if (!await shouldRetryCodexPoolAccountModel400(
+        upstreamResponse,
+        route.modelId,
+        options.abortSignal,
+      )) break;
+      invalidateCodexModelEntitlementsForAccount(retryAuthCtx.accountId);
+      const refreshed = await resolveCodexModelEntitlements(config);
+      if (!entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(retryAuthCtx.accountId)) break;
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+    }
   } catch (error) {
     // Attribute the transport failure to the alternate account (already selected).
     return { kind: "transport", error, authCtx: retryAuthCtx };
@@ -1104,6 +1176,7 @@ async function resolveResponsesCodexAuth(
       authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
         accountId: route.codexAccountId,
         modelId: route.modelId,
+        substituteMainCredentialForDirect: substituteMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
       });
       options.onCodexAuthContextResolved?.(authCtx);
@@ -2135,6 +2208,7 @@ async function handleResponsesInner(
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+  applyCodexAccountGatedWireNormalization(parsed, route);
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
@@ -2793,7 +2867,7 @@ async function handleResponsesInner(
       }
     }
 
-    if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
+    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
       if (await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
@@ -2801,7 +2875,7 @@ async function handleResponsesInner(
         options.abortSignal,
       )) {
         poolRetryOutcome = 400;
-      } else if (shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
+      } else if (!authCtx.fixedAccount && shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
         // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
         poolRetryOutcome = upstreamResponse.status;
       }

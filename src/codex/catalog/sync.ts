@@ -30,7 +30,15 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { providerCodexAccountMode } from "../../providers/registry";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
+import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import {
+  availableAccountGatedNativeModels,
+  isCodexModelEntitlementSnapshotCurrent,
+  resolveCodexModelEntitlements,
+  type CodexModelEntitlementSnapshot,
+} from "../model-entitlements";
 
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
@@ -64,6 +72,7 @@ import {
 } from "../internal/catalog-writer";
 import { codexRuntimeStatePath } from "../runtime";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./native-models";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
@@ -1238,6 +1247,7 @@ interface RetainedCatalogSyncWrite {
   readonly read: RetainedCatalogSyncRead;
   readonly permit: CatalogWritePermit;
   readonly owningCodexHome: string;
+  readonly modelEntitlements: CodexModelEntitlementSnapshot;
 }
 
 function optionalFileBytes(path: string): string | null {
@@ -1401,6 +1411,7 @@ function writeRetainedCatalogSync({
   read,
   permit,
   owningCodexHome,
+  modelEntitlements,
 }: RetainedCatalogSyncWrite): RetainedCatalogSyncResult {
   const { catalogPath, catalog, onDiskCatalog } = read;
   const catalogModelsForMerge = catalogModelsForMergeWithNativeRecovery(
@@ -1436,7 +1447,28 @@ function writeRetainedCatalogSync({
   const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
-  const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
+  const bareEligibleAccountIds = providerCodexAccountMode(
+    OPENAI_CODEX_PROVIDER_ID,
+    config.providers[OPENAI_CODEX_PROVIDER_ID],
+  ) === "direct" ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined;
+  const availableBareGatedNativeSlugs = availableAccountGatedNativeModels(
+    modelEntitlements,
+    bareEligibleAccountIds,
+  );
+  const availableAccountGatedNativeSlugs = availableAccountGatedNativeModels(modelEntitlements);
+  const availableBareNativeSlugs = NATIVE_OPENAI_MODELS.filter(slug => (
+    !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableBareGatedNativeSlugs.has(slug)
+  ));
+  const availableAccountNativeSlugs = NATIVE_OPENAI_MODELS.filter(slug => (
+    !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableAccountGatedNativeSlugs.has(slug)
+  ));
+  const unavailableGatedNativeSlugs = new Set([...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(slug => (
+    !availableBareGatedNativeSlugs.has(slug)
+  )));
+  const suppressedBareNativeSlugs = new Set([
+    ...desktopAllowlistSuppressedNativeSlugs(config),
+    ...unavailableGatedNativeSlugs,
+  ]);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
   const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -1451,12 +1483,21 @@ function writeRetainedCatalogSync({
     ...(onDiskCatalog?.models ?? []).filter(entry =>
       trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
   ];
-  const accountNativeSlugs = accountSelectors.length > 0
-    ? accountBoundNativeOpenAiSlugs(observedAccountNativeEntries)
-    : [];
+  const accountTargets = new Map(codexAccountNamespaceEntries(config));
   const accountNativeSlugsBySelector = accountSelectors.length > 0
-    ? accountBoundNativeOpenAiSlugsBySelector(config, observedAccountNativeEntries)
+    ? new Map([...accountBoundNativeOpenAiSlugsBySelector(config, observedAccountNativeEntries)].map(([selector, slugs]) => {
+      const target = accountTargets.get(selector);
+      const accountId = target && isMainCodexAccountTarget(target) ? MAIN_CODEX_ACCOUNT_ID : target;
+      const entitled = accountId ? modelEntitlements.modelsByAccount.get(accountId) : undefined;
+      const confirmed = accountId ? modelEntitlements.confirmedAccountIds.has(accountId) : false;
+      return [selector, slugs.filter(slug => (
+        !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || (confirmed && entitled?.has(slug) === true)
+      ))] as const;
+    }))
     : new Map<string, readonly string[]>();
+  const accountNativeSlugs = accountSelectors.length > 0
+    ? [...new Set([...accountNativeSlugsBySelector.values()].flatMap(slugs => [...slugs]))]
+    : [];
   // Unknown account-native ids have no safe bare/global identity. They are only projected through
   // the selector map above; the no-selector catalog remains the static native/API-key surface.
   const observedNativeSlugs: string[] = [];
@@ -1510,7 +1551,7 @@ function writeRetainedCatalogSync({
   const accountBoundEntries = includeAccountBoundNativeOpenAi && accountSelectors.length > 0
     ? buildCatalogEntriesFromObservedState({
       template: template ? JSON.parse(JSON.stringify(template)) : null,
-      gptSlugs: NATIVE_OPENAI_MODELS,
+      gptSlugs: availableAccountNativeSlugs,
       goModels: [],
       featured,
       wsEnabled,
@@ -1550,7 +1591,7 @@ function writeRetainedCatalogSync({
     openaiContextCap,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
-      nativeBackfillSlugs: [...NATIVE_OPENAI_MODELS, ...observedNativeSlugs],
+      nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],
       warningPolicy: "emit",
     },
   });
@@ -1664,10 +1705,13 @@ export async function syncCatalogModels(
     evidence: retainedCatalogSyncEvidence(config, preflightRead.catalogPath, preflightRead.catalog),
     processEvidence: retainedCatalogProcessEvidence(),
   };
-  const goModels = await gatherRoutedModels(config, {
-    comboOmissions,
-    providerModelOutcomes,
-  });
+  const [goModels, modelEntitlements] = await Promise.all([
+    gatherRoutedModels(config, {
+      comboOmissions,
+      providerModelOutcomes,
+    }),
+    resolveCodexModelEntitlements(config),
+  ]);
   const committed = withCatalogWriteSerialization(owningCodexHome, permit => {
     // Desired state can flip OFF during the provider await above. The catalog
     // evidence revalidation below cannot see that — intent lives in our config,
@@ -1687,6 +1731,7 @@ export async function syncCatalogModels(
     }
     const current = revalidateRetainedCatalogSync(config, prepared);
     if (current === null) return null;
+    if (!isCodexModelEntitlementSnapshotCurrent(modelEntitlements)) return null;
     return writeRetainedCatalogSync({
       config,
       goModels,
@@ -1695,6 +1740,7 @@ export async function syncCatalogModels(
       read: current,
       permit,
       owningCodexHome,
+      modelEntitlements,
     });
   });
   if (committed.kind === "completed" && committed.value !== null) return committed.value;

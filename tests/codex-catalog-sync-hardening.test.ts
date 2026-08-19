@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -379,7 +380,7 @@ describe("Codex catalog sync hardening", () => {
     expect(JSON.stringify(rows)).not.toContain("Private Display Name");
   });
 
-  test("account sync preserves an observed account-only native id without creating a bare row", () => {
+  test("account sync preserves an observed gated native only after the mapped account confirms it", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -393,8 +394,22 @@ describe("Codex catalog sync hardening", () => {
         opencodex_account_observed_native: true,
       }],
     }, null, 2) + "\n");
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-token", account_id: "main-account" },
+    }), "utf8");
 
     const r = runScript(codexHome, opencodexHome, `
+      globalThis.fetch = async input => {
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+          return Response.json({ models: [{
+            slug: "gpt-daybreak-blue-latest",
+            supported_in_api: true,
+            visibility: "list"
+          }] });
+        }
+        throw new Error("unexpected fetch");
+      };
       const { syncCatalogModels } = require("./src/codex/catalog");
       syncCatalogModels({
         providers: {
@@ -419,8 +434,8 @@ describe("Codex catalog sync hardening", () => {
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
     });
-    // Daybreak is globally allowlisted now (owner decision, devlog 260816_.../011),
-    // so the bare row IS expected — exactly once — alongside the account-qualified row.
+    // Main's authenticated roster grants Daybreak, so Pool publishes one bare row alongside
+    // the exact selector row. The observed cache row alone is not entitlement evidence.
     expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(1);
   });
 
@@ -471,9 +486,9 @@ describe("Codex catalog sync hardening", () => {
       opencodex_catalog_kind: "custom-model-v1",
     });
     expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
-    // The global native row exists (owner decision); the explicit Codex-forward custom row
-    // above is a separate identity and must not collapse into it.
-    expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(1);
+    // The explicit custom row is independent of native account entitlement. With no confirmed
+    // account roster, the account-gated bare row stays absent instead of collapsing into it.
+    expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(0);
     expect(rows.some(row => row.slug === "main/gpt-daybreak-blue-latest")).toBe(false);
     // The separately billed API-key alias must still never reach the Codex surface.
     expect(rows.some(row => row.slug === "openai-apikey/daybreak-blue-latest")).toBe(false);
@@ -640,7 +655,9 @@ describe("Codex catalog sync hardening", () => {
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout) as { picker: string[]; native: string[]; fallback: string[] };
     expect(result.picker).toContain("gpt-5.3-codex-spark");
-    expect(result.native).toEqual(result.fallback);
+    expect(result.native).toEqual(
+      result.fallback.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
+    );
   });
 
   test("account sync recovers supported natives that were hidden before selectors existed", () => {
