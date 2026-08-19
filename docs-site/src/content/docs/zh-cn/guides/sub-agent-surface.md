@@ -72,21 +72,19 @@ per-role fallback 链应该放在 opencodex 配置里，而不是 `$CODEX_HOME/a
 
 重复的模型 id 会在保留第一次出现的前提下移除。在选择过程中，opencodex 会跳过已禁用、不可路由、由已禁用 provider 支撑、标记为 unhealthy、处于 cooldown、没有可用 pooled Codex 账户，或者超出配置配额阈值的候选项。可用性探测会缓存 `subagentModelFallbackPollMs` 的时长，默认 60 秒。
 
-fallback 不会让不兼容的加密任务变得可读。当子任务为 ChatGPT 加密时，选择仅限规范的原生 ChatGPT 目标，或显式配置了 `allowEncryptedV2AgentTasks: true` 的 Responses 提供方。
+fallback 不会让不兼容的加密任务变得可读。当子任务为 ChatGPT 加密时，即使链中更靠前出现了外部模型，选择也只会限制在规范的原生 ChatGPT 目标上。
 
 ## 加密的 v2 任务传递
 
-Codex 只能把 v2 原生到路由的子任务作为后端加密的 `encrypted_content` 发送。原生 ChatGPT 后端可以处理该载荷，某些兼容中转也可能把它交给可处理的后端；OpenCodex 无法根据名称或 Base URL 推断这种能力。这就是已知的 [#92](https://github.com/lidge-jun/opencodex/issues/92) 限制。
+Codex 只能把 v2 原生到路由的子任务作为后端加密的 `encrypted_content` 发送。这个载荷可以被原生 ChatGPT 后端读取，但外部 provider 不能读取。这就是已知的 [#92](https://github.com/lidge-jun/opencodex/issues/92) 限制。
 
 opencodex 会安全失败，而不是转发空任务或不可读任务：
 
-- 未显式信任的非原生直连路由会返回 HTTP 400，并且 `error.code = "unreadable_encrypted_agent_task"`，不会回显密文。
-- 对于该任务，combo 只会考虑规范的原生 ChatGPT 目标和显式信任的 Responses 目标，包括重试。如果没有可用目标，则返回相同的 400 错误。
+- 直接的非原生路由会返回 HTTP 400，并且 `error.code = "unreadable_encrypted_agent_task"`，不会回显密文。
+- 对于该任务，combo 只会考虑规范的原生 ChatGPT 目标，包括重试。如果没有可用目标，则返回相同的 400 错误。
 - 可读的明文任务会保持正常的路由和 fallback 行为。
 
 恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在你控制调用方时将任务作为明文 v2 `agent_message` 内容重新发送。
-
-如果已经验证某个非规范 Responses 端点能够处理该密文，可在该提供方的设置中启用“透传加密的 V2 子代理任务”，或设置 `allowEncryptedV2AgentTasks: true`。此选项默认关闭，仅适用于 `adapter: "openai-responses"`；它会原样透传不透明任务，不会解密、恢复明文或证明兼容性。启用透传的路由会跳过 `agentTaskRecovery`。
 
 实验性的 `agentTaskRecovery` 默认关闭。显式启用后，它可以通过向固定 ChatGPT 端点发送额外的认证请求来恢复这种格式，但会消耗配额、增加延迟，并依赖非公开的后端行为。任何失败都会保留原有的 `unreadable_encrypted_agent_task` 错误。详见[英文配置参考](/reference/configuration/agents/#encrypted-v2-task-recovery)。
 

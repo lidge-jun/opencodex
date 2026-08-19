@@ -137,12 +137,13 @@ Recovery options are to select a native ChatGPT child, add a native ChatGPT targ
 v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
 content when you control the caller.
 
-If a non-canonical Responses endpoint has been verified to consume this ciphertext, enable
+If a non-canonical Responses endpoint has been verified to consume or relay this ciphertext, enable
 **Providers → Settings → Pass through encrypted V2 agent tasks** for that provider, or set
 `allowEncryptedV2AgentTasks: true` in its provider config. The option is disabled by default and is
-valid only with `adapter: "openai-responses"`. It passes the opaque task through unchanged; it does
-not decrypt it, recover plaintext, or prove provider compatibility. The canonical ChatGPT forward
-provider is always eligible and needs no flag. A provider opted into passthrough skips
+valid only when the selected model's final wire is `openai-responses`; a `modelAdapters` override to
+`openai-chat` remains ineligible. It passes the opaque task through unchanged; it does not decrypt,
+translate, or recover plaintext, and it does not prove provider compatibility. The canonical ChatGPT
+forward provider is always eligible and needs no flag. A provider opted into passthrough skips
 `agentTaskRecovery` for that route because recovery and opaque forwarding are separate trust modes.
 
 An experimental, disabled-by-default `agentTaskRecovery` option can recover this specific native-

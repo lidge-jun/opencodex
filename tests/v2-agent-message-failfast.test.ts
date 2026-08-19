@@ -262,6 +262,35 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(forwardedBodies[0]).toContain(FERNET_TASK);
   });
 
+  test("rejects an opted-in provider when the selected model resolves to openai-chat", async () => {
+    const config = routedConfig();
+    config.defaultProvider = "relay";
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: { "gpt-5.6-luna": "openai-chat" },
+    };
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("provider dispatch must not happen");
+    }) as typeof fetch;
+
+    const response = await post(config, "relay/gpt-5.6-luna", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "unreadable_encrypted_agent_task" },
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
   test("lets a combo select an explicitly trusted Responses target", async () => {
     const config = mixedComboConfig();
     config.providers.relay = {
@@ -300,6 +329,37 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(fetchedUrls).toHaveLength(1);
     expect(fetchedUrls[0]).toContain("relay.example.test");
     expect(forwardedBodies[0]).toContain(FERNET_TASK);
+  });
+
+  test("rejects a combo whose only opted-in target resolves to openai-chat", async () => {
+    const config = mixedComboConfig();
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: { "gpt-5.6-luna": "openai-chat" },
+    };
+    config.combos!.mixed!.targets = [
+      { provider: "relay", model: "gpt-5.6-luna" },
+    ];
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("provider dispatch must not happen");
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/mixed", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "unreadable_encrypted_agent_task" },
+    });
+    expect(fetchCalls).toBe(0);
   });
 
   test("keeps encrypted combo failover on native targets after a native failure", async () => {

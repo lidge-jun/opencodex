@@ -79,7 +79,6 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `responsesPath?` | `string` | Anahtar kimlik doğrulamalı `openai-responses` istekleri için göreli kaynak yolu. `/` ile başlamalı ve şema, sorgu veya parça içermemelidir. |
 | `supportsServiceTier?` | `boolean` | Üç durumlu `service_tier` yeteneği. `true`: hızlı mod enjekte edebilir ve arayan değerleri korunur. `false`: alan kaldırılır ve asla enjekte edilmez (desteklemediği belgelenen yukarı akış bunu almamalıdır). Yok: sağlayıcı sınıflandırılmamıştır — arayan tarafından sağlanan değerler dokunulmadan korunur ve hızlı mod asla enjekte etmez. Kayıt defteri kurallı OpenAI'yi (`true`), DeepSeek'i ve Volcengine Ark'ı (`false`) sınıflandırır; bunu yalnızca katmanları gerçekten destekleyen özel ağ geçitleri için açıkça ayarlayın. |
 | `preserveResponsesReasoningContent?` | `boolean` | Düz metin akıl yürütme içeriğini boşaltmak yerine (boşaltma ChatGPT arka ucunun kuralıdır) tekrarlanan Responses akıl yürütme öğelerinde tutun. DeepSeek gibi sözleşmesi akıl yürütme tekrarını kabul eden yukarı akışlar için etkinleştirin. Proxy tarafından basılan `ocxr1` zarfları her zaman kaldırılır. |
-| `allowEncryptedV2AgentTasks?` | `boolean` | Varsayılan olarak kapalıdır. Bu standart dışı `openai-responses` sağlayıcısının opak şifreli V2 alt aracı görevlerini işleyebildiğine güvenir. Etkinleştirildiğinde opencodex `encrypted_content` verisini değiştirmeden iletir ve bu rota için düz metin kurtarmayı atlar. Uyumluluğu veya şifre çözme yeteneğini kanıtlamaz; yalnızca yukarı akışı doğruladıktan sonra etkinleştirin. Standart ChatGPT iletimi bu bayrağa ihtiyaç duymaz. |
 | `disabled?` | `boolean` | Sağlayıcıyı diskte tutun ancak yönlendirmeden ve model/katalog listelerinden hariç tutun. |
 | `apiKey?` | `string` | API anahtarı veya istek zamanında çözümlenen bir `${ENV_VAR}` / `$ENV_VAR` başvurusu. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic anahtar başlığı stili. Varsayılan olarak yerel `x-api-key`; yalnızca anahtar kimlik doğrulamalı `anthropic` sağlayıcıları için geçerlidir. |
@@ -480,4 +479,5 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
+
 

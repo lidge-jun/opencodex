@@ -133,23 +133,24 @@ probları `subagentModelFallbackPollMs` (varsayılan olarak 60 saniye) boyunca
 önbelleğe alınır.
 
 Geri dönüş, uyumsuz şifrelenmiş görevleri okunabilir kılmaz. Çocuk görevi
-ChatGPT için şifrelendiğinde seçim, kurallı yerel ChatGPT hedefleri veya açıkça
-`allowEncryptedV2AgentTasks: true` ayarlanmış Responses sağlayıcılarıyla sınırlandırılır.
+ChatGPT için şifrelendiğinde, zincirde daha önce harici bir model görünse bile
+seçim kurallı yerel ChatGPT hedefleriyle sınırlandırılır.
 
 ## Şifrelenmiş v2 görev teslimi
 
 Codex, bir v2 yerelden yönlendirilen çocuk görevini yalnızca arka uçta
-şifrelenmiş `encrypted_content` olarak gönderebilir. Yerel ChatGPT arka ucu bunu işleyebilir ve bazı uyumlu aktarıcılar işleyebilen bir arka uca iletebilir; OpenCodex bu yeteneği ad veya Base URL üzerinden çıkaramaz. Bu,
+şifrelenmiş `encrypted_content` olarak gönderebilir. Bu yük yerel ChatGPT arka
+ucu tarafından okunabilir, ancak harici bir sağlayıcı tarafından okunamaz. Bu,
 bilinen [#92 sınırlamasıdır](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex boş veya okunamayan bir görevi iletmek yerine güvenli bir şekilde
 başarısız olur:
 
-- Açıkça güvenilmeyen doğrudan yerel olmayan bir rota `error.code =
+- Doğrudan yerel olmayan bir rota `error.code =
   "unreadable_encrypted_agent_task"` ile HTTP 400 döndürür ve şifreli metni
   yankılamaz.
 - Bir kombo, yeniden denemeler de dahil olmak üzere bu görev için yalnızca
-  kurallı yerel ChatGPT hedeflerini ve açıkça güvenilen Responses hedeflerini değerlendirir. Hiçbiri yoksa aynı 400
+  kurallı yerel ChatGPT hedeflerini değerlendirir. Hiçbiri yoksa aynı 400
   hatasını döndürür.
 - Okunabilir bir düz metin görevi normal rota ve geri dönüş davranışını korur.
 
@@ -157,8 +158,6 @@ Kurtarma seçenekleri, yerel bir ChatGPT çocuğu seçmek, komboya yerel bir Cha
 hedefi eklemek, heterojen sağlayıcı yetkilendirmesi için v1 kullanmak veya
 arayanı denetlediğinizde görevi düz metin v2 `agent_message` içeriği olarak
 yeniden göndermektir.
-
-Standart dışı bir Responses uç noktasının bu şifreli içeriği işlediği doğrulandıysa sağlayıcı ayarlarında **Şifreli V2 aracı görevlerini ilet** seçeneğini açın veya `allowEncryptedV2AgentTasks: true` ayarlayın. Varsayılan olarak kapalıdır, `adapter: "openai-responses"` gerektirir, opak görevi değiştirmeden iletir ve uyumluluğu ya da şifre çözme yeteneğini kanıtlamaz. Bu rota `agentTaskRecovery` işlemini atlar.
 
 Deneysel, varsayılan olarak devre dışı bırakılmış bir `agentTaskRecovery`
 seçeneği, `authMode: "forward"` ile kurallı `openai` sağlayıcısı tarafından
@@ -177,7 +176,8 @@ anahtarlı proxy arayanlarını reddeder ve herhangi bir arızada
 `unreadable_encrypted_agent_task`'i korur. Tam güven sınırı ve yapılandırma için
 [Ajan yapılandırması: Şifrelenmiş v2 görev
 kurtarma](/tr/reference/configuration/agents/#encrypted-v2-task-recovery)
-bölümüne bakın. Kombo yönlendirmesi aynı uygunluk kuralını kullanır ve kurallı yerel ChatGPT hedefleriyle açıkça güvenilen Responses hedeflerini değerlendirir.
+bölümüne bakın. Kombo yönlendirmesi değişmeden kalır ve şifrelenmiş görevler
+için yalnızca kurallı yerel ChatGPT hedeflerini değerlendirmeye devam eder.
 
 ## Modu değiştirme
 
@@ -315,4 +315,5 @@ sabitler.
 
 Model bağlam sınırı alt ajan modundan bağımsızdır. Modeller sayfasında
 yapılandırın; yerel OpenAI modelleri gerçek bağlam pencerelerini korur.
+
 

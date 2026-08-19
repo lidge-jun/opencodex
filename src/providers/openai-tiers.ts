@@ -70,7 +70,8 @@ function isOfficialOpenAiResponsesDestination(provider: OcxProviderConfig): bool
 /**
  * Whether an opaque encrypted V2 agent task may be sent to this provider.
  * Canonical ChatGPT forwarding is trusted implicitly. Any other Responses
- * endpoint requires an explicit provider-level operator opt-in.
+ * endpoint requires an explicit provider-level operator opt-in. Model-aware
+ * callers must resolve the final wire before invoking this predicate.
  */
 export function canReceiveEncryptedV2AgentTasks(provider: OcxProviderConfig): boolean {
   return isCanonicalOpenAiForwardProvider(provider)

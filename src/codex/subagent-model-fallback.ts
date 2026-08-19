@@ -37,6 +37,7 @@ import {
   isCanonicalOpenAiForwardProvider,
 } from "../providers/openai-tiers";
 import { routeModel, type RouteResult } from "../router";
+import { resolveWireProtocolOverride } from "../server/adapter-resolve";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import {
@@ -282,7 +283,10 @@ export function selectAvailableSubagentModel(
   for (const candidate of chain) {
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
-      if (!route || !canReceiveEncryptedV2AgentTasks(route.provider)) {
+      const resolvedProvider = route
+        ? resolveWireProtocolOverride(route.providerName, route.modelId, route.provider)
+        : null;
+      if (!resolvedProvider || !canReceiveEncryptedV2AgentTasks(resolvedProvider)) {
         skipped.push(candidate);
         continue;
       }

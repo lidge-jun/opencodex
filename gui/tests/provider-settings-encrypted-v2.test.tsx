@@ -53,7 +53,7 @@ test("settings explicitly opt a Responses provider into encrypted V2 task passth
   const optInLabel = [...container.querySelectorAll<HTMLLabelElement>("label")]
     .find(label => label.textContent?.includes("encrypted V2 agent tasks"));
   expect(optInLabel).toBeTruthy();
-  expect(optInLabel?.textContent).toContain("opaque encrypted task");
+  expect(optInLabel?.textContent).toContain("opaque encrypted V2 child-task ciphertext");
   await act(async () => { optInLabel!.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
   await act(async () => {
     container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
