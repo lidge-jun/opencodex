@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, readFileSync, writeFileSync, unlinkSync, mkdirSync, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { getConfigDir } from "../config";
 import { resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
 import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens } from "../claude/auth-detect";
@@ -122,9 +122,60 @@ export function uninstallShellHook(): { removed: boolean; reason?: string } {
     const cleaned = content.replace(/\n?# opencodex claude-env hook\n\[.*claude-env\.sh.*\n?/g, "\n");
     writeFileSync(zshrcPath, cleaned, { encoding: "utf8", mode: 0o644 });
     return { removed: true };
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
+      return { removed: false, reason: "not installed" };
+    }
     return { removed: false, reason: "read/write failed" };
   }
+}
+
+/** Whether a real `claude` executable is discoverable from this process's PATH. */
+export function claudeCodeCliInstalled(pathValue = process.env.PATH): boolean {
+  if (!pathValue) return false;
+  for (const directory of pathValue.split(delimiter)) {
+    // An empty PATH segment means the current directory. Do not let the proxy treat a
+    // workspace-local file as a durable user installation.
+    if (!directory) continue;
+    const candidate = join(directory, "claude");
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      // Keep scanning PATH after missing, non-file, and non-executable entries.
+    }
+  }
+  return false;
+}
+
+/**
+ * Keep the shell hook aligned with the integration that can actually consume it.
+ * Claude Desktop uses its own profile and does not source `.zshrc`; this hook exists
+ * only for plain Claude Code CLI launches.
+ */
+export function reconcileShellHook(systemEnvInjected: boolean): {
+  changed: boolean;
+  state: "installed" | "absent";
+  reason?: string;
+} {
+  if (process.platform !== "darwin") return { changed: false, state: "absent", reason: "not macOS" };
+  if (systemEnvInjected && claudeCodeCliInstalled()) {
+    const result = installShellHook();
+    const installed = result.installed || result.reason === "already installed";
+    return {
+      changed: result.installed,
+      state: installed ? "installed" : "absent",
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
+  }
+
+  const result = uninstallShellHook();
+  return {
+    changed: result.removed,
+    state: "absent",
+    reason: systemEnvInjected ? "Claude Code not installed" : "system environment inactive",
+  };
 }
 
 const SYSTEM_ENV_NAMES = [

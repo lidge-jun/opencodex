@@ -113,7 +113,9 @@ shell 不受影響，必須重新開啟。
 
 `ocx stop` 和代理關閉操作會**取消設定已注入的鍵**（不會恢復之前的值——只會移除 opencodex
 注入的鍵）。代理還會寫入 `~/.opencodex/claude-env.sh`；`ocx start` 會安裝一個 `.zshrc`
-source hook，以自動載入該檔案。
+source hook，以自動載入該檔案，但僅限 `PATH` 中存在可執行的 Claude Code CLI。Claude Code
+不存在或系統環境整合未啟用時，啟動程序和 `ocx ensure` 會移除 OpenCodex 自己寫入的 hook。
+Claude Desktop 使用獨立 profile，不會觸發 shell hook 安裝。
 
 可以在設定中設定 `claudeCode.systemEnv: false`，或使用 GUI 開關來停用。此功能僅適用於
 macOS；在其他平臺上，請使用 `ocx claude`。

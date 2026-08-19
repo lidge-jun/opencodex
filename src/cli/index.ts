@@ -46,9 +46,8 @@ import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
-import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
+import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
-import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -366,9 +365,10 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   // System-wide env injection AFTER signal handlers are registered (crash safety:
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
-  await injectSystemEnv(port, config).catch(() => {});
-  // Auto-install .zshrc hook (idempotent — skips if already present).
-  installShellHook();
+  const systemEnv = await injectSystemEnv(port, config).catch(() => ({ injected: false }));
+  // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
+  // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
+  reconcileShellHook(systemEnv.injected);
 
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Post-startup sync drives the readiness gate AND the #1046 stale app-server
@@ -455,7 +455,8 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
       });
       if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-      await injectSystemEnv(live.port, config).catch(() => {});
+      const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
+      reconcileShellHook(systemEnv.injected);
       // Refresh the Grok Build fence too (same contract as start). live.hostname is the
       // hostname the running proxy actually bound — config.hostname may have drifted.
       try {
