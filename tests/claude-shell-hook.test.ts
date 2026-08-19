@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { claudeCodeCliInstalled, reconcileShellHook } from "../src/server/system-env";
 
 const originalPlatform = process.platform;
@@ -15,6 +15,7 @@ function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
+/** Create the smallest executable that represents a Claude Code CLI on PATH. */
 function installClaudeCli(): void {
   const executable = join(binDir, "claude");
   writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -104,9 +105,25 @@ describe("Claude Code shell-hook reconciliation", () => {
 
   test("ignores empty PATH segments instead of trusting a workspace-local claude file", () => {
     writeFileSync(join(root, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    process.env.PATH = `:${binDir}`;
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    process.env.PATH = `${delimiter}${binDir}`;
 
-    expect(claudeCodeCliInstalled()).toBe(false);
+    try {
+      expect(claudeCodeCliInstalled()).toBe(false);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  test("reports hook-removal failures instead of claiming the hook is absent", () => {
+    mkdirSync(zshrcPath);
+
+    expect(reconcileShellHook(false)).toEqual({
+      changed: false,
+      state: "failed",
+      reason: "read/write failed",
+    });
   });
 
   test("start and ensure reconcile the hook from the actual injection result", async () => {

@@ -142,10 +142,10 @@ par le proxy sans nécessiter le wrapper `ocx claude`. Les shells déjà ouverts
 
 `ocx stop` et l'arrêt du proxy **suppriment les variables injectées** (ils ne restaurent pas les valeurs précédentes —
 seules les clés injectées par opencodex sont supprimées). Le proxy écrit également `~/.opencodex/claude-env.sh` ;
-`ocx start` installe le hook source `.zshrc` uniquement lorsqu'un exécutable Claude Code CLI est
+`ocx start` installe le hook source `.zshrc` uniquement lorsqu’un exécutable Claude Code CLI est
 présent dans le `PATH`. Au démarrage et avec `ocx ensure`, le hook appartenant à OpenCodex est supprimé
-si Claude Code est absent ou si l'intégration de l'environnement système est inactive. Claude Desktop
-utilise son propre profil et ne déclenche pas l'installation du hook shell.
+si Claude Code est absent ou si l’intégration de l’environnement système est inactive. Claude Desktop
+utilise son propre profil et ne déclenche pas l’installation du hook shell.
 
 Désactivez cette intégration avec `claudeCode.systemEnv: false` dans la configuration ou avec le commutateur de l'interface.
 La fonctionnalité est réservée à macOS ; sur les autres plateformes, utilisez `ocx claude`.

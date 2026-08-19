@@ -156,21 +156,23 @@ export function claudeCodeCliInstalled(pathValue = process.env.PATH): boolean {
  */
 export function reconcileShellHook(systemEnvInjected: boolean): {
   changed: boolean;
-  state: "installed" | "absent";
+  state: "installed" | "absent" | "failed";
   reason?: string;
 } {
   if (process.platform !== "darwin") return { changed: false, state: "absent", reason: "not macOS" };
   if (systemEnvInjected && claudeCodeCliInstalled()) {
     const result = installShellHook();
-    const installed = result.installed || result.reason === "already installed";
-    return {
-      changed: result.installed,
-      state: installed ? "installed" : "absent",
-      ...(result.reason ? { reason: result.reason } : {}),
-    };
+    if (result.installed) return { changed: true, state: "installed" };
+    if (result.reason === "already installed") {
+      return { changed: false, state: "installed", reason: result.reason };
+    }
+    return { changed: false, state: "failed", reason: result.reason ?? "install failed" };
   }
 
   const result = uninstallShellHook();
+  if (!result.removed && result.reason !== "not installed") {
+    return { changed: false, state: "failed", reason: result.reason ?? "remove failed" };
+  }
   return {
     changed: result.removed,
     state: "absent",
