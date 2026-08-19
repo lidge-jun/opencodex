@@ -8,6 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { resolveProductionBehaviorValues } from "../src/routing/compatibility/behavior";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { buildBehaviorFingerprintV1 } from "../src/lab/subject/behavior-fingerprint";
+import { resolveOpenRouterRouting } from "../src/providers/openrouter-routing";
+import { modelRecordValue } from "../src/reasoning-effort";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 // ollama-cloud ships `gpt-oss:120b` verbatim (src/providers/registry.ts) and the same
@@ -136,5 +138,63 @@ describe("a prototype-shaped model id resolves to no override", () => {
     expect(() => buildBehaviorFingerprintV1(overrideValues("constructor"))).not.toThrow();
     expect(buildBehaviorFingerprintV1(overrideValues("constructor")))
       .toBe(buildBehaviorFingerprintV1(overrideValues("toString")));
+  });
+});
+
+// Not every override map is family-aware, and the two that are not must stay that way.
+// The adapter reads `modelPreferHostedTools` through `hasOwnProperty`
+// (`src/adapters/openai-responses.ts:1001`) and `resolveOpenRouterRouting` reads
+// `modelOpenRouterRouting` through `Object.hasOwn` (`src/providers/openrouter-routing.ts:89`);
+// the type calls the first "Exact-model hosted tools" (`src/types.ts:1584`). Sending
+// these through modelRecordValue would be the divergence above with the sign flipped:
+// the report would claim an override applies that the adapter will never apply.
+const EXACT_ONLY: OcxProviderConfig = {
+  adapter: "openai-responses",
+  baseUrl: "https://openrouter.ai/api/v1",
+  apiKey: "sk-test",
+  authMode: "key",
+  modelPreferHostedTools: { "gpt-oss": ["image_generation"] },
+  modelOpenRouterRouting: { "gpt-oss": { order: ["fireworks"] } },
+} as unknown as OcxProviderConfig;
+
+const exactConfig = { providers: { "ollama-cloud": EXACT_ONLY } } as unknown as OcxConfig;
+
+const exactValues = (modelId: string) =>
+  resolveProductionBehaviorValues(exactConfig, "ollama-cloud", modelId, EXACT_ONLY, "salt")!;
+
+describe("exact-own override maps must not spread to the family", () => {
+  test("the runtime really does not apply the bare-family entry to the :tag model (ground truth)", () => {
+    // openRouter routing is resolvable directly, so this half is executable rather than cited.
+    expect(resolveOpenRouterRouting(EXACT_ONLY, "gpt-oss")).toEqual({ order: ["fireworks"] });
+    expect(resolveOpenRouterRouting(EXACT_ONLY, MODEL)).toBeUndefined();
+
+    // And the divergence is real rather than theoretical: the family-aware primitive
+    // resolves the entry that the adapter's own-property guard does not see.
+    expect(modelRecordValue(EXACT_ONLY.modelPreferHostedTools, MODEL)).toEqual(["image_generation"]);
+    expect(Object.hasOwn(EXACT_ONLY.modelPreferHostedTools!, MODEL)).toBe(false);
+  });
+
+  test("report agrees: the :tag model gets no hosted-tool preference", () => {
+    expect(exactValues(MODEL)["tools.hostedPreference"]!.value).toEqual({ tools: [] });
+  });
+
+  test("report agrees: the :tag model gets no openrouter routing", () => {
+    expect(exactValues(MODEL)["openrouter.order"]!.value).toEqual([]);
+  });
+
+  test("an exact key still resolves on both maps (control)", () => {
+    const v = exactValues("gpt-oss");
+    expect(v["tools.hostedPreference"]!.value).toEqual({ tools: ["image_generation"] });
+    expect(v["openrouter.order"]!.value).toEqual(["fireworks"]);
+  });
+
+  test("a prototype-shaped id resolves neither map", () => {
+    // The bare index this replaced walked the prototype chain here too, so these two
+    // maps had the original bug and must not simply inherit the family-aware fix.
+    for (const modelId of ["constructor", "toString", "valueOf"]) {
+      const v = exactValues(modelId);
+      expect(v["tools.hostedPreference"]!.value).toEqual({ tools: [] });
+      expect(v["openrouter.order"]!.value).toEqual([]);
+    }
   });
 });
