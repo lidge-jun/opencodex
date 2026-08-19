@@ -90,3 +90,16 @@ replacement written yet), #2101/#2040 (each needs its own cycle), #2104 (review-
 review not supersession), and the below-threshold set (#2115, #2082, #2027, #2067, #2054, #2032,
 #2075, #2127).
 
+
+## wp7 — PR #2105 (@lilinxiong)
+
+**PR #2144**, branch `codex/absorb-claude-shell-hook-gate`, base `dev`.
+
+Implementation and tests carried unchanged. The one addition is a comment on
+`reconcileShellHook` recording that "installed" is answered from the calling process's PATH, so
+a service context with a stripped PATH can remove a hook an interactive shell would keep — the
+reversible direction, and the one this reconcile wants.
+
+This closes the finding the auditor raised at #2105: it was scored ABSORB with no execution path
+and would have been lost. It now has one.
+
