@@ -43,3 +43,4 @@ export {
   concreteComboRequestBody,
   resetComboEffortWarningStateForTests,
 } from "./request";
+export { earliestQuotaResetAt, quotaResetRemainingMs } from "./reset-window";

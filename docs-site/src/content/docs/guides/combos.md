@@ -1,6 +1,6 @@
 ---
-title: "Combos: failover and load balancing"
-description: Route one virtual model to several providers for failover or weighted load balancing.
+title: "Combos: failover and routing strategies"
+description: Route one virtual model to several providers for failover, load balancing, or cached quota recovery.
 ---
 
 A **combo** is one virtual model that fronts an ordered list of real provider/model targets. Your
@@ -170,6 +170,25 @@ Weights are relative, not percentages. Weights `2,1` and `200,100` express the s
 small values that communicate intent.
 :::
 
+### Random and least-used selection
+
+`random` chooses a target independently on each request, with `weight` controlling the chance of
+selection. `least-used` chooses the eligible target with the fewest successful requests recorded by
+this proxy process; configuration order breaks a tie.
+
+### Reset window: prefer the nearest known recovery
+
+`reset-window` selects the eligible target whose earliest cached quota-window reset is nearest. It
+does not make a provider API request while routing: quota data is the most recently successful
+dashboard/API probe. A target with no fresh reset timestamp ranks after a target with one, and
+configured order breaks ties or supplies the fallback when no target has quota data.
+
+```bash
+ocx combo set recovering \
+  --targets zai/glm-5.3,anthropic/claude-opus-4-8 \
+  --strategy reset-window
+```
+
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
@@ -323,9 +342,9 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | Field | Required | Default | Rules |
 | --- | --- | --- | --- |
 | `targets` | Yes | — | Non-empty ordered array of configured `{ provider, model, weight? }` targets. Duplicate provider/model pairs are rejected. |
-| `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin; ignored by failover. |
-| `strategy` | No | `"failover"` | `"failover"` or `"round-robin"`. |
-| `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. |
+| `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin and random; ignored by the other strategies. |
+| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, or `"reset-window"`. |
+| `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection; ignored by the other strategies. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |

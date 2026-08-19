@@ -215,8 +215,11 @@ export function comboConfigIssues(
   }
   if (body.strategy !== undefined
     && body.strategy !== "failover"
-    && body.strategy !== "round-robin") {
-    issues.push({ path: ["strategy"], message: 'strategy must be "failover" or "round-robin"' });
+    && body.strategy !== "round-robin"
+    && body.strategy !== "random"
+    && body.strategy !== "least-used"
+    && body.strategy !== "reset-window") {
+    issues.push({ path: ["strategy"], message: 'strategy must be "failover", "round-robin", "random", "least-used", or "reset-window"' });
   }
   if (body.stickyLimit !== undefined
     && (typeof body.stickyLimit !== "number" || !Number.isInteger(body.stickyLimit)

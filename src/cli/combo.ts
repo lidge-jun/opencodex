@@ -14,7 +14,7 @@ const USAGE = `Usage:
   ocx combo [list] [--json]
   ocx combo show <id> [--json]
   ocx combo set <id> --targets <provider/model[:weight],...>
-      [--strategy <failover|round-robin>] [--sticky <1-100>]
+      [--strategy <failover|round-robin|random|least-used|reset-window>] [--sticky <1-100>]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--alias <name|->]
       [--native-alias] [--display-name <label|->]
       [--rename-from <id>] [--json]
@@ -73,7 +73,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const targetsRaw = takeOption(args, "--targets");
   if (!targetsRaw) throw new CliUsageError("--targets is required", USAGE);
   const strategy = takeOption(args, "--strategy") ?? "failover";
-  if (strategy !== "failover" && strategy !== "round-robin") throw new CliUsageError("--strategy must be failover or round-robin", USAGE);
+  if (strategy !== "failover" && strategy !== "round-robin" && strategy !== "random" && strategy !== "least-used" && strategy !== "reset-window") throw new CliUsageError("--strategy must be failover, round-robin, random, least-used, or reset-window", USAGE);
   const stickyLimit = takeIntegerOption(args, "--sticky", { min: 1 }) ?? 1;
   if (stickyLimit > 100) throw new CliUsageError("--sticky must be <= 100", USAGE);
   const effort = takeOption(args, "--effort");
@@ -84,9 +84,9 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   rejectArgs(args, USAGE);
   const combo: Record<string, unknown> = {
     strategy,
-    stickyLimit,
     targets: parseTargets(targetsRaw),
   };
+  if (strategy === "round-robin") combo.stickyLimit = stickyLimit;
   if (effort !== undefined) combo.defaultEffort = effort === "-" ? null : effort;
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
   if (nativeAlias) combo.nativeAlias = true;

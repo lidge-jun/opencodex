@@ -46,8 +46,8 @@ Chaque clé de combinaison est un identifiant conforme à `[A-Za-z0-9][A-Za-z0-9
 | Clé | Type | Valeur par défaut | Signification |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | requis | Routes concrètes ordonnées. `weight` est compris entre 1 et 10000 et vaut `1` par défaut. |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | Stratégie de sélection. L’ordre des cibles définit la priorité de repli ; les poids produisent une rotation pondérée régulière. |
-| `stickyLimit?` | `number` | `1` | Nombre de requêtes réussies conservées dans un même lot de rotation. Plage de 1 à 100. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Stratégie de sélection. L’ordre départage les égalités ; les poids s’appliquent à round-robin et random. |
+| `stickyLimit?` | `number` | `1` | Nombre de requêtes réussies conservées dans un même lot round-robin. Plage de 1 à 100 ; ignoré par les autres stratégies. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | non défini | Appliqué uniquement lorsque l’appelant ne précise aucun effort et que la cible sélectionnée annonce le niveau demandé. |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publie les images uniquement lorsque toutes les cibles les prennent en charge ; `"disabled"` impose le texte seul, retire les images des modalités publiées et rejette les requêtes qui en contiennent avant leur distribution. |
 | `alias?` | `string` | — | Identifiant public facultatif du modèle, à la place du slug canonique du sélecteur. |

@@ -654,7 +654,7 @@ export interface OcxConfig {
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
 
-export type OcxComboStrategy = "failover" | "round-robin";
+export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface OcxComboTarget {
@@ -666,7 +666,7 @@ export interface OcxComboTarget {
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
-  /** Ordered failover (default) or deterministic smooth weighted round-robin. */
+  /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
   stickyLimit?: number;

@@ -44,8 +44,8 @@ Codex Auth 頁面將此 picker 行為作為選擇加入功能暴露。停用它�
 | Key | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | 必填 | 有序的具體路由。`weight` 為 1–10000，預設 `1`。 |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | 選擇策略。目標順序為 failover 優先序；權重塑造平滑的加權 round-robin。 |
-| `stickyLimit?` | `number` | `1` | 在一個 round-robin 批次中保留的成功請求數。範圍 1–100。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 選擇策略。目標順序用於打破平手；權重用於 round-robin 與 random。 |
+| `stickyLimit?` | `number` | `1` | 在一個 round-robin 批次中保留的成功請求數。範圍 1–100；其他策略會忽略它。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | 未設定 | 僅在呼叫者省略 effort 且所選目標廣告請求的階層時套用。 |
 | `alias?` | `string` | — | 可選的公開模型 id，取代標準 picker slug。 |
 | `nativeAlias?` | `boolean` | `false` | 讓目前支援的裸原生 id 僅對該未限定 id 取得優先。裸 `gpt-5.6-*` id 使用 Codex 池／Direct 憑證。帳號限定路由保持獨立。供應商限定路由（如 `openai-apikey/gpt-5.6-*`）使用其設定的 API-key 路由，且永不會落到原生別名。 |

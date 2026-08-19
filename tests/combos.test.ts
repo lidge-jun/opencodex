@@ -45,6 +45,10 @@ import type { OcxConfig } from "../src/types";
 import { syncCatalogModels } from "../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { reconcileComboRotationState } from "../src/combos/resolve";
+import {
+  clearCachedProviderQuotas,
+  setCachedProviderQuotaForTests,
+} from "../src/providers/quota-routing-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
@@ -156,6 +160,7 @@ async function responseJson(response: Response | null): Promise<Record<string, u
 afterEach(() => {
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearCachedProviderQuotas();
 });
 
 describe("combo namespace primitives", () => {
@@ -453,6 +458,104 @@ describe("deterministic combo selection", () => {
     expect(routeModel(config, "combo/free").providerName).toBe("a");
   });
 
+  test("random selection is weighted per request and does not inherit round-robin stickiness", () => {
+    const roundRobin = rrConfig(2, [1, 1]);
+    expect(pickComboTarget(roundRobin, "free")?.target.provider).toBe("a");
+
+    const random = baseConfig({
+      combos: {
+        free: {
+          strategy: "random",
+          targets: [
+            { provider: "a", model: "m1", weight: 1 },
+            { provider: "b", model: "m2", weight: 3 },
+          ],
+        },
+      },
+    });
+    const entropy = spyOn(Math, "random");
+    try {
+      entropy.mockReturnValueOnce(0).mockReturnValueOnce(0.5);
+      expect(pickComboTarget(random, "free")?.target.provider).toBe("a");
+      expect(pickComboTarget(random, "free")?.target.provider).toBe("b");
+    } finally {
+      entropy.mockRestore();
+    }
+  });
+
+  test("least-used selection counts successful requests and preserves configured ties", () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          strategy: "least-used",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+        },
+      },
+    });
+
+    expect(successfulPicks(config, 4)).toEqual(["a/m1", "b/m2", "a/m1", "b/m2"]);
+  });
+
+  test("reset-window selects the eligible target whose cached quota resets soonest", () => {
+    const now = Date.now();
+    const config = baseConfig({
+      combos: {
+        free: {
+          strategy: "reset-window",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+            { provider: "c", model: "m3" },
+          ],
+        },
+      },
+    });
+    setCachedProviderQuotaForTests("a", { updatedAt: now, fiveHourResetAt: now + 24 * 60 * 60_000 });
+    setCachedProviderQuotaForTests("b", { updatedAt: now, weeklyResetAt: now + 60 * 60_000 });
+    setCachedProviderQuotaForTests("c", { updatedAt: now });
+
+    expect(pickComboTarget(config, "free")?.target.provider).toBe("b");
+    expect(routeModel(config, "combo/free").routeDecision?.selected).toMatchObject({
+      tieBreak: "reset-window",
+    });
+  });
+
+  test("reset-window treats elapsed resets as unknown and falls back to configured order", () => {
+    const now = Date.now();
+    const config = baseConfig({
+      combos: {
+        free: {
+          strategy: "reset-window",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+            { provider: "c", model: "m3" },
+          ],
+        },
+      },
+    });
+    setCachedProviderQuotaForTests("a", { updatedAt: now, fiveHourResetAt: now - 1 });
+    setCachedProviderQuotaForTests("b", { updatedAt: now, weeklyResetAt: now + 60 * 60_000 });
+    setCachedProviderQuotaForTests("c", { updatedAt: now, monthlyResetAt: now + 60 * 60_000 });
+    expect(pickComboTarget(config, "free")?.target.provider).toBe("b");
+
+    config.providers.a!.disabled = true;
+    expect(pickComboTarget(config, "free")?.target.provider).toBe("b");
+
+    clearCachedProviderQuotas();
+    setCachedProviderQuotaForTests("b", {
+      updatedAt: now - 30 * 60_000 - 1,
+      weeklyResetAt: now + 1,
+    });
+    expect(pickComboTarget(config, "free")?.target.provider).toBe("b");
+
+    config.providers.a!.disabled = false;
+    expect(pickComboTarget(config, "free")?.target.provider).toBe("a");
+  });
+
   test("routes a concrete combo target without re-entering its shadowing alias", () => {
     const config = baseConfig({
       combos: {
@@ -592,7 +695,7 @@ describe("combo validation and normalization", () => {
       { raw: VALID_COMBO, providers: { combo: providers.a! }, path: [], message: 'reserved "combo/" namespace' },
       { id: "a", raw: VALID_COMBO, path: [], message: 'combo id "a" collides' },
       { raw: null, path: [], message: "combo must be an object" },
-      { raw: { ...VALID_COMBO, strategy: "random" }, path: ["strategy"], message: "failover" },
+      { raw: { ...VALID_COMBO, strategy: "unexpected" }, path: ["strategy"], message: "failover" },
       { raw: { ...VALID_COMBO, stickyLimit: 1.5 }, path: ["stickyLimit"], message: "integer from 1 to 100" },
       { raw: { ...VALID_COMBO, defaultEffort: "turbo" }, path: ["defaultEffort"], message: "low, medium, high" },
       { raw: { targets: [] }, path: ["targets"], message: "non-empty array" },
@@ -714,7 +817,7 @@ describe("persisted combo config parity", () => {
       });
 
       const rows: Array<{ id: string; combo: unknown; providers?: OcxConfig["providers"] }> = [
-        { id: "free", combo: { ...VALID_COMBO, strategy: "random" } },
+        { id: "free", combo: { ...VALID_COMBO, strategy: "unexpected" } },
         { id: "free", combo: { ...VALID_COMBO, stickyLimit: 0 } },
         { id: "free", combo: { ...VALID_COMBO, defaultEffort: "turbo" } },
         { id: "free", combo: { targets: [] } },

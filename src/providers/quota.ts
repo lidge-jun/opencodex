@@ -25,6 +25,10 @@ import {
 } from "../lib/state-store-sweeper";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import {
+  clearCachedProviderQuotas,
+  replaceCachedProviderQuotas,
+} from "./quota-routing-cache";
+import {
   aggregateCodexPoolCapacity,
   CODEX_CAPACITY_MAX_QUOTA_AGE_MS,
   type CodexCapacityAggregation,
@@ -125,6 +129,7 @@ let invalidationEpoch = 0;
 /** Invalidate the report cache (e.g. after switching a provider's active account). */
 export function clearProviderQuotaCache(): void {
   cache = null;
+  clearCachedProviderQuotas();
   invalidationEpoch += 1;
 }
 
@@ -1504,6 +1509,7 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
     const reports = cache.response.reports.filter(report => context.providerNames.has(report.provider));
     removed += cache.response.reports.length - reports.length;
     cache = { ...cache, response: { ...cache.response, reports } };
+    replaceCachedProviderQuotas(reports);
   }
   liveAccountQuotaKeys = new Set(context.oauthAccountKeys);
   liveProviderQuotaKeys = new Set(context.providerNames);
@@ -2341,6 +2347,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     ) {
       const reports = response.reports.filter(item => mayCommitProviderQuotaKey(item.provider, writerGeneration));
       cache = { key, ts: Date.now(), response: { ...response, reports } };
+      replaceCachedProviderQuotas(reports);
     }
     return response;
   })();

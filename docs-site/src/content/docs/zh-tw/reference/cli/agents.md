@@ -43,7 +43,7 @@ ocx v2 threads 16
 
 ### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
 
-管理組合 failover 與 round-robin 虛擬模型。`ocx route combo` 是階層式別名；組合是目前支援的路由資源。目標使用
+管理具有多種選擇策略的組合虛擬模型。`ocx route combo` 是階層式別名；組合是目前支援的路由資源。目標使用
 `provider/model[:weight],provider/model[:weight]`。
 
 ```bash
