@@ -144,7 +144,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
     expect(emptyParsed["ocx-kimi-plain"]?.reasoning_efforts).toBeUndefined();
   });
 
-  test("writer drops Codex-only ultra and falls back when that was the configured default", () => {
+  test("Grok config injection drops Codex-only ultra from a mixed ladder", () => {
     const block = buildGrokManagedBlock(10100, [{
       id: "gpt-5.6-sol",
       reasoningEfforts: ["low", "max", "ultra"],
@@ -154,6 +154,30 @@ describe("Grok managed-block thinking-intensity injection", () => {
     const table = parseModels(block)["ocx-gpt-5-6-sol"];
     expect(table.reasoning_efforts?.map(row => row.value)).toEqual(["low", "max"]);
     expect(table.reasoning_effort).toBe("low");
+  });
+
+  test("Grok config injection omits effort fields for an ultra-only ladder", () => {
+    const block = buildGrokManagedBlock(10100, [{
+      id: "gpt-5.6-sol",
+      reasoningEfforts: ["ultra"],
+      defaultReasoningEffort: "ultra",
+    }]);
+    const table = parseModels(block)["ocx-gpt-5-6-sol"];
+    expect(table.supports_reasoning_effort).toBeUndefined();
+    expect(table.reasoning_effort).toBeUndefined();
+    expect(table.reasoning_efforts).toBeUndefined();
+  });
+
+  test("Grok config injection falls back to medium when ultra is the configured default", () => {
+    const block = buildGrokManagedBlock(10100, [{
+      id: "gpt-5.6-sol",
+      reasoningEfforts: ["medium", "ultra"],
+      defaultReasoningEffort: "ultra",
+    }]);
+    const table = parseModels(block)["ocx-gpt-5-6-sol"];
+    expect(table.reasoning_effort).toBe("medium");
+    expect(table.reasoning_efforts?.map(row => row.value)).toEqual(["medium"]);
+    expect(table.reasoning_efforts?.find(row => row.default)?.value).toBe("medium");
   });
 
   test("writer preserves none and minimal while dropping Codex-only ultra", () => {
@@ -185,7 +209,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
     ]);
   });
 
-  test("sync writes each model's own ladder into a parseable config.toml", async () => {
+  test("Grok config injection filters native ultra even though HTTP /v1/models preserves it", async () => {
     const { root, grokHome } = tempGrokHome();
     try {
       const result = await syncGrokConfig(10190, baseConfig(), { grokHome }, {
