@@ -4,14 +4,15 @@
  * the Proactive delegation prompt when they arrive with the synthetic top tier.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../src/server/responses";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../src/codex/catalog";
-import { collectCodexAppServerCatalogState } from "../src/codex/app-server-processes";
+import { collectCodexAppServerCatalogState, resetCodexAppServerCatalogStateCache } from "../src/codex/app-server-processes";
+import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
 import { clearDebugSettings, setDebugSettings } from "../src/lib/debug-settings";
 import {
   getInjectionDebugLogEntries,
@@ -118,6 +119,63 @@ describe("multiAgentGuidanceText", () => {
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "max", tools: [{ name: "shell" }] }))).toBeNull();
   });
 
+  // Every catalog-state test in this file injects `collectCatalogState`, which means none
+  // of them observes which collector the DEFAULT path picks. Rewiring the v2 boundary back
+  // to the synchronous collector left this whole suite green — the regression #1852 exists
+  // to prevent would have shipped unnoticed. This pins the default wiring itself.
+  test("the v2 default catalog path uses the request collector, not the synchronous one (#1852)", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const parsed = parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] });
+
+    // Force the default dependency by passing NO collectCatalogState, and make the
+    // underlying process enumeration observable through the trusted-executable seam:
+    // a stalling fake stands in for a slow CIM walk. The async request collector leaves
+    // the loop free; the synchronous collector parks it.
+    const fakeDir = mkdtempSync(join(tmpdir(), "ocx-collab-ps-"));
+    // Platform-shaped: execFile takes no shell, so a POSIX script is not executable on
+    // Windows — the platform this fix targets, whose CI shard runs this suite.
+    const fake = join(fakeDir, process.platform === "win32" ? "fake-powershell.cmd" : "fake-powershell.sh");
+    if (process.platform === "win32") {
+      writeFileSync(fake, ["@echo off", "ping -n 1 -w 200 192.0.2.1 >nul 2>&1"].join("\r\n"));
+    } else {
+      writeFileSync(fake, ["#!/bin/sh", "sleep 0.2", "printf ''"].join("\n"));
+      chmodSync(fake, 0o755);
+    }
+    setTrustedWindowsElevationExecutablesForTests({ powershell: fake });
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    resetCodexAppServerCatalogStateCache();
+    // This suite sets a hermetic state override at module load so the host's real
+    // app-server cannot leak in. That override short-circuits before any collector runs,
+    // so it has to come off for exactly this test — which is the one test that needs the
+    // real default path.
+    delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+
+    // Phase signal rather than a tick count: a threshold between "sync" and "async"
+    // observations has to guess how many timer callbacks a loaded runner will deliver,
+    // and setInterval promises no catch-up. This asks the binary question instead — did
+    // any event-loop work run WHILE the child was alive? A synchronous exec parks the
+    // loop, so the flag cannot flip regardless of machine speed.
+    let loopRanDuringExec = false;
+    const beat = setInterval(() => { loopRanDuringExec = true; }, 5);
+    try {
+      await multiAgentGuidanceText(parsed, { injectionModel: "anthropic/claude-sonnet-5" });
+    } finally {
+      clearInterval(beat);
+      Object.defineProperty(process, "platform", realPlatform);
+      setTrustedWindowsElevationExecutablesForTests(null);
+      rmSync(fakeDir, { recursive: true, force: true });
+      resetCodexAppServerCatalogStateCache();
+      process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+    }
+
+    expect(loopRanDuringExec).toBe(true);
+  });
+
   test("v2 guidance suppresses positive model claims while the app-server catalog is stale or unknown (#857)", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{
@@ -129,7 +187,7 @@ describe("multiAgentGuidanceText", () => {
 
     for (const state of ["stale", "unknown"] as const) {
       const text = await multiAgentGuidanceText(parsed, options, {
-        collectCatalogState: () => ({ state }),
+        collectCatalogState: async () => ({ state }),
       });
       // #1395: withhold OpenCodex's disk-derived claims, but do not prohibit
       // options the active spawn_agent tool advertises — the global catalog

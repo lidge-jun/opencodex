@@ -197,7 +197,8 @@ export interface MultiAgentGuidanceDeps {
     configuredModels: readonly string[],
     surface: SpawnAgentSurface,
   ) => EffectiveSubagentRoster | Promise<EffectiveSubagentRoster>;
-  collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" };
+  collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" }
+    | Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }>;
 }
 
 async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
@@ -207,8 +208,8 @@ async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" 
   if (override === "fresh" || override === "stale" || override === "not_running" || override === "unknown") {
     return { state: override };
   }
-  const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
-  return collectCodexAppServerCatalogState();
+  const { collectCodexAppServerCatalogStateForRequest } = await import("../../codex/app-server-processes");
+  return collectCodexAppServerCatalogStateForRequest();
 }
 
 

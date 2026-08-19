@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
 import {
@@ -8,6 +9,7 @@ import {
   attachStaleAppServerHint,
   catalogStateTtlMs,
   collectCodexAppServerCatalogState,
+  collectCodexAppServerCatalogStateForRequest,
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
   isWindowsCodexCandidateCommandLine,
@@ -22,7 +24,32 @@ import {
 } from "../src/codex/app-server-processes";
 
 describe("collectCodexAppServerCatalogState (#857)", () => {
-  const APP_SERVER_CMD = "/usr/local/bin/codex app-server";
+const APP_SERVER_CMD = "/usr/local/bin/codex app-server";
+
+/**
+ * A stand-in for powershell.exe that stalls, prints `line`, and exits.
+ *
+ * Platform-shaped on purpose: `execFile` launches its target directly with no shell, so a
+ * POSIX `.sh` script is not an executable on Windows — and Windows is the platform this
+ * whole fix exists for, with its own CI shard running this suite. On Windows the fake is a
+ * `.cmd` invoked through `cmd.exe`; elsewhere it is a shell script.
+ */
+function writeStallingFakePowerShell(dir: string, line: string): string {
+  if (process.platform === "win32") {
+    const cmd = join(dir, "fake-powershell.cmd");
+    writeFileSync(cmd, [
+      "@echo off",
+      // ~200ms without depending on timeout.exe, which refuses a redirected stdin.
+      "ping -n 1 -w 200 192.0.2.1 >nul 2>&1",
+      `echo ${line.replace(/\t/g, "\t")}`,
+    ].join("\r\n"));
+    return cmd;
+  }
+  const sh = join(dir, "fake-powershell.sh");
+  writeFileSync(sh, ["#!/bin/sh", "sleep 0.2", `printf '%s\\n' '${line}'`].join("\n"));
+  chmodSync(sh, 0o755);
+  return sh;
+}
 
   test("not_running when no app-server process exists", () => {
     const status = collectCodexAppServerCatalogState({
@@ -72,6 +99,235 @@ describe("collectCodexAppServerCatalogState (#857)", () => {
       catalogMtimeMs: () => null,
     });
     expect(noCatalog.state).toBe("unknown");
+  });
+
+  test("Windows request collection yields to the event loop while CIM enumeration is slow (#1852)", async () => {
+    let releaseSnapshots: ((snapshots: Array<{ pid: number; commandLine: string }>) => void) | undefined;
+    const snapshots = new Promise<Array<{ pid: number; commandLine: string }>>(resolve => {
+      releaseSnapshots = resolve;
+    });
+    const collection = collectCodexAppServerCatalogStateForRequest({
+      platform: "win32",
+      listSnapshotsAsync: () => snapshots,
+      readStartMsBatchAsync: async pids => new Map(pids.map(pid => [pid, 2_000])),
+      catalogMtimeMs: () => 1_000,
+    });
+
+    const first = await Promise.race([
+      collection.then(() => "collection"),
+      new Promise<"timer">(resolve => setTimeout(() => resolve("timer"), 10)),
+    ]);
+    expect(first).toBe("timer");
+
+    releaseSnapshots?.([{ pid: 42, commandLine: APP_SERVER_CMD }]);
+    await expect(collection).resolves.toMatchObject({ state: "fresh" });
+  });
+
+  // The test above injects an ALREADY-async seam, so it stays green whether or not the
+  // production default is async: reverting the default to `execFileSync` leaves every
+  // assertion in it passing. It describes the intended design without guarding it.
+  //
+  // The one below guards it. It replaces the *executable* rather than the code under
+  // test, so BOTH default PowerShell calls — process enumeration and start-time
+  // discovery — run for real through their production wiring. A synchronous
+  // implementation parks the event loop for the script's whole duration; an
+  // asynchronous one does not. That difference is the entire content of #1852.
+  test("the default Windows request path keeps the event loop alive through both PowerShell calls (#1852)", async () => {
+    resetCodexAppServerCatalogStateCache();
+    const dir = mkdtempSync(join(tmpdir(), "ocx-ps-fake-"));
+    const fake = writeStallingFakePowerShell(dir, `42\t${APP_SERVER_CMD}\tCONTOSO\\jun`);
+    setTrustedWindowsElevationExecutablesForTests({ powershell: fake });
+
+    // Phase signal instead of a timer count. A callback tally has to pick a threshold
+    // between "sync" and "async" observations, and `setInterval` makes no catch-up
+    // guarantee — on a loaded runner a correct implementation can dip under any midpoint.
+    // This asks a binary question instead: did event-loop work make progress WHILE the
+    // child was running? A synchronous exec parks the loop, so the flag stays false no
+    // matter how slow or fast the machine is.
+    let loopRanDuringExec = false;
+    const beat = setInterval(() => { loopRanDuringExec = true; }, 5);
+    let status: Awaited<ReturnType<typeof collectCodexAppServerCatalogStateForRequest>>;
+    try {
+      status = await collectCodexAppServerCatalogStateForRequest({
+        platform: "win32",
+        catalogMtimeMs: () => 1_000,
+        // Only the enumeration is exercised here; the start-time half has its own test.
+        readStartMsBatchAsync: async pids => new Map(pids.map(pid => [pid, 2_000])),
+      });
+    } finally {
+      clearInterval(beat);
+      setTrustedWindowsElevationExecutablesForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+      resetCodexAppServerCatalogStateCache();
+    }
+
+    // Without this a failed exec ("not_running") would look identical to a fast one.
+    expect(status.processes.map(proc => proc.pid)).toEqual([42]);
+    expect(loopRanDuringExec).toBe(true);
+  });
+
+  // The request path makes TWO PowerShell calls. The test above injects
+  // `readStartMsBatchAsync` so it isolates the first one — which means reverting the
+  // SECOND to a synchronous read slips past it. That second call is up to five seconds of
+  // blocking when an app-server exists, so it needs its own oracle.
+  test("the default Windows start-time discovery keeps the event loop alive (#1852)", async () => {
+    resetCodexAppServerCatalogStateCache();
+    const dir = mkdtempSync(join(tmpdir(), "ocx-ps-start-"));
+    const fake = writeStallingFakePowerShell(dir, `42\t${APP_SERVER_CMD}\tCONTOSO\\jun`);
+    setTrustedWindowsElevationExecutablesForTests({ powershell: fake });
+
+    let loopRanDuringExec = false;
+    const beat = setInterval(() => { loopRanDuringExec = true; }, 5);
+    try {
+      // No readStartMsBatchAsync override: the default start-time path must run for real.
+      await collectCodexAppServerCatalogStateForRequest({
+        platform: "win32",
+        listSnapshotsAsync: async () => [{ pid: 42, commandLine: APP_SERVER_CMD }],
+        catalogMtimeMs: () => 1_000,
+      });
+    } finally {
+      clearInterval(beat);
+      setTrustedWindowsElevationExecutablesForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+      resetCodexAppServerCatalogStateCache();
+    }
+
+    expect(loopRanDuringExec).toBe(true);
+  });
+
+  test("Windows request collection shares one in-flight refresh and its short cache (#1852)", async () => {
+    resetCodexAppServerCatalogStateCache();
+    let calls = 0;
+    let now = 1_000;
+    const io = {
+      platform: "win32" as const,
+      now: () => now,
+      listSnapshotsAsync: async () => {
+        calls += 1;
+        await Bun.sleep(10);
+        return [{ pid: 42, commandLine: APP_SERVER_CMD }];
+      },
+      readStartMsBatchAsync: async (pids: readonly number[]) => new Map(pids.map(pid => [pid, 2_000])),
+      catalogMtimeMs: () => 1_000,
+    };
+
+    const [first, joined] = await Promise.all([
+      collectCodexAppServerCatalogStateForRequest(io),
+      collectCodexAppServerCatalogStateForRequest(io),
+    ]);
+    expect(first.state).toBe("fresh");
+    expect(joined).toBe(first);
+    expect(calls).toBe(1);
+
+    now += 4_999;
+    expect((await collectCodexAppServerCatalogStateForRequest(io)).state).toBe("fresh");
+    expect(calls).toBe(1);
+
+    now += 2;
+    expect((await collectCodexAppServerCatalogStateForRequest(io)).state).toBe("fresh");
+    expect(calls).toBe(2);
+    resetCodexAppServerCatalogStateCache();
+  });
+
+  test("cache invalidation cannot be undone by an older in-flight Windows refresh (#1852)", async () => {
+    resetCodexAppServerCatalogStateCache();
+    let calls = 0;
+    let releaseFirst: ((snapshots: Array<{ pid: number; commandLine: string }>) => void) | undefined;
+    const firstSnapshots = new Promise<Array<{ pid: number; commandLine: string }>>(resolve => {
+      releaseFirst = resolve;
+    });
+    const io = {
+      platform: "win32" as const,
+      listSnapshotsAsync: async () => {
+        calls += 1;
+        if (calls === 1) return firstSnapshots;
+        return [];
+      },
+      readStartMsBatchAsync: async (pids: readonly number[]) => new Map(pids.map(pid => [pid, 2_000])),
+      catalogMtimeMs: () => 1_000,
+    };
+
+    const staleFlight = collectCodexAppServerCatalogStateForRequest(io);
+    resetCodexAppServerCatalogStateCache();
+    releaseFirst?.([{ pid: 42, commandLine: APP_SERVER_CMD }]);
+    // The awaiting request must NOT receive the pre-write `fresh`. It was true
+    // before the invalidating write and is false after it, and `fresh` is the one
+    // state that authorizes positive model guidance — so handing it back trades the
+    // original hang for a wrong answer. `unknown` is what an invalidated
+    // observation actually knows, and the guidance path already stays silent on it.
+    await expect(staleFlight).resolves.toMatchObject({ state: "unknown" });
+
+    await expect(collectCodexAppServerCatalogStateForRequest(io)).resolves.toMatchObject({
+      state: "not_running",
+    });
+    expect(calls).toBe(2);
+    resetCodexAppServerCatalogStateCache();
+  });
+
+  test("an invalidated in-flight refresh does not poison the next request (#1852)", async () => {
+    // Companion to the case above: degrading the obsolete result to `unknown` must
+    // not also suppress the NEXT observation, which is made after the write and is
+    // therefore the one the caller should trust.
+    resetCodexAppServerCatalogStateCache();
+    let calls = 0;
+    let releaseFirst: ((snapshots: Array<{ pid: number; commandLine: string }>) => void) | undefined;
+    const firstSnapshots = new Promise<Array<{ pid: number; commandLine: string }>>(resolve => {
+      releaseFirst = resolve;
+    });
+    const io = {
+      platform: "win32" as const,
+      listSnapshotsAsync: async () => {
+        calls += 1;
+        if (calls === 1) return firstSnapshots;
+        return [{ pid: 43, commandLine: APP_SERVER_CMD }];
+      },
+      readStartMsBatchAsync: async (pids: readonly number[]) => new Map(pids.map(pid => [pid, 2_000])),
+      catalogMtimeMs: () => 1_000,
+    };
+
+    const obsolete = collectCodexAppServerCatalogStateForRequest(io);
+    resetCodexAppServerCatalogStateCache();
+    releaseFirst?.([{ pid: 42, commandLine: APP_SERVER_CMD }]);
+    await expect(obsolete).resolves.toMatchObject({ state: "unknown" });
+
+    await expect(collectCodexAppServerCatalogStateForRequest(io)).resolves.toMatchObject({
+      state: "fresh",
+    });
+    expect(calls).toBe(2);
+    resetCodexAppServerCatalogStateCache();
+  });
+
+  test("Windows request collection briefly caches failed CIM enumeration (#1852)", async () => {
+    resetCodexAppServerCatalogStateCache();
+    let calls = 0;
+    let now = 1_000;
+    const io = {
+      platform: "win32" as const,
+      now: () => now,
+      listSnapshotsAsync: async () => {
+        calls += 1;
+        throw new Error("windows_enum_incomplete");
+      },
+      catalogMtimeMs: () => 1_000,
+    };
+
+    await expect(collectCodexAppServerCatalogStateForRequest(io)).resolves.toMatchObject({
+      state: "unknown",
+    });
+    now += 10;
+    await expect(collectCodexAppServerCatalogStateForRequest(io)).resolves.toMatchObject({
+      state: "unknown",
+    });
+    // Failure is advisory and fail-closed, but caching it briefly prevents a
+    // broken CIM provider from spawning one PowerShell process per request.
+    expect(calls).toBe(1);
+
+    now += 241;
+    await expect(collectCodexAppServerCatalogStateForRequest(io)).resolves.toMatchObject({
+      state: "unknown",
+    });
+    expect(calls).toBe(2);
+    resetCodexAppServerCatalogStateCache();
   });
 
   test("unrelated processes never enter the comparison", () => {

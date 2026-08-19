@@ -259,6 +259,13 @@ timestamp, an unreadable process start time, or a failed process enumeration —
 separately by `ocx doctor`. `stale` clears only after every detected Codex app-server starts after
 the final catalog write; it does not necessarily clear `unknown`.
 
+On Windows, this advisory check uses asynchronous PowerShell/CIM discovery on the v2 request path.
+Concurrent cold checks share one in-flight discovery. Observed states are cached for five seconds;
+an `unknown` failure is cached for only 250 milliseconds so a transient CIM error retries quickly. A
+slow or failing CIM query can delay or suppress only OpenCodex-authored model guidance; it does not
+block the Bun event loop, `/healthz`, or unrelated proxy traffic. Explicit CLI/service lifecycle
+operations retain the synchronous, fail-closed process collector because they may signal processes.
+
 Only a real change counts. A sync whose result is byte-identical to the catalog already on disk
 leaves the file untouched, so restarting the proxy or re-syncing an unchanged model set does not
 make a running Codex look stale.
