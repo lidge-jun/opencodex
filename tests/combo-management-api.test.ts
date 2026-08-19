@@ -655,10 +655,22 @@ describe("combo management API", () => {
     expect(body.available.filter(model => model === "deepseek-v4-flash")).toHaveLength(1);
     expect(body.available).not.toContain("combo/free");
 
+    // Disabling an alias hides it from the pickable set, but NOT while it still holds a
+    // saved roster slot: the dashboard PUTs exactly the rows it can render, so dropping a
+    // chosen id here silently truncates the persisted roster on the next Save. Covered by
+    // tests/subagent-roster-retention.test.ts.
     config.disabledModels = ["deepseek-v4-flash"];
     const disabledResponse = await comboApi(config, "GET", "/api/subagent-models");
-    const disabledBody = await disabledResponse!.json() as { available: string[] };
-    expect(disabledBody.available).not.toContain("deepseek-v4-flash");
+    const disabledBody = await disabledResponse!.json() as { chosen: string[]; available: string[] };
+    expect(disabledBody.chosen).toEqual(["deepseek-v4-flash"]);
+    expect(disabledBody.available).toContain("deepseek-v4-flash");
+    expect(disabledBody.available.filter(model => model === "deepseek-v4-flash")).toHaveLength(1);
+
+    // Once it no longer occupies a roster slot, the disable takes full effect.
+    config.subagentModels = [];
+    const unfeaturedResponse = await comboApi(config, "GET", "/api/subagent-models");
+    const unfeaturedBody = await unfeaturedResponse!.json() as { available: string[] };
+    expect(unfeaturedBody.available).not.toContain("deepseek-v4-flash");
   }, 15_000);
 
   test("GET models round-trips a disabled combo alias for the Models GUI", async () => {
