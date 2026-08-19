@@ -60,3 +60,33 @@ wp4 (#2100 + #2077 capability evidence), wp5 (#2056 K12 with the scorer correcti
 responses id backfill with the duplicate-id fix). Each is a sibling off `dev`; none depends on
 another.
 
+
+## wp6 — PR #2131 (@bet4it)
+
+**PR #2142**, branch `codex/absorb-responses-id-backfill`, base `dev`.
+
+Carries @bet4it's implementation and tests, plus one correction: an absent or malformed
+`output_index` collapsed to 0, so two such items both synthesized `msg_ocx_0` — duplicate ids,
+the exact defect the backfill prevents. Unusable indices now take a monotonic ordinal based far
+above any plausible real index.
+
+Evidence worth naming: applying ONLY @bet4it's original source and running the new suite gives
+15 pass / 1 fail, and the single failure is the duplicate-id guard. That is what makes it a guard
+rather than a restatement of behavior.
+
+The inherited assertion `expect(parsed.item.id).toBe("msg_ocx_0")` was replaced, not deleted
+quietly, and the replacement is disclosed in the PR body.
+
+# Campaign state at wp6 close
+
+Superseded and closed with attribution: #2102, #2099, #2091, #2029, #2063, #2100, #2077, #2056,
+#2062, #2131 — ten PRs, each with a comment naming its replacement and the specific reason.
+
+Opened: #2137 (#2132), #2138 (#2092), #2140 (#2100+#2077), #2141 (#2047), #2142 (#2131), plus
+the pre-existing #2134.
+
+Deliberately still open: #2109/#2110 (security gap), #2053 (C4 OAuth review), #2105 (no
+replacement written yet), #2101/#2040 (each needs its own cycle), #2104 (review-ready, deserves
+review not supersession), and the below-threshold set (#2115, #2082, #2027, #2067, #2054, #2032,
+#2075, #2127).
+
