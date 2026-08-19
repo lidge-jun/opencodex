@@ -69,7 +69,10 @@ export function createRoutedToolSearchRestoreBlockRewrite(
       pendingArguments = [];
       pendingArgumentBytes = 0;
       passthrough = true;
-      routedItemIds.clear();
+      // Deliberately KEEP routedItemIds. Overflow means we stop buffering UNKNOWN frames, not
+      // that we forget what we already classified: an item restored to `tool_search_call`
+      // upstream of here would otherwise start emitting `function_call_arguments.*` again and
+      // the client would see a mixed private/public lifecycle for one call.
       ordinaryItemIds.clear();
       return flushed;
     }
@@ -85,7 +88,8 @@ export function createRoutedToolSearchRestoreBlockRewrite(
         pendingArguments = [];
         pendingArgumentBytes = 0;
         passthrough = true;
-        routedItemIds.clear();
+        // Same reasoning as the frame/byte overflow above: an already-restored routed item
+        // must keep its frames suppressed even once buffering stops.
         ordinaryItemIds.clear();
         return flushed;
       }
@@ -130,7 +134,6 @@ export function createRoutedToolSearchRestoreBlockRewrite(
 
   const rewrite: SseBlockRewrite = (block: string): readonly string[] => {
     if (disposed) return [block];
-    if (passthrough) return [block];
     const payload = sseDataPayload(block);
     if (payload === null || payload === "[DONE]") return [block];
     let parsed: unknown;
@@ -142,6 +145,17 @@ export function createRoutedToolSearchRestoreBlockRewrite(
     if (!isPlainObject(parsed)) return [block];
 
     const type = typeof parsed.type === "string" ? parsed.type : "";
+    // After overflow we stop BUFFERING unknown frames, but an item already restored to
+    // `tool_search_call` must keep its public argument frames suppressed — otherwise the client
+    // receives a private item followed by `function_call_arguments.*` for the same id, which is
+    // exactly the mixed lifecycle this rewrite exists to prevent. Everything else passes through.
+    if (passthrough) {
+      const passthroughItemId = typeof parsed.item_id === "string" ? parsed.item_id : undefined;
+      const isArgumentEvent = type === "response.function_call_arguments.delta"
+        || type === "response.function_call_arguments.done";
+      if (isArgumentEvent && passthroughItemId && routedItemIds.has(passthroughItemId)) return [];
+      return [block];
+    }
     const outputIndex = typeof parsed.output_index === "number"
       && Number.isInteger(parsed.output_index)
       && parsed.output_index >= 0

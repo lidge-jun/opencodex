@@ -515,4 +515,64 @@ describe("routed Responses tool-search compatibility", () => {
       globalThis.fetch = savedFetch;
     }
   });
+
+  test("history-only replay still arms restoration for the lowered call", () => {
+    // A turn may replay tool_search history WITHOUT re-declaring the tool. The history is
+    // lowered to function_call either way, so leaving \`names\` empty would hand the client a
+    // public function_call for what it issued as a private search call.
+    const { body, names } = rewriteRoutedToolSearchForUpstream({
+      model: "fixture/deepseek-v4-flash",
+      tools: [{ type: "function", name: "read_file", parameters: { type: "object" } }],
+      input: [
+        {
+          type: "tool_search_call",
+          id: "tsc_old",
+          call_id: "call_old",
+          execution: "client",
+          arguments: { query: "x" },
+          status: "completed",
+        },
+        { type: "tool_search_output", call_id: "call_old", execution: "client", status: "completed", tools: [] },
+      ],
+    });
+
+    expect(names.has("tool_search")).toBe(true);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]).toMatchObject({ type: "function_call", id: "fc_old", name: "tool_search" });
+    expect(input[1]).toMatchObject({ type: "function_call_output", call_id: "call_old" });
+  });
+
+  test("overflow keeps suppressing frames for an already-restored routed item", () => {
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]));
+
+    // Open and restore a routed item.
+    const opened = rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_search", name: "tool_search", arguments: "" },
+    }));
+    expect(dataPayload(opened[0]!).item).toMatchObject({ type: "tool_search_call", id: "tsc_search" });
+
+    // Overflow the pending buffer on a DIFFERENT, unclassified item id.
+    for (let i = 0; i <= 256; i += 1) {
+      rewrite(frame("response.function_call_arguments.delta", {
+        output_index: 1,
+        item_id: "fc_unknown",
+        delta: "x",
+      }));
+    }
+
+    // The restored item's public argument frames must still be suppressed. Clearing the routed
+    // id on overflow would leak them and give the client a mixed private/public lifecycle for
+    // one call — the exact defect this rewrite exists to prevent.
+    const leaked = rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: "fc_search",
+      delta: "{",
+    }));
+    expect(leaked).toEqual([]);
+
+    // Unrelated traffic still passes through untouched after overflow.
+    const other = rewrite(frame("response.output_text.delta", { output_index: 2, delta: "hi" }));
+    expect(other).toHaveLength(1);
+  });
 });

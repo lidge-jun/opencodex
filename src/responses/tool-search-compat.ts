@@ -201,6 +201,7 @@ export function rewriteRoutedToolSearchForUpstream(body: unknown): {
   }
 
   let input = body.input;
+  let historyLowered = false;
   if (Array.isArray(input)) {
     input = input.map(item => {
       if (!isPlainObject(item)) return item;
@@ -208,11 +209,20 @@ export function rewriteRoutedToolSearchForUpstream(body: unknown): {
         const result = rewriteToolList(item.tools, wireName);
         return result.changed ? { ...item, tools: result.tools } : item;
       }
-      return rewriteHistoryItem(item, wireName);
+      const rewritten = rewriteHistoryItem(item, wireName);
+      if (rewritten !== item) historyLowered = true;
+      return rewritten;
     });
   }
 
-  if (declarationChanged && toolChoiceAllowsPrivateSearch(body.tool_choice)) names.add(wireName);
+  // A turn can replay `tool_search_call` history WITHOUT re-declaring the tool — Codex normally
+  // sends the declaration, but a history-only body is legal. The history is lowered to
+  // `function_call` either way, so restoration has to be armed on that too: leaving `names`
+  // empty there would hand the client a public `function_call` for what it issued as a private
+  // search call, and the round trip would silently stop matching.
+  if ((declarationChanged || historyLowered) && toolChoiceAllowsPrivateSearch(body.tool_choice)) {
+    names.add(wireName);
+  }
   const toolChoice = declarationChanged ? rewriteToolChoice(body.tool_choice, wireName) : body.tool_choice;
   return {
     body: {
