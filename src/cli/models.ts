@@ -5,11 +5,11 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
-import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort } from "../reasoning-effort";
+import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { encodedModelIdCollides, routedSlug, slugEquals } from "../providers/slug-codec";
 import { knownModelIdsForProvider } from "../router";
 import { findLiveProxy } from "../server/proxy-liveness";
-import type { OcxConfig, OcxCustomModel } from "../types";
+import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 
 const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio] [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra>] [--default-reasoning-effort <level>]";
 const REMOVE_USAGE = "Usage: ocx models remove <customId|provider/modelId> [--yes]";
@@ -98,15 +98,22 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       if (seen.has(model)) return;
       seen.add(model);
 
-      const noVision = prov.noVisionModels?.includes(model);
-      const modalities = inputModalities[model] ?? (noVision ? ["text"] : null);
-      const efforts = reasoningEfforts[model] ?? prov.reasoningEfforts ?? null;
+      // Resolve exactly as the runtime does, or this command reports capabilities the
+      // proxy will not honour: `isModelTextOnly` matches noVisionModels with modelInList
+      // and reads modelInputModalities with modelRecordValue, so a `gpt-oss` entry covers
+      // `gpt-oss:120b`. A bare lookup reported that model as unclassified on every field.
+      // noVisionModels is checked first because `isModelTextOnly` returns true on that
+      // match before it ever reads modelInputModalities: a `gpt-oss` noVision entry beats
+      // an exact `gpt-oss:120b` entry that lists "image", and the proxy rejects the image.
+      const noVision = modelInList(prov.noVisionModels, model);
+      const modalities = noVision ? ["text"] : (modelRecordValue(inputModalities, model) ?? null);
+      const efforts = modelRecordValue(reasoningEfforts, model) ?? prov.reasoningEfforts ?? null;
 
       entries.push({
         provider: provName,
         model,
         isDefault,
-        contextWindow: contextWindows[model] ?? globalContext,
+        contextWindow: modelRecordValue(contextWindows, model) ?? globalContext,
         inputModalities: modalities,
         reasoningEfforts: efforts,
       });

@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { isModelTextOnly } from "../src/vision";
+import type { OcxProviderConfig } from "../src/types";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -160,6 +162,100 @@ describe("ocx models richer metadata", () => {
       const modelB = parsed.models.find((m: { model: string }) => m.model === "model-b");
       expect(modelB.contextWindow).toBe(32000);
       expect(modelB.inputModalities).toEqual(["text"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a family entry classifies its tagged siblings, as the runtime does", () => {
+    // isModelTextOnly matches noVisionModels with modelInList and reads
+    // modelInputModalities with modelRecordValue, so a `gpt-oss` entry covers
+    // `gpt-oss:120b`. This command must not report a different answer.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-models-family-"));
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "http://localhost:8080/v1",
+      allowPrivateNetwork: true,
+      defaultModel: "gpt-oss:120b",
+      models: ["gpt-oss:120b"],
+      modelContextWindows: { "gpt-oss": 131000 },
+      noVisionModels: ["gpt-oss"],
+      modelReasoningEfforts: { "gpt-oss": ["low", "high"] },
+    };
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ port: 10121, providers: { test: provider }, defaultProvider: "test" }),
+      "utf8",
+    );
+    try {
+      // Ground truth first: what the proxy itself will do with this config.
+      expect(isModelTextOnly(provider as unknown as OcxProviderConfig, "gpt-oss:120b")).toBe(true);
+
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const row = JSON.parse(result.stdout).models
+        .find((m: { model: string }) => m.model === "gpt-oss:120b");
+      expect(row.inputModalities).toEqual(["text"]);
+      expect(row.contextWindow).toBe(131000);
+      expect(row.reasoningEfforts).toEqual(["low", "high"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a noVision family entry beats an exact modality entry, as the runtime does", () => {
+    // isModelTextOnly returns true on the noVisionModels match before it ever reads
+    // modelInputModalities, so an exact entry listing "image" does not grant vision.
+    // Reporting ["text", "image"] here would advertise support the proxy then rejects.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-models-novision-"));
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "http://localhost:8080/v1",
+      allowPrivateNetwork: true,
+      defaultModel: "gpt-oss:120b",
+      models: ["gpt-oss:120b"],
+      noVisionModels: ["gpt-oss"],
+      modelInputModalities: { "gpt-oss:120b": ["text", "image"] },
+    };
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ port: 10123, providers: { test: provider }, defaultProvider: "test" }),
+      "utf8",
+    );
+    try {
+      // Ground truth first: the proxy treats this model as text-only.
+      expect(isModelTextOnly(provider as unknown as OcxProviderConfig, "gpt-oss:120b")).toBe(true);
+
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const row = JSON.parse(result.stdout).models
+        .find((m: { model: string }) => m.model === "gpt-oss:120b");
+      expect(row.inputModalities).toEqual(["text"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an exact entry still wins over the family entry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-models-exact-"));
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "http://localhost:8080/v1",
+      allowPrivateNetwork: true,
+      defaultModel: "gpt-oss:20b",
+      models: ["gpt-oss:20b"],
+      modelContextWindows: { "gpt-oss": 131000, "gpt-oss:20b": 32000 },
+    };
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ port: 10122, providers: { test: provider }, defaultProvider: "test" }),
+      "utf8",
+    );
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      const row = JSON.parse(result.stdout).models
+        .find((m: { model: string }) => m.model === "gpt-oss:20b");
+      expect(row.contextWindow).toBe(32000);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

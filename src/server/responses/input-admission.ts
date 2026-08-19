@@ -13,6 +13,7 @@
 import { nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "../../codex/catalog/metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { modelRecordValue } from "../../reasoning-effort";
 import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 /**
@@ -133,7 +134,11 @@ export function resolveInputCeiling(
   // config here so this stays pure: no filesystem, no catalog, no registry scan.
   nativeContextCap?: NativeContextLimitsInput,
 ): number | null {
-  const configured = positive(provider.modelContextWindows?.[modelId]) ?? positive(provider.contextWindow);
+  // `modelRecordValue`, not a bare lookup: the catalog resolves these same two maps that
+  // way, so a `gpt-oss` entry covers `gpt-oss:120b`. Reading raw here made the gate fall
+  // back to the provider-wide window and refuse turns the model can plainly hold.
+  const configured = positive(modelRecordValue(provider.modelContextWindows, modelId))
+    ?? positive(provider.contextWindow);
 
   // The canonical `openai` registry entry declares no context fields, so without this the
   // gate would be inert on the default Codex route. All three clauses are load-bearing: a
@@ -156,7 +161,7 @@ export function resolveInputCeiling(
 
   const window = canonicalNativeBare ? native : configured;
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
-  const configuredMaxInput = positive(provider.modelMaxInputTokens?.[modelId]);
+  const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
   return limits.length === 0 ? null : Math.min(...limits);
 }
