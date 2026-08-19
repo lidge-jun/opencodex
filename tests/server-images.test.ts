@@ -195,6 +195,45 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
   }
 });
 
+test("POST /v1/images/edits with no image URL does not call xAI generation", async () => {
+  const captured: CapturedRequest[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("api.x.ai")) {
+      captured.push({
+        path: new URL(url).pathname,
+        headers: new Headers(init?.headers),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json({ data: [{ b64_json: "dHJhaW4=" }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/edits", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "make it blue", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toContain("image edits require an image URL");
+    expect(captured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);
