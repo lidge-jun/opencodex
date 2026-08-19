@@ -1505,7 +1505,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
-        outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
+        if (isCanonicalOpenAiForwardProvider(provider)) {
+          outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
+        }
       } else {
         outBody = preferConfiguredHostedTools(
           outBody,

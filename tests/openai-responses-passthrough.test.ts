@@ -2091,6 +2091,29 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
 
     expect(body.prompt_cache_retention).toBe("24h");
   });
+
+  test("noncanonical forward endpoints preserve GPT-5.6 prompt_cache_retention", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "forward",
+      headers: { authorization: "Bearer provider-static" },
+    });
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: "hi",
+        prompt_cache_retention: "24h",
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as { prompt_cache_retention?: string };
+
+    expect(body.prompt_cache_retention).toBe("24h");
+  });
 });
 
 describe("openaiResponsesUrl", () => {
