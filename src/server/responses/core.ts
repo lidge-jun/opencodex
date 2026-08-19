@@ -1085,7 +1085,15 @@ async function resolveResponsesCodexAuth(
     // Refusing it here is what made the codex-cli `env_key` contract unusable against Direct.
     // Admitting it is only safe because the stored main credential is substituted below, so
     // the admission secret still never leaves this process.
-    const substituteMainCredential = options.admission?.source === "bearer";
+    //
+    // #2132: substitution answers "does THIS ROUTE need our stored ChatGPT credential", not
+    // "how did the caller authenticate". Only a native Codex route reaches the ChatGPT backend
+    // and can consume that credential; a key-authenticated routed provider carries its own and
+    // never touches it. Keying on the caller alone made an install that deliberately never
+    // logged into ChatGPT fail every routed request with "No usable Codex main credential".
+    // `codexAccountMode` is set only for the native openai row, which is exactly that test.
+    const substituteMainCredential = options.admission?.source === "bearer"
+      && route.codexAccountMode !== undefined;
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(req.headers, config);
     }

@@ -322,7 +322,10 @@ export async function handleResponsesCompact(
 
   // #1686: a bearer-presented admission secret is one of ours, so the stored main credential
   // is substituted below instead of the caller bearer being forwarded.
-  const substituteMainCredential = admission?.source === "bearer";
+  // #2132: and only when the route is a native Codex one, which is the only route that can
+  // consume that credential. See the longer note in core.ts resolveResponsesCodexAuth.
+  const substituteMainCredential = admission?.source === "bearer"
+    && route.codexAccountMode !== undefined;
   if (route.codexAccountMode === "direct" && !substituteMainCredential) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
