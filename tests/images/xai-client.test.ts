@@ -158,4 +158,22 @@ describe("callXaiImages", () => {
     expect(body).not.toHaveProperty("size");
     expect(body).not.toHaveProperty("quality");
   });
+
+  test("explicit aspect_ratio is forwarded and wins over size", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", size: "1024x1024", aspectRatio: "16:9" }, AUTH);
+    const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
+    expect(body.aspect_ratio).toBe("16:9");
+    expect(body).not.toHaveProperty("size");
+  });
+
+  test("aspect_ratio auto and illegal values are dropped", async () => {
+    const autoCalls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", aspectRatio: "auto" }, AUTH);
+    expect(JSON.parse((autoCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
+
+    const badCalls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", aspectRatio: "2:1" }, AUTH);
+    expect(JSON.parse((badCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
+  });
 });
