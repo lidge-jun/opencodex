@@ -979,7 +979,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
     // routes (kimi, kimi-code, opencode-go).
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
-    // Blind Cursor models (Auto routers, Composer, GLM-5.2) go through the vision sidecar;
+    // Blind Cursor models (Auto routers, Composer, GLM-5.2, GLM-5.3) go through the vision sidecar;
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
     noVisionModels: [...CURSOR_NO_VISION_MODELS],

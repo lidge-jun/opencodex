@@ -66,9 +66,8 @@ describe("Cursor image resolver", () => {
   });
 
   test("omits data URLs above the inbound decode bomb ceiling", async () => {
-    const oversized = "A".repeat(Math.ceil((MAX_CURSOR_IMAGE_DECODE_BYTES + 1) * 4 / 3));
-    const padded = oversized + "=".repeat((4 - (oversized.length % 4)) % 4);
-    const url = `data:image/png;base64,${padded}`;
+    const oversizedLength = Math.ceil(Math.ceil((MAX_CURSOR_IMAGE_DECODE_BYTES + 1) * 4 / 3) / 4) * 4;
+    const url = `data:image/png;base64,${"A".repeat(oversizedLength)}`;
     // Pin the guard itself: the resolver soft-omits every failure reason identically.
     expect(() => decodeCursorImageDataUrl(url)).toThrow("Image input is too large to process safely.");
     // Soft-omit: one bad URL must not abort a mixed turn.
@@ -89,10 +88,9 @@ describe("Cursor image resolver", () => {
   });
 
   test("omits undecodable payloads under the decode ceiling instead of sending them", async () => {
-    const junk = "A".repeat(Math.ceil((MAX_CURSOR_IMAGE_BYTES + 1) * 4 / 3));
-    // Pad to valid base64 length so alphabet/padding checks pass and Bun decode fails.
-    const padded = junk + "=".repeat((4 - (junk.length % 4)) % 4);
-    const resolved = await resolveCursorImages([`data:image/png;base64,${padded}`]);
+    // Length is a multiple of four, so alphabet/padding checks pass and Bun decode fails.
+    const junkLength = Math.ceil(Math.ceil((MAX_CURSOR_IMAGE_BYTES + 1) * 4 / 3) / 4) * 4;
+    const resolved = await resolveCursorImages([`data:image/png;base64,${"A".repeat(junkLength)}`]);
     expect(resolved).toEqual([]);
   });
 
