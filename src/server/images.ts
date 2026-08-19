@@ -223,9 +223,12 @@ async function tryCcaImageGeneration(
       sessionId: `ocx-img-${crypto.randomUUID().slice(0, 8)}`,
     },
   };
-  let upstream: Response;
+  let upstream: Response | undefined;
   try {
     try {
+      // Image generation is a paid, non-idempotent POST. A transport failure is
+      // ambiguous: the upstream may have accepted the request before the
+      // connection failed, so never replay it on a peer host.
       upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
         method: "POST",
         headers: {
@@ -246,12 +249,19 @@ async function tryCcaImageGeneration(
       // lives in an Authorization header, not in the URL, but sanitize defensively
       // so no upstream-rejected credential or query param can reach the client,
       // and strip the internal base URL host from the surfaced message.
+      // 400, not 5xx: the POST is paid and non-idempotent. Codex retries every
+      // 5xx up to 5 attempts, which would duplicate generation after an ambiguous
+      // transport failure (the upstream may already have accepted the request).
       const rawMsg = err instanceof Error ? err.message : String(err);
       const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(
         /https?:\/\/[^\s"'<>]+/gi,
         "[upstream-url]",
       );
-      return formatErrorResponse(502, "upstream_error", `CCA image generation failed: ${safeMsg}`);
+      return formatErrorResponse(
+        400,
+        "invalid_request_error",
+        `CCA image generation may have started and must not be blindly retried: ${safeMsg}`,
+      );
     }
 
     // Stream the upstream body with a bounded reader so an oversized or malicious
