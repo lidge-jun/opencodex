@@ -125,7 +125,7 @@ describe("antigravity CCA envelope", () => {
       },
     } as unknown as OcxParsedRequest;
     const loneEnv = JSON.parse((await createGoogleAdapter(provider).buildRequest(loneModel)).body);
-    expect(loneEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["model"]);
+    expect(loneEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["model", "user"]);
   });
 
   test("exposes Gemini 3.7 Flash while retired Flash ids resolve to it", async () => {
