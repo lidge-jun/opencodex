@@ -199,3 +199,95 @@ verification alone, and it names three residuals rather than letting the origina
 Evidence: reverting `src/oauth/` fails 2 tests including the cancel-then-replace round trip;
 full suite 13536 pass / 0 fail.
 
+
+## wp14 — PR #2075 (@olddonkey): the second false negative
+
+**PR #2151**, branch `codex/absorb-fastwire-native-chat`, base `dev`. Closes #1886.
+
+Same class of error as wp13, different cause. I saw `CONFLICTING` and treated it as a reason not
+to read the diff. The rescore put it at **67**: native `/v1/chat/completions` decided
+`service_tier` from `chatServiceTier` alone, so a `supportsServiceTier: false` declaration was
+fail-open. The conflict was why it could not MERGE, not why it should score LOW — and resolving
+it took one import line.
+
+Rebase, stated exactly: `src/adapters/openai-chat.ts` conflicted because `dev` added
+`AdapterTierMetadata` while the PR adds `decideTier` and `ResolvedFastPolicy`. Both kept.
+Everything else clean. Typecheck is what confirms the resolution.
+
+Evidence: reverting `src/` fails the characterization test the author had flipped from
+documented-known-bug to passing assertion. Full suite 13552 pass / 0 fail.
+
+## Two scoring lessons, recorded together
+
+wp13 and wp14 were both my errors, from two different shortcuts:
+
+1. **Scoring from titles** — "preserve and replay thought signatures" reads like bookkeeping and
+   was a core provider 400.
+2. **Reading merge state as value** — `CONFLICTING` says a patch cannot land today; it says
+   nothing about whether the defect matters.
+
+Both produce false negatives that are indistinguishable from correct low scores without opening
+the diff. The rubric was fine; the inputs I fed it were not.
+
+
+# Campaign close (final)
+
+## 13 PRs open, all green, all MERGEABLE
+
+| PR | Fixes | Credit | Base |
+|---|---|---|---|
+| #2137 | issue #2132 | new work | dev |
+| #2138 | issue #2092 | @lilinxiong | dev |
+| #2140 | #2100 + #2077 | @ntdatt812 | dev |
+| #2141 | issue #2047 | @Ingwannu | dev |
+| #2142 | #2131 | @bet4it | dev |
+| #2144 | #2105 | @lilinxiong | dev |
+| #2145 | issue #1950 | @Ingwannu | dev |
+| #2146 | issue #2097 | @Ingwannu | **#2137 branch (stacked)** |
+| #2147 | issue #1886 | @olddonkey | dev |
+| #2148 | #2109 + #2110 | @drakonkat | dev |
+| #2149 | #2053 | @Ingwannu | dev |
+| #2150 | issue #2125 | @agentHits | dev |
+| #2151 | issue #1886 | @olddonkey | dev |
+
+Plus #2134, which opened this session.
+
+## 16 PRs closed with attribution
+
+#2102, #2099, #2091, #2029, #2063, #2100, #2077, #2056, #2062, #2131, #2105, #2040, #2101,
+#2104, #2109, #2110, #2053, #2127, #2075.
+
+Every one carries a comment naming its replacement, what was carried over, and what was
+deliberately not. Where a contributor's own assertion had to be replaced — #2141's scorer case,
+#2142's `msg_ocx_0` case — the replacement is disclosed in both the comment and the PR body.
+
+## 6 remain, independently verified below threshold
+
+#2115 (58), #2082 (46), #2067 (38), #2054 (58), #2032 (37), #2027 (51).
+
+These are not omissions. A rescore lane read every diff and scored them against the same rubric;
+it found exactly two false negatives in my original triage (#2127 at 83, #2075 at 67) and both
+were absorbed as wp13 and wp14. The remaining six are genuinely below the line, and four of them
+are additionally blocked (draft, CONFLICTING, or CHANGES_REQUESTED).
+
+Two of them carry real bugs attached to unabsorbable patches: #2054's Cursor context collapse
+(#1527) and #2027's Go quota gating (#1924). The right move for both is a clean reimplementation
+on `dev`, not absorbing a 19-file conflicting draft. That is stated rather than silently skipped.
+
+## Corrections made on top of contributor work
+
+Eight PRs shipped with fixes the originals were missing, each pinned by a test verified to fail
+against the contributor's own source:
+
+- #2141 short-only scorer returning 0 instead of UNKNOWN
+- #2142 duplicate `msg_ocx_0` from a collapsed index
+- #2145 history-only arming and non-atomic SSE overflow
+- #2146 selector compact bypassing the wire rewrite, Direct callers evicting catalog cache
+- #2148 `allowPrivateNetwork` bypassing the HTTPS gate for public hosts
+- #2138 `gpt-5.60` near-miss match
+
+## Not merged
+
+DEV-STACK-04 and DEV-GIT-PUSH-01 both put merge authorization with the user. #2137 must land
+before #2146.
+
