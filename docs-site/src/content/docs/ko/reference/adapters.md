@@ -49,9 +49,16 @@ interface ProviderAdapter {
 
 ## `openai-responses`
 
-**대상:** OpenAI **Responses API**. **`passthrough: true`** — 원본 요청 본문을 전달하고 응답을
-**변환하지 않은 채** 스트리밍합니다.
-**인증:** `forward`(호출자 헤더 중계) 또는 `key`.
+**대상:** OpenAI **Responses API**. **`passthrough: true`** — 일반적으로 원본 요청과 응답을
+그대로 전달하되, 라우팅된 게이트웨이에 필요한 좁은 호환성 변환만 적용합니다.
+**인증:** 정규 OpenAI `forward`는 안전한 호출자 헤더 허용 목록만 중계합니다. 비정규
+`forward`는 호출자 authorization을 중계하지 않고 설정된 정적 헤더만 사용하며, `key`는
+설정된 provider 키를 사용합니다.
+
+비정규 Responses 게이트웨이에는 Codex의 클라이언트 실행형 `tool_search` 선언을 공개 function
+도구와 충돌하지 않는 이름으로 전달합니다. 일치하는 요청 기록과 JSON/SSE function call은
+클라이언트용 비공개 `tool_search` 수명 주기로 복원합니다. 정규 OpenAI forward 경로는
+네이티브 비공개 타입을 그대로 유지합니다.
 
 `key` 인증에서는 [`retryOn429`](/ko/reference/configuration/)도 여기에 적용됩니다: 사전 스트림
 429는 번역된 `openai-chat`/Anthropic 요청 경로와 동일하게 다른 처리나 페일오버보다 먼저

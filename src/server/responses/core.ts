@@ -267,6 +267,8 @@ import {
 } from "../sse-payload-rewrite";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-tool-repair";
+import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
+import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import {
   collectDeclaredWireToolNames,
   createUndeclaredToolCallGuardBlockRewrite,
@@ -2399,6 +2401,7 @@ async function handleResponsesInner(
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
     const routedCustomToolNames = new Set<string>();
+    const routedToolSearchNames = new Set<string>();
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -2431,6 +2434,12 @@ async function handleResponsesInner(
       for (const name of request.convertedRoutedCustomToolNames ?? []) {
         if (toolBridgeMaps.freeformToolNames.has(name)) routedCustomToolNames.add(name);
       }
+    }
+    for (const name of request.convertedRoutedToolSearchNames ?? []) {
+      // The adapter already keeps this set empty when tool_choice forbids the private search.
+      // Its wire name may be collision-aliased, so comparing it to the caller-facing name here
+      // would incorrectly disable restoration for the exact ambiguous-name case the alias fixes.
+      routedToolSearchNames.add(name);
     }
     // #1700: the bridged paths refuse a call to a tool the request never declared
     // (`declaredToolNames`, src/bridge.ts). The passthrough had no equivalent, so a routed
@@ -2894,6 +2903,9 @@ async function handleResponsesInner(
         routedCustomToolNames.size > 0
           ? createRoutedCustomToolRestoreBlockRewrite(routedCustomToolNames, translatorBudget)
           : undefined,
+        routedToolSearchNames.size > 0
+          ? createRoutedToolSearchRestoreBlockRewrite(routedToolSearchNames, translatorBudget)
+          : undefined,
         githubCopilotRepairEnabled
           ? createGithubCopilotResponsesBlockRewrite(translatorBudget)
           : undefined,
@@ -3091,9 +3103,13 @@ async function handleResponsesInner(
           restoreImageGenCallsInJson(text, imageGenCallAliases),
           routedCustomToolNames,
         );
+        const restoredToolSearch = restoreRoutedToolSearchCallsInJson(
+          restored,
+          routedToolSearchNames,
+        );
         const repaired = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
-          ? repairResponsesSnapshotJson(restored, outboundRequestBody)
-          : restored;
+          ? repairResponsesSnapshotJson(restoredToolSearch, outboundRequestBody)
+          : restoredToolSearch;
         const modelRewritten = parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId
           ? rewriteResponsesModelJson(backfillResponsesFieldsJson(repaired), parsed._responseModelId)
           : backfillResponsesFieldsJson(repaired);

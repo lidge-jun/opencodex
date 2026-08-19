@@ -20,6 +20,7 @@ import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
+import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -214,15 +215,8 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       // Expose as a function so chat models can call it; the bridge relays it as a tool_search_call.
       out.push({
         name: "tool_search",
-        description: (t.description as string) ?? "Search for additional tools to load for the next turn.",
-        parameters: (isObj(t.parameters) ? t.parameters : {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "Search query for tools to load." },
-            limit: { type: "number", description: "Maximum number of tools to return." },
-          },
-          required: ["query"],
-        }) as Record<string, unknown>,
+        description: toolSearchDescription(t),
+        parameters: normalizeParameters(toolSearchParameters(t)),
         toolSearch: true,
       });
     }
