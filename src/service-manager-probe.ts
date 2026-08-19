@@ -179,6 +179,86 @@ function unitEnvValue(body: string, key: string): string | null {
   return null;
 }
 
+/**
+ * Did `systemctl --user` fail because the session bus could not be reached at all?
+ *
+ * These are the shapes reported on #2114 and #1939. The distinction that matters is
+ * "the question never left the machine" versus "systemd answered and said no" — only
+ * the former licenses reading the disk instead.
+ *
+ * **Locale caveat, stated rather than hidden:** systemd localizes these strings, so a
+ * non-English host will not match and keeps the old `unknown`. That is the safe
+ * direction — it fences rather than admits — but it does mean the fix does not reach
+ * every affected user. Forcing `LC_ALL=C` on the probe would remove the caveat and is
+ * the obvious follow-up; it is not done here because it changes every systemctl call
+ * this module makes, not just this branch.
+ */
+function busUnreachable(stderr: string): boolean {
+  const err = stderr.trim();
+  return err.includes("Failed to connect to bus")
+    || err.includes("Failed to connect to user scope bus")
+    || err.includes("Failed to get D-Bus connection")
+    || err.includes("DBUS_SESSION_BUS_ADDRESS")
+    || err.includes("System has not been booted with systemd");
+}
+
+/**
+ * Ownership from the unit file alone, for when the bus cannot answer (#2114).
+ *
+ * A unit file is proof of installation that does not require a running bus, and the homes
+ * it names are what ownership is actually decided on. What the disk cannot tell us is
+ * whether systemd has the unit LOADED, so this reports `registration: "absent"` — the
+ * honest reading of "no running manager has it" — rather than inventing a live state.
+ *
+ * A foreign home therefore still blocks, which is the whole reason this consults the disk
+ * instead of widening the exit code.
+ */
+function systemdUserUnitSearchPaths(home: string): string[] {
+  // systemd's user search path is not one directory. Checking only the canonical one and
+  // calling the rest absent is a fail-open: with the bus down a foreign unit in any other
+  // search dir is invisible, and "no answer" would be read as "no owner".
+  const xdgConfig = process.env.XDG_CONFIG_HOME?.trim();
+  const xdgData = process.env.XDG_DATA_HOME?.trim();
+  const dirs = [
+    xdgConfig ? join(xdgConfig, "systemd", "user") : join(home, ".config", "systemd", "user"),
+    join(home, ".config", "systemd", "user"),
+    xdgData ? join(xdgData, "systemd", "user") : join(home, ".local", "share", "systemd", "user"),
+    join(home, ".local", "share", "systemd", "user"),
+  ];
+  return [...new Set(dirs)].map(dir => join(dir, `${TASK}.service`));
+}
+
+function inspectSystemdOffline(home: string): ServiceManagerInstallation {
+  const candidates = systemdUserUnitSearchPaths(home);
+  const found = candidates.filter(path => artifactPresence(path) === "present");
+  if (candidates.some(path => artifactPresence(path) === "unreadable")) {
+    return unknown("the session bus is unreachable and a systemd unit could not be read");
+  }
+  if (found.length === 0) return { kind: "absent" };
+  if (found.length > 1) {
+    return unknown("the session bus is unreachable and more than one systemd unit file claims this proxy");
+  }
+  const definitionPath = found[0]!;
+  let body: string;
+  try {
+    body = readFileSync(definitionPath, "utf-8");
+  } catch (error) {
+    return unknown(`the session bus is unreachable and the systemd unit could not be read: ${String(error)}`);
+  }
+  return {
+    kind: "present",
+    claims: [{
+      backend: "systemd",
+      definitionPath,
+      homes: {
+        codexHome: unitEnvValue(body, "CODEX_HOME"),
+        opencodexHome: unitEnvValue(body, "OPENCODEX_HOME"),
+      },
+      registration: "absent",
+    }],
+  };
+}
+
 function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>): ServiceManagerInstallation {
   const definitionPath = join(deps.home, "Library", "LaunchAgents", `${LABEL}.plist`);
 
@@ -269,6 +349,15 @@ function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): Servic
   if (shown.status !== 0) {
     // A missing unit still exits ZERO and says not-found; a non-zero status means
     // the question never reached the bus.
+    //
+    // That is evidence about the BUS, not evidence that a foreign service owns this home
+    // (#2114). Calling it `unknown` fences native-main for the whole process, so a laptop
+    // with no session bus answers every native request with a 503 until `ocx restart`.
+    //
+    // Widening on the exit code alone would fail open, because with the bus down systemctl
+    // cannot see a foreign unit either. So ask the disk, which needs no bus, and fall back
+    // to `unknown` for every other non-zero exit.
+    if (busUnreachable(shown.stderr)) return inspectSystemdOffline(deps.home);
     return unknown(`systemctl show exited ${String(shown.status)}: ${shown.stderr.trim()}`);
   }
 
@@ -729,6 +818,16 @@ function walkWinswChain(
   const registration = probeWinswRegistration(deps);
 
   if (xml === "absent" && exe === "absent" && registration === "absent") return { kind: "absent" };
+  // A query we could not ask is a question about a service that cannot exist: WinSW is an
+  // optional backend, and with neither its XML nor its exe on disk there is nothing for a
+  // registration to belong to. Fencing here on an `sc.exe` timeout is one of the two
+  // triggers behind #2108, where a scheduler-only install answers 503 until `ocx restart`.
+  //
+  // The disk outranks the unaskable query only when BOTH assets are gone. Either one
+  // present means a real install may be there and the old `unknown` still holds.
+  if (registration === "unknown" && xml === "absent" && exe === "absent") {
+    return { kind: "absent" };
+  }
   if (registration === "unknown") {
     return unknown("the native WinSW service registration could not be verified");
   }

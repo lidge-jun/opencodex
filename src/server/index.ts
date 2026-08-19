@@ -705,6 +705,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
       : blockNativeMainStartupForUnownedServiceHome(
         nativeOwnership.ownership === "foreign" ? "foreign-ownership" : "ownership-unknown",
+        // #2108: an `unknown` verdict means the probe could not answer, not that this host
+        // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
+        // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
+        // verdict ignores this by design — that one is a fact, not a question.
+        { reprobe: () => inspectStartupOwnership(deps).ownership },
       )
     : {
       homeId: null,
