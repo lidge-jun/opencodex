@@ -131,3 +131,82 @@ Every superseded PR gets (a) its author credited by @login in the superseding PR
 (b) a courteous closing comment naming the replacement PR and what was carried over,
 (c) no force-push and no edit to the contributor's own branch.
 
+
+---
+
+# P-phase amendment (A-gate self-audit, 2026-08-20): the stack premise in §5 was WRONG
+
+The A-phase auditor lane produced nothing across three wait cycles, so it was retired
+(DISPATCH-RETIRE-01) and the load-bearing claims were verified directly. Two of them failed.
+
+## Correction 1 — #2131 does NOT touch `src/server/responses/core.ts`
+
+`gh pr diff 2131 --name-only` returns `src/server/responses/responses-field-backfill.ts`,
+its test, and eight docs locales. `core.ts` already imports that module on `dev`
+(`src/server/responses/core.ts:6-7`, called at :3098-3099); #2131 only changes the module's
+internals and signature. It never edits `core.ts`.
+
+#2132's fix lives in `resolveResponsesCodexAuth` (`core.ts:1082-1114`), a different region of
+a file #2131 does not modify at all.
+
+**Therefore the single dependency edge claimed in §5 does not exist.** The corrected file map:
+
+| Item | Files | Overlap |
+|---|---|---|
+| #2132 | src/server/responses/core.ts (auth resolution) | none |
+| #2131 | src/server/responses/responses-field-backfill.ts | none |
+| #2102 | src/adapters/openai-responses.ts | none |
+| #2100 | src/routing/capability.ts | none |
+| #2077 | src/routing/compatibility/behavior.ts | none |
+| #2056 | src/codex/quota.ts, src/codex/routing.ts | none |
+| #2105 | src/cli/index.ts, src/server/system-env.ts | none |
+
+Every absorbed item is disjoint. **There is no dependency-ordered chain in this backlog at all.**
+
+## Consequence: this work must NOT be stacked
+
+DEV-STACK-01 forbids stacking independent parts: "the parts are independent — open parallel PRs
+off trunk instead, since a stack imposes a false merge order." Building the requested chain
+would mean any layer's review blocking every layer above it, for zero dependency benefit, and
+would violate the same rule the request asked to follow.
+
+Docs 010 and 020 are therefore **superseded**: both become siblings based on `dev`, not layers.
+PR #2134 remains its own independent PR. The stack rooted on #2134 is cancelled and the reason
+is recorded here rather than the plan being quietly reshaped.
+
+**One exception preserved:** if two absorbed items ever do touch one file, they stack. None do.
+
+## Correction 2 — issue #2132 is confirmed present, with a sharper mechanism than 010 assumed
+
+Verified in this worktree:
+- `core.ts:1088`: `const substituteMainCredential = options.admission?.source === "bearer";`
+  keys on HOW the caller authenticated, never on WHERE the request routes.
+- `auth-context.ts:542-548`: with `ctx.kind === "main"` and that flag, a missing/dead stored
+  main token throws `CodexMainSubstitutionUnavailableError`.
+- `core.ts:1148-1153`: that becomes the reported 401.
+- The `authCtx = { kind: "main" }` fallback at `core.ts:1105` is taken whenever
+  `route.codexAccountMode` is unset — which is every non-`openai` provider.
+
+So a key-auth routed provider reaches `kind: "main"` + `substituteMainCredential: true` and
+fails, exactly as reported. The defect is real and 010's fix direction stands; only its stack
+position changes.
+
+## Correction 3 — supersede claims re-verified
+
+`gh pr view 2055`: `MERGED` at 2026-08-19T00:11:27Z, merge commit `2648ffa879edf93e`. #2063's
+supersede stands.
+
+## Revised work-phase map
+
+| WP | Doc | Branch | Base | Content |
+|---|---|---|---|---|
+| wp2 | 010 | codex/fix-bearer-admission-2132 | dev | issue #2132 (score 96) |
+| wp3 | 030 | codex/consolidate-prompt-cache-retention | dev | absorb #2102; supersede #2099, #2091 |
+| wp4 | 040 | codex/absorb-capability-evidence | dev | absorb #2100, #2077 |
+| wp5 | 050 | codex/absorb-k12-short-window | dev | absorb #2056; supersede #2062, #2063 |
+| wp6 | 020 | codex/absorb-responses-id-backfill | dev | absorb #2131 + unique-id correction |
+| wp7 | 060 | — | — | close-outs with attribution |
+
+Ordered by score, not by dependency, because no dependency exists. Each is independently
+reviewable and independently mergeable, which is what DEV-STACK-01 actually asks for.
+
