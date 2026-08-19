@@ -1083,9 +1083,9 @@ CCA chat/adapter requests use `streamGenerateContent?alt=sse`, including unary c
 buffers those SSE events for the unary contract. Built-in image generation uses the separate unary
 `v1internal:generateContent` endpoint outside the adapter. The configured daily or production host
 is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.com` or
-`cloudcode-pa.googleapis.com`) is eligible for one first-host transport, 404, `UNAVAILABLE`, or
-empty-stream retry. Authentication, geoblock, invalid-request, and exhausted-quota responses do
-not trigger host failover.
+`cloudcode-pa.googleapis.com`) is eligible for a single retry after a first-host transport
+failure, empty stream, 404, or `UNAVAILABLE`. Authentication, geoblock, invalid-request, and
+exhausted-quota responses do not trigger host failover.
 
 ## Transport inventory
 
