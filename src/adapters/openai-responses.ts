@@ -1505,6 +1505,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
+        outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
       } else {
         outBody = preferConfiguredHostedTools(
           outBody,
@@ -1536,7 +1537,6 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
-      outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
