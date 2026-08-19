@@ -613,15 +613,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
       ))
       .map(catalogModelSlug))];
-    const available = [
+    const chosen = config.subagentModels ?? [];
+    const selectable = [
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
       ...visibleRouted,
+    ];
+    // A saved roster slot must stay representable even after its model is disabled
+    // elsewhere (Models page, provider allowlist, a provider row going away). The
+    // dashboard treats `available` as the set of rows it can render, so a chosen id
+    // missing from it disappears from the roster UI and the next Save — which PUTs
+    // exactly what the UI holds — silently truncates the persisted list. Losing a
+    // deliberate 5-model roster to an unrelated visibility toggle is data loss, not a
+    // filter. Same reasoning as `fetchGrokCandidateModels`, which deliberately lists a
+    // model the user already excluded so its switch remains reachable.
+    const selectableSet = new Set(selectable);
+    const available = [
+      ...selectable,
+      ...[...new Set(chosen)].filter(model => !selectableSet.has(model)),
     ];
     // #857: let CLI/GUI show when a running Codex app-server keeps an older
     // in-memory catalog than the one on disk.
     const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
     const catalogState = collectCodexAppServerCatalogState();
-    return jsonResponse({ chosen: config.subagentModels ?? [], available, catalogState });
+    return jsonResponse({ chosen, available, catalogState });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
