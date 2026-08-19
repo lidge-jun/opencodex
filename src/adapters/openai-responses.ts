@@ -909,15 +909,24 @@ function stripStatefulResponsesParams(body: unknown): unknown {
  * with `{"detail":"Unsupported parameter: …"}` (strict allowlist). Codex CLI never
  * sends these — it controls output length via `reasoning.effort` — but third-party
  * Responses API clients (GJC, SDK wrappers) include `max_output_tokens` per the
- * public spec. `metadata` is likewise absent from the allowlist. No-op when the
- * body carries neither field, keeping the common Codex path allocation-free.
+ * public spec. `metadata` is likewise absent from the allowlist. Codex can also
+ * send `prompt_cache_retention`, but the ChatGPT backend rejects it for models
+ * that do not expose extended retention instead of falling back to normal cache
+ * retention. No-op when the body carries none of these fields, keeping the common
+ * Codex path allocation-free. API-key Responses requests retain all three fields.
  */
 function stripUnsupportedForwardParams(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
   const hasMot = Object.prototype.hasOwnProperty.call(body, "max_output_tokens");
   const hasMeta = Object.prototype.hasOwnProperty.call(body, "metadata");
-  if (!hasMot && !hasMeta) return body;
-  const { max_output_tokens: _mot, metadata: _meta, ...rest } = body;
+  const hasPromptCacheRetention = Object.prototype.hasOwnProperty.call(body, "prompt_cache_retention");
+  if (!hasMot && !hasMeta && !hasPromptCacheRetention) return body;
+  const {
+    max_output_tokens: _mot,
+    metadata: _meta,
+    prompt_cache_retention: _promptCacheRetention,
+    ...rest
+  } = body;
   return rest;
 }
 

@@ -804,8 +804,13 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.prompt_cache_key).toBe("project-cache-v1");
   });
 
-  test("preserves prompt_cache_retention in the raw Responses passthrough body", () => {
-    const adapter = createResponsesPassthroughAdapter(provider);
+  test("preserves prompt_cache_retention for OpenAI API-key Responses requests", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    });
     const request = adapter.buildRequest({
       modelId: "gpt-5.5",
       context: { messages: [] },
@@ -820,6 +825,24 @@ describe("OpenAI Responses passthrough sanitization", () => {
     const body = JSON.parse(request.body) as { prompt_cache_retention?: string };
 
     expect(body.prompt_cache_retention).toBe("24h");
+  });
+
+  test("strips prompt_cache_retention from ChatGPT forward requests", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: "hi",
+        prompt_cache_retention: "24h",
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { prompt_cache_retention?: string };
+
+    expect(body).not.toHaveProperty("prompt_cache_retention");
   });
 
   const expandedRawBody = {
