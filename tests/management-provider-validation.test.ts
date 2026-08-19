@@ -2888,11 +2888,11 @@ describe("provider management validation", () => {
     };
 
     // Clearing user-managed headers must not delete the registry-owned static
-    // metadata (opencode-free's x-opencode-client marker) the transport relies on.
+    // metadata (opencode-free's User-Agent and x-opencode-client markers) the transport relies on.
     expect((await patch("opencode-free", { headers: null }))?.status).toBe(200);
-    expect(liveConfig.providers["opencode-free"].headers).toEqual({ "x-opencode-client": "desktop" });
+    expect(liveConfig.providers["opencode-free"].headers).toEqual({ "User-Agent": "opencode", "x-opencode-client": "desktop" });
     const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
-    expect(saved.providers["opencode-free"]?.headers).toEqual({ "x-opencode-client": "desktop" });
+    expect(saved.providers["opencode-free"]?.headers).toEqual({ "User-Agent": "opencode", "x-opencode-client": "desktop" });
   });
   test("concurrent provider PATCHes merge different headers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });

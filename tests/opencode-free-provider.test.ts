@@ -29,12 +29,14 @@ describe("opencode-free provider", () => {
 
   test("static headers include only the public client marker", () => {
     expect(entry?.staticHeaders?.["Authorization"]).toBeUndefined();
+    expect(entry?.staticHeaders?.["User-Agent"]).toBe("opencode");
     expect(entry?.staticHeaders?.["x-opencode-client"]).toBe("desktop");
   });
 
   test("providerConfigSeed propagates static headers", () => {
     const seed = providerConfigSeed(entry!);
     expect(seed.headers?.["Authorization"]).toBeUndefined();
+    expect(seed.headers?.["User-Agent"]).toBe("opencode");
     expect(seed.headers?.["x-opencode-client"]).toBe("desktop");
     expect(seed.keyOptional).toBe(true);
     expect(seed.liveModels).toBe(true);
@@ -55,6 +57,7 @@ describe("opencode-free provider", () => {
     const req = adapter.buildRequest(minimalRequest());
     const headers = req.headers as Record<string, string>;
     expect(headers["Authorization"]).toBeUndefined();
+    expect(headers["User-Agent"]).toBe("opencode");
     expect(headers["x-opencode-client"]).toBe("desktop");
     expect(req.url).toBe("https://opencode.ai/zen/v1/chat/completions");
   });
