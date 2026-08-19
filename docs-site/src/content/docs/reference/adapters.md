@@ -49,9 +49,16 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
 
 ## `openai-responses`
 
-**Targets:** the OpenAI **Responses API**. **`passthrough: true`** — forwards the raw request body and
-streams the response back **untranslated**.
-**Auth:** `forward` (relay the caller's headers) or `key`.
+**Targets:** the OpenAI **Responses API**. **`passthrough: true`** — normally forwards the raw request
+body and response, with narrow compatibility rewrites for routed gateways.
+**Auth:** canonical OpenAI `forward` relays only the safe caller-header allowlist; noncanonical
+`forward` uses configured static headers without relaying caller authorization; `key` uses the
+configured provider key.
+
+Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
+collision-safe public function tool. Matching request history and JSON/SSE function calls are
+translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
+keeps the native private type unchanged.
 
 For `key` auth, [`retryOn429`](/reference/configuration/) applies here too: a pre-stream 429
 waits and replays the identical request on the same key before any other handling, exactly like

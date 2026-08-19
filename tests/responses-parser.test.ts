@@ -32,6 +32,28 @@ describe("Responses parser", () => {
     ]);
   });
 
+  test("normalizes tool_search parameter schemas to the same object-root contract", () => {
+    const parsed = parseRequest({
+      model: "test-model",
+      input: "find a tool",
+      tools: [{
+        type: "tool_search",
+        parameters: { properties: { query: { type: "string" } }, required: ["query"] },
+      }],
+    });
+
+    expect(parsed.context.tools).toEqual([{
+      name: "tool_search",
+      description: "Search for additional tools to load for the next turn.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      toolSearch: true,
+    }]);
+  });
+
   test("unwraps Chat-shaped function tools while retaining flat function tools", () => {
     const parameters = {
       type: "object",

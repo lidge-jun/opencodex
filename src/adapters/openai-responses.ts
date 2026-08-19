@@ -11,6 +11,7 @@ import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
+import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import {
   createAdapterTierMetadata,
@@ -1490,6 +1491,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
+      let convertedRoutedToolSearchNames: Set<string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -1549,6 +1551,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        // Run after custom-tool lowering so the search compatibility layer can choose a
+        // collision-free public function name against the final routed function catalog.
+        const rewritten = rewriteRoutedToolSearchForUpstream(outBody);
+        outBody = rewritten.body;
+        convertedRoutedToolSearchNames = rewritten.names;
+      }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
@@ -1576,6 +1585,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         body,
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
+        ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
     },

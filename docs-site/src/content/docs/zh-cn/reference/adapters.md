@@ -45,9 +45,14 @@ interface ProviderAdapter {
 
 ## `openai-responses`
 
-**目标：** OpenAI **Responses API**。**`passthrough: true`** —— 转发原始请求 body，并把响应
-**不经转换**地流式传回。
-**认证：** `forward`（转发调用方 header）或 `key`。
+**目标：** OpenAI **Responses API**。**`passthrough: true`** —— 通常原样转发请求与响应，仅对
+路由网关应用范围有限的兼容性转换。
+**认证：** 规范 OpenAI `forward` 只转发安全的调用方 header allowlist；非规范 `forward` 不会
+转发调用方 authorization，只使用已配置的静态 header；`key` 使用已配置的 provider key。
+
+对于非规范 Responses 网关，Codex 的客户端执行型 `tool_search` 声明会作为公共 function tool
+以不与现有 function 名称冲突的方式发送；匹配的请求历史和 JSON/SSE function call 会恢复为
+客户端私有的 `tool_search` 生命周期。规范 OpenAI forward 路径仍保持原生私有类型不变。
 
 使用 `key` 认证时，[`retryOn429`](/zh-cn/reference/configuration/) 同样适用：流开始前的 429
 会等待并先于其他处理或故障转移，在相同 key 上重放完全相同请求，与翻译后的

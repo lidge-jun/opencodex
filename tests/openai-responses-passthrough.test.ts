@@ -346,6 +346,34 @@ describe("OpenAI Responses passthrough sanitization", () => {
       .not.toHaveProperty("defer_loading");
     expect(namespace?.tools?.find(tool => tool.name === "deferred_read"))
       .not.toHaveProperty("defer_loading");
+    expect(body.tools.find(tool => tool.name === "tool_search")).toMatchObject({
+      type: "function",
+      name: "tool_search",
+      description: "Search deferred tools",
+    });
+  });
+
+  test("noncanonical forward passthrough also lowers tool_search without caller credential relay", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "forward",
+      headers: { authorization: "Bearer provider-static" },
+    });
+    const request = adapter.buildRequest({
+      modelId: deferredToolBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: deferredToolBody,
+    }, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+    const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
+
+    expect(body.tools.find(tool => tool.name === "tool_search")).toMatchObject({
+      type: "function",
+      name: "tool_search",
+    });
+    expect(request.headers.authorization).toBe("Bearer provider-static");
   });
 
   test("canonical forward passthrough leaves tool-search loading to the native backend", () => {
@@ -397,6 +425,8 @@ describe("OpenAI Responses passthrough sanitization", () => {
       "declared_deferred_read",
       "deferred_read",
     ]);
+    expect(additionalTools?.find(tool => tool.name === "tool_search"))
+      .toMatchObject({ type: "function", name: "tool_search" });
   });
 
   test("normalizes top-level function schemas in the serialized raw body (#745)", () => {

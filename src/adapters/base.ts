@@ -70,6 +70,8 @@ export interface AdapterRequest {
     body: string;
     /** Custom-tool names actually lowered to upstream function calls while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
+    /** Client tool-search names actually lowered to upstream function calls for this request. */
+    convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
