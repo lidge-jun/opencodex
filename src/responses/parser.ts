@@ -19,7 +19,7 @@ import { compactionItemToText, isCompactionItemType } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
-import { extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
+import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -220,6 +220,12 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
         toolSearch: true,
       });
     }
+    else if (t.type === "image_generation" || t.type === "image_gen") {
+      // Keep Codex's image_gen visible to routed chat models. The hosted OpenAI tool
+      // cannot execute on Grok; the model still has to see a callable image_gen so
+      // Codex's client-side /v1/images request can fire and be relayed to xAI.
+      if (!out.some(tool => tool.name === IMAGE_GEN_TOOL_NAME)) out.push(buildImageTool());
+    }
     else if (typeof t.name === "string" && t.type !== "web_search" && t.type !== "image_generation") {
       // Any OTHER named tool (e.g. a native/computer-use tool type opencodex doesn't explicitly
       // model) is client-executed — pass it through as a function so the routed model can read and
@@ -227,8 +233,7 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       // silently dropped, so the model never saw them.
       pushFn(t);
     }
-    // Only the OpenAI-hosted server-side tools (web_search, image_generation) are intentionally
-    // dropped — they're executed by OpenAI and can't be relayed to a routed chat model.
+    // Hosted web_search is still dropped here — the web-search sidecar re-injects it.
   }
   return out.length > 0 ? out : undefined;
 }

@@ -55,6 +55,12 @@ Standalone `/images/generations` calls never enter that bridge.
   `openai-responses` provider whose endpoint implements the OpenAI Images API. Explicit selection
   fails closed and never falls back to a different paid upstream. Registry-managed provider ids
   are not accepted here; omit `images.provider` to use the built-in OpenAI tiers.
+- **xAI Imagine (Grok OAuth) relay:** when `images.bridgeEnabled` is `true` and an `xai` provider
+  has a usable Grok CLI OAuth token (`ocx login xai`) or API key, `/v1/images/generations` and
+  `/v1/images/edits` are sent to `https://api.x.ai/v1` with that token. ChatGPT credentials are
+  not forwarded. The relay maps Codex `size` / `aspect_ratio` onto xAI's Imagine body and returns
+  the same `{created, data:[{b64_json}]}` shape. This is independent of the Responses Image
+  Bridge loop (which remains API-key-only).
 - **Google Antigravity (CCA) fallback:** when neither an OpenAI forward candidate nor a keyed
   provider is configured, `/v1/images/generations` (not `/images/edits`) falls back to the
   Antigravity **Cloud Code Assist** endpoint using the `gemini-3.1-flash-image` model. The fallback
