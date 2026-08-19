@@ -13,6 +13,7 @@ import {
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   codexMainProfileDrainingResponse,
+  __resetNativeMainFenceReasonLog,
   cooldownErrorMessage,
   cooldownErrorResponse,
   headersForCodexAuthContext,
@@ -54,6 +55,7 @@ import {
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import {
+  blockNativeMainStartupForUnownedServiceHome,
   completeNativeMainRecovery,
   initializeNativeMainStartupGate,
 } from "../src/codex/native-profile-startup";
@@ -1344,5 +1346,70 @@ describe("cooldown error surface", () => {
     const err = new CodexAccountCooldownError("pool-a", now - 5_000, "default");
 
     expect(cooldownErrorResponse(err, now).headers.get("Retry-After")).toBe("1");
+  });
+});
+
+// #2108: a Windows reboot can leave the native-main fence closed until `ocx restart`, and the
+// reporter could not tell us WHICH gate reason settled because nothing ever logged it. The 503
+// message must stay byte-identical (claude-messages.ts:818 matches it to keep the fence a 503
+// instead of remapping to Anthropic 529), and headers never survive to /api/logs, so stdout is
+// the only surface that reaches every path this fence fires on.
+describe("native-main fence names its gate reason", () => {
+  // Reset on BOTH sides: an afterEach only protects tests that run after this file, and the
+  // dedup is module state shared with every other file in the same process.
+  beforeEach(() => {
+    __resetNativeMainFenceReasonLog();
+  });
+
+  afterEach(() => {
+    __resetNativeMainFenceReasonLog();
+  });
+
+  test("the thrown fence carries the settled reason and says so once", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown");
+    try {
+      const err = new CodexMainProfileDrainingError();
+
+      expect(err.reason).toBe("ownership-unknown");
+      expect(err.message).toBe(CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
+      const lines = warn.mock.calls.map(call => call.join(" "));
+      expect(lines.filter(line => line.includes("ownership-unknown"))).toHaveLength(1);
+      // The homeId is derived from a profile directory path and has no business in a log line.
+      expect(lines.join("\n")).not.toContain("homeId");
+
+      // A retrying client must not turn the diagnostic into the noise it was meant to cut.
+      new CodexMainProfileDrainingError();
+      new CodexMainProfileDrainingError();
+      expect(lines.length).toBe(warn.mock.calls.length);
+    } finally {
+      warn.mockRestore();
+      await fence.release();
+    }
+  });
+
+  test("a different fence reports a different reason, so the value is read and not assumed", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    try {
+      expect(new CodexMainProfileDrainingError().reason).toBe("foreign-ownership");
+      expect(warn.mock.calls.map(call => call.join(" ")).join("\n")).toContain("foreign-ownership");
+    } finally {
+      warn.mockRestore();
+      await fence.release();
+    }
+  });
+
+  // The claimMainProfile() site throws the same error for the turn-drain fence, which
+  // is NOT the startup gate: the snapshot there reads `ready`. Inventing a reason for it would
+  // send the next reboot report chasing a startup gate that never closed.
+  test("the turn-drain fence stays silent instead of borrowing a startup reason", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(new CodexMainProfileDrainingError().reason).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

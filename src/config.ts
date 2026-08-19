@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
+import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 import {
   bumpConfigGenerationAtPath,
   bumpCurrentConfigGeneration,
@@ -727,6 +728,11 @@ const providerConfigSchema = z.object({
     .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
+  // Validated rather than passed through: this schema ends in `.passthrough()`, so an
+  // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
+  // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
+  // operator asked for shell mode, got code mode, and was told nothing (#2106).
+  codexToolMode: z.enum(["code_mode_only", "shell"]).optional(),
   responsesItemIdRepair: z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),
@@ -736,19 +742,6 @@ const providerConfigSchema = z.object({
   responsesSnapshotRepair: z.boolean().optional(),
 }).passthrough();
 
-const RESERVED_PROVIDER_NAMES = new Set([
-  // JavaScript prototype-pollution guards.
-  "__proto__",
-  "prototype",
-  "constructor",
-  // System-reserved routing namespace (resolved before provider/account
-  // namespaces in routeModelInternal). "combo" is intentionally NOT reserved:
-  // a physical provider named `combo` is a supported pattern (combo aliases
-  // hosted on the combo provider), and the combo selector only wins when an
-  // actual combo id matches.
-  "policy",
-]);
-const PROVIDER_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const SENSITIVE_PROVIDER_HEADERS = new Set([
   "authorization",
@@ -760,16 +753,7 @@ const SENSITIVE_PROVIDER_HEADERS = new Set([
   "x-amz-security-token",
 ]);
 
-export function isValidProviderName(name: string): boolean {
-  const trimmed = name.trim();
-  return trimmed === name
-    && PROVIDER_NAME_PATTERN.test(name)
-    && !RESERVED_PROVIDER_NAMES.has(name.toLowerCase());
-}
-
-export function hasOwnProvider(providers: Record<string, unknown>, name: string): boolean {
-  return Object.prototype.hasOwnProperty.call(providers, name);
-}
+export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 
 export function providerBaseUrlConfigError(baseUrl: string): string | null {
   try {

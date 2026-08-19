@@ -48,7 +48,7 @@ import {
   type InteractionResponse,
 } from "./gen/agent_pb";
 import { debugProviderDiagnostic } from "../../lib/debug";
-import { classifyCursorError, CursorUnexpectedCancelError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
+import { classifyCursorError, CursorUnexpectedCancelError, isCursorAbortError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import {
@@ -650,6 +650,18 @@ class LiveCursorTransport implements CursorTransport {
         // A CANCEL is benign only on the client-tool suspend path (expectedClose); an
         // unexpected server-side NGHTTP2_CANCEL must surface as a real transport error.
         if (this.expectedClose && isCursorBenignCancelError(failure)) return;
+        // A teardown error arriving AFTER the turn's terminal frame describes the connection,
+        // not the turn: the answer is committed and every queued message has been yielded.
+        //
+        // Narrow on purpose. A benign cancel after a terminal is already swallowed one layer
+        // up (`cursor.ts:183`), so widening this to every post-terminal error would change
+        // what the adapter sees for genuine faults. What it does cover is the abort case
+        // from #1527: `signal.abort` fires `failAndClear(new Error("Cursor request was
+        // aborted"))`, which is NOT benign (`cursor-errors.ts:74`), so an ordinary completed
+        // turn that is then torn down still surfaced as `turn-failed` with
+        // `expectedClose:false`. Only `cancelCursorRun()` sets `expectedClose`, so a normal
+        // completion never qualified for the branch above.
+        if (this.emittedTerminal && isCursorAbortError(failure)) return;
         throw attachPartialUsage(classifyTurnFailure(failure), state);
       }
       if (done) break;
@@ -659,6 +671,7 @@ class LiveCursorTransport implements CursorTransport {
     }
     if (failure) {
       if (this.expectedClose && isCursorBenignCancelError(failure)) return;
+      if (this.emittedTerminal && isCursorAbortError(failure)) return;
       throw attachPartialUsage(classifyTurnFailure(failure), state);
     }
   }

@@ -86,6 +86,21 @@ export function isCursorBenignCancelError(value: unknown): boolean {
 }
 
 /**
+ * True when the turn was torn down by an `AbortSignal` rather than by a transport fault.
+ *
+ * This is deliberately NOT part of `isCursorBenignCancelError`: an abort mid-turn is a real
+ * failure and must still surface. It is only meaningful in combination with a terminal frame
+ * having already been emitted, where it means "the answer landed and then the connection went
+ * away" (#1527).
+ */
+export function isCursorAbortError(value: unknown): boolean {
+  const message = errorMessage(value).toLowerCase();
+  if (message.includes("cursor request was aborted")) return true;
+  const name = (value as { name?: unknown })?.name;
+  return typeof name === "string" && name === "AbortError";
+}
+
+/**
  * True when Cursor Connect rejected the turn with invalid_argument.
  * Seen after stepCompleted on brittle external-model continuations.
  */

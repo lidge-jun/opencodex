@@ -31,6 +31,10 @@ export type NativeMainStartupGateSnapshot =
         | "stage-cleanup-required";
     };
 
+/** The settled reason a blocked gate carries, named so consumers can hold one without the union. */
+export type NativeMainStartupBlockReason =
+  Extract<NativeMainStartupGateSnapshot, { status: "blocked" }>["reason"];
+
 export interface NativeMainStartupGateDeps {
   manager?: NativeProfileManager;
   /** Test-only barrier used to prove admission stays closed while startup recovery is pending. */

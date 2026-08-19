@@ -33,6 +33,7 @@ function cancelError(): Error {
 async function runCancelTurn(opts: {
   emitTerminalFirst?: boolean;
   suspendFirst?: boolean;
+  failWith?: Error;
 }): Promise<{ messages: CursorServerMessage[]; failure?: Error }> {
   resetCursorBlobStateForTests();
   const transport = createLiveCursorTransport({
@@ -73,7 +74,7 @@ async function runCancelTurn(opts: {
   if (opts.emitTerminalFirst) pushEvent({ type: "done", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
   // The client-tool suspend path cancels our own stream, which sets expectedClose.
   if (opts.suspendFirst) (transport as unknown as { cancelCursorRun(): void }).cancelCursorRun();
-  failTurn(cancelError());
+  failTurn(opts.failWith ?? cancelError());
   await drain;
   transport.close?.();
   return { messages, failure };
@@ -111,6 +112,30 @@ describe("Cursor cancel provenance", () => {
     expect(failure).toBeDefined();
     expect(failure).not.toBeInstanceOf(CursorUnexpectedCancelError);
     expect(isCursorBenignCancelError(failure)).toBe(true);
+  });
+
+  test("an abort after a terminal frame does not re-label a completed turn as failed (#1527)", async () => {
+    // Only cancelCursorRun() sets expectedClose, so an ordinary completed turn never
+    // qualified for the benign path. The abort listener then failed the turn with
+    // "Cursor request was aborted" — which is deliberately NOT a benign cancel — so a turn
+    // whose answer had already been delivered still surfaced as turn-failed with
+    // expectedClose:false in the request log.
+    const { messages, failure } = await runCancelTurn({
+      emitTerminalFirst: true,
+      failWith: new Error("Cursor request was aborted"),
+    });
+
+    expect(messages.some(m => m.type === "done")).toBe(true);
+    expect(failure).toBeUndefined();
+  });
+
+  test("an abort BEFORE any terminal frame still fails the turn (#1527 guard)", async () => {
+    // The narrowing must not swallow a genuine mid-turn abort: nothing was delivered, so
+    // the caller has to hear about it.
+    const { failure } = await runCancelTurn({ failWith: new Error("Cursor request was aborted") });
+
+    expect(failure).toBeDefined();
+    expect(failure?.message).toContain("aborted");
   });
 });
 

@@ -12,7 +12,8 @@ import { ConfigMutationLockError } from "../config";
 import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken, isMainAccountTokenLive } from "./main-account";
-import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { isNativeMainTrafficBlocked, nativeMainStartupGateSnapshot } from "./native-profile-startup";
+import type { NativeMainStartupBlockReason } from "./native-profile-startup";
 import {
   codexQuotaScopeForModel,
   getCodexQuotaHealthSnapshot,
@@ -116,10 +117,61 @@ export const CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE =
   "OpenCodex local native-main profile maintenance is active; retry this request";
 
 export class CodexMainProfileDrainingError extends Error {
+  /**
+   * Which startup-gate state fenced this request, when one did. Undefined means the
+   * fence came from somewhere other than the startup gate — the turn-drain claim race
+   * throws this same error while the gate reads `ready`, and inventing a reason there
+   * would point the next report at a gate that never closed.
+   *
+   * Captured here rather than at the throw sites because this is the last moment it is
+   * both in scope and still true: every catch site has already lost it, and re-reading
+   * the gate later can observe a recovery that completed in between (#2108).
+   */
+  readonly reason?: NativeMainStartupBlockReason;
+
   constructor() {
     super(CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
     this.name = "CodexMainProfileDrainingError";
+    const gate = nativeMainStartupGateSnapshot();
+    if (gate.status !== "blocked") return;
+    this.reason = gate.reason;
+    reportNativeMainFenceReason(gate.reason);
   }
+}
+
+/**
+ * #2108: a reboot could leave this fence closed until `ocx restart`, and the report was
+ * unactionable because the settled reason was never written anywhere. It cannot ride the
+ * message (claude-messages.ts matches that string exactly to keep the fence a 503 rather
+ * than an Anthropic 529) and it cannot ride a header (/api/logs reads only error.message
+ * from the body, and the Claude surface rebuilds its response headers from scratch), so
+ * stdout is the one surface that covers every path this fence fires on.
+ *
+ * Deduped per distinct reason: the original report shows three 503s in eleven seconds and
+ * a real client retries harder than that, so a per-request line would bury the signal.
+ * Only the reason is emitted; the snapshot's homeId is derived from a profile directory.
+ */
+const reportedFenceReasons = new Set<NativeMainStartupBlockReason>();
+
+function reportNativeMainFenceReason(reason: NativeMainStartupBlockReason): void {
+  if (reportedFenceReasons.has(reason)) return;
+  reportedFenceReasons.add(reason);
+  console.warn(
+    `native-main admission is fenced (reason: ${reason}); native model requests return 503 until it clears`,
+  );
+}
+
+/**
+ * Test-only reset for the dedup set above.
+ *
+ * The dedup is process-lifetime module state, so it is order-sensitive across test files
+ * sharing one Bun process: whichever file constructs this error first consumes the one-shot
+ * warn, and a later file asserting on it would see nothing and pass vacuously. Any test that
+ * asserts on the warn must call this first — an `afterEach` in the asserting file is not
+ * enough on its own, because the consuming file may not be the asserting one.
+ */
+export function __resetNativeMainFenceReasonLog(): void {
+  reportedFenceReasons.clear();
 }
 
 export function codexMainProfileDrainingResponse(): Response {

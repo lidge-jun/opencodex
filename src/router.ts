@@ -8,7 +8,8 @@ import {
   type ComboPick,
 } from "./combos";
 import type { NormalizedComboConfig } from "./combos/types";
-import { hasOwnProvider, resolveEnvValue } from "./config";
+import { hasOwnProvider } from "./config/provider-name";
+import { resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {

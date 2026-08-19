@@ -801,6 +801,34 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("accepts both codexToolMode values and rejects a misspelled one (#2106)", () => {
+    for (const codexToolMode of ["code_mode_only", "shell"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", codexToolMode },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().config.providers.custom.codexToolMode).toBe(codexToolMode);
+      expect(readConfigDiagnostics().error).toBeNull();
+    }
+
+    // The regression this guards: `providerConfigSchema` ends in `.passthrough()`, so an
+    // undeclared key survives verbatim. Before the enum was declared, "shel" was accepted,
+    // persisted, and then silently resolved to the `code_mode_only` default — the operator
+    // asked for shell mode, got code mode, and was told nothing.
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", codexToolMode: "shel" },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("codexToolMode");
+  });
+
   test("accepts the exact responsesItemIdRepair shape and rejects the old nested placeholderIds proposal", () => {
     writeConfig({
       port: 12345,

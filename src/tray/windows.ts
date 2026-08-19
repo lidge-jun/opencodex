@@ -9,6 +9,7 @@ import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
+import { decodeWindowsTextBytes } from "../lib/windows-text";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
@@ -117,12 +118,31 @@ function registryExe(): string {
   return existsSync(candidate) ? candidate : "reg.exe";
 }
 
+/**
+ * Decode `reg.exe` output the way the rest of the product decodes Windows console
+ * output.
+ *
+ * `reg.exe` writes the console ANSI code page when its output is redirected, not
+ * UTF-8. Reading it as utf8 corrupts every non-ASCII byte, so a profile path such
+ * as `C:\Users\M<o-umlaut>tz` came back with replacement characters, the
+ * comparison against the value we wrote could never match, `registrationOwned`
+ * went false, and the CLI reported the tray registration as
+ * "foreign, stale, or points to missing package files" over an entry that was
+ * correct and owned (#1933).
+ *
+ * `decodeWindowsTextBytes` already solves this for `schtasks` (#1573). The tray
+ * reader was the site that class fix missed.
+ */
+function decodeRegistryOutput(stdout: Buffer | string): string {
+  const bytes = typeof stdout === "string" ? Buffer.from(stdout, "binary") : stdout;
+  return decodeWindowsTextBytes(bytes).trim();
+}
+
 function runRegistry(args: string[]): string {
-  return execFileSync(registryExe(), args, {
-    encoding: "utf8",
+  return decodeRegistryOutput(execFileSync(registryExe(), args, {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-  }).trim();
+  }));
 }
 
 function safePath(value: string): string {
@@ -335,13 +355,13 @@ function readOwnedRunValue(runValue = windowsTrayRunValue(getConfigDir())): stri
 function runRegistryAsync(args: string[]): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(registryExe(), args, {
-      encoding: "utf8",
+      encoding: "buffer",
       timeout: 2_000,
       windowsHide: true,
       maxBuffer: 64 * 1024,
     }, (error, stdout) => {
       if (error) rejectPromise(error);
-      else resolvePromise(stdout.trim());
+      else resolvePromise(decodeRegistryOutput(stdout));
     });
   });
 }

@@ -27,6 +27,7 @@ import {
   windowsRegistryParentShowsRunKey,
   type WindowsTrayEntry,
 } from "../src/tray/windows";
+import { decodeWindowsTextBytes } from "../src/lib/windows-text";
 import {
   hardenSecretPath,
   hardenedSecretPathCountForTests,
@@ -470,6 +471,14 @@ describe("Windows tray packaging and command safety", () => {
     expect(tray).toContain("return readWindowsTrayRunValueWithRunner(runValue, runRegistry)");
     expect(tray).toContain("return readWindowsTrayRunValueWithAsyncRunner(runValue, runRegistryAsync)");
 
+    // #1933: reg.exe writes the console ANSI code page, not UTF-8. Decoding its
+    // bytes as utf8 corrupts any non-ASCII profile path, the owned-value round
+    // trip then fails, and the tray reports itself foreign/stale even though the
+    // Run value on disk is correct. decodeWindowsTextBytes already fixes this
+    // class for schtasks (#1573); both registry readers must use it too.
+    expect(tray).not.toContain('encoding: "utf8"');
+    expect(tray).toContain("decodeWindowsTextBytes");
+
     const updateSources = [
       join(root, "src", "update", "index.ts"),
       join(root, "src", "update", "job.ts"),
@@ -480,6 +489,38 @@ describe("Windows tray packaging and command safety", () => {
       expect(source).toContain("stop");
       expect(source).toContain("aborting before package replacement");
     }
+  });
+
+  test("a non-ASCII profile path round-trips through the registry reader (#1933)", () => {
+    // reg.exe emits the console ANSI code page, not UTF-8. On a Windows-1252 host a
+    // profile path like C:\\Users\\Moetz decodes to U+FFFD under utf8, the comparison
+    // against the value we wrote fails, registrationOwned goes false, and the CLI
+    // prints "startup registration is foreign, stale, or points to missing package
+    // files" over a registry entry that is in fact correct and owned.
+    const runValue = "OpenCodexTray-c856edd2e06f";
+    const command = [
+      String.raw`"C:\WINDOWS\System32\wscript.exe" //B //NoLogo `,
+      String.raw`"C:\Users\M\u00f6tz\.opencodex\opencodex-tray.vbs"`,
+    ].join("").replace("\\u00f6", "\u00f6");
+    const rendered = [
+      "",
+      String.raw`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`,
+      `    ${runValue}    REG_SZ    ${command}`,
+      "",
+    ].join("\r\n");
+
+    // The bytes reg.exe actually hands back on that host: one byte per code point.
+    const cp1252 = Uint8Array.from([...rendered].map(ch => ch.codePointAt(0) ?? 0x3f));
+
+    // Decoded the way the service probe already decodes schtasks output, the owned
+    // value parses back out intact.
+    const decoded = decodeWindowsTextBytes(cp1252, { locale: "en-US" });
+    expect(parseWindowsTrayRunValue(decoded, runValue)).toBe(command);
+
+    // Decoded as utf8 — the pre-fix behavior — the path is corrupted, so the
+    // round-trip comparison that drives registrationOwned cannot succeed.
+    const asUtf8 = Buffer.from(cp1252).toString("utf8");
+    expect(parseWindowsTrayRunValue(asUtf8, runValue)).not.toBe(command);
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
