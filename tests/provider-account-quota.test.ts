@@ -438,11 +438,14 @@ describe("fetchProviderAccountQuotas", () => {
       email: "agy2@example.com",
     });
 
-    const seenProjects: string[] = [];
+    const seenRequests: Array<{ project: string; authorization: string | null }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toContain("/v1internal:fetchAvailableModels");
       const body = JSON.parse(String(init?.body)) as { project?: string };
-      seenProjects.push(body.project ?? "");
+      seenRequests.push({
+        project: body.project ?? "",
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
       if (body.project === "project-1") {
         return new Response(JSON.stringify({
           models: {
@@ -469,7 +472,10 @@ describe("fetchProviderAccountQuotas", () => {
 
     const rows = await fetchProviderAccountQuotas("google-antigravity");
     expect(rows.length).toBe(2);
-    expect(seenProjects.sort()).toEqual(["project-1", "project-2"]);
+    expect(seenRequests).toEqual(expect.arrayContaining([
+      { project: "project-1", authorization: "Bearer token-agy-1" },
+      { project: "project-2", authorization: "Bearer token-agy-2" },
+    ]));
 
     const byProject = Object.fromEntries(rows.map(r => [
       r.quota?.customWindows?.find(w => w.label === "Gem")?.percent,

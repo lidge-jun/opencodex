@@ -7,7 +7,7 @@ import {
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { codexPlanKey } from "../codex/plan";
-import { resolveEnvValue } from "../config";
+import { loadConfig, resolveEnvValue } from "../config";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
@@ -1521,7 +1521,8 @@ async function fetchAccountQuota(
         const stored = getAccountCredential(provider, accountId);
         if (!stored?.projectId) throw new Error("google-antigravity account projectId missing");
         const token = await getTokenForAccountQuotaProbe(provider, accountId);
-        quota = await fetchAntigravityUsageQuota(token, stored.projectId);
+        const provBaseUrl = loadConfig().providers?.["google-antigravity"]?.baseUrl;
+        quota = await fetchAntigravityUsageQuota(token, stored.projectId, provBaseUrl);
       }
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
