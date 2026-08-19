@@ -209,7 +209,7 @@ Responses-family および Chat リクエストは、プロバイダーまたは
 | 401 | `authentication_error` |必要なプロキシ アドミッション資格情報が見つからないか無効です。
 | 403 | `origin_rejected` | Responses/OpenAI データプレーン リクエストまたは WebSocket アップグレードが、許可されていないオリジンから送信されました。
 | 503 | `combo_unavailable` |選択したコンボ内のすべてのターゲットは使用不可、クールダウン中、無効、またはその他の理由で不適格です。
-| 400 | `unreadable_encrypted_agent_task` |暗号化された v2 ワーカー タスクに、それを不透明なまま処理または中継できる適格なネイティブ ChatGPT 消費者または明示的に許可された Responses ターゲットがありません。 |
+| 400 | `unreadable_encrypted_agent_task` |暗号化された v2 ワーカー タスクに、それを不透明なまま処理または中継できる適格なネイティブ ChatGPT 消費者、または最終 wire adapter が `openai-responses` のままである明示的に許可された Responses ターゲットがありません。 |
 | 426 | `upgrade_required` |応答 WebSocket トランスポートが無効になっているか、アップグレードが失敗しました。 HTTP を使用する |
 
 Anthropic オリジンの失敗は Anthropic のエラー エンベロープでレンダリングされるため、オリジンの拒否は OpenAI スタイルの `origin_rejected` 本体ではなく、その方言上の 403 `permission_error` になります。
@@ -218,4 +218,4 @@ Anthropic オリジンの失敗は Anthropic のエラー エンベロープで�
 
 プロキシは、本物のバックエンド暗号文を不透明なものとして扱います。構造的に有効な暗号文はバイト単位で保存されます。opencodex は暗号文を復号したり、その内容を変換したり、別のプロバイダー用に再暗号化したりしません。
 
-一部のエージェント フックはこれまで、プレーンテキストの制御テキストを `encrypted_content` スロットに配置していました。互換性を確保するために、プロキシは、構造的に有効な Fernet の実行を変更せずに保持しながら、プレーンテキストをテキスト部分に分割します。`agent_message` が修復中にすべての暗号化された部分を失った場合、それは通常のユーザー メッセージになります。現在の v2 タスクが完全に暗号化されたままで、利用可能な正規の ChatGPT 消費者または明示的に許可された Responses ターゲットがない場合、opencodex は読み取り不能なバイトをプロバイダーに送信する代わりに `unreadable_encrypted_agent_task` で失敗します。ワーカー タスクに関するクライアントの動作については、[サブエージェントサーフェス](/ja/guides/sub-agent-surface/) を参照してください。
+一部のエージェント フックはこれまで、プレーンテキストの制御テキストを `encrypted_content` スロットに配置していました。互換性を確保するために、プロキシは、構造的に有効な Fernet の実行を変更せずに保持しながら、プレーンテキストをテキスト部分に分割します。`agent_message` が修復中にすべての暗号化された部分を失った場合、それは通常のユーザー メッセージになります。現在の v2 タスクが完全に暗号化されたままで、利用可能な正規の ChatGPT 消費者または最終 wire adapter が `openai-responses` のままである明示的に許可された Responses ターゲットがない場合、opencodex は読み取り不能なバイトをプロバイダーに送信する代わりに `unreadable_encrypted_agent_task` で失敗します。ワーカー タスクに関するクライアントの動作については、[サブエージェントサーフェス](/ja/guides/sub-agent-surface/) を参照してください。

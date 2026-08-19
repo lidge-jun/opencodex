@@ -88,13 +88,14 @@ opencodex 仍可為了向後相容從 TOML 讀取舊版 `model_fallback` 列，�
 候選。可用性探測會快取 `subagentModelFallbackPollMs`（預設 60 秒）。
 
 Fallback 不能讓不相容的加密任務變成可讀。當子任務是為 ChatGPT 加密時，即使外部模型在鏈中出現得
-更早，選擇也會限制在規範的原生 ChatGPT 目標，或明確設定 `allowEncryptedV2AgentTasks: true` 的
-Responses provider。
+更早，選擇也會限制在規範的原生 ChatGPT 目標，或明確設定
+`allowEncryptedV2AgentTasks: true` 且最終 wire adapter 仍為 `openai-responses` 的 Responses provider。
 
 ## 加密的 v2 任務傳輸
 
 Codex 可能只以後端加密的 `encrypted_content` 傳送 v2 原生→路由子任務。原生 ChatGPT
-後端可以讀取該載荷；明確信任、能不透明中繼密文的 Responses provider 則只能逐位元組中繼，不能讀取。
+後端可以讀取該載荷；明確信任、最終 wire adapter 仍為 `openai-responses` 且能不透明中繼密文的 Responses provider
+則只能逐位元組中繼，不能讀取。
 這是已知的
 [#92 限制](https://github.com/lidge-jun/opencodex/issues/92)。
 
@@ -102,7 +103,7 @@ opencodex 會安全失敗，而不是轉發空或無法讀取的任務：
 
 - 不具資格的直接非原生路由回傳 HTTP 400，帶有 `error.code = "unreadable_encrypted_agent_task"`，且不會回顯
   密文。
-- 組合只會為該任務考慮規範的原生 ChatGPT 目標與明確信任的 Responses 目標，包括重試。若沒有可用目標，回傳相同的 400。
+- 組合只會為該任務考慮規範的原生 ChatGPT 目標與最終 wire adapter 仍為 `openai-responses` 的明確信任 Responses 目標，包括重試。若沒有可用目標，回傳相同的 400。
 - 可讀取的明文任務保持正常的路由與 fallback 行為。
 
 恢復方法：選擇原生 ChatGPT 子代理、在組合中加入原生 ChatGPT 目標、異構 provider 委派改用 v1，

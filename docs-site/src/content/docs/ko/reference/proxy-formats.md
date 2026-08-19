@@ -261,7 +261,7 @@ data-plane key는 management credential이 아닙니다. management API는 별�
 | 401 | `authentication_error` | 필요한 프록시 admission credential이 없거나 유효하지 않습니다 |
 | 403 | `origin_rejected` | Responses/OpenAI data-plane 요청 또는 WebSocket 업그레이드가 허용되지 않은 origin에서 들어왔습니다 |
 | 503 | `combo_unavailable` | 선택한 combo의 모든 대상이 사용할 수 없거나, cooldown 중이거나, 비활성화되어 있거나, 다른 이유로 부적합합니다 |
-| 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 불투명하게 소비하거나 중계할 적격 네이티브 ChatGPT 대상 또는 명시적으로 허용된 Responses 대상이 없습니다 |
+| 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 불투명하게 소비하거나 중계할 적격 네이티브 ChatGPT 대상 또는 최종 wire adapter가 `openai-responses`로 유지되는 명시적으로 허용된 Responses 대상이 없습니다 |
 | 426 | `upgrade_required` | Responses WebSocket transport가 비활성화되어 있거나 업그레이드에 실패했습니다. HTTP를 사용하십시오 |
 
 Anthropic-origin 실패는 Anthropic의 error envelope로 렌더링됩니다. 따라서 해당 방언에서 origin 거부는
@@ -276,7 +276,8 @@ OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입�
 일부 에이전트 hook은 과거에 평문 제어 텍스트를 `encrypted_content` 슬롯에 넣었습니다. 호환성을 위해
 프록시는 구조적으로 유효한 Fernet 구간은 그대로 유지하면서 해당 평문을 텍스트 파트로 분리합니다.
 이 복구 과정에서 `agent_message`의 암호화된 파트가 모두 사라지면 일반 user message가 됩니다. 현재 v2
-작업이 실제로 암호화된 상태이고 적격 네이티브 ChatGPT 소비자 또는 명시적으로 허용된 Responses
+작업이 실제로 암호화된 상태이고 적격 네이티브 ChatGPT 소비자 또는 최종 wire adapter가
+`openai-responses`로 유지되는 명시적으로 허용된 Responses
 대상이 없다면 opencodex는 읽을 수 없는 바이트를 프로바이더에 보내는 대신
 `unreadable_encrypted_agent_task`로 실패합니다. worker task와 관련된 클라이언트 동작은
 [서브에이전트 표면](/ko/guides/sub-agent-surface/)을 참조하세요.
