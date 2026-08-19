@@ -24,6 +24,15 @@ import { join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
+
+/**
+ * Per-case budget. A case can start a server twice and stop it, so it must exceed the sum of
+ * the watchdogs inside it or the case dies before the watchdog it was meant to bound can
+ * report anything useful. On CI those watchdogs take the 30s floor, so this scales with them.
+ */
+const CASE_TIMEOUT_MS = process.env.CI === "true" ? 150_000 : 45_000;
+
 import {
   canonicalizeCodexHome,
 } from "../src/codex/codex-write-lock";
@@ -73,7 +82,16 @@ function manifestWithoutCatalogArtifacts(entries: Record<string, string>): Recor
   );
 }
 
-async function waitFor<T>(read: () => T | null | Promise<T | null>, label: string, timeoutMs = 10_000): Promise<T> {
+async function waitFor<T>(
+  read: () => T | null | Promise<T | null>,
+  label: string,
+  // These wait on a REAL `ocx start` child: spawn a Bun runtime, load the CLI, read config,
+  // bind a port, then publish runtime-port.json. On the Windows shards that exceeded 10s
+  // while the child was still alive and still working — `child exit=null` with both streams
+  // open, which is a slow start, not a crash. The watchdog exists to bound a hung test, not
+  // to assert startup latency, so it takes the repository's CI floor.
+  timeoutMs = watchdogMs(10_000),
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = await read();
@@ -169,7 +187,12 @@ class Fixture {
     return child;
   }
 
-  async runCli(argv: string[], home = this.homeA, userprofile = this.userprofileA, timeoutMs = 15_000): Promise<CliResult> {
+  async runCli(
+    argv: string[],
+    home = this.homeA,
+    userprofile = this.userprofileA,
+    timeoutMs = watchdogMs(15_000),
+  ): Promise<CliResult> {
     const child = this.spawnCli(argv, home, userprofile);
     const completed = await Promise.race([
       Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
@@ -227,7 +250,7 @@ class Fixture {
     if (server.process.exitCode === null) server.process.kill("SIGTERM");
     const exitCode = await Promise.race([
       server.process.exited,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server shutdown watchdog")), 10_000)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server shutdown watchdog")), watchdogMs(10_000))),
     ]);
     // Bun reports a forced SIGTERM as 128 + 15 on Windows; POSIX children may
     // run the CLI shutdown handler and exit cleanly instead.
@@ -317,7 +340,7 @@ describe("WP13 composed toggle acceptance", () => {
     } finally {
       await fx.stop(server);
     }
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 
   /**
    * RED: remove shouldSyncCodexOnStart or the under-lock desired-state read; an
@@ -372,7 +395,7 @@ describe("WP13 composed toggle acceptance", () => {
     } finally {
       await fx.stop(server);
     }
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 
   /** RED: bypass the persisted OFF mutation or the under-lock re-read; stale P19 writes its candidate after gather. */
   test("B-reduced: a held local provider cannot commit after the HTTP route persists OFF", async () => {
@@ -434,7 +457,7 @@ describe("WP13 composed toggle acceptance", () => {
     } finally {
       provider.stop(true);
     }
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 
   /** RED: omit `admitCodexWrite` ownership refusal; start/ensure/P19 create a coordinator or native artifact. */
   test("D-reduced: foreign service-home evidence refuses real CLI and HTTP writers before artifacts", async () => {
@@ -492,7 +515,7 @@ describe("WP13 composed toggle acceptance", () => {
     } finally {
       await fx.stop(server);
     }
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 
   test("D-unknown: unprovable service-home ownership refuses native reads and cache writes", async () => {
     const fx = fixture();
@@ -537,7 +560,7 @@ describe("WP13 composed toggle acceptance", () => {
     } finally {
       await fx.stop(server);
     }
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 
   /** RED: key N by HOME/USERPROFILE instead of effective uid plus canonical CODEX_HOME; both children acquire. */
   test("E: separate fake homes share the effective-user Codex lock", async () => {
@@ -600,7 +623,7 @@ describe("WP13 composed toggle acceptance", () => {
       await fx.stop(second);
     }
     expect(await secondOutput).not.toContain("Grok Build config updated");
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 
   /** RED: report restore success after a blocked history worker; config recovery must not hide history contention. */
   test("Restore truth: JSON distinguishes a busy history restore from native artifact recovery", async () => {
@@ -662,5 +685,5 @@ describe("WP13 composed toggle acceptance", () => {
     const after = new Database(stateDb, { readonly: true });
     expect(after.query<{ model_provider: string }, []>("SELECT model_provider FROM threads WHERE id = 'restore-1'").get()?.model_provider).toBe("openai");
     after.close();
-  }, 45_000);
+  }, CASE_TIMEOUT_MS);
 });
