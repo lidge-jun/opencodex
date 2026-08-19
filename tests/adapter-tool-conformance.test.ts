@@ -100,6 +100,26 @@ function freeformParsed(wire: AdapterWire): OcxParsedRequest {
   }), wire);
 }
 
+function namespacedCollisionParsed(wire: AdapterWire): OcxParsedRequest {
+  return prepareForWire(parseRequest({
+    model: WIRE_MODELS[wire],
+    input: "Run the requested tool.",
+    stream: true,
+    tools: [
+      {
+        type: "namespace",
+        name: "mcp__custom",
+        tools: [{ type: "custom", name: "exec", description: "Freeform execution." }],
+      },
+      {
+        type: "namespace",
+        name: "mcp__remote",
+        tools: [{ type: "function", name: "exec", description: "Structured execution.", parameters: { type: "object", properties: {} } }],
+      },
+    ],
+  }), wire);
+}
+
 function toolChoiceParsed(wire: AdapterWire, toolChoice?: "none"): OcxParsedRequest {
   return prepareForWire(parseRequest({
     model: WIRE_MODELS[wire],
@@ -428,6 +448,79 @@ describe("registry-derived routed tool conformance", () => {
         continue;
       }
       expect(await restoredStreamInput(adapterId, contract.wire), adapterId).toBe(PATCH);
+    }
+  });
+
+  test("every buffered adapter preserves same-name tools from different namespaces", async () => {
+    for (const [adapterId] of adapterDefinitions()) {
+      const contract = effectiveAdapterContract(adapterId);
+      if (contract.wire === "openai-responses" || contract.wire === "cursor") {
+        // Native Responses passthrough and Cursor's protobuf transport do not use the routed
+        // adapter tool declaration surface exercised by this registry-wide check.
+        continue;
+      }
+      const body = await outbound(adapterId, namespacedCollisionParsed(contract.wire));
+      const names = advertisedToolNames(contract.wire, body).filter(name => name.includes("exec"));
+      expect(new Set(names).size, adapterId).toBe(2);
+    }
+  });
+
+  test("every routed adapter fails closed for an ambiguous bare selector", async () => {
+    for (const [adapterId] of adapterDefinitions()) {
+      const contract = effectiveAdapterContract(adapterId);
+      if (contract.wire === "openai-responses" || contract.wire === "cursor") continue;
+      const parsed = namespacedCollisionParsed(contract.wire);
+      // parseRequest rejects this shape for real inbound traffic; keeping the policy mutation here
+      // also proves each adapter remains fail-closed when a caller reaches it with a prebuilt AST.
+      parsed.options.toolChoice = { allowedTools: ["exec"], mode: "required" };
+      if (contract.wire === "kiro") {
+        await expect(outbound(adapterId, parsed)).rejects.toThrow("Kiro supports only automatic tool choice or tool_choice:none");
+        continue;
+      }
+      const body = await outbound(adapterId, parsed);
+      expect(advertisedToolNames(contract.wire, body), adapterId).toHaveLength(0);
+    }
+  });
+
+  test("every streaming adapter restores namespaced custom/function collisions distinctly", async () => {
+    for (const [adapterId] of adapterDefinitions()) {
+      const contract = effectiveAdapterContract(adapterId);
+      const driver = TOOL_WIRE_DRIVERS[contract.wire];
+      if (!driver.streamingToolCall || !driver.extractWireToolName) {
+        expect(["openai-responses", "cursor"]).toContain(contract.wire);
+        continue;
+      }
+
+      const parsed = namespacedCollisionParsed(contract.wire);
+      const body = await outbound(adapterId, parsed);
+      const maps = buildToolBridgeMaps(parsed);
+      const cases = [
+        { logicalName: "mcp__custom__exec", type: "custom_tool_call" },
+        { logicalName: "mcp__remote__exec", namespace: "mcp__remote", type: "function_call" },
+      ] as const;
+      for (const testCase of cases) {
+        const wireName = driver.extractWireToolName(body, testCase.logicalName);
+        const bridged = bridgeToResponsesSSE(
+          createRegisteredAdapter(providerFixture(adapterId, contract.wire)).parseStream(
+            driver.streamingToolCall(wireName, JSON.stringify({ input: "ok" })),
+            createTestTranslatorBudget(),
+          ),
+          parsed.modelId,
+          maps.toolNsMap,
+          maps.freeformToolNames,
+          maps.toolSearchToolNames,
+          undefined,
+          2_000,
+          { declaredToolNames: maps.declaredToolNames },
+        );
+        const frames = parseResponsesFrames(await new Response(bridged).text());
+        const item = frames.find(frame => frame.event === "response.output_item.added")?.data.item as Record<string, unknown> | undefined;
+        expect(item, `${adapterId}:${testCase.logicalName}`).toMatchObject({
+          type: testCase.type,
+          name: "exec",
+          ...(testCase.namespace ? { namespace: testCase.namespace } : {}),
+        });
+      }
     }
   });
 

@@ -252,13 +252,59 @@ export function toolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): st
   return tool.namespace ? [wireName, `${tool.namespace}.${tool.name}`] : [wireName];
 }
 
-export function toolAllowedByChoice(tool: Pick<OcxTool, "namespace" | "name">, allowedTools: ReadonlySet<string>): boolean {
-  return toolChoiceAliases(tool).some(name => allowedTools.has(name));
+function sameToolIdentity(
+  left: Pick<OcxTool, "namespace" | "name">,
+  right: Pick<OcxTool, "namespace" | "name">,
+): boolean {
+  return left.namespace === right.namespace && left.name === right.name;
+}
+
+/**
+ * All tools that could be selected by one client-facing name. Bare logical names are included
+ * here because they are a compatibility selector for namespaced tools, while wire and dotted
+ * aliases come from `toolChoiceAliases`. A selector with more than one candidate is invalid.
+ */
+export function toolChoiceCandidates(
+  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+  name: string,
+): Pick<OcxTool, "namespace" | "name">[] {
+  if (!tools) return [];
+  const candidates: Pick<OcxTool, "namespace" | "name">[] = [];
+  for (const tool of tools) {
+    if (tool.name !== name && !toolChoiceAliases(tool).includes(name)) continue;
+    if (!candidates.some(candidate => sameToolIdentity(candidate, tool))) candidates.push(tool);
+  }
+  return candidates;
+}
+
+/**
+ * Newer Codex clients can select a tool nested in a namespace by its bare name. Resolve that
+ * shorthand only when the request contains one tool with the logical name, so an ambiguous name
+ * cannot authorize a tool from an unintended namespace.
+ */
+export function toolAllowedByChoice(
+  tool: Pick<OcxTool, "namespace" | "name">,
+  allowedTools: ReadonlySet<string>,
+  tools?: readonly Pick<OcxTool, "namespace" | "name">[],
+): boolean {
+  if (!tools) return toolChoiceAliases(tool).some(name => allowedTools.has(name));
+  for (const name of [...toolChoiceAliases(tool), tool.name]) {
+    if (!allowedTools.has(name)) continue;
+    const candidates = toolChoiceCandidates(tools, name);
+    if (candidates.length === 1 && sameToolIdentity(candidates[0], tool)) return true;
+  }
+  return false;
 }
 
 export function resolveToolChoiceWireName(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined, name: string): string {
-  const match = tools?.find(tool => toolChoiceAliases(tool).includes(name));
-  return match ? namespacedToolName(match.namespace, match.name) : name;
+  const candidates = toolChoiceCandidates(tools, name);
+  if (candidates.length === 1) {
+    const match = candidates[0];
+    return namespacedToolName(match.namespace, match.name);
+  }
+  // Keep unknown/ambiguous names unchanged for callers that only serialize a selector. The
+  // catalog-aware predicate rejects them, and parseRequest rejects ambiguous request selectors.
+  return name;
 }
 
 /**
@@ -287,14 +333,17 @@ export function isAllowedToolChoice(value: OcxToolChoice | undefined): value is 
 /** Compile the request's tool-choice policy into a reusable advertisement/restoration predicate. */
 export function toolChoiceToolPredicate(
   choice: OcxToolChoice | undefined,
+  tools?: readonly Pick<OcxTool, "namespace" | "name">[],
 ): (tool: Pick<OcxTool, "namespace" | "name">) => boolean {
   if (!choice || choice === "auto" || choice === "required") return () => true;
   if (choice === "none") return () => false;
   if (isAllowedToolChoice(choice)) {
     const allowed = new Set(choice.allowedTools);
-    return tool => toolAllowedByChoice(tool, allowed);
+    return tool => toolAllowedByChoice(tool, allowed, tools);
   }
-  return tool => toolChoiceAliases(tool).includes(choice.name);
+  if (!tools) return tool => toolChoiceAliases(tool).includes(choice.name);
+  const candidates = toolChoiceCandidates(tools, choice.name);
+  return tool => candidates.length === 1 && sameToolIdentity(candidates[0], tool);
 }
 
 export interface OcxRequestOptions {
@@ -637,6 +686,12 @@ export interface OcxCustomModel {
   reasoningEfforts?: string[];
   /** Default effort label when `reasoningEfforts` is non-empty. */
   defaultReasoningEffort?: string;
+  /**
+   * Codex tool calling mode override for this custom model.
+   * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only".
+   * "shell" leaves tool_mode unset so Codex declares top-level shell tools (exec_command).
+   */
+  codexToolMode?: "code_mode_only" | "shell";
   /** 추가 시각 (ISO 8601) */
   addedAt?: string;
 }
@@ -1376,6 +1431,12 @@ export type TierDecision =
  */
 export interface OcxProviderConfig {
   adapter: string;
+  /**
+   * Codex tool calling mode for routed models.
+   * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only" (unified exec helper tool).
+   * "shell" leaves tool_mode unset so Codex declares top-level shell tools (exec_command).
+   */
+  codexToolMode?: "code_mode_only" | "shell";
   /** Optional outbound request-start pacing shared by this provider and its model overrides. */
   requestPacing?: ProviderRequestPacingConfig;
   /** Cursor MCP compatibility bounds; positive integers when configured. */

@@ -1,7 +1,7 @@
 import { modelInList } from "../../types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { PROVIDER_REGISTRY } from "../../providers/registry";
-import { fastPolicyForModel, serviceTierSupportForModel } from "../../providers/service-tier";
+import { fastPolicyForModel, serviceTierSupportFromPolicy } from "../../providers/service-tier";
 import { resolveProviderAuthTransport } from "../../providers/fastwire";
 import { localFingerprint } from "../../lab/digest";
 import type { LabBehaviorSource, LabBehaviorValues } from "../../lab/live/types";
@@ -103,7 +103,7 @@ export function resolveProductionBehaviorValues(
   const project = typeof effective.project === "string" && effective.project ? effective.project : null;
   const location = typeof effective.location === "string" && effective.location ? effective.location : null;
   const nativeLocalExec = effective.nativeLocalExec === "on" || effective.unsafeAllowNativeLocalExec === true;
-  const fastPolicy = fastPolicyForModel(effective, modelId, providerName);
+  const fastPolicy = fastPolicyForModel(effective, modelId, providerName, "responses", provider);
 
   const values: LabBehaviorValues = {
     "wire.adapter": behaviorRow("provider_config", adapter),
@@ -122,7 +122,7 @@ export function resolveProductionBehaviorValues(
     "responses.stateful": behaviorRow("provider_config", effective.statelessResponses !== true),
     "responses.serviceTier": behaviorRow(
       "provider_config",
-      serviceTierSupportForModel(effective, modelId, providerName) ?? null,
+      serviceTierSupportFromPolicy(fastPolicy) ?? null,
     ),
     "responses.fastWireKind": behaviorRow(
       "provider_config",

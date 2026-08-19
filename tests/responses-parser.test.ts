@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildResponseJSON } from "../src/bridge";
 import { parseRequest } from "../src/responses/parser";
 import { buildToolBridgeMaps } from "../src/server/responses";
 
@@ -190,6 +191,102 @@ describe("Responses parser", () => {
     expect([...maps.toolSearchToolNames]).toEqual([]);
   });
 
+  test("accepts a unique bare selector for a namespaced custom tool and rejects ambiguity", () => {
+    const parsed = parseRequest({
+      model: "claude-opus-5",
+      input: "run it",
+      tools: [{
+        type: "namespace",
+        name: "mcp__functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "required",
+        tools: [{ type: "custom", name: "exec" }],
+      },
+    });
+
+    let maps = buildToolBridgeMaps(parsed);
+    expect([...maps.toolNsMap]).toEqual([
+      ["mcp__functions__exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
+      ["exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
+    ]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__functions__exec", "exec"]);
+    expect([...maps.freeformToolNames]).toEqual(["exec"]);
+
+    const bridged = buildResponseJSON([
+      { type: "tool_call_start", id: "call_exec", name: "exec" },
+      { type: "tool_call_delta", arguments: '{"input":"pwd"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "claude-opus-5", maps);
+    expect(bridged.status).toBe("completed");
+    expect((bridged.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "custom_tool_call",
+      call_id: "call_exec",
+      name: "exec",
+      input: "pwd",
+      status: "completed",
+    });
+
+    parsed.options.toolChoice = { name: "exec" };
+    maps = buildToolBridgeMaps(parsed);
+    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__functions__exec", "exec"]);
+
+    expect(() => parseRequest({
+      model: "claude-opus-5",
+      input: "run it",
+      tools: [{
+        type: "namespace",
+        name: "mcp__functions",
+        tools: [{ type: "custom", name: "exec" }],
+      }, {
+        type: "namespace",
+        name: "other",
+        tools: [{ type: "custom", name: "exec" }],
+      }],
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "required",
+        tools: [{ type: "custom", name: "exec" }],
+      },
+    })).toThrow("ambiguous tool_choice name: exec");
+
+    const mixedKinds = parseRequest({
+      model: "claude-opus-5",
+      input: "run it",
+      tools: [{
+        type: "namespace",
+        name: "mcp__functions",
+        tools: [{ type: "custom", name: "exec" }],
+      }, {
+        type: "namespace",
+        name: "mcp__remote",
+        tools: [{ type: "function", name: "exec", parameters: { type: "object" } }],
+      }],
+    });
+    const mixedMaps = buildToolBridgeMaps(mixedKinds);
+    const customCall = buildResponseJSON([
+      { type: "tool_call_start", id: "call_custom", name: "mcp__functions__exec" },
+      { type: "tool_call_delta", arguments: '{"input":"pwd"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "claude-opus-5", mixedMaps);
+    const functionCall = buildResponseJSON([
+      { type: "tool_call_start", id: "call_function", name: "mcp__remote__exec" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "claude-opus-5", mixedMaps);
+    expect((customCall.output as Record<string, unknown>[])[0]?.type).toBe("custom_tool_call");
+    expect((functionCall.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "function_call",
+      name: "exec",
+      namespace: "mcp__remote",
+    });
+  });
+
   test("maps hosted allowed_tools entries to their synthetic routed tool names", () => {
     const parsed = parseRequest({
       model: "umans/umans-kimi-k2.7",
@@ -204,6 +301,37 @@ describe("Responses parser", () => {
 
     expect(parsed._webSearch).toEqual({ type: "web_search", search_context_size: "medium" });
     expect(parsed.options.toolChoice).toEqual({ allowedTools: ["web_search"], mode: "required" });
+  });
+
+  test("rejects wire-name collisions instead of dropping one logical tool", () => {
+    expect(() => parseRequest({
+      model: "gpt-5.5",
+      input: "run it",
+      tools: [
+        {
+          type: "namespace",
+          name: "foo",
+          tools: [{ type: "function", name: "bar", parameters: { type: "object" } }],
+        },
+        { type: "function", name: "foo__bar", parameters: { type: "object" } },
+      ],
+    })).toThrow("ambiguous tool catalog: multiple logical tools map to wire name foo__bar");
+  });
+
+  test("rejects a dotted alias that also names a flat tool", () => {
+    expect(() => parseRequest({
+      model: "gpt-5.5",
+      input: "run it",
+      tools: [
+        {
+          type: "namespace",
+          name: "foo",
+          tools: [{ type: "function", name: "bar", parameters: { type: "object" } }],
+        },
+        { type: "function", name: "foo.bar", parameters: { type: "object" } },
+      ],
+      tool_choice: { type: "function", name: "foo.bar" },
+    })).toThrow("ambiguous tool_choice name: foo.bar");
   });
 
   test("maps type-only hosted image_generation tool_choice to required image_gen", () => {
@@ -477,5 +605,58 @@ describe("codex-rs compat surface (260707)", () => {
     expect(parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "" } }).options.reasoning).toBeUndefined();
     expect(parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "banana" } }).options.reasoning).toBeUndefined();
     expect(() => parseRequest({ model: "p/m", input: "hi", reasoning: { effort: null } })).toThrow();
+  });
+
+  test("a replayed custom_tool_call recovers the namespace it was declared under", () => {
+    // The round trip loses it otherwise. The bridge emits a client-facing custom call with
+    // only the BARE name — `{"type":"custom_tool_call","name":"exec"}` even for a tool
+    // declared as `mcp__functions__exec`. On the next request the adapters replay tool
+    // history through `namespacedToolName(namespace, name)`, so a missing namespace makes
+    // the replayed call target a bare `exec` the provider may not expose.
+    //
+    // `function_call` items do not need this: they carry `namespace` on the wire.
+    const parsed = parseRequest({
+      model: "p/m",
+      tools: [{
+        type: "namespace",
+        name: "mcp__tools",
+        tools: [{ type: "custom", name: "exec", description: "run", format: { type: "text" } }],
+      }],
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "go" }] },
+        { type: "custom_tool_call", call_id: "call_1", name: "exec", input: "ls" },
+      ],
+    });
+
+    const assistant = parsed.context.messages.find(msg => msg.role === "assistant");
+    const call = (assistant?.content as Array<{ type: string; name?: string; namespace?: string }> | undefined)
+      ?.find(part => part.type === "toolCall");
+    expect(call?.name).toBe("exec");
+    expect(call?.namespace).toBe("mcp__tools");
+  });
+
+  test("a replayed custom_tool_call under the reserved functions namespace stays bare", () => {
+    // Companion guard. Codex 0.147 groups ordinary client tools under `functions`, and
+    // buildTools deliberately flattens those WITHOUT a namespace. Reconstructing one here
+    // would invent a namespace the request never advertised and break the reverse mapping
+    // in the other direction.
+    const parsed = parseRequest({
+      model: "p/m",
+      tools: [{
+        type: "namespace",
+        name: "functions",
+        tools: [{ type: "custom", name: "apply_patch", description: "patch", format: { type: "text" } }],
+      }],
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "go" }] },
+        { type: "custom_tool_call", call_id: "call_2", name: "apply_patch", input: "*** Begin Patch" },
+      ],
+    });
+
+    const assistant = parsed.context.messages.find(msg => msg.role === "assistant");
+    const call = (assistant?.content as Array<{ type: string; name?: string; namespace?: string }> | undefined)
+      ?.find(part => part.type === "toolCall");
+    expect(call?.name).toBe("apply_patch");
+    expect(call?.namespace).toBeUndefined();
   });
 });

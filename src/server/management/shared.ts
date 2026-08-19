@@ -86,7 +86,8 @@ export type CostEstimateReason =
   | "usage_estimated"
   | "cache_detail_missing"
   | "expected_price_overlay"
-  | "provider_cost_overlay";
+  | "provider_cost_overlay"
+  | "priority_lower_bound";
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
@@ -143,6 +144,7 @@ export function costResult(entry: MetricSource): CostResult {
       ? "expected_price_overlay" as const : undefined,
     estimate.price?.source === "user" || estimate.attempts?.some(a => a.price.source === "user")
       ? "provider_cost_overlay" as const : undefined,
+    estimate.priorityLowerBound ? "priority_lower_bound" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };
 }

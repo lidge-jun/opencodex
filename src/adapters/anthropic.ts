@@ -743,7 +743,7 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
     ? new Set(parsed.options.toolChoice.allowedTools)
     : undefined;
   const tools = allowed
-    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed))
+    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed, parsed.context.tools))
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   const converted = tools.map(t => ({

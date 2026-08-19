@@ -3,6 +3,7 @@ import { cloneFastWire } from "./fastwire";
 import {
   PROVIDER_REGISTRY,
   registryEntryForProviderDestination,
+  registryModelServiceTierCapabilityApplies,
   type ProviderRegistryEntry,
 } from "./registry";
 import {
@@ -377,6 +378,15 @@ function applyServiceTierModelDefaults(
   };
 }
 
+function serviceTierModelDefaultsFor(
+  entry: ProviderRegistryEntry | undefined,
+  prov: OcxProviderConfig,
+): Readonly<Record<string, boolean>> | undefined {
+  return entry && registryModelServiceTierCapabilityApplies(entry, prov)
+    ? entry.modelSupportsServiceTier
+    : undefined;
+}
+
 /**
  * Last-resort enrichment for a provider whose NAME matches no registry id.
  *
@@ -412,7 +422,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     // which vendor endpoint is this row talking to — and is already restricted to fixed key
     // destinations, so a templated or overridable base URL cannot be claimed by it.
     enrichReasoningSummariesByDestination(prov);
-    applyServiceTierModelDefaults(prov, registryEntryForProviderDestination(prov)?.modelSupportsServiceTier);
+    applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(registryEntryForProviderDestination(prov), prov));
     return;
   }
   const explicitDirectReasoning: DirectReasoningEffortOverrides = {
@@ -466,7 +476,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
-  applyServiceTierModelDefaults(prov, entry.modelSupportsServiceTier);
+  applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(entry, prov));
   // Registry-only repair policy (#938): fill only when the runtime provider has
   // no explicit policy, and deep-clone so saved/user values never alias the
   // registry constant.

@@ -101,22 +101,23 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 
 
 export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: TranslatorBudget): {
-  toolNsMap: Map<string, { namespace: string; name: string }>;
+  toolNsMap: Map<string, { namespace: string; name: string; freeform?: true }>;
   declaredToolNames: Set<string>;
   /** Declared parameter schema per request-visible tool name (#1611 integer repair). */
   toolParameterSchemas: Map<string, Record<string, unknown>>;
   freeformToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
 } {
-  const toolNsMap = new Map<string, { namespace: string; name: string }>();
+  const toolNsMap = new Map<string, { namespace: string; name: string; freeform?: true }>();
   const declaredToolNames = new Set<string>();
   const toolParameterSchemas = new Map<string, Record<string, unknown>>();
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
-  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
-  for (const t of parsed.context.tools ?? []) {
+  const requestedTools = parsed.context.tools ?? [];
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, requestedTools);
+  const authorizedTools = requestedTools.filter(toolAllowed);
+  for (const t of authorizedTools) {
     // Upstream output is untrusted: only restore calls for tools the caller authorized.
-    if (!toolAllowed(t)) continue;
     const wireName = namespacedToolName(t.namespace, t.name);
     budget?.chargeRetained(new TextEncoder().encode(wireName).byteLength, { kind: "retained_collectors" });
     declaredToolNames.add(wireName);
@@ -125,7 +126,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
     if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(wireName, t.parameters);
     if (t.namespace) {
       budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
-      toolNsMap.set(wireName, { namespace: t.namespace, name: t.name });
+      toolNsMap.set(wireName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
     }
     if (t.freeform) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
@@ -134,6 +135,29 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
     if (t.toolSearch) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
       toolSearchToolNames.add(t.name);
+    }
+  }
+  // Some routed providers echo a bare tool_choice selector instead of the flattened catalog
+  // name. Accept only selectors the client actually sent and only when the full request catalog
+  // contains one tool with that logical name.
+  const choice = parsed.options.toolChoice;
+  const bareChoiceNames = new Set(
+    choice && typeof choice === "object"
+      ? ("allowedTools" in choice ? choice.allowedTools : [choice.name])
+      : [],
+  );
+  const bareNameCounts = new Map<string, number>();
+  for (const t of requestedTools) {
+    bareNameCounts.set(t.name, (bareNameCounts.get(t.name) ?? 0) + 1);
+  }
+  for (const t of authorizedTools) {
+    if (!t.namespace || !bareChoiceNames.has(t.name) || bareNameCounts.get(t.name) !== 1 || declaredToolNames.has(t.name)) continue;
+    budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+    declaredToolNames.add(t.name);
+    budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([t.name, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+    toolNsMap.set(t.name, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+    if (t.parameters && typeof t.parameters === "object") {
+      toolParameterSchemas.set(t.name, t.parameters);
     }
   }
   return { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames };

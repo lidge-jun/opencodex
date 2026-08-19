@@ -19,6 +19,7 @@ import {
 import {
   canonicalFastTierMarker,
   createAdapterTierMetadata,
+  type AdapterTierMetadata,
 } from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
@@ -1201,7 +1202,7 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
 
 function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
-  const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice));
+  const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
@@ -1483,7 +1484,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       };
     },
 
-    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
+    async *parseStream(
+      response: Response,
+      budget: TranslatorBudget,
+      tierMetadata?: AdapterTierMetadata,
+    ): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
@@ -1552,11 +1557,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         try {
           parsed = JSON.parse(payload);
         } catch {
+          tierMetadata?.markResponseUnparseable();
           yield { type: "error", message: "malformed upstream SSE data frame" };
           return "terminate";
         }
         if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "continue";
         const chunk = parsed as Record<string, unknown>;
+        if (Object.hasOwn(chunk, "service_tier")) {
+          tierMetadata?.observeResponseServiceTier(chunk.service_tier);
+        }
 
         if (chunk.error !== undefined && chunk.error !== null) {
           const event = upstreamErrorEvent(chunk.error, pendingUsage);
@@ -1757,8 +1766,26 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
     },
 
-    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
-      const json = await response.json() as Record<string, unknown>;
+    async parseResponse(
+      response: Response,
+      budget: TranslatorBudget,
+      tierMetadata?: AdapterTierMetadata,
+    ): Promise<AdapterEvent[]> {
+      let parsed: unknown;
+      try {
+        parsed = await response.json();
+      } catch (error) {
+        tierMetadata?.markResponseUnparseable();
+        throw error;
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        tierMetadata?.markResponseUnparseable();
+        throw new Error("upstream response was not a JSON object");
+      }
+      const json = parsed as Record<string, unknown>;
+      if (Object.hasOwn(json, "service_tier")) {
+        tierMetadata?.observeResponseServiceTier(json.service_tier);
+      }
       const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
       budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
       try {

@@ -7,6 +7,9 @@
  * ever receiving an injection (PR #860 family).
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { applyProviderConfigHints } from "../src/codex/catalog";
+import { applyCatalogModelMetadata } from "../src/codex/catalog/effort";
+import type { RawEntry } from "../src/codex/catalog/parsing";
 import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { RequestLogContext } from "../src/server/request-log";
@@ -44,6 +47,30 @@ describe("registry capability reaches saved configs without overriding them", ()
     const optedIn: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", supportsServiceTier: true };
     enrichProviderFromRegistry("deepseek", optedIn);
     expect(optedIn.supportsServiceTier).toBe(true);
+  });
+
+  test("OpenRouter stays provider-unclassified and declares only its three OpenAI-backed slugs", () => {
+    const entry = getProviderRegistryEntry("openrouter")!;
+    expect(entry.supportsServiceTier).toBeUndefined();
+    expect(entry.chatServiceTier).toBeUndefined();
+    expect(entry.modelSupportsServiceTier).toEqual({
+      "openai/gpt-5.6-sol": true,
+      "openai/gpt-5.6-terra": true,
+      "openai/gpt-5.6-luna": true,
+    });
+    expect(entry.modelSupportsServiceTier).not.toHaveProperty("anthropic/claude-sonnet-5");
+    expect(providerConfigSeed(entry).modelSupportsServiceTier).toBeUndefined();
+  });
+
+  test("OpenRouter registry capability is not inherited by a same-named noncanonical destination", () => {
+    const provider: OcxProviderConfig = {
+      ...providerConfigSeed(getProviderRegistryEntry("openrouter")!),
+      baseUrl: "https://openrouter-proxy.example.test/v1",
+      apiKey: "sk-test",
+    };
+    enrichProviderFromRegistry("openrouter", provider);
+    expect(provider.modelSupportsServiceTier).toBeUndefined();
+    expect(supportsServiceTierForModel(provider, "openai/gpt-5.6-sol")).toBeUndefined();
   });
 });
 
@@ -237,6 +264,14 @@ describe("the gate fires on the live handleResponses path", () => {
     ({ ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" });
   const openAiKeyProvider = (): OcxProviderConfig =>
     ({ ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!), apiKey: "sk-test" });
+  const openRouterProvider = (overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig => {
+    const provider: OcxProviderConfig = {
+      ...providerConfigSeed(getProviderRegistryEntry("openrouter")!),
+      apiKey: "sk-test",
+      ...overrides,
+    };
+    return provider;
+  };
 
   test("DeepSeek never receives service_tier, even with fastMode on", async () => {
     const body = await drive("deepseek", deepseekProvider(), "deepseek-v4-flash", {}, true);
@@ -310,6 +345,53 @@ describe("the gate fires on the live handleResponses path", () => {
     const undeclared = await drive("custom-chat", custom(), "undeclared-model", { service_tier: "priority" });
     expect(undeclared).not.toHaveProperty("service_tier");
   });
+
+  test.each([
+    "openai/gpt-5.6-sol",
+    "openai/gpt-5.6-terra",
+    "openai/gpt-5.6-luna",
+  ])("OpenRouter %s publishes and injects canonical Fast without route pins", async modelId => {
+    const provider = openRouterProvider();
+    const model = applyProviderConfigHints("openrouter", provider, { id: modelId, provider: "openrouter" });
+    const catalogEntry: RawEntry = {};
+    applyCatalogModelMetadata(catalogEntry, model);
+    expect(catalogEntry.service_tiers).toEqual([expect.objectContaining({ id: "priority", name: "Fast" })]);
+
+    const body = await drive("openrouter", provider, modelId, {}, true);
+    expect(body.service_tier).toBe("priority");
+    expect(body).not.toHaveProperty("provider");
+  });
+
+  test("OpenRouter Anthropic and undeclared slugs stay unclassified and receive no Fast injection", async () => {
+    const provider = openRouterProvider();
+    for (const modelId of ["anthropic/claude-sonnet-5", "google/gemini-unknown"]) {
+      const model = applyProviderConfigHints("openrouter", provider, { id: modelId, provider: "openrouter" });
+      const catalogEntry: RawEntry = {};
+      applyCatalogModelMetadata(catalogEntry, model);
+      expect(catalogEntry).not.toHaveProperty("service_tiers");
+      expect(await drive("openrouter", provider, modelId, {}, true)).not.toHaveProperty("service_tier");
+    }
+  });
+
+  test("an explicit OpenRouter provider-level false remains fail-closed", async () => {
+    const provider = openRouterProvider({ supportsServiceTier: false });
+    expect(supportsServiceTierForModel(provider, "openai/gpt-5.6-sol")).toBe(false);
+    const body = await drive("openrouter", provider, "openai/gpt-5.6-sol", {}, true);
+    expect(body).not.toHaveProperty("service_tier");
+  });
+
+  test("a same-named noncanonical OpenRouter destination neither publishes nor injects registry Fast", async () => {
+    const provider = openRouterProvider({ baseUrl: "https://openrouter-proxy.example.test/v1" });
+    const model = applyProviderConfigHints("openrouter", provider, {
+      id: "openai/gpt-5.6-sol",
+      provider: "openrouter",
+    });
+    const catalogEntry: RawEntry = {};
+    applyCatalogModelMetadata(catalogEntry, model);
+    expect(catalogEntry).not.toHaveProperty("service_tiers");
+    const body = await drive("openrouter", provider, "openai/gpt-5.6-sol", {}, true);
+    expect(body).not.toHaveProperty("service_tier");
+  });
 });
 
 describe("unclassified chat-wire tier projection (release-audit fix)", () => {
@@ -328,4 +410,3 @@ describe("unclassified chat-wire tier projection (release-audit fix)", () => {
     expect(serviceTierSupportForModel(provider, "some-model")).toBeUndefined();
   });
 });
-

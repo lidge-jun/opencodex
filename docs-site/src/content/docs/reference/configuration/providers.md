@@ -151,6 +151,35 @@ contract; existing configurations see these migration deltas:
 
 Explicit capability `false` and Responses caller-tier forwarding retain their existing contracts.
 
+### OpenRouter Fast
+
+The canonical `https://openrouter.ai/api/v1` preset advertises Fast only for these exact
+OpenAI-backed model slugs:
+
+- `openai/gpt-5.6-sol`
+- `openai/gpt-5.6-terra`
+- `openai/gpt-5.6-luna`
+
+`anthropic/claude-sonnet-5` and undeclared OpenRouter models remain unclassified. A provider-level
+`supportsServiceTier` default is intentionally absent, and a user-set `supportsServiceTier: false`
+still disables the exact-model declarations. The registry declarations apply only while the
+provider still targets the canonical OpenRouter base URL; a same-named custom destination is not
+assumed to share OpenRouter's contract.
+
+Fast sends `service_tier: "priority"`. It does not add or rewrite `provider.only`,
+`provider.order`, or `provider.allow_fallbacks`. OpenRouter documents priority endpoints as the
+first routing choice, followed by graceful fallback to other endpoints when priority capacity is
+unavailable. Billing follows the endpoint actually used, and the response reports the actual
+top-level `service_tier`. Pinning tier endpoints and disabling fallback would therefore reduce
+availability without improving billing safety.
+
+Request logs use that response echo as the authority. `priority` confirms Fast as applied;
+`default` records a downgrade and uses the standard-price estimate; a missing field leaves the
+attempt assumed rather than guessing a downgrade. OpenRouter's priority multiplier varies by
+upstream and is not bundled here. When priority is confirmed but no exact priority price is known,
+the dashboard keeps the standard-price estimate as a documented lower bound and prefixes it with
+`≥`; downgraded attempts have no lower-bound marker.
+
 API-key providers may hold a literal key or an environment reference. OAuth providers use the
 credential store populated by `ocx login`; subscription-backed Claude Code launch behavior is
 configured under [`claudeCode.authMode`](/reference/configuration/server/#claude-code).

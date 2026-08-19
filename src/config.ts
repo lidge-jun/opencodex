@@ -74,6 +74,7 @@ import {
   getProviderRegistryEntry,
   providerMatchesRegistryTransport,
   providerModelWireDefault,
+  registryModelServiceTierCapabilityApplies,
 } from "./providers/registry";
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
@@ -2159,7 +2160,9 @@ function inheritedFastWireConflictProviderNames(
     if (!registry) continue;
     const effectiveProviderCapability = provider.supportsServiceTier ?? registry.supportsServiceTier;
     const effectiveModelCapabilities = {
-      ...(registry.modelSupportsServiceTier ?? {}),
+      ...(registryModelServiceTierCapabilityApplies(registry, provider)
+        ? registry.modelSupportsServiceTier ?? {}
+        : {}),
       ...(provider.modelSupportsServiceTier ?? {}),
     };
     if (

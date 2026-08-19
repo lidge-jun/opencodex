@@ -392,7 +392,7 @@ describe("Command Code provider", () => {
     expect(JSON.parse(built.body).params.tools).toEqual([]);
   });
 
-  test("matches a forced namespaced tool choice by dot alias", async () => {
+  test("matches a forced namespaced tool choice by dot or unique bare alias", async () => {
     const namespacedParsed = {
       ...parsed(),
       context: {
@@ -404,6 +404,12 @@ describe("Command Code provider", () => {
     const built = await builtRequest(namespacedParsed);
     const tools = JSON.parse(built.body).params.tools;
     expect(tools).toEqual([{ name: "functions__exec_command", description: "exec", input_schema: { type: "object" } }]);
+
+    const bareBuilt = await builtRequest({
+      ...namespacedParsed,
+      options: { toolChoice: { name: "exec_command" } },
+    });
+    expect(JSON.parse(bareBuilt.body).params.tools).toEqual(tools);
   });
 
   test("refreshes a stale official effort record only after a reasoning rejection and retries without it", async () => {

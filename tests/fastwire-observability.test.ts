@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AdapterRequest } from "../src/adapters/base";
+import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
 import { buildBehaviorFingerprintV1 } from "../src/lab/subject/behavior-fingerprint";
 import { sanitizeLogMetadataString } from "../src/lib/redact";
@@ -18,12 +19,13 @@ import {
   type RequestLogContext,
   type RequestLogEntry,
 } from "../src/server/request-log";
-import { applyServiceTierGate } from "../src/server/responses/core";
+import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
+import { costResult } from "../src/server/management/shared";
 import type { OcxConfig, OcxParsedRequest, TierObservationContext } from "../src/types";
 import { estimateComboCost, serviceTierContextFromOutcome } from "../src/usage/cost";
 import type { ExpectedPriceOverlay } from "../src/usage/expected-prices";
 import { normalizeUsageEntryForTest } from "../src/usage/log";
-import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const SERVICE_WIRE = {
   kind: "service-tier" as const,
@@ -408,6 +410,120 @@ describe("FastWire logging and persistence", () => {
     expect(normalized.responseServiceTier).toBe(expected);
     expect(normalized.tierOutcome?.responseServiceTier).toBe(expected);
   });
+
+  test.each([
+    { wire: "stream", responseTier: "priority", fastOutcome: "applied", confirmation: "confirmed", canonical: "priority" },
+    { wire: "stream", responseTier: "default", fastOutcome: "downgraded", confirmation: "downgraded", canonical: undefined },
+    { wire: "stream", responseTier: undefined, fastOutcome: "applied", confirmation: "assumed", canonical: "priority" },
+    { wire: "non-stream", responseTier: "priority", fastOutcome: "applied", confirmation: "confirmed", canonical: "priority" },
+    { wire: "non-stream", responseTier: "default", fastOutcome: "downgraded", confirmation: "downgraded", canonical: undefined },
+    { wire: "non-stream", responseTier: undefined, fastOutcome: "applied", confirmation: "assumed", canonical: "priority" },
+  ] as const)(
+    "OpenAI Chat $wire response tier=$responseTier updates the existing adapter observer",
+    async ({ wire, responseTier, fastOutcome, confirmation, canonical }) => {
+      const tracker = createAdapterTierMetadata(
+        observation(),
+        { kind: "set", value: "priority" },
+        "service-tier",
+        "priority",
+      )!;
+      const adapter = createOpenAIChatAdapter({
+        adapter: "openai-chat",
+        baseUrl: "https://openrouter.ai/api/v1",
+      });
+      const tierField = responseTier === undefined ? {} : { service_tier: responseTier };
+      const budget = createTestTranslatorBudget();
+
+      if (wire === "stream") {
+        const chunk = {
+          id: "chatcmpl-tier",
+          object: "chat.completion.chunk",
+          ...tierField,
+          choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        };
+        for await (const _ of adapter.parseStream(new Response(
+          `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`,
+        ), budget, tracker)) {
+          // Drain the adapter so the final chunk and tier echo are observed.
+        }
+      } else {
+        await adapter.parseResponse(new Response(JSON.stringify({
+          id: "chatcmpl-tier",
+          object: "chat.completion",
+          ...tierField,
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        })), budget, tracker);
+      }
+
+      expect(tracker.outcome).toMatchObject({ fastOutcome, confirmation });
+      if (canonical === undefined) expect(tracker.outcome).not.toHaveProperty("canonical");
+      else expect(tracker.outcome.canonical).toBe(canonical);
+      if (responseTier === undefined) expect(tracker.outcome).not.toHaveProperty("responseServiceTier");
+      else expect(tracker.outcome.responseServiceTier).toBe(responseTier);
+    },
+  );
+
+  test.each([
+    { stream: true, responseTier: "priority", fastOutcome: "applied", confirmation: "confirmed" },
+    { stream: false, responseTier: "default", fastOutcome: "downgraded", confirmation: "downgraded" },
+  ] as const)(
+    "the Responses bridge passes the live observer into Chat parsing (stream=$stream)",
+    async ({ stream, responseTier, fastOutcome, confirmation }) => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () => {
+        const payload = stream
+          ? `data: ${JSON.stringify({
+              service_tier: responseTier,
+              choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            })}\n\ndata: [DONE]\n\n`
+          : JSON.stringify({
+              service_tier: responseTier,
+              choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            });
+        return new Response(payload, {
+          status: 200,
+          headers: { "content-type": stream ? "text/event-stream" : "application/json" },
+        });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      try {
+        const response = await handleResponses(
+          new Request("http://localhost/v1/responses", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: "fixture/model", input: "ping", stream }),
+          }),
+          {
+            port: 10100,
+            defaultProvider: "fixture",
+            fastMode: true,
+            providers: {
+              fixture: {
+                adapter: "openai-chat",
+                baseUrl: "https://fixture.example.test/v1",
+                apiKey: "sk-test",
+                supportsServiceTier: true,
+              },
+            },
+          },
+          logCtx,
+          {},
+        );
+        await response.text();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      expect(logCtx.activeAttempt?.tierOutcome).toMatchObject({
+        fastOutcome,
+        confirmation,
+        responseServiceTier: responseTier,
+      });
+    },
+  );
 });
 
 describe("FastWire per-attempt cost", () => {
@@ -497,6 +613,140 @@ describe("FastWire per-attempt cost", () => {
     ], overlays, { requestedServiceTier: "priority" })!;
     expect(estimate.cost.total).toBeCloseTo(6.4, 9);
     expect(estimate.attempts?.every(attempt => attempt.priorityMultiplier === 2)).toBe(true);
+  });
+
+  test("confirmed OpenRouter priority is a standard-price lower bound, while downgrade and OpenAI stay unchanged", () => {
+    const openRouterOverlays: ExpectedPriceOverlay[] = [{
+      provider: "openrouter",
+      modelId: "openai/gpt-5.6-sol",
+      cost4: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      source: "test",
+      verifiedAt: "2026-08-18",
+      status: "verified",
+    }];
+    const confirmedPriority = {
+      canonical: "priority" as const,
+      wireKind: "service-tier" as const,
+      wireValue: "priority",
+      fastOutcome: "applied" as const,
+      confirmation: "confirmed" as const,
+      responseServiceTier: "priority",
+    };
+    const downgraded = {
+      wireKind: "service-tier" as const,
+      wireValue: "priority",
+      fastOutcome: "downgraded" as const,
+      fastDowngradeReason: "response-declined" as const,
+      confirmation: "downgraded" as const,
+      responseServiceTier: "default",
+    };
+
+    const priority = estimateComboCost([{
+      ordinal: 1,
+      provider: "openrouter",
+      model: "openai/gpt-5.6-sol",
+      usageStatus: "reported",
+      usage,
+      tierOutcome: confirmedPriority,
+    }], openRouterOverlays)!;
+    expect(priority.cost.total).toBeCloseTo(1.6, 9);
+    expect(priority.priorityMultiplier).toBeUndefined();
+    expect(priority.priorityLowerBound).toBe(true);
+    expect(priority.attempts?.[0]?.priorityLowerBound).toBe(true);
+
+    const standard = estimateComboCost([{
+      ordinal: 1,
+      provider: "openrouter",
+      model: "openai/gpt-5.6-sol",
+      usageStatus: "reported",
+      usage,
+      tierOutcome: downgraded,
+    }], openRouterOverlays)!;
+    expect(standard.cost.total).toBeCloseTo(1.6, 9);
+    expect(standard.priorityLowerBound).toBeUndefined();
+
+    const flex = estimateComboCost([{
+      ordinal: 1,
+      provider: "openrouter",
+      model: "openai/gpt-5.6-sol",
+      usageStatus: "reported",
+      usage,
+      tierOutcome: { ...downgraded, responseServiceTier: "flex" },
+    }], openRouterOverlays)!;
+    expect(flex.cost.total).toBeCloseTo(1.6, 9);
+    expect(flex.priorityLowerBound).toBeUndefined();
+
+    const openAi = estimateComboCost([{
+      ordinal: 1,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      usageStatus: "reported",
+      usage,
+      tierOutcome: confirmedPriority,
+    }], overlays)!;
+    expect(openAi.cost.total).toBeCloseTo(3.2, 9);
+    expect(openAi.priorityMultiplier).toBe(2);
+    expect(openAi.priorityLowerBound).toBeUndefined();
+  });
+
+  test("an ASSUMED OpenRouter priority attempt is a lower bound, not a definite standard price", () => {
+    // The provider never echoed a tier, so we do not know which price was billed. Reporting
+    // the standard total unmarked would tell the UI "this cost 1.6" for a request that may
+    // have been served -- and billed -- as priority. The confirmed case is a lower bound
+    // because the premium price is not bundled; the assumed case is a lower bound because
+    // the OUTCOME itself was never observed. Both must carry the marker.
+    const usage = { inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 0 };
+    const assumedPriority = {
+      canonical: "priority" as const,
+      wireKind: "service-tier" as const,
+      wireValue: "priority",
+      fastOutcome: "applied" as const,
+      confirmation: "assumed" as const,
+    };
+    const openRouterOverlays: ExpectedPriceOverlay[] = [{
+      provider: "openrouter",
+      modelId: "openai/gpt-5.6-sol",
+      cost4: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      source: "test",
+      verifiedAt: "2026-08-18",
+      status: "verified",
+    }];
+
+    const assumed = estimateComboCost([{
+      ordinal: 1,
+      provider: "openrouter",
+      model: "openai/gpt-5.6-sol",
+      usageStatus: "reported",
+      usage,
+      tierOutcome: assumedPriority,
+    }], openRouterOverlays)!;
+
+    expect(assumed.priorityLowerBound).toBe(true);
+    expect(assumed.attempts?.[0]?.priorityLowerBound).toBe(true);
+    // No premium multiplier is applied — the standard rate IS the floor being reported.
+    expect(assumed.priorityMultiplier).toBeUndefined();
+  });
+
+  test("management cost metadata exposes the aligned priority_lower_bound reason", () => {
+    const result = costResult({
+      provider: "openrouter",
+      model: "openai/gpt-5.6-sol",
+      durationMs: 1,
+      usageStatus: "reported",
+      usage,
+      tierOutcome: {
+        canonical: "priority",
+        wireKind: "service-tier",
+        wireValue: "priority",
+        fastOutcome: "applied",
+        confirmation: "confirmed",
+        responseServiceTier: "priority",
+      },
+    });
+    expect(result.kind).toBe("value");
+    if (result.kind !== "value") throw new Error("expected a priced OpenRouter result");
+    expect(result.estimate.priorityLowerBound).toBe(true);
+    expect(result.estimateReasons).toContain("priority_lower_bound");
   });
 });
 

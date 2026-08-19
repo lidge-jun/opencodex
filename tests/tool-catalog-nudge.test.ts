@@ -196,6 +196,18 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).not.toContain("`exec_command`,");
   });
 
+  test("keeps a uniquely named namespace tool visible when allowed_tools uses its bare name", () => {
+    const tools: OcxTool[] = [
+      { name: "exec", namespace: "functions", description: "Run", parameters: {} },
+      { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
+    ];
+
+    const note = buildNonOpenAIToolCatalogNudgeForTools(tools, { mode: "required", allowedTools: ["exec"] });
+
+    expect(note).toContain("`functions__exec`");
+    expect(note).not.toContain("`mcp__fs__read_file`");
+  });
+
   test("skips OpenAI and ChatGPT hosts", () => {
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://api.openai.com/v1" })).toBe(false);
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(false);

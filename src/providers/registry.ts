@@ -17,6 +17,7 @@ import {
   cursorModelReasoningEfforts,
 } from "../adapters/cursor/discovery";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
+import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -217,6 +218,11 @@ export interface ProviderRegistryEntry {
   supportsServiceTier?: boolean;
   /** Registry default for exact model service-tier capability; explicit config keys win. */
   modelSupportsServiceTier?: Record<string, boolean>;
+  /**
+   * Registry-only destination guard for `modelSupportsServiceTier`. This scopes vendor evidence
+   * without changing provider ownership, routing, authentication, or config validation.
+   */
+  modelServiceTierCapabilityBaseUrlGuard?: (baseUrl: string) => boolean;
   /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
   /** Registry defaults for per-model Codex reasoning propagation; explicit user keys win during enrichment. */
@@ -1349,7 +1355,33 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     autoToolChoiceOnlyModels: ["kimi-k2.7-code"],
     preserveReasoningContentModels: NEURALWATT_REASONING_HISTORY_MODELS,
   },
-  { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    adapter: "openai-chat",
+    baseUrl: "https://openrouter.ai/api/v1",
+    authKind: "key",
+    featured: true,
+    dashboardUrl: "https://openrouter.ai/keys",
+    jawcodeBundle: "openrouter",
+    models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS],
+    modelContextWindows: {
+      "anthropic/claude-sonnet-5": 1_000_000,
+      ...OPENROUTER_GPT56_CONTEXT_WINDOWS,
+    },
+    // OpenRouter documents priority support for OpenAI endpoints, but not Anthropic. Keep the
+    // provider unclassified and opt in only the exact OpenAI-backed slugs we ship. These facts
+    // belong only to the canonical destination; a same-named custom gateway is unknown to us.
+    modelServiceTierCapabilityBaseUrlGuard: isCanonicalOpenRouterTarget,
+    modelSupportsServiceTier: {
+      "openai/gpt-5.6-sol": true,
+      "openai/gpt-5.6-terra": true,
+      "openai/gpt-5.6-luna": true,
+    },
+    // Deliberately no OpenRouter route pin: it bills the endpoint actually used and reports the
+    // actual service_tier. B0 confirmation therefore owns downgrade safety. Forcing `only` plus
+    // `allow_fallbacks:false` would turn a graceful priority-capacity fallback into a hard failure.
+  },
   {
     // Primary sources checked 2026-08-02:
     // - docs.cline.bot/getting-started/clinepass publishes this exact catalog and explicitly
@@ -2557,6 +2589,15 @@ for (const entry of PROVIDER_REGISTRY) {
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(entry => entry.id === id);
+}
+
+/** Whether this registry row's per-model service-tier evidence applies to one configured target. */
+export function registryModelServiceTierCapabilityApplies(
+  entry: Pick<ProviderRegistryEntry, "modelServiceTierCapabilityBaseUrlGuard">,
+  provider: Pick<OcxProviderConfig, "baseUrl">,
+): boolean {
+  const guard = entry.modelServiceTierCapabilityBaseUrlGuard;
+  return guard === undefined || guard(provider.baseUrl);
 }
 
 function normalizedProviderEndpoint(value: string): string {

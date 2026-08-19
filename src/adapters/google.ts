@@ -262,7 +262,7 @@ function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
     ? new Set(parsed.options.toolChoice.allowedTools)
     : undefined;
   const tools = allowed
-    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed))
+    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed, parsed.context.tools))
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   return [{

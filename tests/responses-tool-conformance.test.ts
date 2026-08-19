@@ -172,18 +172,24 @@ describe("Responses tool-kind discrimination", () => {
     expect(parsed.context.tools ?? []).toEqual([]);
   });
 
-  it("CURRENT BEHAVIOR: a non-function child inside a namespace disappears", () => {
+  it("preserves custom namespace children while unknown child kinds still disappear", () => {
     const parsed = parseRequest(request([], [
       {
         type: "namespace",
         name: "ns",
         tools: [
           { type: "function", name: "kept", parameters: { type: "object", properties: {} } },
-          { type: "custom", name: "dropped" },
+          { type: "custom", name: "freeform" },
+          { type: "computer_use_preview", name: "dropped" },
         ],
       },
     ]));
-    expect(toolNames(parsed)).toEqual(["kept"]);
+    expect(toolNames(parsed)).toEqual(["kept", "freeform"]);
+    expect(parsed.context.tools?.[1]).toMatchObject({
+      name: "freeform",
+      namespace: "ns",
+      freeform: true,
+    });
   });
 });
 
@@ -384,6 +390,33 @@ describe("streaming and non-streaming tool parity", () => {
       "tool_search_call",
       "function_call",
     ]);
+  });
+
+  it("keeps namespaced custom and function tools distinct when their logical names collide", async () => {
+    const collidingNsMap = new Map<string, { namespace: string; name: string; freeform?: true }>([
+      ["functions__exec", { namespace: "functions", name: "exec", freeform: true }],
+      ["mcp__remote__exec", { namespace: "mcp__remote", name: "exec" }],
+    ]);
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_custom", name: "functions__exec" },
+      { type: "tool_call_delta", arguments: '{"input":"pwd"}' },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "call_function", name: "mcp__remote__exec" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+
+    const view = await streamedView(events, MODEL, collidingNsMap, new Set(["exec"]));
+    const json = jsonToolItems(events, MODEL, {
+      toolNsMap: collidingNsMap,
+      freeformToolNames: new Set(["exec"]),
+    });
+
+    expect(view.incremental).toEqual(view.snapshot);
+    expect(view.snapshot).toEqual(json);
+    expect(view.snapshot.map(item => item.type)).toEqual(["custom_tool_call", "function_call"]);
+    expect(view.snapshot[1]).toMatchObject({ name: "exec", namespace: "mcp__remote" });
   });
 
   it("emits the exact custom input fragments on the streamed path only", async () => {

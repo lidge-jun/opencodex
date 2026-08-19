@@ -39,8 +39,20 @@ export interface ProviderAdapter {
 
   fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
 
-  parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
-  parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
+  /**
+   * Parse one upstream response. `tierMetadata` is the same live observer returned on the
+   * corresponding AdapterRequest; adapters that receive a documented tier echo may update it.
+   */
+  parseStream(
+    response: Response,
+    budget: TranslatorBudget,
+    tierMetadata?: AdapterTierMetadata,
+  ): AsyncGenerator<AdapterEvent>;
+  parseResponse?(
+    response: Response,
+    budget: TranslatorBudget,
+    tierMetadata?: AdapterTierMetadata,
+  ): Promise<AdapterEvent[]>;
   runTurn?(
     parsed: OcxParsedRequest,
     incoming: IncomingMeta,

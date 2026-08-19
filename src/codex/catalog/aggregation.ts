@@ -183,6 +183,9 @@ export function deriveComboCatalogModel(
         ? { supportsServiceTier: false }
         : {}),
     ...(members.some(member => member.supportsReasoningSummaries === false) ? { supportsReasoningSummaries: false } : {}),
+    ...(members.every(member => member.codexToolMode === "shell")
+      ? { codexToolMode: "shell" as const }
+      : {}),
   };
 }
 

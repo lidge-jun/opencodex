@@ -135,7 +135,7 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
   toolChoice?: OcxRequestOptions["toolChoice"],
   toWireName: (tool: Pick<OcxTool, "namespace" | "name">) => string = tool => namespacedToolName(tool.namespace, tool.name),
 ): string | undefined {
-  const visible = tools?.filter(toolChoiceToolPredicate(toolChoice));
+  const visible = tools?.filter(toolChoiceToolPredicate(toolChoice, tools));
   const visibleNames = visible?.map(toWireName);
   // Decide code mode from the tool OBJECTS, while the `freeform` flag still exists — reducing
   // to wire names first throws away the only thing that distinguishes Codex's JavaScript

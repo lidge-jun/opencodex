@@ -4,6 +4,7 @@ import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 import {
   getProviderRegistryEntry,
   providerMatchesRegistryTransport,
+  registryModelServiceTierCapabilityApplies,
   type InboundWire,
   type ModelWireDefault,
 } from "./registry";
@@ -57,8 +58,14 @@ function buildFastPolicyAuthority(
   providerName: string,
   provider: ServiceTierCapabilityProvider,
   registryTransportMatch: boolean,
+  capabilityProvider: ServiceTierCapabilityProvider = provider,
 ): FastPolicyAuthority {
   const registry = registryTransportMatch ? getProviderRegistryEntry(providerName) : undefined;
+  const registryModelCapabilities = registry
+    && registryModelServiceTierCapabilityApplies(registry, capabilityProvider)
+    ? registry.modelSupportsServiceTier
+    : undefined;
+  const providerCapability = capabilityProvider.supportsServiceTier ?? registry?.supportsServiceTier;
   const authority: FastPolicyAuthority = Object.freeze({
     providerAdapter: provider.adapter,
     fastWireDeclaration: cloneFastWire(
@@ -72,8 +79,11 @@ function buildFastPolicyAuthority(
       provider.apiKeyTransport,
     ),
     capability: Object.freeze({
-      ...(provider.supportsServiceTier !== undefined ? { provider: provider.supportsServiceTier } : {}),
-      models: Object.freeze({ ...(provider.modelSupportsServiceTier ?? {}) }),
+      ...(providerCapability !== undefined ? { provider: providerCapability } : {}),
+      models: Object.freeze({
+        ...(registryModelCapabilities ?? {}),
+        ...(capabilityProvider.modelSupportsServiceTier ?? {}),
+      }),
       ...(provider.chatServiceTier !== undefined ? { chatServiceTier: provider.chatServiceTier } : {}),
     }),
     modelAdapters: Object.freeze({ ...(provider.modelAdapters ?? {}) }),
@@ -87,8 +97,14 @@ export function captureFastPolicyAuthority(
   providerName: string,
   provider: ServiceTierCapabilityProvider,
   registryTransportMatch: boolean,
+  capabilityProvider: ServiceTierCapabilityProvider = provider,
 ): FastPolicyAuthority {
-  const authority = buildFastPolicyAuthority(providerName, provider, registryTransportMatch);
+  const authority = buildFastPolicyAuthority(
+    providerName,
+    provider,
+    registryTransportMatch,
+    capabilityProvider,
+  );
   if (Object.isFrozen(provider)) capturedFastPolicyAuthorities.set(provider, authority);
   return authority;
 }
@@ -106,12 +122,13 @@ export function captureServiceTierAdapterAuthority(
 function authorityForProvider(
   provider: ServiceTierCapabilityProvider,
   providerName?: string,
+  capabilityProvider?: ServiceTierCapabilityProvider,
 ): FastPolicyAuthority {
   // Preserve the legacy no-name short circuit: serviceTierSupportForModel() used the
   // provider adapter directly when no provider identity was available, so no configured
   // override, hard pin, or registry default may participate on this path in A1.
   if (providerName === undefined) {
-    const authority = buildFastPolicyAuthority("", provider, false);
+    const authority = buildFastPolicyAuthority("", provider, false, capabilityProvider ?? provider);
     return Object.freeze({
       ...authority,
       modelAdapters: Object.freeze({}),
@@ -119,12 +136,17 @@ function authorityForProvider(
       registryWireDefaults: Object.freeze({}),
     });
   }
-  const captured = Object.isFrozen(provider)
+  const captured = capabilityProvider === undefined && Object.isFrozen(provider)
     ? capturedFastPolicyAuthorities.get(provider)
     : undefined;
   if (captured) return captured;
   const registryTransportMatch = providerMatchesRegistryTransport(providerName, provider);
-  const authority = buildFastPolicyAuthority(providerName, provider, registryTransportMatch);
+  const authority = buildFastPolicyAuthority(
+    providerName,
+    provider,
+    registryTransportMatch,
+    capabilityProvider ?? provider,
+  );
   // Frozen provider snapshots cannot drift, so repeated catalog/runtime projections may safely
   // reuse the registry lookup and detached declaration maps. Mutable configs still rebuild.
   if (Object.isFrozen(provider)) capturedFastPolicyAuthorities.set(provider, authority);
@@ -137,8 +159,13 @@ export function fastPolicyForModel(
   modelId: string,
   providerName?: string,
   inbound: InboundWire = "responses",
+  capabilityProvider?: ServiceTierCapabilityProvider,
 ): ResolvedFastPolicy {
-  return resolveFastPolicy(authorityForProvider(provider, providerName), modelId, inbound);
+  return resolveFastPolicy(
+    authorityForProvider(provider, providerName, capabilityProvider),
+    modelId,
+    inbound,
+  );
 }
 
 /**

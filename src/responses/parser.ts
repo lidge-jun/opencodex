@@ -11,7 +11,7 @@ import type {
   OcxToolCall,
   OcxReasoningReplayScopeRef,
 } from "../types";
-import { namespacedToolName } from "../types";
+import { namespacedToolName, toolChoiceCandidates } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
@@ -203,7 +203,7 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       const ns = typeof t.name === "string" && !builtinFunctions ? t.name : undefined;
       for (const inner of t.tools as unknown[]) {
         if (isObj(inner) && inner.type === "function" && typeof inner.name === "string") pushFn(inner, ns);
-        else if (builtinFunctions && isObj(inner) && inner.type === "custom" && typeof inner.name === "string") pushCustom(inner);
+        else if (isObj(inner) && inner.type === "custom" && typeof inner.name === "string") pushCustom(inner, ns);
       }
     }
     else if (t.type === "custom" && typeof t.name === "string") {
@@ -328,6 +328,35 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+/**
+ * Namespace a custom tool was declared under, by its bare name.
+ *
+ * A `custom_tool_call` echoed back by the client carries only the bare name — the bridge
+ * emits `{"type":"custom_tool_call","name":"exec"}` even when the tool was declared as
+ * `mcp__functions__exec`. Without this lookup the namespace is lost on the return trip,
+ * and the adapters replay history through `namespacedToolName(namespace, name)`, which
+ * then produces a bare `exec` the provider may not have. Ordinary `function_call` items
+ * do not need this: they carry `namespace` on the wire.
+ */
+function customToolNamespaces(tools: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!Array.isArray(tools)) return out;
+  for (const spec of tools) {
+    if (!isObj(spec) || spec.type !== "namespace" || !Array.isArray(spec.tools)) continue;
+    const namespace = typeof spec.name === "string" ? spec.name : undefined;
+    // Codex 0.147 groups ordinary client tools under the reserved `functions` namespace and
+    // buildTools deliberately flattens those without a namespace. Mirror that here, or the
+    // reconstruction would invent a namespace the request never advertised.
+    if (!namespace || namespace === "functions") continue;
+    for (const inner of spec.tools) {
+      if (!isObj(inner) || inner.type !== "custom" || typeof inner.name !== "string") continue;
+      // Ambiguous bare names are already rejected upstream, so first declaration wins.
+      if (!out.has(inner.name)) out.set(inner.name, namespace);
+    }
+  }
+  return out;
+}
+
 export function parseRequest(
   body: unknown,
   parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef },
@@ -341,6 +370,9 @@ export function parseRequest(
   const data = parsed.data;
   const now = Date.now();
   const messages: OcxMessage[] = [];
+  // Built before the item loop: a custom_tool_call echoed back in `input` needs the
+  // namespace from the request's own tool catalog to survive the round trip.
+  const customToolNamespacesByName = customToolNamespaces(data.tools);
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
@@ -574,10 +606,15 @@ export function parseRequest(
       if (effectiveType === "custom_tool_call") {
         const call = item as { id?: string; call_id: string; name: string; input: string };
         const remembered = typeof call.call_id === "string" ? replayThoughtSignatureMetadata(call.call_id, replayCacheScope) : undefined;
+        // Reconstruct the namespace the request declared this tool under. The wire item
+        // carries only the bare name, so without this the round trip loses it and adapters
+        // replay the call as an unnamespaced tool the provider may not expose.
+        const customNamespace = customToolNamespacesByName.get(call.name);
         const toolCall: OcxToolCall = {
           type: "toolCall", id: call.call_id, name: call.name,
           arguments: { input: call.input ?? "" },
           customWireName: call.name,
+          ...(customNamespace ? { namespace: customNamespace } : {}),
           ...(remembered ? { providerMetadata: remembered } : {}),
         };
         assistantHolderWithReasoning().content.push(toolCall);
@@ -691,6 +728,15 @@ export function parseRequest(
   const declaredTools = buildTools(data.tools as unknown[] | undefined) ?? [];
   const loadedTools = buildTools(loadedToolSpecs) ?? [];
   const loadedToolNames = new Set(loadedTools.map(t => namespacedToolName(t.namespace, t.name)));
+  const wireOwners = new Map<string, OcxTool>();
+  for (const tool of [...declaredTools, ...loadedTools]) {
+    const wireName = namespacedToolName(tool.namespace, tool.name);
+    const previous = wireOwners.get(wireName);
+    if (previous && (previous.namespace !== tool.namespace || previous.name !== tool.name || previous.freeform !== tool.freeform || previous.toolSearch !== tool.toolSearch)) {
+      throw new Error(`ambiguous tool catalog: multiple logical tools map to wire name ${wireName}`);
+    }
+    wireOwners.set(wireName, tool);
+  }
   const seenTools = new Set<string>();
   const mergedTools = [...declaredTools, ...loadedTools]
     .filter(t => {
@@ -716,6 +762,14 @@ export function parseRequest(
     options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
   }
   const tc = mapToolChoice(data.tool_choice);
+  if (tc && typeof tc === "object") {
+    const selectors = "allowedTools" in tc ? tc.allowedTools : [tc.name];
+    for (const selector of selectors) {
+      if (toolChoiceCandidates(mergedTools, selector).length > 1) {
+        throw new Error(`ambiguous tool_choice name: ${selector}`);
+      }
+    }
+  }
   if (tc !== undefined) options.toolChoice = tc;
   if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   // Upstream codex-rs converts "ultra" to "max" at the inference boundary (core/src/client.rs

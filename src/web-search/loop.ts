@@ -741,13 +741,20 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     throw e;
   }
 
-  const toolNsMap = new Map<string, { namespace: string; name: string }>();
+  const toolNsMap = new Map<string, { namespace: string; name: string; freeform?: true }>();
   const freeform = new Set<string>();
   const toolSearch = new Set<string>();
-  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
-  for (const t of parsed.context.tools ?? []) {
+  const requestedTools = parsed.context.tools ?? [];
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, requestedTools);
+  for (const t of requestedTools) {
     if (!toolAllowed(t)) continue;
-    if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
+    if (t.namespace) {
+      toolNsMap.set(namespacedToolName(t.namespace, t.name), {
+        namespace: t.namespace,
+        name: t.name,
+        ...(t.freeform ? { freeform: true } : {}),
+      });
+    }
     if (t.freeform) freeform.add(t.name);
     if (t.toolSearch) toolSearch.add(t.name);
   }

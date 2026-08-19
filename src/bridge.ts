@@ -167,7 +167,7 @@ export type ResponsesTerminalStatus = "completed" | "failed" | "incomplete";
 export function bridgeToResponsesSSE(
   events: AsyncIterable<AdapterEvent>,
   modelId: string,
-  toolNsMap?: Map<string, { namespace: string; name: string }>,
+  toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>,
   freeformToolNames?: Set<string>,
   toolSearchToolNames?: Set<string>,
   onCancel?: () => void,
@@ -1050,7 +1050,9 @@ export function bridgeToResponsesSSE(
               }
               const ns = mapped?.namespace;
               const toolSearch = toolSearchToolNames?.has(realName) ?? false;
-              const freeform = !toolSearch && (freeformToolNames?.has(realName) ?? false);
+              const freeform = !toolSearch && (mapped
+                ? mapped.freeform === true
+                : (freeformToolNames?.has(realName) ?? false));
               const itemId = `${toolSearch ? "tsc" : freeform ? "ctc" : "fc"}_${uuid()}`;
               const item = toolSearch
                 ? { type: "tool_search_call", id: itemId, call_id: event.id, execution: "client", arguments: {}, status: "in_progress" }
@@ -1451,7 +1453,7 @@ function buildResponseJSONWithBudget(
   modelId: string,
   options?: {
     hideThinkingSummary?: boolean;
-    toolNsMap?: Map<string, { namespace: string; name: string }>;
+    toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
     /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
     declaredToolNames?: ReadonlySet<string>;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
@@ -1632,7 +1634,9 @@ function buildResponseJSONWithBudget(
     const realName = mapped?.name ?? currentToolCallName;
     const ns = mapped?.namespace;
     const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
-    const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+    const freeform = !toolSearch && (mapped
+      ? mapped.freeform === true
+      : (options?.freeformToolNames?.has(realName) ?? false));
     // #1611: same integral-float repair as the streaming path. Keyed by the wire name
     // the request declared, which is the pre-namespace-mapping `currentToolCallName`.
     const coercedArgs = coerceIntegerToolArguments(
@@ -1796,7 +1800,9 @@ function buildResponseJSONWithBudget(
           const mapped = options?.toolNsMap?.get(currentToolCallName);
           const realName = mapped?.name ?? currentToolCallName;
           const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
-          const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+          const freeform = !toolSearch && (mapped
+            ? mapped.freeform === true
+            : (options?.freeformToolNames?.has(realName) ?? false));
           if (!freeform && !toolSearch) {
             flushToolCall("incomplete");
             errorEvent = {
