@@ -322,16 +322,22 @@ function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): void {
 export function computeCodexUsageScore(quota: {
   weeklyPercent?: number;
   monthlyPercent?: number;
+  shortPercent?: number;
 } | null, plan?: unknown): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
-  if (isThirtyDayOnlyCodexPlan(plan)) {
-    return typeof quota.monthlyPercent === "number" && Number.isFinite(quota.monthlyPercent)
-      ? quota.monthlyPercent
-      : CODEX_UNKNOWN_USAGE_SCORE;
-  }
-  const values = [quota.weeklyPercent, quota.monthlyPercent]
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  return values.length > 0 ? Math.max(...values) : CODEX_UNKNOWN_USAGE_SCORE;
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  const longWindows = isThirtyDayOnlyCodexPlan(plan)
+    ? [quota.monthlyPercent]
+    : [quota.weeklyPercent, quota.monthlyPercent];
+  const knownLong = longWindows.filter(finite);
+  // The short burst window only REFINES a known long-window position; it cannot stand in for
+  // one. A snapshot carrying just `shortPercent: 0` would otherwise score a flat 0 and make an
+  // account whose weekly/monthly usage is entirely unverified look like the emptiest in the
+  // pool, so `pickLowestUsageAmong` would send every request to it. Unknown has to stay
+  // unknown until a governing window is actually observed.
+  if (knownLong.length === 0) return CODEX_UNKNOWN_USAGE_SCORE;
+  const values = finite(quota.shortPercent) ? [...knownLong, quota.shortPercent] : knownLong;
+  return Math.max(...values);
 }
 
 export function classifyCodexUpstreamOutcome(

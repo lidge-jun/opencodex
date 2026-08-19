@@ -1183,6 +1183,56 @@ describe("codex-auth API", () => {
     expect(getAccountQuota("preserve-valid")).toEqual(before);
   });
 
+  test("quota cache rebuilds preserve the short-window tuple", () => {
+    setAccountQuotaFromParsed("short-cache", {
+      weeklyPercent: 1,
+      weeklyResetAt: 2_000_586_800,
+      monthlyPercent: 3,
+      monthlyResetAt: 2_002_592_000,
+      shortPercent: 0,
+      shortResetAt: 2_000_000_000,
+      shortWindowSeconds: 18_000,
+    });
+    expect(getAccountQuota("short-cache")).toMatchObject({
+      weeklyPercent: 1,
+      shortPercent: 0,
+      shortResetAt: 2_000_000_000,
+      shortWindowSeconds: 18_000,
+    });
+
+    setAccountQuotaFromParsed("short-cache", {
+      shortPercent: 4,
+      shortResetAt: 2_000_000_100,
+      shortWindowSeconds: 18_000,
+    });
+    expect(getAccountQuota("short-cache")).toMatchObject({
+      weeklyPercent: 1,
+      monthlyPercent: 3,
+      shortPercent: 4,
+      shortResetAt: 2_000_000_100,
+      shortWindowSeconds: 18_000,
+    });
+
+    updateAccountQuota("short-cache", 2, 2_000_586_900);
+    expect(getAccountQuota("short-cache")).toMatchObject({
+      weeklyPercent: 2,
+      monthlyPercent: 3,
+      shortPercent: 4,
+      shortResetAt: 2_000_000_100,
+      shortWindowSeconds: 18_000,
+    });
+
+    setAccountQuotaFromParsed("short-cache", { resetCredits: 3 });
+    expect(getAccountQuota("short-cache")).toMatchObject({
+      weeklyPercent: 2,
+      monthlyPercent: 3,
+      shortPercent: 4,
+      shortResetAt: 2_000_000_100,
+      shortWindowSeconds: 18_000,
+      resetCredits: 3,
+    });
+  });
+
   test("GET /api/codex-auth/quota returns stored quotas", async () => {
     updateAccountQuota("q-test", 30);
     const req = new Request("http://localhost/api/codex-auth/quota", { method: "GET" });
@@ -1225,6 +1275,47 @@ describe("codex-auth API", () => {
       expect(pool?.quota).toMatchObject({ weeklyPercent: 64, weeklyResetAt: 1782628379 });
       expect(pool?.needsReauth).toBe(false);
       expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("GET /api/codex-auth/accounts preserves a parsed K12 short window through cache and DTO", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-k12-short",
+      email: "pool-k12-short@example.com",
+      plan: "k12",
+      accessToken: "tok",
+      refreshToken: "ref",
+      chatgptAccountId: "acc-pool-k12-short",
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      plan_type: "k12",
+      rate_limit: {
+        primary_window: { used_percent: 0, reset_at: 2_000_000_000, limit_window_seconds: 18_000 },
+        secondary_window: { used_percent: 1, reset_at: 2_000_586_800, limit_window_seconds: 604_800 },
+      },
+    })) as typeof fetch;
+
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(200);
+      const data = await resp!.json() as {
+        accounts: Array<{ id: string; quota?: Record<string, unknown> }>;
+      };
+      const quota = data.accounts.find(account => account.id === "pool-k12-short")?.quota;
+      expect(quota).toMatchObject({
+        weeklyPercent: 1,
+        weeklyResetAt: 2_000_586_800,
+        shortPercent: 0,
+        shortResetAt: 2_000_000_000,
+        shortWindowSeconds: 18_000,
+      });
+      expect(getAccountQuota("pool-k12-short")).toMatchObject(quota!);
     } finally {
       globalThis.fetch = originalFetch;
     }

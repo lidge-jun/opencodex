@@ -186,7 +186,7 @@ function normalizeResetAt(value: unknown): number | undefined {
 }
 
 function hasKnownQuotaValue(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
-  return [quota.weeklyPercent, quota.monthlyPercent]
+  return [quota.weeklyPercent, quota.monthlyPercent, quota.shortPercent]
     .some(value => typeof value === "number" && Number.isFinite(value));
 }
 
@@ -226,8 +226,14 @@ function snapshotHasMonthly(quota: Omit<StoredAccountQuota, "updatedAt">): boole
   return quota.monthlyPercent !== undefined || quota.monthlyResetAt !== undefined;
 }
 
+function snapshotHasShort(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.shortPercent !== undefined
+    || quota.shortResetAt !== undefined
+    || quota.shortWindowSeconds !== undefined;
+}
+
 function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
-  return snapshotHasWeekly(quota) || snapshotHasMonthly(quota);
+  return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota);
 }
 export function setAccountQuotaFromParsed(
   accountId: string,
@@ -246,6 +252,9 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
+    if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
+    if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
     next.resetCredits = quota.resetCredits;
     accountQuota.set(accountId, next);
     schedulePersistAccountQuotas();
@@ -270,10 +279,23 @@ export function setAccountQuotaFromParsed(
     // while silently dropping `monthlyIsPrimaryWindow` would look like tertiary-only data to
     // any future reader, and that failure would be invisible.
     if (quota.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
-  } else if (snapshotHasWeekly(quota) && existing?.monthlyPercent !== undefined) {
+  } else if ((snapshotHasWeekly(quota) || snapshotHasShort(quota))
+      && existing?.monthlyPercent !== undefined) {
     next.monthlyPercent = existing.monthlyPercent;
     if (existing.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
+  }
+
+  if (snapshotHasShort(quota)) {
+    if (quota.shortPercent !== undefined) next.shortPercent = quota.shortPercent;
+    if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
+    if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
+  } else {
+    // Header and reset-credit updates are partial snapshots. Preserve the last full WHAM
+    // burst tuple when those updates do not carry enough window metadata to replace it.
+    if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
+    if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
   }
 
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
@@ -369,6 +391,9 @@ export function updateAccountQuota(
       : {}),
     ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
+    ...(existing?.shortPercent !== undefined ? { shortPercent: existing.shortPercent } : {}),
+    ...(existing?.shortResetAt !== undefined ? { shortResetAt: existing.shortResetAt } : {}),
+    ...(existing?.shortWindowSeconds !== undefined ? { shortWindowSeconds: existing.shortWindowSeconds } : {}),
     ...(existing?.resetCredits !== undefined ? { resetCredits: existing.resetCredits } : {}),
     updatedAt: Date.now(),
   };

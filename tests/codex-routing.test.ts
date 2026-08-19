@@ -119,7 +119,20 @@ describe("codex routing", () => {
   test("usage score uses the hottest known quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 81 })).toBe(81);
     expect(computeCodexUsageScore({ weeklyPercent: 15, monthlyPercent: 91 })).toBe(91);
+    expect(computeCodexUsageScore({ weeklyPercent: 15, monthlyPercent: 20, shortPercent: 92 })).toBe(92);
     expect(computeCodexUsageScore({ weeklyPercent: 15 })).toBe(15);
+  });
+
+  test("a short-only snapshot is unknown usage, not zero usage", () => {
+    // The burst window refines a known long-window position; it cannot stand in for one.
+    // Scoring a bare `shortPercent: 0` as 0 would make an account whose weekly/monthly usage
+    // was never observed look like the emptiest in the pool, and pickLowestUsageAmong would
+    // send every request to it.
+    expect(computeCodexUsageScore({ shortPercent: 0 })).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    expect(computeCodexUsageScore({ shortPercent: 87 })).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    // Once a governing window is known, the burst still wins when it is hotter.
+    expect(computeCodexUsageScore({ weeklyPercent: 1, shortPercent: 100 })).toBe(100);
+    expect(computeCodexUsageScore({ weeklyPercent: 40, shortPercent: 0 })).toBe(40);
   });
 
   test("exact-account failures record health without rotating the active Pool account", () => {
@@ -179,6 +192,7 @@ describe("codex routing", () => {
   test("go and free plans use only the 30d quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12 }, "go")).toBe(12);
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 13 }, "free")).toBe(13);
+    expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12, shortPercent: 14 }, "go")).toBe(14);
     expect(computeCodexUsageScore({ weeklyPercent: 1 }, "go")).toBe(CODEX_UNKNOWN_USAGE_SCORE);
   });
 
@@ -1271,6 +1285,19 @@ describe("codex routing", () => {
       shortWindowSeconds: 18000,
       weeklyPercent: 0,
       weeklyResetAt: 2000586800,
+    });
+  });
+
+  test("a zero-valued short-only WHAM snapshot remains known quota (#2047)", () => {
+    expect(parseUsageQuota({
+      plan_type: "k12",
+      rate_limit: {
+        primary_window: { used_percent: 0, reset_at: 2000000000, limit_window_seconds: 18000 },
+      },
+    })).toMatchObject({
+      shortPercent: 0,
+      shortResetAt: 2000000000,
+      shortWindowSeconds: 18000,
     });
   });
 
