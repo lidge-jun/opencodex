@@ -99,6 +99,7 @@ const MODEL_ID_LISTS = [
   // their catalog instead of being renamed. OAuth reconciliation does not cover this
   // field, so the rename has to.
   "selectedModels",
+  "retainModels",
   "noVisionModels",
   "noReasoningModels",
   "noTemperatureModels",

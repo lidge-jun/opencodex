@@ -724,6 +724,9 @@ const providerConfigSchema = z.object({
     .nullish()
     .transform(value => value ?? undefined),
   directGeminiWireRenames: z.boolean().optional(),
+  retainModels: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
   noStructuredOutputModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
