@@ -32,6 +32,7 @@ describe("#1690 retainModels provider configuration", () => {
     const prov: OcxProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://api.example.com/v1",
+      retainModels: [],
     };
     const live = [model("live-model-1")];
     const configured = [model("configured-model-1")];
