@@ -160,6 +160,26 @@ describe("google SSE frame byte cap", () => {
     });
   });
 
+  test("accepts a data line exactly at the cap before its LF delimiter", async () => {
+    const cap = 128;
+    const envelope = (text: string) => ({
+      response: { candidates: [{ content: { parts: [{ text }] } }] },
+    });
+    const encoder = new TextEncoder();
+    const emptyLine = `data: ${JSON.stringify(envelope(""))}`;
+    const line = `data: ${JSON.stringify(envelope("a".repeat(cap - encoder.encode(emptyLine).byteLength)))}`;
+    expect(encoder.encode(line).byteLength).toBe(cap);
+
+    setGoogleSseFrameMaxBytesForTests(cap);
+    const events = await collect(
+      createGoogleAdapter(googleProvider()).parseStream(
+        byteStreamResponse([encoder.encode(`${line}\n\n`)]),
+      ),
+    );
+
+    expect(events.some(event => event.type === "error" && event.message.includes("exceeds"))).toBe(false);
+  });
+
   test("accepts multiple sub-cap data frames delivered in one oversized chunk", async () => {
     const cap = 96;
     const body = [
