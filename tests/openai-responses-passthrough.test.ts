@@ -1982,6 +1982,49 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
     expect(body.model).toBe("gpt-5.6-sol");
   });
 
+
+
+  test("forward mode strips prompt_cache_retention for gpt-5.6 models (#2092)", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    for (const modelId of ["gpt-5.6-luna", "gpt-5.6-sol"]) {
+      const request = adapter.buildRequest({
+        modelId,
+        context: { messages: [] },
+        stream: true,
+        options: {},
+        _rawBody: {
+          model: modelId,
+          input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
+          stream: true,
+          store: false,
+          prompt_cache_retention: "24h",
+        },
+      }, meta);
+      const body = JSON.parse(request.body) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("prompt_cache_retention");
+      expect(body.model).toBe(modelId);
+    }
+  });
+
+  test("forward mode keeps prompt_cache_retention for non-gpt-5.6 models (#2092)", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: "hi",
+        prompt_cache_retention: "24h",
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+    // The backend's cache handling varies by deployment and has accepted this
+    // field before; only gpt-5.6 provably rejects it, so it stays.
+    expect(body.prompt_cache_retention).toBe("24h");
+  });
+
   test("forward mode is a no-op when neither field is present", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const { max_output_tokens: _m, metadata: _d, ...codexBody } = rawBody;

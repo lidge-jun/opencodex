@@ -815,6 +815,28 @@ function stripUnsupportedForwardParams(body: unknown): unknown {
   return rest;
 }
 
+/**
+ * The ChatGPT codex backend rejects `prompt_cache_retention` with
+ * `{"detail":"Unsupported parameter: prompt_cache_retention"}` on gpt-5.6
+ * models (gpt-5.6-luna / gpt-5.6-sol), aborting the whole agent turn mid-run.
+ * The parameter is emitted client-side by some Codex App builds - it does not
+ * exist anywhere in codex-rs - and request bodies are forwarded opaquely, so
+ * one bad field kills the turn (#2092).
+ *
+ * Other models keep the field: the backend's cache handling is account-level
+ * and has provably varied by deployment (one accepted "24h" and echoed it
+ * back), so stripping globally would silently drop a parameter a deployment
+ * honors. Model-scoped, matching the report's invariant: never send it to
+ * gpt-5.6.
+ */
+function stripPromptCacheRetentionForGpt56(body: unknown, modelId: string | undefined): unknown {
+  if (modelId === undefined || !modelId.startsWith("gpt-5.6")) return body;
+  if (!isPlainObject(body)) return body;
+  if (!Object.prototype.hasOwnProperty.call(body, "prompt_cache_retention")) return body;
+  const { prompt_cache_retention: _pcr, ...rest } = body;
+  return rest;
+}
+
 const IMAGE_GEN_NAMESPACE = "image_gen";
 const HOSTED_IMAGE_GENERATION_TOOL = "image_generation";
 const IMAGE_GEN_DOTTED_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
@@ -1382,6 +1404,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
+        outBody = stripPromptCacheRetentionForGpt56(outBody, parsed.modelId);
       } else {
         outBody = preferConfiguredHostedTools(
           outBody,
