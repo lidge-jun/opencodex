@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { buildOpenAIChatPassthroughRequest } from "../src/adapters/openai-chat";
 import { chatCompletionsToResponsesBody } from "../src/chat/inbound";
+import { fastPolicyForModel } from "../src/providers/service-tier";
 import * as adapterResolveModule from "../src/server/adapter-resolve";
 import type { RequestLogContext } from "../src/server/request-log";
 import { handleResponses } from "../src/server/responses/core";
@@ -364,17 +365,19 @@ describe("FastWire characterization: rawBody observation point", () => {
 });
 
 describe("FastWire characterization: known bugs", () => {
-  test("characterization (known bug): native chat passthrough ignores exact-model false", () => {
+  test("characterization: native chat passthrough honors exact-model false", () => {
+    // FastWire #1886 native-chat policy fix: exact-model false now strips the caller tier.
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://native-chat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      supportsServiceTier: true,
+      chatServiceTier: true,
+      modelSupportsServiceTier: { model: false },
+    };
     const request = buildOpenAIChatPassthroughRequest(
-      {
-        adapter: "openai-chat",
-        baseUrl: "https://native-chat.example.test/v1",
-        authMode: "key",
-        apiKey: "sk-test",
-        supportsServiceTier: true,
-        chatServiceTier: true,
-        modelSupportsServiceTier: { model: false },
-      },
+      provider,
       {
         model: "model",
         messages: [{ role: "user", content: "ping" }],
@@ -382,9 +385,10 @@ describe("FastWire characterization: known bugs", () => {
       },
       "model",
       false,
+      fastPolicyForModel(provider, "model", "native-chat", "chat"),
     );
     const body = JSON.parse(request.body) as Record<string, unknown>;
-    expect(body.service_tier).toBe("flex");
+    expect(body).not.toHaveProperty("service_tier");
   });
 
   test("characterization: chat-to-responses conversion preserves service_tier", () => {

@@ -14,12 +14,15 @@ import { buildNonOpenAIToolCatalogNudgeForTools, effectiveInstructionText, isCan
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import {
   canForwardForeignServiceTierForChatModel,
+  fastPolicyForModel,
   supportsServiceTierForModel,
 } from "../providers/service-tier";
 import {
   canonicalFastTierMarker,
   createAdapterTierMetadata,
+  decideTier,
   type AdapterTierMetadata,
+  type ResolvedFastPolicy,
 } from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
@@ -96,6 +99,8 @@ export function buildOpenAIChatPassthroughRequest(
   rawBody: Record<string, unknown>,
   modelId: string,
   stream: boolean,
+  fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
+  fastMode?: boolean,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
@@ -123,7 +128,16 @@ export function buildOpenAIChatPassthroughRequest(
   // `<listed>:<tag>` siblings the operator never opted out, silently returning prose.
   if (provider.noStructuredOutputModels?.includes(modelId)) delete body.response_format;
 
-  if (provider.chatServiceTier && rawBody.service_tier !== undefined) {
+  // Run the same complete Fast policy as the translated Chat path, including explicit
+  // fastMode and foreign-tier handling. On inherited canonical Fast, the passthrough still
+  // retains the caller's exact spelling; forced Fast uses the policy-owned wire value.
+  const callerTier = typeof rawBody.service_tier === "string" ? rawBody.service_tier : undefined;
+  const tierDecision = decideTier(fastPolicy, fastMode, callerTier);
+  if (tierDecision.kind === "set") {
+    body.service_tier = fastMode === undefined && canonicalFastTierMarker(callerTier) !== undefined
+      ? callerTier
+      : tierDecision.value;
+  } else if (tierDecision.kind === "forward-caller" && rawBody.service_tier !== undefined) {
     body.service_tier = rawBody.service_tier;
   }
   if (provider.promptCacheKey && rawBody.prompt_cache_key !== undefined) {
@@ -1284,6 +1298,23 @@ function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: stri
   return fraction === undefined ? undefined : Math.max(1, Math.floor(maxBudget * fraction));
 }
 
+function canSerializeOpenAIChatServiceTier(
+  provider: OcxProviderConfig,
+  modelId: string,
+  serviceTier: unknown,
+  tierDecision?: OcxParsedRequest["options"]["tierDecision"],
+): boolean {
+  if (serviceTier === undefined) return false;
+  if (tierDecision !== undefined) {
+    return tierDecision.kind === "set" || tierDecision.kind === "forward-caller";
+  }
+  const callerTier = typeof serviceTier === "string" ? serviceTier : undefined;
+  const callerCanonicalFast = canonicalFastTierMarker(callerTier) !== undefined;
+  const capability = supportsServiceTierForModel(provider, modelId);
+  const callerTierForwardAllowed = canForwardForeignServiceTierForChatModel(provider, modelId);
+  return callerTierForwardAllowed || (callerCanonicalFast && capability === true);
+}
+
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   return {
     name: "openai-chat",
@@ -1306,13 +1337,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // unclassified Chat routes remain behind the caller-forwarding opt-in.
       const serviceTier = parsed.options.serviceTier;
       const tierDecision = parsed.options.tierDecision;
-      const callerCanonicalFast = canonicalFastTierMarker(serviceTier) !== undefined;
-      const callerTierForwardAllowed = canForwardForeignServiceTierForChatModel(provider, parsed.modelId);
-      const canonicalFastCapability = callerCanonicalFast
-        && supportsServiceTierForModel(provider, parsed.modelId) === true;
-      const canSerializeServiceTier = tierDecision?.kind === "set"
-        || tierDecision?.kind === "forward-caller"
-        || (tierDecision === undefined && (callerTierForwardAllowed || canonicalFastCapability));
+      const canSerializeServiceTier = canSerializeOpenAIChatServiceTier(
+        provider,
+        parsed.modelId,
+        serviceTier,
+        tierDecision,
+      );
       if (canSerializeServiceTier && serviceTier !== undefined) {
         body.service_tier = serviceTier;
       }
