@@ -646,9 +646,15 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
+  const preserveExactReasoningRungs = modelRecordValue(prov.modelPreserveExactReasoningRungs, model.id)
+    ?? prov.preserveExactReasoningRungs;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const supportsServiceTier = serviceTierSupportForModel(prov, model.id, name);
-  const { supportsServiceTier: _staleServiceTier, ...modelWithoutServiceTier } = model;
+  const {
+    supportsServiceTier: _staleServiceTier,
+    preserveExactReasoningRungs: _stalePreserveExactReasoningRungs,
+    ...modelWithoutServiceTier
+  } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
@@ -669,6 +675,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       }
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(preserveExactReasoningRungs === true ? { preserveExactReasoningRungs: true } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),

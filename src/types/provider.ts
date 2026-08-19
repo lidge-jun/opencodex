@@ -324,6 +324,19 @@ export interface OcxProviderConfig {
   reasoningEfforts?: string[];
   /** Model-specific Codex-visible reasoning tiers. An empty array means “do not expose effort”. */
   modelReasoningEfforts?: Record<string, string[]>;
+  /**
+   * Suppress the synthetic `max`/`ultra` reasoning rungs that `applyReasoningLevels`
+   * appends to every reasoning-capable routed model. When true, the catalog advertises
+   * exactly the configured `reasoningEfforts` / `modelReasoningEfforts` ladder instead of
+   * padding the top rungs, so the Codex picker reflects the model's real capability.
+   *
+   * Tradeoff: subagent `spawn_agent` sends `max` directly and codex-rs validates it
+   * against catalog membership, so removing `max` can hard-fail that path for the affected
+   * models. Enable only for models that cannot actually serve the synthetic top rungs.
+   */
+  preserveExactReasoningRungs?: boolean;
+  /** Per-model override for `preserveExactReasoningRungs`. */
+  modelPreserveExactReasoningRungs?: Record<string, boolean>;
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
   /**

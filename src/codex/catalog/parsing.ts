@@ -109,6 +109,11 @@ export interface CatalogModel {
   owned_by?: string;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
+  /**
+   * Suppress the synthetic `max`/`ultra` top rungs so the catalog advertises exactly
+   * `reasoningEfforts` (mirrors `OcxProviderConfig.preserveExactReasoningRungs`).
+   */
+  preserveExactReasoningRungs?: boolean;
   contextWindow?: number;
   maxInputTokens?: number;
   contextCap?: number;

@@ -714,6 +714,8 @@ const providerConfigSchema = z.object({
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
+  preserveExactReasoningRungs: z.boolean().optional(),
+  modelPreserveExactReasoningRungs: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   // The management API accepts `null` as "clear this", so a config written before the POST
@@ -1511,6 +1513,25 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelSupportsServiceTier"],
         message: serviceTierModelsError,
+      });
+    }
+    const preserveExactReasoningRungsError = booleanRecordConfigError(
+      (provider as { modelPreserveExactReasoningRungs?: unknown }).modelPreserveExactReasoningRungs,
+      "modelPreserveExactReasoningRungs",
+    );
+    if (preserveExactReasoningRungsError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelPreserveExactReasoningRungs"],
+        message: preserveExactReasoningRungsError,
+      });
+    }
+    if ((provider as { preserveExactReasoningRungs?: unknown }).preserveExactReasoningRungs !== undefined
+      && typeof (provider as { preserveExactReasoningRungs?: unknown }).preserveExactReasoningRungs !== "boolean") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "preserveExactReasoningRungs"],
+        message: "preserveExactReasoningRungs must be a boolean",
       });
     }
     const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
