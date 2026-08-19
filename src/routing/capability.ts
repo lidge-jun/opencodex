@@ -21,6 +21,7 @@ import {
   nativeReasoningEfforts,
 } from "../codex/catalog/metadata";
 import { readCatalog, readCodexCatalogPath } from "../codex/catalog/parsing";
+import { modelRecordValue } from "../reasoning-effort";
 import { statSync } from "node:fs";
 import type { RouteCapabilityEvidence } from "./trace";
 
@@ -159,9 +160,14 @@ export function candidateCapabilityEvidence(
   const catalogRow = cachedCatalogModels().find(model => model.provider === providerName && model.id === modelId);
   const isNative = providerName === OPENAI_CODEX_PROVIDER_ID && !modelId.includes("/");
 
-  const rawContextWindow = provider?.modelContextWindows?.[modelId]
+  // `modelRecordValue`, not a bare lookup: every runtime reader of these three maps
+  // resolves them that way, so a `gpt-oss` entry covers `gpt-oss:120b`. Reading raw
+  // made the evidence disagree with the resolver it claims to describe — and for the
+  // window it did not even degrade to unknown, it fell through to the provider-wide
+  // value, which is a definite wrong answer rather than an absent one.
+  const rawContextWindow = modelRecordValue(provider?.modelContextWindows, modelId)
     ?? provider?.contextWindow
-    ?? registryEntry?.modelContextWindows?.[modelId]
+    ?? modelRecordValue(registryEntry?.modelContextWindows, modelId)
     ?? catalogRow?.contextWindow
     ?? (isNative ? nativeOpenAiContextWindow(modelId, nativeContextLimits(config)) : undefined);
   // Native rows go through the accessor (raise-to-ceiling + opt-in). Routed rows keep
@@ -170,8 +176,8 @@ export function candidateCapabilityEvidence(
     ? (nativeOpenAiContextWindow(modelId, nativeContextLimits(config)) ?? rawContextWindow)
     : rawContextWindow;
 
-  const modalities = provider?.modelInputModalities?.[modelId]
-    ?? registryEntry?.modelInputModalities?.[modelId]
+  const modalities = modelRecordValue(provider?.modelInputModalities, modelId)
+    ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)
     ?? catalogRow?.inputModalities
     ?? (isNative ? nativeInputModalities(modelId) : undefined);
   const image = Array.isArray(modalities)
@@ -196,8 +202,8 @@ export function candidateCapabilityEvidence(
     || provider?.parallelToolCalls === true
     || undefined;
 
-  const reasoningEfforts = provider?.modelReasoningEfforts?.[modelId]
-    ?? registryEntry?.modelReasoningEfforts?.[modelId]
+  const reasoningEfforts = modelRecordValue(provider?.modelReasoningEfforts, modelId)
+    ?? modelRecordValue(registryEntry?.modelReasoningEfforts, modelId)
     ?? (isNative ? nativeReasoningEfforts(modelId) : undefined);
 
   const tierSupport = provider
