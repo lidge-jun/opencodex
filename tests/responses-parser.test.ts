@@ -216,6 +216,7 @@ describe("Responses parser", () => {
 
     expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
     expect(parsed.options.toolChoice).toEqual({ name: "image_gen" });
+    expect(parsed.context.tools?.some(tool => tool.name === "image_gen")).toBe(true);
   });
 
   test("preserves requested service_tier for request logging", () => {
