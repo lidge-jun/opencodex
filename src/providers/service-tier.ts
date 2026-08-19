@@ -45,7 +45,13 @@ function cloneRegistryWireDefaults(
   for (const [modelId, declaration] of Object.entries(defaults)) {
     clone[modelId.trim().toLowerCase()] = typeof declaration === "string"
       ? declaration
-      : Object.freeze({ wire: declaration.wire, inbound: Object.freeze([...declaration.inbound]) });
+      : Object.freeze({
+          wire: declaration.wire,
+          inbound: Object.freeze([...declaration.inbound]),
+          ...(declaration.authModes
+            ? { authModes: Object.freeze([...declaration.authModes]) }
+            : {}),
+        });
   }
   return Object.freeze(clone);
 }
@@ -68,6 +74,7 @@ function buildFastPolicyAuthority(
   const providerCapability = capabilityProvider.supportsServiceTier ?? registry?.supportsServiceTier;
   const authority: FastPolicyAuthority = Object.freeze({
     providerAdapter: provider.adapter,
+    providerAuthMode: provider.authMode ?? registry?.authKind ?? "key",
     fastWireDeclaration: cloneFastWire(
       provider.fastWire !== undefined ? provider.fastWire : registry?.fastWire,
       { freeze: true },

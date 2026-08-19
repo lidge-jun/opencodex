@@ -66,7 +66,16 @@ Registry `modelWireDefaults` select an evidence-backed upstream protocol for an 
 changing the provider-wide adapter. Explicit, allowed `modelAdapters` configuration always wins,
 including an entry that opts the model back into the provider-wide wire. Defaults are applied only
 while the configured provider still matches the registry transport, so reusing a preset name for a
-different custom destination does not inherit its upstream assumptions.
+different custom destination does not inherit its upstream assumptions. Object-form defaults may
+also narrow the decision by inbound protocol and authentication mode; an auth-scoped default must
+not leak from a subscription transport into an API-key or forwarded-credential route.
+
+xAI keeps `openai-chat` as its provider-wide compatibility wire. The official Grok CLI catalog
+declares the Grok 4.5 and 4.6 subscription models as Responses backends, so only OAuth-backed native
+Responses traffic for those exact models selects `openai-responses`. API-key requests, translated
+Chat/Anthropic callers, other Grok models, and explicit model adapter overrides retain their
+existing wire. This lets Codex receive native xAI SSE deltas as they arrive without widening the
+credential or compatibility boundary.
 
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and
@@ -601,9 +610,10 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
   (`expectedGeneration` → superseded adoption), conditional `needsReauth`, bounded jittered
   retry for transient token-endpoint failures.
-- **Reactive 401 replay:** the serving recovery loop force-refreshes once (singleflight,
-  generation-checked) and replays OAuth-backed xAI requests exactly once with a re-resolved
-  transport; API-key/BYOK paths excluded (`src/server/responses.ts`).
+- **Reactive 401 replay:** both the adapter recovery loop and native Responses passthrough branch
+  force-refresh once (singleflight, generation-checked) and replay OAuth-backed xAI requests
+  exactly once with a re-resolved transport; API-key/BYOK paths are excluded
+  (`src/server/responses/core.ts`).
 - **Header parity:** per-attempt `x-grok-req-id` (fresh UUID inside the transport fetch
   wrapper), stable session/conv affinity headers, always-set User-Agent, and a single
   compatibility profile const for the Grok client version (`src/providers/xai-transport.ts`);

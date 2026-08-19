@@ -31,9 +31,13 @@ export type InboundWire = "responses" | "chat" | "anthropic";
 
 /**
  * A per-model wire default: a bare string applies to every inbound, while the object
- * form applies only to the listed inbound protocols.
+ * form may scope the default to listed inbound protocols and authentication modes.
  */
-export type ModelWireDefault = string | { wire: string; inbound: readonly InboundWire[] };
+export type ModelWireDefault = string | {
+  wire: string;
+  inbound: readonly InboundWire[];
+  authModes?: readonly ProviderAuthKind[];
+};
 
 export interface ResponsesTerminalRepairPolicy {
   /** Quiet time after a structurally complete output graph before synthesizing completion. */
@@ -1017,6 +1021,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     defaultModel: "grok-4.5",
+    // The current Grok CLI catalog declares both subscription models as native Responses
+    // backends. Keep API-key and translated Chat/Anthropic callers on their existing wire;
+    // Codex Responses traffic can relay xAI's SSE as it arrives instead of waiting for the
+    // Chat Completions compatibility stream to flush at the end of a reasoning turn.
+    modelWireDefaults: {
+      "grok-4.6": { wire: "openai-responses", inbound: ["responses"], authModes: ["oauth"] },
+      "grok-4.5": { wire: "openai-responses", inbound: ["responses"], authModes: ["oauth"] },
+    },
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
     // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves
     // inputModalities undefined, and deriveComboCatalogModel defaults an undefined member to
@@ -2679,8 +2691,12 @@ export function providerModelWireDefault(
   if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
   const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
   if (declared === undefined) return undefined;
-  // A bare string applies to every inbound; the object form only to the listed ones.
-  if (typeof declared !== "string" && !declared.inbound.includes(inbound)) return undefined;
+  // A bare string applies to every inbound/auth mode; the object form may narrow either.
+  if (typeof declared !== "string") {
+    if (!declared.inbound.includes(inbound)) return undefined;
+    const authMode = provider.authMode ?? entry.authKind;
+    if (declared.authModes && !declared.authModes.includes(authMode)) return undefined;
+  }
   const wire = typeof declared === "string" ? declared : declared.wire;
   return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
 }

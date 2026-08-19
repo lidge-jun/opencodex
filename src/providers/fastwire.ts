@@ -7,7 +7,7 @@ import type {
 } from "../types";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../types";
 import { sanitizeLogMetadataString } from "../lib/redact";
-import type { InboundWire, ModelWireDefault } from "./registry";
+import type { InboundWire, ModelWireDefault, ProviderAuthKind } from "./registry";
 
 const SERVICE_TIER_ADAPTERS = new Set(["openai-chat", "openai-responses"]);
 const FAST_WIRE_ADAPTERS: Readonly<Record<FastWire["kind"], ReadonlySet<string>>> = {
@@ -31,6 +31,7 @@ export type FastPolicyAuthTransport =
 
 export interface FastPolicyAuthority {
   readonly providerAdapter: string;
+  readonly providerAuthMode?: ProviderAuthKind;
   readonly fastWireDeclaration: FastWire | null | undefined;
   readonly modelWireOverrideAllowed: boolean;
   readonly authTransport: FastPolicyAuthTransport;
@@ -114,12 +115,18 @@ function registryDefaultForModel(
   defaults: Readonly<Record<string, ModelWireDefault>>,
   modelId: string,
   inbound: InboundWire,
+  authMode: ProviderAuthKind | undefined,
 ): string | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
   if (!Object.hasOwn(defaults, normalizedModelId)) return undefined;
   const declared = defaults[normalizedModelId];
   if (declared === undefined) return undefined;
-  if (typeof declared !== "string" && !declared.inbound.includes(inbound)) return undefined;
+  if (typeof declared !== "string") {
+    if (!declared.inbound.includes(inbound)) return undefined;
+    if (declared.authModes && (authMode === undefined || !declared.authModes.includes(authMode))) {
+      return undefined;
+    }
+  }
   const wire = typeof declared === "string" ? declared : declared.wire;
   return MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire) ? wire : undefined;
 }
@@ -143,7 +150,12 @@ function resolvePolicyAdapter(
       return { adapter: configured, hardPinned: false };
     }
     if (MODEL_ADAPTER_OVERRIDE_ALLOWED.has(authority.providerAdapter)) {
-      const registryDefault = registryDefaultForModel(authority.registryWireDefaults, modelId, inbound);
+      const registryDefault = registryDefaultForModel(
+        authority.registryWireDefaults,
+        modelId,
+        inbound,
+        authority.providerAuthMode,
+      );
       if (registryDefault !== undefined) return { adapter: registryDefault, hardPinned: false };
     }
   }
