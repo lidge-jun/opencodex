@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { modelRecordValue } from "../src/reasoning-effort";
 import { isModelTextOnly } from "../src/vision";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -75,6 +76,28 @@ describe("candidateCapabilityEvidence model matching", () => {
     );
     expect(evidence.contextWindow).toBe(8_000);
     expect(evidence.reasoningEfforts).toBeUndefined();
+  });
+
+  test("a registry entry covers its tagged siblings with no provider configured", () => {
+    // The three registry lookups (capability.ts lines 170/180/206) are a separate branch
+    // from the configured-provider ones above: they are only reached when the provider is
+    // absent from the config, which every other case here supplies.
+    const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
+    if (!registryEntry) throw new Error("fixture drift: no `xai` entry in PROVIDER_REGISTRY");
+
+    // Pin the fixture's shape rather than its values, so registry churn does not turn
+    // into a false failure here while real drift still does.
+    const family = "grok-4.6";
+    expect(registryEntry.modelContextWindows?.[family]).toBeNumber();
+    expect(registryEntry.modelInputModalities?.[family]).toBeArray();
+    expect(registryEntry.modelReasoningEfforts?.[family]).toBeArray();
+
+    const emptyConfig = { providers: {} } as unknown as OcxConfig;
+    const evidence = candidateCapabilityEvidence(emptyConfig, "xai", `${family}:latest`);
+
+    expect(evidence.contextWindow).toBe(registryEntry.modelContextWindows![family]);
+    expect(evidence.image).toBe(registryEntry.modelInputModalities![family].includes("image"));
+    expect(evidence.reasoningEfforts).toEqual(registryEntry.modelReasoningEfforts![family]);
   });
 
   test("a prototype-shaped model id resolves nothing", () => {
