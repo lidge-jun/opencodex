@@ -760,6 +760,24 @@ describe("Google Antigravity history repair", () => {
     expect(repaired).toHaveLength(2);
   });
 
+  test("keeps only the first complete exchange when duplicate ids have matching results", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "dup", name: "one", arguments: { n: 1 } },
+        { type: "toolCall", id: "dup", name: "one", arguments: { n: 2 } },
+      ] },
+      { role: "toolResult", toolCallId: "dup", toolName: "one", content: "first", isError: false },
+      { role: "toolResult", toolCallId: "dup", toolName: "one", content: "second", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect((repaired[0] as { content: { id: string; arguments: { n: number } }[] }).content).toEqual([
+      { type: "toolCall", id: "dup", name: "one", arguments: { n: 1 } },
+    ]);
+    expect(repaired).toHaveLength(2);
+    expect((repaired[1] as { content: string }).content).toBe("first");
+  });
+
   test("strips only trailing model turns when another content turn remains", () => {
     const contents = [{ role: "user" }, { role: "model" }, { role: "model" }];
     expect(stripTrailingClaudePrefill(contents)).toBe(true);

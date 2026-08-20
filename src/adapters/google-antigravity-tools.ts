@@ -21,13 +21,20 @@ function isToolResult(message: OcxMessage): message is OcxToolResultMessage {
  * call appeared earlier in the history, and a call is valid only when a result
  * appears later. Filtering the history first also prevents orphan results from
  * reserving ids in the request-scoped allocator.
+ *
+ * The allocator maps one raw id to one wire id, so a second complete exchange
+ * that reuses the same raw id would serialize as a colliding pair. Keep only
+ * the first matched occurrence per raw id.
  */
 export function repairGoogleToolPairs(messages: readonly OcxMessage[]): OcxMessage[] {
   const pendingCalls = new Map<string, Array<{ messageIndex: number; partIndex: number }>>();
+  const seenRawCallIds = new Set<string>();
   const matchedCallParts = new Set<string>();
   const matchedResultIndexes = new Set<number>();
 
   const enqueueCall = (id: string, messageIndex: number, partIndex: number) => {
+    if (seenRawCallIds.has(id)) return;
+    seenRawCallIds.add(id);
     const queue = pendingCalls.get(id) ?? [];
     queue.push({ messageIndex, partIndex });
     pendingCalls.set(id, queue);
