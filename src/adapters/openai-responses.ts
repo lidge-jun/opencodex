@@ -1470,8 +1470,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // inspect the original caller metadata. Authorization and
         // chatgpt-account-id are deliberately excluded — API key mode uses
         // the configured apiKey and has no ChatGPT account binding.
+        // The defensive name-based guard also blocks any future FORWARD_HEADERS
+        // entry whose name contains "key", "token", or "secret".
         for (const h of FORWARD_HEADERS) {
           if (h === "authorization" || h === "chatgpt-account-id") continue;
+          if (/key|token|secret/i.test(h)) continue;
           const v = incoming?.headers.get(h);
           if (v) headers[h] = v;
         }
