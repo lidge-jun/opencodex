@@ -116,6 +116,10 @@ of the HTTP retry loop.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- Tool-call batches are closed by one immediately adjacent user turn containing exactly one ordered
+  `functionResponse` per call. Interrupted histories receive an explicit missing-result marker;
+  duplicate or standalone results are preserved as marked text (and image siblings) rather than
+  emitted as invalid unpaired `functionResponse` parts.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.

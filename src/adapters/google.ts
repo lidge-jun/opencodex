@@ -126,6 +126,7 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
  */
 const GEMINI_EMPTY_PLACEHOLDER = "(empty)";
 const GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER = "(empty tool output)";
+const GEMINI_MISSING_TOOL_RESULT = "[missing tool_result for this tool_use in history]";
 
 /** A Gemini text part, or undefined when the value cannot form a valid non-empty text block. */
 function geminiTextPart(text: unknown): { text: string } | undefined {
@@ -142,6 +143,42 @@ function geminiToolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
   const hasContent = content.some(p => p.type === "image" || (typeof p.text === "string" && p.text.length > 0));
   return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+}
+
+function geminiToolResultParts(
+  msg: OcxToolResultMessage,
+  wireName: string,
+  wireCallId: string,
+): unknown[] {
+  const functionResponse: Record<string, unknown> = {
+    name: wireName,
+    response: { result: geminiToolResultText(msg.content) },
+    id: wireCallId,
+  };
+  return [{ functionResponse }, ...toolResultImageParts(msg.content)];
+}
+
+function geminiMissingToolResultPart(wireName: string, wireCallId: string): unknown {
+  return {
+    functionResponse: {
+      name: wireName,
+      response: { result: GEMINI_MISSING_TOOL_RESULT },
+      id: wireCallId,
+    },
+  };
+}
+
+function geminiUnrepresentableToolCallPart(tc: OcxToolCall, wireName: string): unknown {
+  const args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
+  return { text: `[tool_use without a usable id: ${wireName}]\n${args}` };
+}
+
+function geminiOrphanToolResultParts(msg: OcxToolResultMessage): unknown[] {
+  const label = msg.toolName ? `${msg.toolName} (${msg.toolCallId})` : msg.toolCallId;
+  return [
+    { text: `[tool_result without adjacent tool_use: ${label}]\n${geminiToolResultText(msg.content)}` },
+    ...toolResultImageParts(msg.content),
+  ];
 }
 
 function messagesToGeminiFormat(
@@ -170,7 +207,8 @@ function messagesToGeminiFormat(
       callIds.reserve((msg as OcxToolResultMessage).toolCallId);
     }
   }
-  for (const msg of parsed.context.messages) {
+  for (let i = 0; i < parsed.context.messages.length; i++) {
+    const msg = parsed.context.messages[i];
     switch (msg.role) {
       case "user":
       case "developer": {
@@ -197,6 +235,7 @@ function messagesToGeminiFormat(
       case "assistant": {
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
+        const toolCalls: Array<{ wireCallId: string; wireName: string }> = [];
         for (const p of aMsg.content) {
           if (p.type === "text") {
             const textPart = geminiTextPart((p as OcxTextContent).text);
@@ -209,10 +248,19 @@ function messagesToGeminiFormat(
             // Responses parser also stashes synthetic item ids (`fc_...`) on this field, and sending
             // those as a thoughtSignature breaks continuity (the replay cache supplies the real one).
             const callId = callIds.allocate(tc.id);
-            const functionCall: Record<string, unknown> = { name: namespacedToolName(tc.namespace, tc.name), args: tc.arguments };
+            const wireName = namespacedToolName(tc.namespace, tc.name);
+            if (callId === undefined) {
+              // Claude-on-Antigravity requires a usable id for every translated tool_use. An empty
+              // source id cannot be paired safely, so preserve the call as text and let its result
+              // follow the same orphan-text path instead of emitting an invalid functionCall.
+              parts.push(geminiUnrepresentableToolCallPart(tc, wireName));
+              continue;
+            }
+            const functionCall: Record<string, unknown> = { name: wireName, args: tc.arguments };
             // Claude-on-Antigravity maps this id to Anthropic `tool_use.id`; without it the upstream
             // conversion 400s. Gemini accepts the optional id and pairs call/response by it.
-            if (callId !== undefined) functionCall.id = callId;
+            functionCall.id = callId;
+            toolCalls.push({ wireCallId: callId, wireName });
             const part: Record<string, unknown> = { functionCall };
             // Prefer the metadata that travelled with this exact call; fall back to the legacy
             // field for callers that have not been migrated. Never merge or synthesize.
@@ -232,22 +280,44 @@ function messagesToGeminiFormat(
         // adapter does for its own empty assistant content.
         if (parts.length === 0) break;
         contents.push({ role: "model", parts });
+        if (toolCalls.length > 0) {
+          // Gemini/Claude-on-Antigravity requires one adjacent response batch for the whole
+          // function-call turn. Replayed histories can be interrupted, reversed, duplicated, or
+          // contain an orphan result; repair only this wire boundary without inventing success.
+          const requiredIds = new Set(toolCalls.map(call => call.wireCallId));
+          const resultsById = new Map<string, OcxToolResultMessage>();
+          const orphanResults: OcxToolResultMessage[] = [];
+          let j = i + 1;
+          while (j < parsed.context.messages.length && parsed.context.messages[j].role === "toolResult") {
+            const result = parsed.context.messages[j] as OcxToolResultMessage;
+            const wireResultId = callIds.lookup(result.toolCallId);
+            if (wireResultId !== undefined && requiredIds.has(wireResultId) && !resultsById.has(wireResultId)) {
+              resultsById.set(wireResultId, result);
+            } else {
+              orphanResults.push(result);
+            }
+            j++;
+          }
+
+          const responseParts: unknown[] = [];
+          for (const call of toolCalls) {
+            const result = resultsById.get(call.wireCallId);
+            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId));
+            else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
+          }
+          for (const orphan of orphanResults) {
+            responseParts.push(...geminiOrphanToolResultParts(orphan));
+          }
+          contents.push({ role: "user", parts: responseParts });
+          i = j - 1;
+        }
         break;
       }
       case "toolResult": {
-        // The functionResponse part carries the textual result. Gemini cannot embed images inside a
-        // functionResponse, but it does accept sibling inline_data parts in the same user turn, so
-        // tool-result screenshots (e.g. Computer Use) ride along as inline_data instead of being
-        // flattened to a "[image]" marker the model can't actually see.
-        // lookup(), not allocate(): a response must reuse its call's id and must never mint a new one.
-        const responseId = callIds.lookup(msg.toolCallId);
-        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: geminiToolResultText(msg.content) } };
-        // Mirror the matching functionCall id so Claude-on-Antigravity can pair this result with its
-        // `tool_use` block (-> Anthropic `tool_result.tool_use_id`).
-        if (responseId !== undefined) functionResponse.id = responseId;
-        const parts: unknown[] = [{ functionResponse }];
-        for (const part of toolResultImageParts(msg.content)) parts.push(part);
-        contents.push({ role: "user", parts });
+        // A standalone functionResponse is invalid without an immediately preceding matching
+        // functionCall batch. Preserve the result as explicit user text (plus any representable
+        // image siblings) rather than manufacturing a successful call or sending a 400-prone shape.
+        contents.push({ role: "user", parts: geminiOrphanToolResultParts(msg as OcxToolResultMessage) });
         break;
       }
     }
