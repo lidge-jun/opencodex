@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mergeConfiguredModelsIntoLiveCatalog } from "../src/codex/catalog/provider-fetch";
+import { filterCatalogVisibleModels, mergeConfiguredModelsIntoLiveCatalog } from "../src/codex/catalog/provider-fetch";
 import { nonBlankStringArrayConfigError } from "../src/config";
 import type { CatalogModel } from "../src/codex/catalog/parsing";
 import type { OcxProviderConfig } from "../src/types";
@@ -162,5 +162,30 @@ describe("#1690 retainModels provider configuration", () => {
     expect(error).not.toBeNull();
     expect(error).toContain("nonblank");
     expect(nonBlankStringArrayConfigError(["gemini-3.7-flash", " gemini-3.5-flash "], "retainModels")).toBeNull();
+  });
+
+  test("respects selectedModels and disabledModels filtering after retaining models", () => {
+    const prov: OcxProviderConfig = {
+      adapter: "google",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      retainModels: ["gemini-3.7-flash", "retained-unselected"],
+      selectedModels: ["gemini-3.7-flash"],
+    };
+    const live = [model("gemini-3.5-flash", "google-antigravity")];
+    const configured = [model("gemini-3.7-flash", "google-antigravity"), model("retained-unselected", "google-antigravity")];
+
+    const { models } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "google-antigravity",
+      provider: prov,
+      models: live,
+      configured,
+    });
+
+    expect(models.map(m => m.id)).toEqual(["gemini-3.5-flash", "gemini-3.7-flash", "retained-unselected"]);
+
+    const visible = filterCatalogVisibleModels(models, {
+      providers: { "google-antigravity": prov },
+    });
+    expect(visible.map(m => m.id)).toEqual(["gemini-3.7-flash"]);
   });
 });
