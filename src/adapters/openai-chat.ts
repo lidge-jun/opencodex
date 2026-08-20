@@ -322,8 +322,13 @@ function invalidToolCallsEvent(
   rawToolCalls: unknown,
   mode: "stream" | "response",
   usage?: OcxUsage,
+  diagnosticOverride?: InvalidToolCallDiagnostic,
 ): Extract<AdapterEvent, { type: "error" }> {
-  const diagnostic = diagnoseInvalidToolCalls(rawToolCalls, mode);
+  // The streamed accumulator knows things a rescan cannot: which field on which pending call
+  // was actually rejected. Without the override, a stream carrying accepted padding on call 0
+  // and a real defect on call 1 blames call 0, because the stateless scan stops at the first
+  // structurally odd value it sees.
+  const diagnostic = diagnosticOverride ?? diagnoseInvalidToolCalls(rawToolCalls, mode);
   const detail = diagnostic
     ? ` (${diagnostic.reason}${diagnostic.callIndex !== undefined ? `; callIndex=${diagnostic.callIndex}` : ""}; valueType=${diagnostic.valueType})`
     : "";
@@ -541,9 +546,13 @@ function diagnoseInvalidToolCalls(
   return undefined;
 }
 
-function logInvalidToolCalls(mode: "stream" | "response", rawToolCalls: unknown): void {
+function logInvalidToolCalls(
+  mode: "stream" | "response",
+  rawToolCalls: unknown,
+  diagnosticOverride?: InvalidToolCallDiagnostic,
+): void {
   if (!isDebugEnabled()) return;
-  const diagnostic = diagnoseInvalidToolCalls(rawToolCalls, mode);
+  const diagnostic = diagnosticOverride ?? diagnoseInvalidToolCalls(rawToolCalls, mode);
   if (!diagnostic) return;
   const fieldShape = fingerprintInvalidField(invalidToolCallField(rawToolCalls, diagnostic));
   debugProviderDiagnostic("openai-chat", "invalid-tool-calls", {
@@ -1523,7 +1532,20 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
-      interface PendingToolCall { key: string; id: string; name: string; args: string; argsBytes: number }
+      interface PendingToolCall {
+        key: string;
+        id: string;
+        name: string;
+        args: string;
+        argsBytes: number;
+        /**
+         * Whether this call has ever received `arguments` as an actual string, empty included.
+         * An empty string still counts: it proves the upstream sent the field with the right
+         * wire type, which is what a later malformed repeat of that field would be padding for.
+         * A canonical NAME is not evidence about the ARGUMENTS field and must not stand in.
+         */
+        sawArgumentsString: boolean;
+      }
       const pendingToolCalls: PendingToolCall[] = [];
       let toolCallSeq = 0;
       const closeToolCalls = (): PendingToolCall[] => {
@@ -1637,61 +1659,88 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               logInvalidToolCalls("stream", rawToolCalls);
               return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
             }
-            for (const rawToolCall of rawToolCalls) {
+            for (let callIndex = 0; callIndex < rawToolCalls.length; callIndex++) {
+              const rawToolCall: unknown = rawToolCalls[callIndex];
               if (!isRecord(rawToolCall)) {
-                logInvalidToolCalls("stream", rawToolCalls);
-                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
+                const diagnostic: InvalidToolCallDiagnostic = {
+                  reason: "tool_call_not_object",
+                  callIndex,
+                  valueType: rawToolCall === null ? "null" : Array.isArray(rawToolCall) ? "array" : typeof rawToolCall,
+                };
+                logInvalidToolCalls("stream", rawToolCalls, diagnostic);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage, diagnostic));
               }
-              const tc = rawToolCall as {
-                index?: number;
-                id?: string;
-                function?: { name?: string; arguments?: string };
-              };
-              // That cast is a TypeScript convenience, not a runtime guarantee: this is
-              // upstream JSON. Validate the fields before they are stored, so a non-string
-              // name or arguments value fails closed through the #1325 channel here rather
-              // than escaping later as a TypeError from string handling at flush time.
-              const rawFunction = (rawToolCall as { function?: unknown }).function;
-              if (rawFunction !== undefined && rawFunction !== null) {
-                if (!isRecord(rawFunction)) {
-                  logInvalidToolCalls("stream", rawToolCalls);
-                  return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
-                }
-                const rawName = rawFunction.name;
-                const rawArguments = rawFunction.arguments;
-                // Some OpenAI-compatible streamers repeat already-sent fields as null on
-                // continuation deltas. Treat only null/undefined as absent; every other
-                // non-string value still fails closed before entering the accumulator.
-                if (isInvalidStreamStringField(rawName) || isInvalidStreamStringField(rawArguments)) {
-                  logInvalidToolCalls("stream", rawToolCalls);
-                  return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
-                }
+              // This is upstream JSON, so every field is validated before it is stored: a
+              // malformed value must fail closed through the #1325 channel here rather than
+              // escaping later as a TypeError from string handling at flush time.
+              const rawFunction = rawToolCall.function;
+              if (rawFunction !== undefined && rawFunction !== null && !isRecord(rawFunction)) {
+                const diagnostic: InvalidToolCallDiagnostic = {
+                  reason: "tool_call_function_not_object",
+                  callIndex,
+                  valueType: Array.isArray(rawFunction) ? "array" : typeof rawFunction,
+                };
+                logInvalidToolCalls("stream", rawToolCalls, diagnostic);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage, diagnostic));
               }
-              if (isInvalidStreamStringField(tc.id)) {
-                logInvalidToolCalls("stream", rawToolCalls);
-                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
-              }
-              const key = typeof tc.index === "number"
-                ? `i:${tc.index}`
-                : tc.id
-                  ? `id:${tc.id}`
+              const fnRecord = isRecord(rawFunction) ? rawFunction : undefined;
+              const rawName = fnRecord?.name;
+              const rawArguments = fnRecord?.arguments;
+              const rawId = rawToolCall.id;
+              const idDelta = typeof rawId === "string" ? rawId : "";
+              const rawIndex = rawToolCall.index;
+
+              // Resolve the pending call BEFORE judging the fields. Some OpenAI-compatible
+              // streamers repeat an already-sent field as a non-string placeholder on a
+              // continuation delta; judging first meant the whole stream died with a 502 even
+              // though the value being repeated was already held in canonical form.
+              const key = typeof rawIndex === "number"
+                ? `i:${rawIndex}`
+                : idDelta
+                  ? `id:${idDelta}`
                   : pendingToolCalls[pendingToolCalls.length - 1]?.key;
               let call = key !== undefined ? pendingToolCalls.find(c => c.key === key) : undefined;
-              if (!call && tc.id) call = pendingToolCalls.find(c => c.id === tc.id);
+              if (!call && idDelta) call = pendingToolCalls.find(c => c.id === idDelta);
               if (!call) {
-                call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "", argsBytes: 0 };
+                call = {
+                  key: key ?? `seq:${pendingToolCalls.length}`,
+                  id: "",
+                  name: "",
+                  args: "",
+                  argsBytes: 0,
+                  sawArgumentsString: false,
+                };
                 pendingToolCalls.push(call);
                 budget.openCall(call.key);
               }
-              if (tc.id && !call.id) call.id = tc.id;
-              if (tc.function?.name && !call.name) call.name = tc.function.name;
-              if (tc.function?.arguments) {
+
+              // Tolerance is per FIELD, keyed on that field's own provenance. A canonical name
+              // says nothing about whether `arguments` was ever sent as a string, so it cannot
+              // authorize a malformed arguments value — that would silently drop a real
+              // argument payload the model intended to send.
+              const rejection: InvalidToolCallDiagnostic | undefined =
+                isInvalidStreamStringField(rawName) && call.name.trim() === ""
+                  ? { reason: "tool_call_function_name_invalid", callIndex, valueType: typeof rawName }
+                  : isInvalidStreamStringField(rawArguments) && !call.sawArgumentsString
+                    ? { reason: "tool_call_function_arguments_invalid", callIndex, valueType: typeof rawArguments }
+                    : isInvalidStreamStringField(rawId) && call.id === ""
+                      ? { reason: "tool_call_id_invalid", callIndex, valueType: typeof rawId }
+                      : undefined;
+              if (rejection) {
+                logInvalidToolCalls("stream", rawToolCalls, rejection);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage, rejection));
+              }
+
+              if (idDelta && !call.id) call.id = idDelta;
+              if (typeof rawName === "string" && rawName && !call.name) call.name = rawName;
+              if (typeof rawArguments === "string") call.sawArgumentsString = true;
+              if (typeof rawArguments === "string" && rawArguments) {
                 const previousBytes = call.argsBytes;
-                const nextBytes = previousBytes + budgetEncoder.encode(tc.function.arguments).byteLength;
+                const nextBytes = previousBytes + budgetEncoder.encode(rawArguments).byteLength;
                 const scope = { kind: "tool_args" as const, callId: call.key };
                 const reservation = budget.reserveTransient(nextBytes, scope);
                 try {
-                  call.args += tc.function.arguments;
+                  call.args += rawArguments;
                   reservation.commitRetained();
                   budget.releaseRetained(previousBytes, scope);
                   call.argsBytes = nextBytes;

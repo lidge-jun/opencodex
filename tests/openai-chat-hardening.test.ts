@@ -476,6 +476,102 @@ describe("openai-chat stream response hardening", () => {
     expect(lines).toContain('"callIndex":1');
     expect(lines).not.toContain('"tool_call_function_name_invalid"');
   });
+
+  // Some OpenAI-compatible streamers repeat an already-sent field as a non-string placeholder
+  // instead of null. Before #2155 that killed the whole turn with a 502 even though the value
+  // being repeated was already held in canonical form, so the tool never ran.
+  test("a non-string repeat is padding once that field has string provenance (#2155)", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: "call_a", function: { name: "shell", arguments: "" } },
+      ] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: { padding: true }, function: { name: { padding: true }, arguments: { padding: true } } },
+      ] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, function: { arguments: "{}" } },
+      ] } }] })}\n\n`,
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(events).toContainEqual({ type: "tool_call_start", id: "call_a", name: "shell" });
+    expect(events).toContainEqual({ type: "tool_call_delta", arguments: "{}" });
+  });
+
+  // Tolerance is per field. A canonical NAME is not evidence that `arguments` was ever sent
+  // as a string, and accepting a malformed object here would silently discard an argument
+  // payload the model meant to send.
+  test("a canonical name does not authorize a malformed arguments value (#2155)", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: "call_a", function: { name: "shell" } },
+      ] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, function: { arguments: { bad: true } } },
+      ] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    expect(await collect(adapter.parseStream(response))).toEqual([{
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (tool_call_function_arguments_invalid; callIndex=0; valueType=object)",
+    }]);
+  });
+
+  test("a malformed id stays terminal until that call has a canonical id (#2155)", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, function: { name: "shell", arguments: "{}" } },
+      ] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: { bad: true } },
+      ] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    expect(await collect(adapter.parseStream(response))).toEqual([{
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (tool_call_id_invalid; callIndex=0; valueType=object)",
+    }]);
+  });
+
+  // The reason the diagnostic is passed from the rejection site rather than rescanned: a
+  // stateless rescan stops at the first structurally odd value, which here is the ACCEPTED
+  // padding on call 0, and would blame the wrong call for the real defect on call 1.
+  test("parallel calls blame the unresolved call, not the accepted padding (#2155)", async () => {
+    process.env.OCX_DEBUG = "1";
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: "call_a", function: { name: "alpha", arguments: "" } },
+        { index: 1, id: "call_b", function: { name: "beta" } },
+      ] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, function: { arguments: { padding: true } } },
+        { index: 1, function: { arguments: { bad: true } } },
+      ] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    expect(await collect(adapter.parseStream(response))).toEqual([{
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (tool_call_function_arguments_invalid; callIndex=1; valueType=object)",
+    }]);
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    expect(lines).toContain('"callIndex":1');
+  });
 });
 
 describe("openai-chat credential hardening", () => {
