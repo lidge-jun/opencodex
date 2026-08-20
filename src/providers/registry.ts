@@ -39,6 +39,7 @@ export type ModelWireDefault = string | {
   authModes?: readonly ProviderAuthKind[];
   /** Whether this registry-selected route may relay a caller-owned service_tier. */
   forwardCallerServiceTier?: boolean;
+  customToolTransport?: "freeform" | "function-json";
 };
 
 export interface ResponsesTerminalRepairPolicy {
@@ -1032,12 +1033,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
+        customToolTransport: "function-json",
         forwardCallerServiceTier: false,
       },
       "grok-4.5": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
+        customToolTransport: "function-json",
         forwardCallerServiceTier: false,
       },
     },
@@ -2752,6 +2755,26 @@ export function providerModelWireDefault(
   }
   const wire = typeof declared === "string" ? declared : declared.wire;
   return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
+}
+
+export function providerModelCustomToolTransport(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+  inbound: InboundWire = "responses",
+): "freeform" | "function-json" | undefined {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWireDefaults) return undefined;
+  const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  if (!declared || typeof declared === "string") return undefined;
+  if (declared.wire !== "openai-responses" || !declared.inbound.includes(inbound)) return undefined;
+  const matchesConfiguredTransport = providerMatchesRegistryTransport(id, provider);
+  const matchesResolvedModelWire = provider.adapter === declared.wire
+    && normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
+  if (!matchesConfiguredTransport && !matchesResolvedModelWire) return undefined;
+  const authMode = provider.authMode ?? entry.authKind;
+  if (declared.authModes && !declared.authModes.includes(authMode)) return undefined;
+  return declared.customToolTransport;
 }
 
 /** Resolve a registry-only upstream-streaming compatibility hint for Responses turns. */

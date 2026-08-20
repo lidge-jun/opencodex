@@ -22,6 +22,12 @@ describe("Codex tool mode configuration (#2106)", () => {
     expect(explicitCodeMode.tool_mode).toBe(ROUTED_CODEX_TOOL_MODE);
   });
 
+  test("accepts direct-first code_mode as a routed capability", () => {
+    const entry: Record<string, unknown> = {};
+    applyRoutedCodexToolMode(entry, "code_mode");
+    expect(entry.tool_mode).toBe("code_mode");
+  });
+
   test("applyRoutedCodexToolMode deletes tool_mode when toolMode is shell", () => {
     const entry: RawEntry = {
       slug: "deepseek/deepseek-v4-flash",
@@ -206,5 +212,3 @@ describe("Codex tool mode configuration (#2106)", () => {
     expect(daybreak?.use_responses_lite).toBe(true);
   });
 });
-
-

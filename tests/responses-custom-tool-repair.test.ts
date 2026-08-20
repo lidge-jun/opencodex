@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   collectRoutedCustomToolNames,
   restoreRoutedCustomCallsInJson,
@@ -6,8 +6,23 @@ import {
 } from "../src/responses/custom-tool-compat";
 import { createRoutedCustomToolRestoreBlockRewrite } from "../src/server/responses-custom-tool-repair";
 import { handleResponses } from "../src/server/responses";
+import { removeCredential, saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+beforeAll(async () => {
+  await saveCredential("xai", {
+    access: "fixture-xai-access",
+    refresh: "fixture-xai-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId: "fixture-xai-account",
+    source: "oauth",
+  });
+});
+
+afterAll(async () => {
+  await removeCredential("xai");
+});
 
 function dataPayload(block: string): Record<string, unknown> {
   const line = block.split(/\r?\n/).find(entry => entry.startsWith("data:"));
@@ -20,7 +35,7 @@ function frame(event: string, payload: Record<string, unknown>): string {
 }
 
 describe("routed Responses custom-tool compatibility", () => {
-  test("rewrites exec definitions and paired history without touching apply_patch", () => {
+  test("projects exec and apply_patch definitions and paired history onto native function fields", () => {
     const raw = {
       model: "deepseek-v4-flash",
       tools: [
@@ -36,35 +51,51 @@ describe("routed Responses custom-tool compatibility", () => {
       ],
     };
 
-    expect(collectRoutedCustomToolNames(raw)).toEqual(new Set(["exec"]));
-    const rewritten = rewriteRoutedCustomToolsForUpstream(raw);
-    expect(rewritten.names).toEqual(new Set(["exec"]));
+    expect(collectRoutedCustomToolNames(raw, "direct-first")).toEqual(new Set(["exec", "apply_patch"]));
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, "direct-first");
+    expect(rewritten.names).toEqual(new Set(["exec", "apply_patch"]));
     expect(rewritten.body).not.toBe(raw);
     expect(raw.tools[0]?.type).toBe("custom");
 
     const body = rewritten.body as typeof raw;
-    expect(body.tools[0]).toMatchObject({
+    const execTool = body.tools.find(tool => tool.name === "exec");
+    const patchTool = body.tools.find(tool => tool.name === "apply_patch");
+    expect(body.tools.map(tool => tool.name)).toEqual(["apply_patch", "ordinary", "exec"]);
+    expect(execTool).toMatchObject({
       type: "function",
       name: "exec",
       parameters: {
         type: "object",
-        properties: { input: { type: "string" } },
-        required: ["input"],
+        properties: { code: { type: "string" } },
+        required: ["code"],
       },
     });
-    expect(body.tools[0]).not.toHaveProperty("format");
-    expect(body.tools[1]).toEqual(raw.tools[1]);
-    expect(body.tools[2]).toEqual(raw.tools[2]);
+    expect(execTool).not.toHaveProperty("format");
+    expect(patchTool).toMatchObject({
+      type: "function",
+      name: "apply_patch",
+      parameters: {
+        type: "object",
+        properties: { patch: { type: "string" } },
+        required: ["patch"],
+      },
+    });
+    expect(body.tools[1]).toEqual(raw.tools[2]);
     expect(body.input[0]).toMatchObject({
       type: "function_call",
       call_id: "call_exec",
       name: "exec",
-      arguments: JSON.stringify({ input: "await sky.list_apps()" }),
+      arguments: JSON.stringify({ code: "await sky.list_apps()" }),
     });
     expect(body.input[0]).not.toHaveProperty("input");
     expect(body.input[1]).toMatchObject({ type: "function_call_output", call_id: "call_exec" });
-    expect(body.input[2]).toEqual(raw.input[2]);
-    expect(body.input[3]).toEqual(raw.input[3]);
+    expect(body.input[2]).toMatchObject({
+      type: "function_call",
+      call_id: "call_patch",
+      name: "apply_patch",
+      arguments: JSON.stringify({ patch: "*** Begin Patch" }),
+    });
+    expect(body.input[3]).toMatchObject({ type: "function_call_output", call_id: "call_patch" });
   });
 
   test("restores non-streaming exec calls while leaving ordinary functions alone", () => {
@@ -166,6 +197,39 @@ describe("routed Responses custom-tool compatibility", () => {
     const response = dataPayload(completed[0]!).response as { output: Array<Record<string, unknown>> };
     expect(response.output[0]).toMatchObject({ type: "custom_tool_call", name: "exec", input: "apps.length" });
     rewrite.dispose?.();
+  });
+
+  test("streams projected code and patch fields without losing partial input", () => {
+    for (const [name, field, input] of [
+      ["exec", "code", "text(\"café\\n\")"],
+      ["apply_patch", "patch", "*** Begin Patch\n*** End Patch\n"],
+    ] as const) {
+      const rewrite = createRoutedCustomToolRestoreBlockRewrite(new Set([name]));
+      const itemId = `fc_${name}`;
+      rewrite(frame("response.output_item.added", {
+        output_index: 0,
+        item: { type: "function_call", id: itemId, call_id: `call_${name}`, name, arguments: "", status: "in_progress" },
+      }));
+      const encoded = JSON.stringify({ [field]: input });
+      let streamed = "";
+      for (const fragment of [encoded.slice(0, 5), encoded.slice(5, 11), encoded.slice(11)]) {
+        for (const block of rewrite(frame("response.function_call_arguments.delta", {
+          output_index: 0,
+          item_id: itemId,
+          delta: fragment,
+        }))) {
+          streamed += String(dataPayload(block).delta ?? "");
+        }
+      }
+      const done = rewrite(frame("response.function_call_arguments.done", {
+        output_index: 0,
+        item_id: itemId,
+        arguments: encoded,
+      }));
+      expect(streamed).toBe(input);
+      expect(dataPayload(done[0]!).input).toBe(input);
+      rewrite.dispose?.();
+    }
   });
 
   test("buffers argument events until a missing added event is identified by item done", () => {
@@ -491,12 +555,12 @@ describe("routed Responses custom-tool compatibility", () => {
     }) as typeof fetch;
     const config = {
       port: 0,
-      defaultProvider: "fixture",
+      defaultProvider: "xai",
       providers: {
-        fixture: {
-          adapter: "openai-responses",
-          baseUrl: "https://fixture.test/v1",
-          authMode: "key",
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
           apiKey: "fixture-key",
         },
       },
@@ -507,7 +571,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: true,
           input: [{ role: "user", content: [{ type: "input_text", text: "list apps" }] }],
           tools: [{ type: "custom", name: "exec", description: "Run JavaScript", format: { type: "grammar", syntax: "lark" } }],
@@ -570,12 +634,12 @@ describe("routed Responses custom-tool compatibility", () => {
     }) as typeof fetch;
     const config = {
       port: 0,
-      defaultProvider: "fixture",
+      defaultProvider: "xai",
       providers: {
-        fixture: {
-          adapter: "openai-responses",
-          baseUrl: "https://fixture.test/v1",
-          authMode: "key",
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
           apiKey: "fixture-key",
         },
       },
@@ -587,7 +651,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: true,
           input: [{ role: "user", content: [{ type: "input_text", text: "list apps" }] }],
           tools,
@@ -602,7 +666,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: true,
           input: [
             { role: "user", content: [{ type: "input_text", text: "list apps" }] },
@@ -627,7 +691,7 @@ describe("routed Responses custom-tool compatibility", () => {
           type: "function_call",
           call_id: "call_exec",
           name: "exec",
-          arguments: JSON.stringify({ input: "const apps = await sky.list_apps();" }),
+          arguments: JSON.stringify({ code: "const apps = await sky.list_apps();" }),
         }),
         expect.objectContaining({
           type: "function_call_output",
@@ -666,12 +730,12 @@ describe("routed Responses custom-tool compatibility", () => {
     }), { headers: { "content-type": "application/json" } })) as typeof fetch;
     const config = {
       port: 0,
-      defaultProvider: "fixture",
+      defaultProvider: "xai",
       providers: {
-        fixture: {
-          adapter: "openai-responses",
-          baseUrl: "https://fixture.test/v1",
-          authMode: "key",
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
           apiKey: "fixture-key",
         },
       },
@@ -682,7 +746,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: false,
           input: [{ role: "user", content: [{ type: "input_text", text: "list apps" }] }],
           tools: [{ type: "custom", name: "exec", description: "Run JavaScript", format: { type: "grammar", syntax: "lark" } }],

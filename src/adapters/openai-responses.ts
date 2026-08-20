@@ -1561,7 +1561,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = promoteClientLoadedTools(outBody);
       }
       if (provider.authMode !== "forward") {
-        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody);
+        const rewritten = rewriteRoutedCustomToolsForUpstream(
+          outBody,
+          provider.customToolTransport === "function-json" ? "direct-first" : "legacy",
+        );
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
