@@ -7,14 +7,26 @@ import {
 import { compileCodeModeHelperInput } from "./code-mode-helper-compat";
 import { collectResponsesToolGroups } from "./tool-groups";
 
+type ProjectedField = "code" | "patch" | "input";
+export type RoutedCustomToolProjection = "legacy" | "direct-first";
+
 const ROUTED_CUSTOM_TOOL_PASSTHROUGH = new Set(["apply_patch"]);
 const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
 
 function routedCustomToolPassesThrough(
   name: string,
   supportsResponsesCustomTools: boolean | undefined,
+  projection: RoutedCustomToolProjection = "legacy",
 ): boolean {
-  return supportsResponsesCustomTools !== false && ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(name);
+  return projection !== "direct-first"
+    && supportsResponsesCustomTools !== false
+    && ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(name);
+}
+
+export function projectedCustomToolField(name: string): ProjectedField {
+  if (name === "exec") return "code";
+  if (name === "apply_patch") return "patch";
+  return "input";
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -88,6 +100,7 @@ function collectRoutedCustomToolWireNames(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
   passthrough = false,
+  projection: RoutedCustomToolProjection = "legacy",
 ): Set<string> {
   const names = new Set<string>();
   const groups = collectResponsesToolGroups(body);
@@ -108,7 +121,7 @@ function collectRoutedCustomToolWireNames(
       if (
         tool.type === "custom"
         && typeof tool.name === "string"
-        && routedCustomToolPassesThrough(tool.name, supportsResponsesCustomTools) === passthrough
+        && routedCustomToolPassesThrough(tool.name, supportsResponsesCustomTools, projection) === passthrough
       ) {
         names.add(tool.name);
         continue;
@@ -121,7 +134,7 @@ function collectRoutedCustomToolWireNames(
           isPlainObject(child)
           && child.type === "custom"
           && typeof child.name === "string"
-          && routedCustomToolPassesThrough(child.name, supportsResponsesCustomTools) === passthrough
+          && routedCustomToolPassesThrough(child.name, supportsResponsesCustomTools, projection) === passthrough
           && (!passthrough || tool.name === BUILTIN_FUNCTIONS_NAMESPACE)
           && !(tool.name === BUILTIN_FUNCTIONS_NAMESPACE && bareWireNames.has(child.name))
         ) names.add(customToolWireName(tool.name, child.name));
@@ -137,8 +150,15 @@ export function customToolItemId(id: unknown): unknown {
 
 export function collectRoutedCustomToolNames(
   body: unknown,
-  supportsResponsesCustomTools?: boolean,
+  supportsOrProjection?: boolean | RoutedCustomToolProjection,
+  explicitProjection: RoutedCustomToolProjection = "legacy",
 ): Set<string> {
+  const supportsResponsesCustomTools = typeof supportsOrProjection === "boolean"
+    ? supportsOrProjection
+    : undefined;
+  const projection = typeof supportsOrProjection === "string"
+    ? supportsOrProjection
+    : explicitProjection;
   const names = new Set<string>();
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
@@ -149,7 +169,7 @@ export function collectRoutedCustomToolNames(
     if (
       value.type === "custom"
       && typeof value.name === "string"
-      && !routedCustomToolPassesThrough(value.name, supportsResponsesCustomTools)
+      && !routedCustomToolPassesThrough(value.name, supportsResponsesCustomTools, projection)
     ) {
       names.add(value.name);
     }
@@ -180,8 +200,9 @@ function rewriteForUpstream(
   value: unknown,
   names: ReadonlySet<string>,
   callIds: ReadonlySet<string>,
+  projection: RoutedCustomToolProjection,
 ): unknown {
-  if (Array.isArray(value)) return value.map(entry => rewriteForUpstream(entry, names, callIds));
+  if (Array.isArray(value)) return value.map(entry => rewriteForUpstream(entry, names, callIds, projection));
   if (!isPlainObject(value)) return value;
 
   if (value.type === "custom" && typeof value.name === "string" && names.has(value.name)) {
@@ -190,21 +211,24 @@ function rewriteForUpstream(
       || isPlainObject(value.format)
       || isPlainObject(value.parameters);
     if (!isDefinition) return { ...rest, type: "function" };
-    const inputDescription = value.name === "exec"
+    const field = projection === "direct-first" ? projectedCustomToolField(value.name) : "input";
+    const inputDescription = field === "code"
       ? "JavaScript source for unified exec. Use await tools.exec_command(...) for shell commands and text(...) to return textual output; do not provide a bare shell command."
-      : "Raw input for this client-executed custom tool.";
+      : field === "patch"
+        ? "Patch text for apply_patch, beginning exactly with `*** Begin Patch`."
+        : "Raw input for this client-executed custom tool.";
     return {
       ...rest,
       type: "function",
       parameters: {
         type: "object",
         properties: {
-          input: {
+          [field]: {
             type: "string",
             description: inputDescription,
           },
         },
-        required: ["input"],
+        required: [field],
         additionalProperties: false,
       },
     };
@@ -216,10 +240,11 @@ function rewriteForUpstream(
     && names.has(value.name)
   ) {
     const { input, id: _id, ...rest } = value;
+    const field = projection === "direct-first" ? projectedCustomToolField(value.name) : "input";
     return {
       ...rest,
       type: "function_call",
-      arguments: JSON.stringify({ input: typeof input === "string" ? input : "" }),
+      arguments: JSON.stringify({ [field]: typeof input === "string" ? input : "" }),
     };
   }
 
@@ -234,31 +259,89 @@ function rewriteForUpstream(
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    const rewritten = rewriteForUpstream(entry, names, callIds);
+    const rewritten = rewriteForUpstream(entry, names, callIds, projection);
     next[key] = rewritten;
     changed ||= rewritten !== entry;
   }
   return changed ? next : value;
 }
 
+function directFirstToolOrder(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  let changed = false;
+  const next = { ...body };
+  const moveExecLast = (value: unknown): unknown => {
+    if (!Array.isArray(value)) return value;
+    const direct = value.filter(entry => !(isPlainObject(entry) && entry.name === "exec"));
+    const exec = value.filter(entry => isPlainObject(entry) && entry.name === "exec");
+    if (exec.length === 0) return value;
+    const ordered = [...direct, ...exec];
+    return ordered.every((entry, index) => entry === value[index]) ? value : ordered;
+  };
+  const tools = moveExecLast(body.tools);
+  if (tools !== body.tools) {
+    next.tools = tools;
+    changed = true;
+  }
+  if (Array.isArray(body.input)) {
+    const originalInput = body.input;
+    const input = originalInput.map(item => {
+      if (!isPlainObject(item) || item.type !== "additional_tools") return item;
+      const additional = moveExecLast(item.tools);
+      return additional === item.tools ? item : { ...item, tools: additional };
+    });
+    if (input.some((item, index) => item !== originalInput[index])) {
+      next.input = input;
+      changed = true;
+    }
+  }
+  return changed ? next : body;
+}
+
 export function rewriteRoutedCustomToolsForUpstream(
   body: unknown,
-  supportsResponsesCustomTools?: boolean,
+  supportsOrProjection?: boolean | RoutedCustomToolProjection,
+  explicitProjection: RoutedCustomToolProjection = "legacy",
 ): {
   body: unknown;
   names: Set<string>;
   repairNames: Set<string>;
 } {
-  const conversionNames = collectRoutedCustomToolNames(body, supportsResponsesCustomTools);
-  const names = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools);
-  const repairNames = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools, true);
+  const supportsResponsesCustomTools = typeof supportsOrProjection === "boolean"
+    ? supportsOrProjection
+    : undefined;
+  const projection = typeof supportsOrProjection === "string"
+    ? supportsOrProjection
+    : explicitProjection;
+  const conversionNames = collectRoutedCustomToolNames(
+    body,
+    supportsResponsesCustomTools,
+    projection,
+  );
+  const names = collectRoutedCustomToolWireNames(
+    body,
+    supportsResponsesCustomTools,
+    false,
+    projection,
+  );
+  const repairNames = collectRoutedCustomToolWireNames(
+    body,
+    supportsResponsesCustomTools,
+    true,
+    projection,
+  );
   for (const name of repairNames) {
     if (!toolChoiceAllowsRoutedCustomTool(body, name, repairNames)) repairNames.delete(name);
   }
   if (conversionNames.size === 0) return { body, names, repairNames };
   const callIds = new Set<string>();
   collectConvertedCallIds(body, conversionNames, callIds);
-  return { body: rewriteForUpstream(body, conversionNames, callIds), names, repairNames };
+  const rewritten = rewriteForUpstream(body, conversionNames, callIds, projection);
+  return {
+    body: projection === "direct-first" ? directFirstToolOrder(rewritten) : rewritten,
+    names,
+    repairNames,
+  };
 }
 
 export function restoreRoutedCustomCalls(
@@ -288,7 +371,7 @@ export function restoreRoutedCustomCalls(
         name: aliased ? targetName : item.name,
         input: aliased && sourceInput !== ""
           ? compileCodeModeHelperInput(sourceInput, item.name)
-          : repairFreeformToolInput(
+          : unwrapRoutedCustomToolArguments(
             sourceInput,
             targetName,
             typeof item.namespace === "string" ? item.namespace : undefined,
@@ -378,7 +461,16 @@ export function unwrapRoutedCustomToolArguments(
   toolName = "",
   namespace?: string,
 ): string {
-  return toolName
-    ? repairFreeformToolInput(argumentsText, toolName, namespace)
-    : unwrapFreeformToolInput(argumentsText);
+  if (!toolName) return unwrapFreeformToolInput(argumentsText);
+  let projected = argumentsText;
+  if (typeof argumentsText === "string") {
+    try {
+      const parsed = JSON.parse(argumentsText) as unknown;
+      const field = projectedCustomToolField(toolName);
+      if (isPlainObject(parsed) && typeof parsed[field] === "string") {
+        projected = JSON.stringify({ input: parsed[field] });
+      }
+    } catch { /* malformed arguments stay visible */ }
+  }
+  return repairFreeformToolInput(projected, toolName, namespace);
 }

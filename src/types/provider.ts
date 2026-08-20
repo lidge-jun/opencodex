@@ -143,12 +143,15 @@ export interface OcxProviderConfig {
   /** Override the global built-in model-alias switch for this provider. */
   defaultAliases?: boolean;
   adapter: string;
+  /** Internal per-model Responses custom-tool projection capability. */
+  customToolTransport?: "freeform" | "function-json";
   /**
    * Codex tool calling mode for routed models.
+   * "code_mode" selects a direct-first routed surface (direct tools by default, exec for complex orchestration).
    * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only" (unified exec helper tool).
    * "shell" leaves tool_mode unset so Codex declares top-level shell tools (exec_command).
    */
-  codexToolMode?: "code_mode_only" | "shell";
+  codexToolMode?: "code_mode" | "code_mode_only" | "shell";
   /** Optional outbound request-start pacing shared by this provider and its model overrides. */
   requestPacing?: ProviderRequestPacingConfig;
   /** Cursor MCP compatibility bounds; positive integers when configured. */

@@ -2,7 +2,7 @@ import { createRegisteredAdapter } from "../adapters/registry";
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { type InboundWire, providerModelWireDefault } from "../providers/registry";
+import { type InboundWire, providerModelCustomToolTransport, providerModelWireDefault } from "../providers/registry";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -35,6 +35,7 @@ export function resolveWireProtocolOverride(
   const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)
     ? configured
     : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound);
+  const customToolTransport = providerModelCustomToolTransport(providerName, providerConfig, modelId, inbound);
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter
@@ -42,9 +43,9 @@ export function resolveWireProtocolOverride(
     // A forward provider hands the caller's own credential upstream; the chat adapter
     // only ever sends provider.apiKey, so switching wires here would drop the auth.
     && !isCanonicalOpenAiForwardProvider(providerConfig)) {
-    return { ...providerConfig, adapter: requested };
+    return { ...providerConfig, adapter: requested, ...(customToolTransport ? { customToolTransport } : {}) };
   }
-  return providerConfig;
+  return customToolTransport ? { ...providerConfig, customToolTransport } : providerConfig;
 }
 
 /** Build the provider adapter for a resolved provider config. */

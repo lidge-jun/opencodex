@@ -919,6 +919,10 @@ describe("provider registry parity", () => {
     const model = applyProviderConfigHints("xai", seed, { id: "grok-4.5", provider: "xai" });
     expect(model.contextWindow).toBe(500_000);
     expect(model.reasoningEfforts).toEqual(["low", "medium", "high"]);
+    expect(model.codexToolMode).toBe("code_mode");
+
+    const apiKeyModel = applyProviderConfigHints("xai", { ...seed, authMode: "key" }, { id: "grok-4.5", provider: "xai" });
+    expect(apiKeyModel.codexToolMode).toBeUndefined();
 
     const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
     const entry = entries.find(e => e.slug === "xai/grok-4.5");
@@ -928,12 +932,20 @@ describe("provider registry parity", () => {
       .toEqual(["low", "medium", "high", "max", "ultra"]);
   });
 
+  test("native OpenAI seed does not receive the external direct-first capability", () => {
+    const openai = PROVIDER_REGISTRY.find(entry => entry.id === "openai");
+    const model = applyProviderConfigHints("openai", providerConfigSeed(openai!), { id: "gpt-5.5", provider: "openai" });
+    expect(model.codexToolMode).toBeUndefined();
+  });
+
   test("grok-4.6 advertises the documented xhigh rung from the xai registry seed", () => {
     const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
     const seed = providerConfigSeed(xai!);
+    expect(seed.codexToolMode).toBeUndefined();
     const model = applyProviderConfigHints("xai", seed, { id: "grok-4.6", provider: "xai" });
     expect(model.contextWindow).toBe(500_000);
     expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(model.codexToolMode).toBe("code_mode");
 
     const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
     const entry = entries.find(e => e.slug === "xai/grok-4.6");

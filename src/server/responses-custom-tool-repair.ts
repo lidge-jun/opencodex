@@ -16,8 +16,7 @@ import {
 
 /** Exact compact prefix used by our upstream rewriter; progressive matching also
  *  tolerates insignificant JSON whitespace via FREEFORM_WRAP_PREFIX_RE. */
-const FREEFORM_WRAP_PREFIX = '{"input":"';
-const FREEFORM_WRAP_PREFIX_RE = /^\s*\{\s*"input"\s*:\s*"/;
+const FREEFORM_WRAP_PREFIX_RE = /^\s*\{\s*"(?:input|code|patch)"\s*:\s*"/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -313,7 +312,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       openCalls.set(upstreamItemId, open);
       // Still accumulating toward the compact wrapper, or an unrecognized shape:
       // suppress progressive emission and let the done event carry input.
-      if (FREEFORM_WRAP_PREFIX.startsWith(open.argumentsText)) return [];
+      if (open.argumentsText.length < 12 && !FREEFORM_WRAP_PREFIX_RE.test(open.argumentsText)) return [];
       const fullInput = partialCustomToolInput(open.argumentsText);
       if (fullInput === null) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];

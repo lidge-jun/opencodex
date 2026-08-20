@@ -2048,6 +2048,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedCustomToolsForUpstream(
           outBody,
           provider.supportsResponsesCustomTools,
+          provider.customToolTransport === "function-json" ? "direct-first" : "legacy",
         );
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;

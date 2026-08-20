@@ -108,14 +108,16 @@ describe("registry per-model wire defaults", () => {
   });
 
   test("keeps xAI key auth and translated callers on their existing Chat wire", () => {
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("key"), "responses").adapter)
-      .toBe("openai-chat");
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("oauth"), "chat").adapter)
-      .toBe("openai-chat");
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("oauth"), "anthropic").adapter)
-      .toBe("openai-chat");
-    expect(resolveWireProtocolOverride("xai", "grok-4.3", xai("oauth"), "responses").adapter)
-      .toBe("openai-chat");
+    const cases = [
+      [xai("key"), "responses"], [xai("oauth"), "chat"],
+      [xai("oauth"), "anthropic"], [xai("oauth"), "responses"],
+    ] as const;
+    for (const [provider, inbound] of cases) {
+      const model = inbound === "responses" && provider.authMode === "oauth" ? "grok-4.3" : "grok-4.6";
+      const resolved = resolveWireProtocolOverride("xai", model, provider, inbound);
+      expect(resolved.adapter).toBe("openai-chat");
+      expect(resolved.customToolTransport).toBeUndefined();
+    }
   });
 
   test("an explicit xAI Responses override opts into the native wire", () => {

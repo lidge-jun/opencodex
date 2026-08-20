@@ -201,10 +201,11 @@ export interface OcxCustomModel {
   defaultReasoningEffort?: string;
   /**
    * Codex tool calling mode override for this custom model.
+   * "code_mode" selects a direct-first routed surface (direct tools by default, exec for complex orchestration).
    * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only".
    * "shell" leaves tool_mode unset so Codex declares top-level shell tools (exec_command).
    */
-  codexToolMode?: "code_mode_only" | "shell";
+  codexToolMode?: "code_mode" | "code_mode_only" | "shell";
   /** 추가 시각 (ISO 8601) */
   addedAt?: string;
 }
