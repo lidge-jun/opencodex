@@ -95,6 +95,33 @@ afterEach(() => {
   rmSync(opencodexHome, { recursive: true, force: true });
 });
 
+test("does not classify a daily bucket nested under a weekly ancestor as weekly", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: TOKEN,
+    projectId: PROJECT,
+    baseUrl: DAILY_HOST,
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return jsonResponse({
+          buckets: [
+            { modelId: "gemini-test", remainingFraction: 0.5 },
+          ],
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return jsonResponse({
+          weekly: { daily: { remainingPercentage: 90 } },
+        });
+      }
+      return jsonResponse({}, 404);
+    },
+  });
+
+  expect(result?.weeklyPercent).toBeUndefined();
+});
+
 test("does not classify an unlabelled daily summary window as weekly", async () => {
   const requestOptions: Array<{ url: string; init?: RequestInit }> = [];
   const result = await fetchAntigravityLiveQuota({
@@ -341,6 +368,27 @@ describe("Antigravity live quota", () => {
     expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
     expect(requested.filter(url => url.endsWith(":fetchAvailableModels"))).toEqual([]);
     expect(result.reports).toEqual([]);
+  });
+
+  test("drops last-good Antigravity quota after a terminal 401 refresh", async () => {
+    let rejected = false;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (rejected && url.includes(":retrieveUserQuota") && !url.includes("Summary")) {
+        return jsonResponse({}, 401);
+      }
+      if (url.endsWith(":retrieveUserQuota") && !url.includes("Summary")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const valid = await fetchProviderQuotaReports(config(), true);
+    rejected = true;
+    const rejectedRefresh = await fetchProviderQuotaReports(config(), true);
+
+    expect(valid.reports).toHaveLength(1);
+    expect(rejectedRefresh.reports).toEqual([]);
   });
 
   test("does not fetch production or catalog when daily retrieveUserQuota 401 races a 404 summary", async () => {

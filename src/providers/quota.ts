@@ -2005,7 +2005,7 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
   return normalizePercent(100 - remaining);
 }
 
-async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   const credential = getCredential("google-antigravity");
   if (!credential?.projectId) return null;
   let accessToken: string;
@@ -2025,7 +2025,7 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     });
   } catch (error) {
     if (error instanceof AntigravityQuotaRpcError && isTerminalAntigravityQuotaStatus(error.status)) {
-      return null;
+      return TERMINAL_QUOTA_FAILURE;
     }
     liveQuota = null;
   }
