@@ -22,6 +22,7 @@ import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./g
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "./google-antigravity-tools";
+import { isAntigravityHttpsHost } from "./google-antigravity-hosts";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
@@ -702,7 +703,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (!token) throw new Error("google-antigravity oauth token missing — run ocx login google-antigravity");
         const base = provider.baseUrl?.trim();
         if (!base) throw new Error("google-antigravity requires a non-empty baseUrl");
-        const url = `${base}/v1internal:${method}${streamParam}`;
+        if (!isAntigravityHttpsHost(base)) {
+          throw new Error("google-antigravity requires an HTTPS baseUrl");
+        }
+        const url = `${base.replace(/\/+$/, "")}/v1internal:${method}${streamParam}`;
         const project = provider.project;
         if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);

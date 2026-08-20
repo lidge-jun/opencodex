@@ -84,6 +84,16 @@ describe("google provider hardening", () => {
     );
   });
 
+  test("Antigravity rejects a cleartext http baseUrl before dispatch", async () => {
+    const adapter = createGoogleAdapter(antigravityProvider({
+      baseUrl: "http://daily-cloudcode-pa.googleapis.com",
+    }));
+
+    await expect(adapter.buildRequest(parsed())).rejects.toThrow(
+      "google-antigravity requires an HTTPS baseUrl",
+    );
+  });
+
   test("Antigravity rejects flat Gemini payloads without the response wrapper", async () => {
     const adapter = createGoogleAdapter(antigravityProvider());
     const flatPayload = { candidates: [{ content: { parts: [{ text: "unexpected" }] } }] };

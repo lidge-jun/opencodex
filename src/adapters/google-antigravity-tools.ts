@@ -23,39 +23,37 @@ function isToolResult(message: OcxMessage): message is OcxToolResultMessage {
  * reserving ids in the request-scoped allocator.
  */
 export function repairGoogleToolPairs(messages: readonly OcxMessage[]): OcxMessage[] {
-  const matchedCallIds = new Set<string>();
-  const callIdsBeforeResult = new Set<string>();
+  const pendingCalls = new Map<string, Array<{ messageIndex: number; partIndex: number }>>();
+  const matchedCallParts = new Set<string>();
+  const matchedResultIndexes = new Set<number>();
 
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index]!;
+  const enqueueCall = (id: string, messageIndex: number, partIndex: number) => {
+    const queue = pendingCalls.get(id) ?? [];
+    queue.push({ messageIndex, partIndex });
+    pendingCalls.set(id, queue);
+  };
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex]!;
     if (isAssistantToolCall(message)) {
-      for (const part of message.content) {
-        if (part.type !== "toolCall") continue;
-        const toolCall = part as OcxToolCall;
-        for (let later = index + 1; later < messages.length; later++) {
-          const candidate = messages[later]!;
-          if (isToolResult(candidate) && candidate.toolCallId === toolCall.id) {
-            matchedCallIds.add(toolCall.id);
-            break;
-          }
-        }
-      }
-    } else if (isToolResult(message)) {
-      for (let earlier = index - 1; earlier >= 0; earlier--) {
-        const candidate = messages[earlier]!;
-        if (!isAssistantToolCall(candidate)) continue;
-        if (candidate.content.some(part => part.type === "toolCall" && (part as OcxToolCall).id === message.toolCallId)) {
-          callIdsBeforeResult.add(message.toolCallId);
-          break;
-        }
-      }
+      message.content.forEach((part, partIndex) => {
+        if (part.type !== "toolCall") return;
+        enqueueCall((part as OcxToolCall).id, messageIndex, partIndex);
+      });
+      continue;
     }
+    if (!isToolResult(message)) continue;
+    const queue = pendingCalls.get(message.toolCallId);
+    const slot = queue?.shift();
+    if (!slot) continue;
+    matchedCallParts.add(`${slot.messageIndex}:${slot.partIndex}`);
+    matchedResultIndexes.add(messageIndex);
   }
 
   const repaired: OcxMessage[] = [];
-  for (const message of messages) {
+  for (const [messageIndex, message] of messages.entries()) {
     if (isToolResult(message)) {
-      if (callIdsBeforeResult.has(message.toolCallId)) repaired.push(message);
+      if (matchedResultIndexes.has(messageIndex)) repaired.push(message);
       continue;
     }
     if (!isAssistantToolCall(message)) {
@@ -63,8 +61,8 @@ export function repairGoogleToolPairs(messages: readonly OcxMessage[]): OcxMessa
       continue;
     }
 
-    const content = message.content.filter(part =>
-      part.type !== "toolCall" || matchedCallIds.has((part as OcxToolCall).id));
+    const content = message.content.filter((part, partIndex) =>
+      part.type !== "toolCall" || matchedCallParts.has(`${messageIndex}:${partIndex}`));
     if (content.length > 0) {
       repaired.push(content.length === message.content.length ? message : { ...message, content });
     }

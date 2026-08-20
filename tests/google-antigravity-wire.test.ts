@@ -746,6 +746,20 @@ describe("Google Antigravity history repair", () => {
     expect(repaired).toHaveLength(3);
   });
 
+  test("pairs duplicate tool-call ids by occurrence", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "dup", name: "one", arguments: {} },
+        { type: "toolCall", id: "dup", name: "one", arguments: {} },
+      ] },
+      { role: "toolResult", toolCallId: "dup", toolName: "one", content: "first", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect((repaired[0] as { content: { id: string }[] }).content).toHaveLength(1);
+    expect(repaired).toHaveLength(2);
+  });
+
   test("strips only trailing model turns when another content turn remains", () => {
     const contents = [{ role: "user" }, { role: "model" }, { role: "model" }];
     expect(stripTrailingClaudePrefill(contents)).toBe(true);
