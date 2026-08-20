@@ -1918,7 +1918,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(seen).toEqual([undefined, undefined]);
   });
 
-  test.each(["provider", "destination", "model"] as const)(
+  test.each(["provider", "destination", "adapter", "model"] as const)(
     "continuation owner rejects an exact %s mismatch",
     async mismatch => {
       const seen: Array<string | undefined> = [];
@@ -1943,6 +1943,10 @@ describe("server combo failover 030 activation matrix", () => {
         config.combos!.free!.targets = [{ provider: "b", model: "m1" }];
       } else if (mismatch === "destination") {
         config.providers.a!.baseUrl = "https://kiro-b.test/v1";
+      } else if (mismatch === "adapter") {
+        // Keep provider, destination, credential, and model fixed so only the adapter owner
+        // component changes. The first test-kiro turn already persisted the owned state.
+        config.providers.a!.adapter = "test-owned";
       } else {
         config.combos!.free!.targets = [{ provider: "a", model: "m2" }];
       }

@@ -485,6 +485,9 @@ function bindRouteReasoningReplayScope(args: {
       : undefined,
   );
   if (adapterName === "cursor") {
+    // The final route owner is authoritative for Cursor and supersedes the account-derived
+    // seed assigned before route binding. A Cursor conversation must be scoped to the exact
+    // provider/destination/adapter/model/credential that serves it.
     if (continuationOwner) parsed._cursorIdentityScope = providerContinuationRouteScope(continuationOwner);
     else if (!parsed._cursorIdentityScope?.startsWith("cursor-unowned:")) {
       // Prevent the adapter's token-only fallback from recreating a provider-private id after the
@@ -2344,8 +2347,9 @@ async function handleResponsesInner(
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
   logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
-  // Prefer Codex pool account as the Cursor thread namespace when present. Cursor routes without
-  // codexAccountMode still get a credential-derived scope inside the Cursor adapter.
+  // Seed an account-derived scope before final adapter binding. Cursor never treats it as
+  // authoritative: bindRouteReasoningReplayScope replaces it with the exact route owner or a
+  // per-request fail-closed sentinel after the final provider and credential are known.
   const identityScope = codexLogAccountId(authCtx);
   if (identityScope) parsed._cursorIdentityScope = identityScope;
   subagentFallbackAccountId = authCtx.kind === "pool" || authCtx.kind === "main-pool"
