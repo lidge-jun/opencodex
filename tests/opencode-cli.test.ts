@@ -20,6 +20,7 @@ import {
   opencodeApiKey,
   opencodeCatalogFromProxyRows,
   opencodeGlobalConfigPath,
+  requireOpencodeManagementToken,
   opencodeLaunchNativeSlugs,
   opencodeModelKey,
   opencodeNotFoundHint,
@@ -556,6 +557,22 @@ describe("ocx opencode admission key", () => {
 
   test("falls back to a placeholder on an open loopback proxy", () => {
     expect(opencodeApiKey(cfg(), {})).toBe("ocx");
+  });
+});
+
+describe("ocx opencode management token", () => {
+  test("returns the configured admin token for management API calls", () => {
+    expect(requireOpencodeManagementToken(() => "ocx_admin_token")).toBe("ocx_admin_token");
+    expect(requireOpencodeManagementToken(() => "  ocx_admin_token  ")).toBe("ocx_admin_token");
+  });
+
+  test("fails early when the admin token is unavailable", () => {
+    expect(() => requireOpencodeManagementToken(() => null)).toThrow(
+      "opencodex admin token is not configured.",
+    );
+    expect(() => requireOpencodeManagementToken(() => "   ")).toThrow(
+      "opencodex admin token is not configured.",
+    );
   });
 });
 

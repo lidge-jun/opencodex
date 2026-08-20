@@ -534,6 +534,14 @@ export function opencodeNotFoundHint(
   return platform === "win32" && code === 9009 && !signal ? OPENCODE_INSTALL_HINT : null;
 }
 
+export function requireOpencodeManagementToken(
+  readConfiguredAdminToken: () => string | null = configuredAdminToken,
+): string {
+  const token = readConfiguredAdminToken()?.trim();
+  if (token) return token;
+  throw new Error("opencodex admin token is not configured.");
+}
+
 export async function cmdOpencode(args: string[]): Promise<number> {
   const config = loadConfig();
   const live = await ensureProxyForOpencode(config);
@@ -546,7 +554,14 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   // `/api/models` is a management endpoint — it requires the admin token, not the
   // data-plane admission key. The proxy is already running at this point so
   // configuredAdminToken() finds the same token the server initialized with.
-  const managementToken = configuredAdminToken() ?? "";
+  let managementToken: string;
+  try {
+    managementToken = requireOpencodeManagementToken();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`❌ Could not fetch the model catalog from the proxy: ${reason}`);
+    return 1;
+  }
   let proxyModels: OpencodeProxyModelRow[];
   try {
     proxyModels = await fetchOpencodeProxyModels(live, managementToken);
