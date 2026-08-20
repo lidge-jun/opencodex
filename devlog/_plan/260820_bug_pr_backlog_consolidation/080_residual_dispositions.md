@@ -214,3 +214,61 @@ clear keeps registry static headers" now asserts the two-header set. That is the
 ## wp17-wp19 — the three that need new code
 
 Recorded here as each is decided; each is its own PABCD cycle.
+
+### wp17 — #2082 @yzxcj797: AgentRouter language framing
+
+**PR #2162**, branch `codex/absorb-agentrouter-language-framing`, base `dev`. #2082 closed
+(`issuecomment-5349709140`). Fixes #2074.
+
+The diagnosis was the contributor's and it was correct: AgentRouter answers 400
+`content-blocked` on a non-English first user message while the same request in English
+returns 200, and the filter reads that turn, so an Anthropic `system` string cannot reach it.
+
+Two corrections.
+
+**Host predicate.** `hostname.includes("agentrouter")` also matches `notagentrouter.example`
+and `agentrouter.org.attacker.example`. This is a prompt mutation keyed on a provider's
+identity, so the key has to be that identity exactly — otherwise an unrelated destination
+quietly receives an injected instruction block. Now `agentrouter.org` or a real subdomain.
+
+**Where the marker goes.** The original spliced it into the user's string:
+`firstUser.content = \`\${MARKER}\\n\\n\${firstUser.content}\``. That edits what the user
+wrote, and every downstream reader then attributes a sentence to them that they never typed —
+the hidden user-turn mutation named in #1804. The framing is now its own leading text block.
+It still adds content to the user turn, which is unavoidable against a filter that reads the
+first user message, but additive-and-visible is a different risk class than a silent rewrite.
+
+Idempotence is keyed on the LEADING block being exactly the marker, not a substring test: a
+user who quotes the marker mid-prompt must not suppress their own framing.
+
+Evidence: 10 regressions; reverting only the adapter fails 7. The 3 that stay green are the
+lookalike-host and direct-Anthropic cases — green on unpatched `dev` precisely because `dev`
+frames nobody, which is what makes them guards against the substring predicate rather than
+restatements of it. Full suite 13529 pass / 10 skip / 0 fail; typecheck and privacy clean.
+
+`CONFLICTING` was an inherited `package.json` bump alone; the Anthropic hunks merge cleanly.
+No version change in the replacement.
+
+### wp18 — #2027 @yzxcj797: OpenCode Go quota, planned
+
+The investigation moved the answer here too. The real issue is #1924: sibling rows
+(`opencode-go-2` … `-5`) show no quota in the dashboard and no rows in
+`ocx provider quota --refresh --json`, because dispatch gates on the literal provider NAME at
+`src/providers/quota.ts:2087`.
+
+The contributor's fix swaps that for a base-URL comparison. Closer, but it does not check the
+adapter, so a row pointed at the canonical URL with a different adapter would be probed.
+
+The repository already has the exact predicate: `registryEntryForProviderDestination`
+(`registry.ts:2678`) identifies a renamed fixed key provider by normalized endpoint + adapter
++ auth mode, and is already the convention for renamed rows
+(`opencode-zen-rate-limit.ts:28-43`, `derive.ts:398-425`).
+
+Rejected alternative, recorded: `providerMatchesRegistryTransport("opencode-go", provider)`
+would need `preserveCustomDestination: true` on the registry entry, which also changes ROUTING
+for a same-named custom row (`router.ts:269-274` vs `:320-336`). That may be worth doing, but
+not as a side effect of a quota fix.
+
+The defensive canonical-URL check inside `fetchOpenCodeGoQuota` (`quota.ts:485-494`) stays: it
+is what stops an API key being sent to a non-canonical host, and it should not depend on the
+dispatch predicate being correct.

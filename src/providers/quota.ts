@@ -13,7 +13,7 @@ import { getAccountCredential, getAccountSet, getCredential } from "../oauth/sto
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
-import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
+import { getProviderRegistryEntry, providerCodexAccountMode, registryEntryForProviderDestination } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
 import {
@@ -2120,7 +2120,14 @@ async function maybeFetchProviderQuota(
       && isCanonicalCommandCodeBaseUrl(provider.baseUrl)) {
       return fetchCommandCodeQuota(name, provider);
     }
-    if ((provider.authMode ?? "key") === "key" && name === "opencode-go") {
+    // Identify OpenCode Go by where it routes, not by what the row is called. Multi-account
+    // setups keep the same destination under names like `opencode-go-2` (#1924), and those rows
+    // silently had no quota panel and no `ocx provider quota --json` report while the literal
+    // name was the gate. `registryEntryForProviderDestination` is the existing predicate for
+    // exactly this question: normalized endpoint + adapter + key auth, so a canonical URL behind
+    // a different adapter is still not OpenCode Go. The defensive URL check inside
+    // `fetchOpenCodeGoQuota` stays — sending a key anywhere must not depend on this gate.
+    if ((provider.authMode ?? "key") === "key" && registryEntryForProviderDestination(provider)?.id === "opencode-go") {
       return fetchOpenCodeGoQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl)) {
