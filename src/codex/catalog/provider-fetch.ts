@@ -1186,7 +1186,11 @@ async function fetchProviderModelsWithAuth(
       seedVertexDefault,
       retainComboTargets: options?.retainComboTargets,
     });
-    if (retainedConfiguredIds.length > 0) retainedWithoutDiscoveryRefs.set(name, new Set(retainedConfiguredIds));
+    if (retainedConfiguredIds.length > 0) {
+      retainedWithoutDiscoveryRefs.set(name, new Set(retainedConfiguredIds));
+    } else {
+      retainedWithoutDiscoveryRefs.delete(name);
+    }
     if (
       options?.warnDrops === true
       && droppedConfiguredIds.length > 0
