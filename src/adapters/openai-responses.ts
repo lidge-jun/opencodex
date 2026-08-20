@@ -12,6 +12,7 @@ import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
+import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import {
   createAdapterTierMetadata,
@@ -118,6 +119,52 @@ function stripInvalidItemIds(body: unknown): unknown {
   });
 
   return changed ? { ...body, input } : body;
+}
+
+/**
+ * Codex attaches ChatGPT's private `external_web_access` policy bit to the public
+ * `web_search` tool. Third-party Responses APIs enable browsing by the presence of the tool and
+ * commonly reject the extra argument (xAI returns `Argument not supported:
+ * external_web_access`). Keep the hosted tool and every public option, but remove only that
+ * canonical-only hint before a routed request reaches a non-OpenAI gateway.
+ */
+function stripCanonicalWebSearchAccessHint(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+
+  const rewriteTools = (tools: unknown[]): unknown[] => {
+    let changed = false;
+    const rewritten = tools.map(tool => {
+      if (
+        !isPlainObject(tool)
+        || tool.type !== "web_search"
+        || !Object.hasOwn(tool, "external_web_access")
+      ) {
+        return tool;
+      }
+      changed = true;
+      const { external_web_access: _externalWebAccess, ...rest } = tool;
+      return rest;
+    });
+    return changed ? rewritten : tools;
+  };
+
+  let rewrittenBody = body;
+  if (Array.isArray(body.tools)) {
+    const tools = rewriteTools(body.tools);
+    if (tools !== body.tools) rewrittenBody = { ...rewrittenBody, tools };
+  }
+  if (!Array.isArray(body.input)) return rewrittenBody;
+
+  let input: unknown[] | undefined;
+  for (let index = 0; index < body.input.length; index += 1) {
+    const item = body.input[index];
+    if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) continue;
+    const tools = rewriteTools(item.tools);
+    if (tools === item.tools) continue;
+    input ??= [...body.input];
+    input[index] = { ...item, tools };
+  }
+  return input ? { ...rewrittenBody, input } : rewrittenBody;
 }
 
 /**
@@ -1506,6 +1553,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
       let convertedRoutedToolSearchNames: Set<string> | undefined;
+      let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string }> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -1572,6 +1620,17 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
       }
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        // Codex 0.147 emits private namespace tool groups, while public/third-party Responses
+        // gateways accept only flat tool variants. Run after custom/tool-search lowering so
+        // namespace children already carry their final public kind before they are promoted.
+        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody);
+        outBody = rewritten.body;
+        convertedRoutedNamespaceToolAliases = rewritten.aliases;
+      }
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        outBody = stripCanonicalWebSearchAccessHint(outBody);
+      }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
@@ -1600,6 +1659,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
+        ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
     },

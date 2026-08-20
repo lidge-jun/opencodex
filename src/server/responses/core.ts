@@ -276,6 +276,11 @@ import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-t
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
 import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import {
+  createRoutedNamespaceCallRestoreRewrite,
+  restoreRoutedNamespaceCallsInJson,
+  type RoutedNamespaceToolAliases,
+} from "../../responses/namespace-tool-compat";
+import {
   collectDeclaredWireToolNames,
   createUndeclaredToolCallGuardBlockRewrite,
   undeclaredToolCallMessage,
@@ -2501,6 +2506,7 @@ async function handleResponsesInner(
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
     const routedCustomToolNames = new Set<string>();
     const routedToolSearchNames = new Set<string>();
+    let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -2540,6 +2546,7 @@ async function handleResponsesInner(
       // would incorrectly disable restoration for the exact ambiguous-name case the alias fixes.
       routedToolSearchNames.add(name);
     }
+    routedNamespaceToolAliases = request.convertedRoutedNamespaceToolAliases ?? routedNamespaceToolAliases;
     // #1700: the bridged paths refuse a call to a tool the request never declared
     // (`declaredToolNames`, src/bridge.ts). The passthrough had no equivalent, so a routed
     // provider's top-level `apply_patch` — which under Codex code mode exists only as a nested
@@ -3074,6 +3081,9 @@ async function handleResponsesInner(
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
+        routedNamespaceToolAliases.size > 0
+          ? createRoutedNamespaceCallRestoreRewrite(routedNamespaceToolAliases)
+          : undefined,
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
@@ -3290,8 +3300,12 @@ async function handleResponsesInner(
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
       const clientJson = (() => {
-        const restored = restoreRoutedCustomCallsInJson(
+        const restoredNamespace = restoreRoutedNamespaceCallsInJson(
           restoreImageGenCallsInJson(text, imageGenCallAliases),
+          routedNamespaceToolAliases,
+        );
+        const restored = restoreRoutedCustomCallsInJson(
+          restoredNamespace,
           routedCustomToolNames,
         );
         const restoredToolSearch = restoreRoutedToolSearchCallsInJson(

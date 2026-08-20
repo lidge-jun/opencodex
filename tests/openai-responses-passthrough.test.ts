@@ -336,15 +336,15 @@ describe("OpenAI Responses passthrough sanitization", () => {
       }>;
     };
 
-    const namespace = body.tools.find(tool => tool.type === "namespace" && tool.name === "workspace");
-    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
-      "upfront_read",
-      "declared_deferred_read",
-      "deferred_read",
+    expect(body.tools.some(tool => tool.type === "namespace")).toBe(false);
+    expect(body.tools.filter(tool => tool.name?.startsWith("workspace__")).map(tool => tool.name)).toEqual([
+      "workspace__upfront_read",
+      "workspace__declared_deferred_read",
+      "workspace__deferred_read",
     ]);
-    expect(namespace?.tools?.find(tool => tool.name === "declared_deferred_read"))
+    expect(body.tools.find(tool => tool.name === "workspace__declared_deferred_read"))
       .not.toHaveProperty("defer_loading");
-    expect(namespace?.tools?.find(tool => tool.name === "deferred_read"))
+    expect(body.tools.find(tool => tool.name === "workspace__deferred_read"))
       .not.toHaveProperty("defer_loading");
     expect(body.tools.find(tool => tool.name === "tool_search")).toMatchObject({
       type: "function",
@@ -419,11 +419,11 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     expect(body.tools).toBeUndefined();
     const additionalTools = body.input.find(item => item.type === "additional_tools")?.tools;
-    const namespace = additionalTools?.find(tool => tool.type === "namespace" && tool.name === "workspace");
-    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
-      "upfront_read",
-      "declared_deferred_read",
-      "deferred_read",
+    expect(additionalTools?.some(tool => tool.type === "namespace")).toBe(false);
+    expect(additionalTools?.filter(tool => tool.name?.startsWith("workspace__")).map(tool => tool.name)).toEqual([
+      "workspace__upfront_read",
+      "workspace__declared_deferred_read",
+      "workspace__deferred_read",
     ]);
     expect(additionalTools?.find(tool => tool.name === "tool_search"))
       .toMatchObject({ type: "function", name: "tool_search" });
@@ -814,6 +814,60 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     expect(body.tools).toHaveLength(1);
     expect(body.tools[0]).toMatchObject({ type: "image_generation" });
+  });
+
+  test("drops ChatGPT's external_web_access hint but keeps routed web search", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key" as const,
+      apiKey: "xai-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        input: [{
+          type: "additional_tools",
+          tools: [{ type: "web_search", external_web_access: true, search_context_size: "medium" }],
+        }],
+        tools: [{ type: "web_search", external_web_access: false, filters: { allowed_domains: ["example.com"] } }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      tools: Record<string, unknown>[];
+      input: Array<{ type: string; tools: Record<string, unknown>[] }>;
+    };
+
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      filters: { allowed_domains: ["example.com"] },
+    }]);
+    expect(body.input[0]?.tools).toEqual([{
+      type: "web_search",
+      search_context_size: "medium",
+    }]);
+  });
+
+  test("preserves external_web_access on the canonical OpenAI forward route", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [{ type: "web_search", external_web_access: true }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { tools: Record<string, unknown>[] };
+
+    expect(body.tools).toEqual([{ type: "web_search", external_web_access: true }]);
   });
 
   test("preserves prompt_cache_key in the raw Responses passthrough body", () => {
@@ -1488,7 +1542,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(JSON.parse(secondRequest.body)).toEqual(firstBody);
   });
 
-  test("keyed platform preserves unrelated and malformed namespaces", () => {
+  test("keyed platform flattens complete namespaces and preserves malformed ones", () => {
     const adapter = createResponsesPassthroughAdapter(keyedProvider);
     const request = adapter.buildRequest({
       modelId: "gpt-5.6-sol",
@@ -1518,9 +1572,9 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(body.tools).toEqual([
       { type: "namespace", name: "image_gen", tools: [] },
       {
-        type: "namespace",
-        name: "web",
-        tools: [{ type: "function", name: "run", parameters: {} }],
+        type: "function",
+        name: "web__run",
+        parameters: { type: "object" },
       },
       { type: "image_generation" },
     ]);

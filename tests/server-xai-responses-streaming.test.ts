@@ -220,4 +220,126 @@ describe("xAI OAuth Responses streaming", () => {
       await server.stop(true);
     }
   }, 10_000);
+
+  test("lowers Codex namespaces for xAI and restores routed calls on the client stream", async () => {
+    let outboundBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const call = {
+        id: "fc_spawn",
+        type: "function_call",
+        status: "completed",
+        name: "collaboration__spawn_agent",
+        call_id: "call_spawn",
+        arguments: "{}",
+      };
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(sse({
+            type: "response.created",
+            sequence_number: 0,
+            response: { id: "resp_namespace", object: "response", status: "in_progress", model: "grok-4.6", output: [] },
+          }));
+          controller.enqueue(sse({
+            type: "response.output_item.added",
+            sequence_number: 1,
+            output_index: 0,
+            item: call,
+          }));
+          controller.enqueue(sse({
+            type: "response.output_item.done",
+            sequence_number: 2,
+            output_index: 0,
+            item: call,
+          }));
+          controller.enqueue(sse({
+            type: "response.completed",
+            sequence_number: 3,
+            response: {
+              id: "resp_namespace",
+              object: "response",
+              status: "completed",
+              model: "grok-4.6",
+              output: [call],
+              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+            },
+          }));
+          controller.close();
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          stream: true,
+          store: false,
+          tools: [{ type: "web_search", external_web_access: true }],
+          input: [
+            {
+              type: "additional_tools",
+              role: "developer",
+              tools: [
+                {
+                  type: "namespace",
+                  name: "functions",
+                  tools: [{ type: "custom", name: "exec", description: "run code", format: { type: "text" } }],
+                },
+                {
+                  type: "namespace",
+                  name: "collaboration",
+                  tools: [{ type: "function", name: "spawn_agent", description: "spawn", parameters: {} }],
+                },
+              ],
+            },
+            { type: "message", role: "user", content: [{ type: "input_text", text: "delegate" }] },
+          ],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const clientText = await response.text();
+
+      const outboundInput = outboundBody?.input as Array<{
+        type: string;
+        tools?: Array<{ type: string; name?: string }>;
+      }> | undefined;
+      const outboundTools = outboundInput?.find(item => item.type === "additional_tools")?.tools;
+      expect(outboundTools?.some(tool => tool.type === "namespace")).toBe(false);
+      expect(outboundTools?.find(tool => tool.name === "exec")?.type).toBe("function");
+      expect(outboundTools?.find(tool => tool.name === "collaboration__spawn_agent")?.type).toBe("function");
+      expect(outboundBody?.tools).toEqual([{ type: "web_search" }]);
+
+      const payloads = clientText
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map(line => JSON.parse(line.slice(6)) as Record<string, unknown>);
+      const added = payloads.find(payload => payload.type === "response.output_item.added") as {
+        item?: Record<string, unknown>;
+      } | undefined;
+      expect(added?.item).toMatchObject({
+        type: "function_call",
+        namespace: "collaboration",
+        name: "spawn_agent",
+        call_id: "call_spawn",
+      });
+      const completed = payloads.find(payload => payload.type === "response.completed") as {
+        response?: { output?: Array<Record<string, unknown>> };
+      } | undefined;
+      expect(completed?.response?.output?.[0]).toMatchObject({
+        namespace: "collaboration",
+        name: "spawn_agent",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  }, 10_000);
 });

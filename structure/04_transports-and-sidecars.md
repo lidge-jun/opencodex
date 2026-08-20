@@ -39,6 +39,20 @@ Responses-compatible streaming output.
 - 다른 대안 대신 이 방식을 선택한 이유: Provider-specific workarounds fragment the contract, while unconditional restoration could turn an untrusted ordinary function call into a privileged client discovery action.
 - 장점, 단점 및 영향: Strict third-party Responses gateways can start and continue deferred discovery without changing native ChatGPT behavior; ordinary same-named functions remain distinct, and the proxy performs a capped SSE lifecycle rewrite only when the request actually required compatibility translation.
 
+[Decision Log]
+- 목적과 의도: Keep Codex 0.147 namespace tool catalogs usable after a routed provider adopts native Responses but implements only the public flat tool variants.
+- 기존 구현 및 제약 조건: Chat translation already flattened namespace children, while native Responses passthrough forwarded the private `namespace` variant unchanged. xAI therefore rejected Grok requests before inference after its OAuth Grok 4.5/4.6 route moved to Responses.
+- 검토한 주요 대안: Move Grok back to Chat; special-case only xAI or the reserved `functions` group; flatten every complete namespace on noncanonical Responses and restore request-authorized aliases on return.
+- 선택한 방식: Noncanonical Responses lowers `functions` children to their bare top-level names and every other complete namespace to collision-checked `<namespace>__<name>` aliases after custom/tool-search conversion. It rewrites matching replay calls and tool selectors, records the aliases on the built request, and restores only those aliases in JSON/SSE call items before custom/tool-search lifecycle repair. Canonical OpenAI forward preserves native namespace shapes.
+- 다른 대안 대신 이 방식을 선택한 이유: A transport regression should not discard Responses streaming or create a provider-specific fork, and restoration without request-local authorization could reinterpret an unrelated upstream function as a client namespace call.
+- 장점, 단점 및 영향: Grok and other public-schema Responses gateways accept current Codex catalogs while Codex still receives explicit namespace routing. Ambiguous wire names fail closed; empty, malformed, and future nested namespace shapes remain untouched rather than losing tools silently.
+
+The same noncanonical boundary strips ChatGPT's private `external_web_access` bit from routed
+`web_search` declarations. The public tool remains enabled and all other options remain intact;
+canonical OpenAI forwarding preserves the bit. xAI's public Responses schema enables browsing by
+the presence of `web_search` and rejects the private argument, so forwarding it made the first
+post-namespace request fail with HTTP 400.
+
 The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
 resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
 the allowed Codex/OpenAI auth/session headers from the current request and short-circuits pool
@@ -222,9 +236,10 @@ items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can di
 extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify
 pass (`src/server/sse-payload-rewrite.ts`) rather than chaining separate JS pull wrappers.
 Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
-replays to return upstream without leaking a client-only namespace shape. Malformed, empty, and
-unrelated namespaces remain untouched. ChatGPT forward mode preserves the private namespace and
-hosted tool because that backend understands their native semantics.
+replays to return upstream without leaking a client-only namespace shape. Malformed and empty
+image-gen namespaces remain untouched; complete unrelated namespaces follow the general
+noncanonical namespace compatibility rule above. ChatGPT forward mode preserves the private
+namespace and hosted tool because that backend understands their native semantics.
 
 Per-model `modelReasoningSummaryDelivery` is a narrow compatibility layer for
 `openai-responses` gateways whose summary capability is real but whose accepted delivery enum
