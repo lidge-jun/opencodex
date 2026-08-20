@@ -269,12 +269,19 @@ upstream snapshot и никогда не перекрываются пользо
 
 ### Внешние provider manager'ы
 
-Если `config.toml` уже выбирает провайдера, отличного от `openai` или `opencodex`, OpenCodex
+Если в режиме `full` (по умолчанию) `config.toml` уже выбирает провайдера, отличного от `openai` или `opencodex`, OpenCodex
 оставляет файл без изменений и пропускает запись profile, обновление catalog/cache и как
 немедленную, так и фоновую миграцию истории Codex. Инструменты, управляющие custom-провайдером,
 часто помечают существующие сессии своим provider id; замена активного id может привести к тому,
 что рабочие сессии просто исчезнут из history view Codex. Та же защита действует и для внешнего
 провайдера, выбранного через legacy root profile.
+
+Чтобы сохранить внешний provider id и при этом обновлять стандартный picker моделей, выполните
+`ocx config set clientIntegrations.codex catalog-only`, затем `ocx sync`. В этом режиме меняются
+только каталог из `model_catalog_json` и `models_cache.json`; `config.toml`,
+`opencodex.config.toml`, journal, базы истории и session JSONL остаются без изменений. Внешний
+провайдер должен указывать на локальный прокси через Responses passthrough
+(`wire_api = "responses"`).
 
 Держите владельцем конфигурации провайдера Codex только один инструмент. Если вы хотите
 использовать OpenCodex позади уже существующего provider manager'а, направьте этот провайдер на

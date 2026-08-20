@@ -38,6 +38,7 @@ describe("Codex metadata integrity", () => {
       "session_id",
       "session-id",
       "thread-id",
+      "user-agent",
       "chatgpt-account-id",
       "x-codex-parent-thread-id",
     ]) {
@@ -159,5 +160,62 @@ describe("Codex metadata integrity", () => {
     expect(sync.headers.originator).toBe("codex_cli_rs");
     expect(sync.headers.session_id).toBe("sess-real-2");
     expect(sync.headers["thread-id"]).toBe("thread-real-2");
+  });
+
+  test("adapter API key mode forwards User-Agent", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://upstream.test/v1",
+      apiKey: "sk-test-key",
+    };
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest(minimalParsed(), {
+      headers: new Headers({
+        "user-agent": "codex_cli_rs/0.147.0",
+        originator: "codex_cli_rs",
+      }),
+    });
+    const sync = request as { headers: Record<string, string> };
+    expect(sync.headers["user-agent"]).toBe("codex_cli_rs/0.147.0");
+    expect(sync.headers.originator).toBe("codex_cli_rs");
+  });
+
+  test("adapter API key mode does not forward authorization", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://upstream.test/v1",
+      apiKey: "sk-test-key",
+    };
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest(minimalParsed(), {
+      headers: new Headers({
+        authorization: "incoming-caller-token",
+        originator: "codex_cli_rs",
+      }),
+    });
+    const sync = request as { headers: Record<string, string> };
+    // The incoming lowercase authorization must not be forwarded.
+    expect(sync.headers["authorization"]).toBeUndefined();
+    // The api-key-derived Authorization header is still present.
+    expect(sync.headers["Authorization"]).toContain("sk-test-key");
+    expect(sync.headers.originator).toBe("codex_cli_rs");
+  });
+
+  test("adapter API key mode does not forward chatgpt-account-id", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://upstream.test/v1",
+      apiKey: "sk-test-key",
+    };
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest(minimalParsed(), {
+      headers: new Headers({
+        "chatgpt-account-id": "acct-should-not-leak",
+        originator: "codex_cli_rs",
+      }),
+    });
+    const sync = request as { headers: Record<string, string> };
+    expect(sync.headers["chatgpt-account-id"]).toBeUndefined();
+    expect(sync.headers.originator).toBe("codex_cli_rs");
   });
 });

@@ -34,6 +34,27 @@ opencodex 会把持久化配置存放在 `$OPENCODEX_HOME/config.json`，通常�
 
 路由有自己独立的顺序化解析规则；见 [Routing](/reference/configuration/routing/)。
 
+## Codex 集成模式
+
+`clientIntegrations.codex` 控制 OpenCodex 对 Codex 状态的管理范围：
+
+| 值 | 模式 | 行为 |
+| --- | --- | --- |
+| 缺失或 `true` | `full` | 管理路由、目录、缓存和兼容性文件。 |
+| `"catalog-only"` | `catalog-only` | 刷新目录/缓存，同时保留 provider 路由和 Codex 历史。 |
+| `false` | `off` | 关闭 Codex 集成。 |
+
+```json
+{
+  "clientIntegrations": {
+    "codex": "catalog-only"
+  }
+}
+```
+
+仪表盘的 **Integrations → Codex CLI** 提供相同的三种模式。外部 provider 的所有权边界见
+[Codex 集成](/zh-cn/guides/codex-integration/#外部-provider-管理器)。
+
 ## 配置域
 
 - [Providers](/reference/configuration/providers/) — provider 条目、认证、端点、目录、allowlist、上下文限制、配额和 provider 特定选项。
