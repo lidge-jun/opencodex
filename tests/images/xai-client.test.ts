@@ -48,6 +48,20 @@ describe("callXaiImages", () => {
     expect(body.n).toBe(3);
   });
 
+  test("3xx is not followed and throws with the redirect status", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://evil.example/images/generations" },
+      });
+    }) as typeof fetch;
+    await expect(callXaiImages({ prompt: "x" }, AUTH)).rejects.toThrow("302");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init?.redirect).toBe("manual");
+  });
+
   test("non-2xx → throws Error containing status code", async () => {
     stubFetch(429, { error: "rate limited" });
     await expect(callXaiImages({ prompt: "x" }, AUTH)).rejects.toThrow("429");

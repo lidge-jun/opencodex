@@ -295,6 +295,41 @@ function pickPinnedAddress(addresses: PinnedAddress[]): PinnedAddress {
   return addresses.find(a => a.family === 4) ?? addresses[0]!;
 }
 
+/**
+ * Fetch a provider-returned image URL after destination-policy + pinned HTTPS.
+ * Redirects are not followed (`pinnedHttpsGet` treats 3xx as failure). Throws a
+ * message that names the class of failure (scheme / destination kind / download)
+ * without reflecting the target URL.
+ */
+export async function fetchPublicHttpsImage(
+  url: string,
+  options?: {
+    signal?: AbortSignal;
+    pinnedDownload?: PinnedDownloadFn;
+    maxBytes?: number;
+  },
+): Promise<Response> {
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  const assessment = assessUrlDestination(url);
+  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
+    throw new Error(`image URL targets ${assessment.detail}`);
+  }
+  const resolved = await resolvePublicAddresses(url);
+  const pinned = pickPinnedAddress(resolved.addresses);
+  const download = options?.pinnedDownload ?? ((resource, peer, signal) =>
+    pinnedHttpsGet(resource, peer, signal, { maxBytes: options?.maxBytes }));
+  const resp = await download(url, pinned, options?.signal);
+  if (!resp.ok || (resp.status >= 300 && resp.status < 400)) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw new Error("image download failed");
+  }
+  return resp;
+}
+
 export async function downloadImageToArtifact(
   url: string,
   budget?: ImageBudget,
@@ -307,30 +342,11 @@ export async function downloadImageToArtifact(
     return materializeInlineImage(m[2], budget);
   }
 
-  // SSRF protection: validate the provider-returned URL before fetching.
-  // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
-  // Resolve DNS once, then pin that public address for the HTTPS connect (SNI/Host keep
-  // the original hostname) so a rebinding answer cannot retarget the TCP peer.
-  let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
-  }
-  // Reject literal private/loopback/link-local/metadata addresses.
-  const assessment = assessUrlDestination(url);
-  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
-    throw new Error(`image URL targets ${assessment.detail}`);
-  }
-  const resolved = await resolvePublicAddresses(url);
-  const pinned = pickPinnedAddress(resolved.addresses);
-  const download = options?.pinnedDownload ?? pinnedHttpsGet;
-  const resp = await download(url, pinned, signal);
-  if (!resp.ok) {
-    // Custom `pinnedDownload` seams may still return a failed Response with a
-    // live body; cancel it so unread error payloads cannot keep the socket warm.
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    throw new Error("image download failed: " + resp.status);
-  }
+  const resp = await fetchPublicHttpsImage(url, {
+    signal,
+    pinnedDownload: options?.pinnedDownload,
+    maxBytes: MAX_DOWNLOAD_BYTES,
+  });
 
   // Stream the body with a hard byte cap so a missing/lying Content-Length or a
   // compromised CDN URL cannot exhaust memory before the size check runs.
