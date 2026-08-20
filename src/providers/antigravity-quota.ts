@@ -110,7 +110,8 @@ function parseGeminiWindow(payload: unknown): ProviderQuotaWindow | undefined {
 }
 
 function isWeeklyPath(path: string[]): boolean {
-  return path.some(part => /weekly|week|seven[_-]?day/i.test(part));
+  const leaf = path.at(-1);
+  return typeof leaf === "string" && /weekly|week|seven[_-]?day/i.test(leaf);
 }
 
 function parseWeeklyWindow(payload: unknown): { percent: number; resetAt?: number } | undefined {
