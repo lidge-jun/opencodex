@@ -1714,6 +1714,8 @@ export const de: Record<TKey, string> = {
   "modal.accountCodexPool": "ChatGPT-Kontopool",
   "modal.accountLoggedIn": "Angemeldet",
   "modal.accountLoggedOut": "Nicht angemeldet",
+  "modal.accountGeminiCodeAssist": "Google-Konto · Subtyp Code Assist",
+  "modal.accountGeminiAiStudio": "Google-Konto · Subtyp AI Studio (eigener OAuth-Client erforderlich)",
   "quota.fiveHourLimit": "5-Stunden-Limit",
   "quota.weeklyLimit": "Wochenlimit",
   "quota.monthlyLimit": "30-Tage-Limit",

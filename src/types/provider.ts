@@ -8,6 +8,17 @@ import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } 
  */
 export type RefreshPolicy = "proactive" | "lazy-only" | "disabled";
 
+/**
+ * Google adapter mode. "ai-studio" (default) = Generative Language API + x-goog-api-key.
+ * "vertex" = Vertex AI project/location endpoints with GCP ADC (or x-goog-api-key).
+ * "cloud-code-assist" = Google Antigravity (Cloud Code Assist) OAuth + CCA envelope.
+ * "gemini-cli" = Gemini CLI OAuth against the same CCA endpoint, but with the CLI's plain
+ * `{model, project, request}` envelope and CLI User-Agent instead of the Antigravity IDE
+ * fingerprint. The last two are NOT interchangeable: sending the Antigravity envelope with a
+ * CLI credential mismatches the client family the token was issued to.
+ */
+export type GoogleAdapterMode = "ai-studio" | "vertex" | "cloud-code-assist" | "gemini-cli";
+
 export interface OpenRouterProviderRouting {
   /** OpenRouter provider slugs to try first, in priority order. */
   order?: string[];
@@ -568,12 +579,8 @@ export interface OcxProviderConfig {
    * attached images are described by a gpt vision model and replaced with text before the call.
    */
   noVisionModels?: string[];
-  /**
-   * Google adapter mode. "ai-studio" (default) = Generative Language API + x-goog-api-key.
-   * "vertex" = Vertex AI project/location endpoints with GCP ADC (or x-goog-api-key).
-   * "cloud-code-assist" = Google Antigravity (Cloud Code Assist) OAuth + CCA envelope.
-   */
-  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  /** Google adapter mode; see {@link GoogleAdapterMode}. */
+  googleMode?: GoogleAdapterMode;
   /** Vertex AI GCP project id (or GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env). */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global" (or GOOGLE_CLOUD_LOCATION env). */

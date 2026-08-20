@@ -50,6 +50,10 @@ const OAUTH_LABELS: Record<string, string> = {
   anthropic: "Anthropic (Claude)",
   kimi: "Kimi (Moonshot)",
   "google-antigravity": "Google Antigravity",
+  // Gemini OAuth subtypes. Product names, so they stay untranslated like the rows around them;
+  // the explanatory copy lives in i18n (providers.oauthGeminiSubtypeHint).
+  "gemini-cli": "Gemini (Code Assist)",
+  "gemini-ai-studio": "Gemini (AI Studio)",
   "github-copilot": "GitHub Copilot",
   cursor: "Cursor",
 };

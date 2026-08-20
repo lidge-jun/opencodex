@@ -1003,6 +1003,8 @@ export const ja: Record<TKey, string> = {
   "modal.accountCodexPool": "ChatGPT アカウントプール",
   "modal.accountLoggedIn": "ログイン済み",
   "modal.accountLoggedOut": "未ログイン",
+  "modal.accountGeminiCodeAssist": "Google アカウント · Code Assist サブタイプ",
+  "modal.accountGeminiAiStudio": "Google アカウント · AI Studio サブタイプ（独自の OAuth クライアントが必要）",
   "quota.fiveHourLimit": "5 時間上限",
   "quota.weeklyLimit": "週間上限",
   "quota.monthlyLimit": "30 日上限",

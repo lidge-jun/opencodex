@@ -1051,6 +1051,8 @@ export const tr: Record<TKey, string> = {
   "modal.accountCodexPool": "ChatGPT hesap havuzu",
   "modal.accountLoggedIn": "Giriş yapıldı",
   "modal.accountLoggedOut": "Giriş yapılmadı",
+  "modal.accountGeminiCodeAssist": "Google hesabı · Code Assist alt türü",
+  "modal.accountGeminiAiStudio": "Google hesabı · AI Studio alt türü (kendi OAuth istemciniz gerekir)",
   "quota.fiveHourLimit": "5 saatlik limit",
   "quota.weeklyLimit": "Haftalık limit",
   "quota.monthlyLimit": "30 günlük limit",
