@@ -34,6 +34,14 @@ const ITEM_ID_PREFIXES: Readonly<Record<string, string>> = {
   message: "msg_",
   reasoning: "rs_",
   function_call: "fc_",
+  custom_tool_call: "ctc_",
+  // A routed tool_search lowering is restored to `tool_search_call` without an id, so this
+  // backfill is what names it. The generic `item_` fallback is not merely cosmetic here:
+  // `stripInvalidItemIds` in the Responses adapter deletes any id whose prefix does not match
+  // the type, so an `item_`-named tool_search_call silently loses its id on the NEXT turn and
+  // the client sees an item it cannot correlate. The prefixes here must stay a superset of the
+  // ones that serializer enforces.
+  tool_search_call: "tsc_",
   web_search_call: "ws_",
   file_search_call: "fs_",
   code_interpreter_call: "ci_",

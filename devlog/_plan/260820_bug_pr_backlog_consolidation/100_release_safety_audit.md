@@ -27,7 +27,7 @@ and the adapter forwarded our own proxy secret. Reproduced through the real adap
 
 ```
 URL:  https://chatgpt.com/backend-api/codex/responses
-AUTH: Bearer ocx_data_this_is_our_proxy_key
+AUTH: Bearer <the proxy's own admission secret, verbatim>
 LEAKED: true
 ```
 
@@ -120,4 +120,3 @@ Version line on `dev` is `2.27.0`, equal to the published `latest` and the `v2.2
 pre-release state, not a half-finished bump.
 
 This remains a readiness record. No release was executed.
-
