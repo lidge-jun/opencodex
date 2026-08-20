@@ -43,6 +43,7 @@ export type {
   OcxAssistantContentPart,
   OcxRequestOptions,
   OcxMessagePhase,
+  OcxProviderContinuationOwner,
   OcxProviderContinuationState,
   AdapterEvent,
   OcxUrlCitation,

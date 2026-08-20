@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { randomUUID } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import {
@@ -26,6 +27,7 @@ import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
+  copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -33,6 +35,12 @@ import {
   previousResponseScopeMismatch,
   rememberResponseState,
 } from "../../responses/state";
+import {
+  isValidProviderContinuationOwner,
+  providerContinuationOwnerFromReplayIdentity,
+  providerContinuationRouteScope,
+  sameProviderContinuationOwner,
+} from "../../responses/provider-continuation";
 import {
   comboRouteDecisionTrace,
   NoEligiblePolicyCandidateError,
@@ -62,7 +70,17 @@ import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage, TierDecision } from "../../types";
+import type {
+  AdapterEvent,
+  OcxConfig,
+  OcxParsedRequest,
+  OcxProviderConfig,
+  OcxProviderContinuationOwner,
+  OcxProviderContinuationState,
+  OcxReasoningReplayIdentity,
+  OcxUsage,
+  TierDecision,
+} from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -325,6 +343,62 @@ export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
 }
 
+type ContinuationOwnerRead =
+  | { kind: "missing" }
+  | { kind: "invalid" }
+  | { kind: "valid"; owner: OcxProviderContinuationOwner };
+
+function readProviderContinuationOwner(
+  state: OcxProviderContinuationState | undefined,
+): ContinuationOwnerRead {
+  if (!state || state.__ocxOwner === undefined) return { kind: "missing" };
+  const owner = state.__ocxOwner;
+  if (!isValidProviderContinuationOwner(owner)) return { kind: "invalid" };
+  return { kind: "valid", owner: { ...owner } };
+}
+
+function providerContinuationPayload(
+  state: OcxProviderContinuationState | undefined,
+): OcxProviderContinuationState | undefined {
+  if (!state) return undefined;
+  const cloned = structuredClone(state);
+  delete cloned.__ocxOwner;
+  return Object.keys(cloned).length > 0 ? cloned : undefined;
+}
+
+function bindProviderContinuationForRoute(
+  parsed: OcxParsedRequest,
+  currentOwner: OcxProviderContinuationOwner | undefined,
+): void {
+  const candidate = parsed._providerContinuationCandidate;
+  const storedOwner = readProviderContinuationOwner(candidate);
+  const mayRestore = storedOwner.kind === "valid"
+    && !!currentOwner
+    && sameProviderContinuationOwner(storedOwner.owner, currentOwner);
+  const restored = mayRestore ? providerContinuationPayload(candidate) : undefined;
+  if (restored) parsed._providerContinuation = restored;
+  else delete parsed._providerContinuation;
+  const cursorConversationId = restored?.cursor?.conversationId;
+  if (cursorConversationId) parsed._cursorConversationId = cursorConversationId;
+  else delete parsed._cursorConversationId;
+  if (currentOwner) parsed._providerContinuationOwner = { ...currentOwner };
+  else delete parsed._providerContinuationOwner;
+}
+
+function providerContinuationDestinationIdentity(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+): string | undefined {
+  const kiroContext = parsed._kiroAuthContext;
+  return reasoningReplayDestinationIdentity(JSON.stringify([
+    provider.baseUrl.trim().replace(/\/+$/, ""),
+    provider.responsesPath ?? "",
+    kiroContext?.profileArn ?? "",
+    kiroContext?.apiRegion ?? "",
+    kiroContext?.ssoRegion ?? "",
+  ]));
+}
+
 function bindRouteReasoningReplayScope(args: {
   parsed: OcxParsedRequest;
   providerName: string;
@@ -393,20 +467,36 @@ function bindRouteReasoningReplayScope(args: {
     );
   }
   const providerDestinationIdentity = reasoningReplayDestinationIdentity(provider.baseUrl);
-  bindReasoningReplayScope(
-    parsed._reasoningReplayScope,
-    credentialIdentity && providerDestinationIdentity
-      ? {
-          providerName,
-          providerDestinationIdentity,
-          providerDestinationDurableIdentity: durableReplayDestinationIdentity(provider.baseUrl),
-          adapterName,
-          modelId: parsed.modelId,
-          credentialIdentity,
-          ...(credentialDurableIdentity ? { credentialDurableIdentity } : {}),
-        }
+  const replayIdentity: OcxReasoningReplayIdentity | undefined = credentialIdentity && providerDestinationIdentity
+    ? {
+        providerName,
+        providerDestinationIdentity,
+        providerDestinationDurableIdentity: durableReplayDestinationIdentity(provider.baseUrl),
+        adapterName,
+        modelId: parsed.modelId,
+        credentialIdentity,
+        ...(credentialDurableIdentity ? { credentialDurableIdentity } : {}),
+      }
+    : undefined;
+  const continuationDestinationIdentity = providerContinuationDestinationIdentity(parsed, provider);
+  const continuationOwner = providerContinuationOwnerFromReplayIdentity(
+    replayIdentity && continuationDestinationIdentity
+      ? { ...replayIdentity, providerDestinationIdentity: continuationDestinationIdentity }
       : undefined,
   );
+  if (adapterName === "cursor") {
+    if (continuationOwner) parsed._cursorIdentityScope = providerContinuationRouteScope(continuationOwner);
+    else if (!parsed._cursorIdentityScope?.startsWith("cursor-unowned:")) {
+      // Prevent the adapter's token-only fallback from recreating a provider-private id after the
+      // route owner failed closed. The sentinel is per parsed request and contains no credential.
+      parsed._cursorIdentityScope = `cursor-unowned:${randomUUID()}`;
+    }
+  }
+  bindReasoningReplayScope(
+    parsed._reasoningReplayScope,
+    replayIdentity,
+  );
+  bindProviderContinuationForRoute(parsed, continuationOwner);
 }
 
 function nonEmptyProviderApiKey(provider: OcxProviderConfig): string | undefined {
@@ -943,6 +1033,12 @@ export interface HandleResponsesOptions {
   stripClaudeMainAuthForNoncanonicalForward?: boolean;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal combo handoff for one parent-validated continuation snapshot. */
+  comboReplaySnapshot?: {
+    sourceBody: unknown;
+    previousResponseInputExpanded: boolean;
+    providerContinuation: OcxProviderContinuationState | undefined;
+  };
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -1435,7 +1531,12 @@ export async function handleComboResponses(
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
-  const body = expandPreviousResponseInput(rawBody);
+  const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
+  const scopeMismatch = previousResponseScopeMismatch(body);
+  if (scopeMismatch) {
+    console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+  }
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
       400,
@@ -1462,11 +1563,14 @@ export async function handleComboResponses(
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
   }
-  // Expansion already materialised prior input. Drop the id so the child
-  // handleResponses path does not expand again and double-prepend history.
-  if (body !== rawBody && body && typeof body === "object" && !Array.isArray(body)) {
-    delete (body as Record<string, unknown>).previous_response_id;
-  }
+  const comboReplaySnapshot = {
+    sourceBody: body,
+    previousResponseInputExpanded: body !== rawBody
+      && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string",
+    providerContinuation: !scopeMismatch && body !== rawBody && requestedPreviousId
+      ? previousResponseProviderState(requestedPreviousId)
+      : undefined,
+  };
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
     // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
@@ -1573,6 +1677,7 @@ export async function handleComboResponses(
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
         comboAttempt: true,
+        comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
@@ -1842,19 +1947,24 @@ async function handleResponsesInner(
   );
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const originalBody = body;
-  body = expandPreviousResponseInput(body, inboundClientThreadId);
-  if (previousResponseScopeMismatch(body)) {
-    console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+  if (options.comboReplaySnapshot) {
+    copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
+  } else {
+    body = expandPreviousResponseInput(body, inboundClientThreadId);
+    if (previousResponseScopeMismatch(body)) {
+      console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+    }
+    if (previousResponseReplayFailure(body)) {
+      return formatErrorResponse(
+        400,
+        "previous_response_not_found",
+        "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+      );
+    }
   }
-  if (previousResponseReplayFailure(body)) {
-    return formatErrorResponse(
-      400,
-      "previous_response_not_found",
-      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-    );
-  }
-  const previousResponseInputExpanded = body !== originalBody
-    && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string";
+  const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
+    ?? (body !== originalBody
+      && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
@@ -1877,8 +1987,10 @@ async function handleResponsesInner(
     parsed = parseRequest(body);
     toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
-    parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
-    parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
+    const providerContinuationCandidate = options.comboReplaySnapshot
+      ? options.comboReplaySnapshot.providerContinuation
+      : previousResponseProviderState(parsed.previousResponseId);
+    if (providerContinuationCandidate) parsed._providerContinuationCandidate = providerContinuationCandidate;
     if (inboundClientThreadId) {
       parsed._clientThreadId = inboundClientThreadId;
       parsed._reasoningReplayScope = { clientThreadId: inboundClientThreadId };
@@ -2077,6 +2189,8 @@ async function handleResponsesInner(
           const kept: Array<keyof OcxParsedRequest> = [
             "_previousResponseInputExpanded",
             "_providerContinuation",
+            "_providerContinuationCandidate",
+            "_providerContinuationOwner",
             "_cursorConversationId",
             "_clientThreadId",
             "_reasoningReplayScope",
@@ -2345,6 +2459,9 @@ async function handleResponsesInner(
     codexAuthContext: authCtx,
     forwardHeaders: selectedForwardHeaders,
   });
+  if (!logCtx.conversationId && parsed._cursorConversationId) {
+    logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
+  }
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.
@@ -2445,24 +2562,22 @@ async function handleResponsesInner(
     emitted?: OcxProviderContinuationState,
   ): OcxProviderContinuationState | undefined => {
     const cursorConversationId = parsed._cursorConversationId;
-    const inherited = parsed._providerContinuation;
-    if (!emitted && !inherited && !cursorConversationId) return undefined;
-    return {
-      ...(inherited ?? {}),
-      ...(emitted ?? {}),
-      ...((inherited?.kiro || emitted?.kiro)
-        ? { kiro: { ...(inherited?.kiro ?? {}), ...(emitted?.kiro ?? {}) } }
-        : {}),
-      ...(cursorConversationId
-        ? {
-            cursor: {
-              ...(inherited?.cursor ?? {}),
-              ...(emitted?.cursor ?? {}),
-              conversationId: cursorConversationId,
-            },
-          }
-        : {}),
-    };
+    const inherited = providerContinuationPayload(parsed._providerContinuation);
+    const emittedPayload = providerContinuationPayload(emitted);
+    if (!emittedPayload && !inherited && !cursorConversationId) return undefined;
+    const merged: OcxProviderContinuationState = { ...(inherited ?? {}) };
+    for (const [provider, value] of Object.entries(emittedPayload ?? {})) {
+      const prior = merged[provider];
+      merged[provider] = prior && value
+        ? { ...prior, ...value }
+        : value;
+    }
+    if (cursorConversationId) {
+      merged.cursor = { ...(merged.cursor ?? {}), conversationId: cursorConversationId };
+    }
+    return parsed._providerContinuationOwner
+      ? { ...merged, __ocxOwner: { ...parsed._providerContinuationOwner } }
+      : merged;
   };
 
   // Remote compaction v2 on a ROUTED model: Codex sent `compaction_trigger` and requires exactly
@@ -4475,6 +4590,14 @@ async function handleResponsesInner(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
+          bindRouteReasoningReplayScope({
+            parsed: nextParsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+          });
+          // Response persistence closes over the outer parsed request; keep its owner binding in
+          // sync with the terminal-guard clone that builds the rotated continuation request.
           bindRouteReasoningReplayScope({
             parsed,
             providerName: route.providerName,
