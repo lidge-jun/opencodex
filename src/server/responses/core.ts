@@ -182,7 +182,11 @@ import {
   waitForProviderRequestSlot,
 } from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
-import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
+import {
+  applyOpenAiVirtualModel,
+  resolveOpenAiCompactModel,
+  resolveOpenAiVirtualModel,
+} from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
@@ -1452,9 +1456,11 @@ function routeCanReceiveEncryptedV2AgentTasks(
   route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
   inboundWire: InboundWire = "responses",
 ): boolean {
+  const wireModelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId
+    ?? route.modelId;
   const resolvedProvider = resolveWireProtocolOverride(
     route.providerName,
-    route.modelId,
+    wireModelId,
     route.provider,
     inboundWire,
   );
@@ -2521,13 +2527,6 @@ async function handleResponsesInner(
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
 
-  // Encrypted child tasks may reach canonical ChatGPT or an explicitly trusted
-  // Responses provider. This check runs against the FINAL route so compatible-only
-  // fallback can rescue an incompatible primary.
-  if (!routeCanReceiveEncryptedV2AgentTasks(route, inboundWire) && unreadableEncryptedAgentTask) {
-    return unreadableEncryptedAgentTaskResponse();
-  }
-
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
   // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
   // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
@@ -2556,6 +2555,12 @@ async function handleResponsesInner(
     inboundWire,
     inboundTransport: options.inboundTransport,
   });
+  // Virtual model normalization can change both the wire model and its model-specific
+  // adapter. Enforce the ciphertext boundary only after that final wire decision, while
+  // still preceding auth, adapter construction, and all provider I/O.
+  if (!routeCanReceiveEncryptedV2AgentTasks(route, inboundWire) && unreadableEncryptedAgentTask) {
+    return unreadableEncryptedAgentTaskResponse();
+  }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {

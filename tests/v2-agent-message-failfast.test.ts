@@ -291,6 +291,84 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  test("rejects when a trusted Responses virtual model normalizes to an openai-chat wire model", async () => {
+    const config = routedConfig();
+    config.defaultProvider = "openai-apikey";
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-openai-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: {
+        "gpt-5.6-sol-pro": "openai-responses",
+        "gpt-5.6-sol": "openai-chat",
+      },
+    };
+    const fetchedUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      fetchedUrls.push(String(input));
+      return Response.json({
+        id: "chatcmpl_must_not_dispatch",
+        object: "chat.completion",
+        model: "gpt-5.6-sol",
+        choices: [{ index: 0, message: { role: "assistant", content: "unsafe" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "openai-apikey/gpt-5.6-sol-pro", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "unreadable_encrypted_agent_task" },
+    });
+    expect(fetchedUrls).toEqual([]);
+  });
+
+  test("allows when an openai-chat virtual model normalizes to a trusted Responses wire model", async () => {
+    const config = routedConfig();
+    config.defaultProvider = "openai-apikey";
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-openai-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: {
+        "gpt-5.6-sol-pro": "openai-chat",
+        "gpt-5.6-sol": "openai-responses",
+      },
+    };
+    const fetchedUrls: string[] = [];
+    const forwardedBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      fetchedUrls.push(String(input));
+      forwardedBodies.push(typeof init?.body === "string" ? init.body : "");
+      return Response.json({
+        id: "resp_virtual_wire",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.6-sol",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "openai-apikey/gpt-5.6-sol-pro", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toEndWith("/responses");
+    expect(forwardedBodies[0]).toContain(FERNET_TASK);
+  });
+
   test("lets a combo select an explicitly trusted Responses target", async () => {
     const config = mixedComboConfig();
     config.providers.relay = {
@@ -360,6 +438,96 @@ describe("V2 routed agent-message ciphertext guard", () => {
       error: { code: "unreadable_encrypted_agent_task" },
     });
     expect(fetchCalls).toBe(0);
+  });
+
+  test("skips a combo target whose trusted Responses alias normalizes to an openai-chat wire model", async () => {
+    const config = mixedComboConfig();
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-openai-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: {
+        "gpt-5.6-sol-pro": "openai-responses",
+        "gpt-5.6-sol": "openai-chat",
+      },
+    };
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    config.combos!.mixed!.targets = [
+      { provider: "openai-apikey", model: "gpt-5.6-sol-pro" },
+      { provider: "relay", model: "gpt-5.6-luna" },
+    ];
+    const fetchedUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      fetchedUrls.push(String(input));
+      return Response.json({
+        id: "resp_combo_wire_fallback",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.6-luna",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/mixed", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toContain("relay.example.test");
+    expect(fetchedUrls[0]).not.toContain("api.openai.com");
+  });
+
+  test("selects a combo target whose openai-chat alias normalizes to a trusted Responses wire model", async () => {
+    const config = mixedComboConfig();
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-openai-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: {
+        "gpt-5.6-sol-pro": "openai-chat",
+        "gpt-5.6-sol": "openai-responses",
+      },
+    };
+    config.combos!.mixed!.targets = [
+      { provider: "openai-apikey", model: "gpt-5.6-sol-pro" },
+    ];
+    const fetchedUrls: string[] = [];
+    const forwardedBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      fetchedUrls.push(String(input));
+      forwardedBodies.push(typeof init?.body === "string" ? init.body : "");
+      return Response.json({
+        id: "resp_combo_virtual_wire",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.6-sol",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/mixed", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toEndWith("/responses");
+    expect(forwardedBodies[0]).toContain(FERNET_TASK);
   });
 
   test("uses the request inbound wire when preflighting encrypted combo targets", async () => {

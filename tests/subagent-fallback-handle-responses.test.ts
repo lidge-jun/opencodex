@@ -986,6 +986,95 @@ describe("encrypted child native-only fallback", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  test("skips a trusted Responses fallback alias whose wire model resolves to openai-chat", async () => {
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      subagentModelFallback: [
+        "openai-apikey/gpt-5.6-sol-pro",
+        "relay/gpt-5.6-luna",
+      ],
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "xai-test",
+        },
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "openai-test",
+          allowEncryptedV2AgentTasks: true,
+          modelAdapters: {
+            "gpt-5.6-sol-pro": "openai-responses",
+            "gpt-5.6-sol": "openai-chat",
+          },
+        },
+        relay: {
+          adapter: "openai-responses",
+          baseUrl: "https://relay.example.test/v1",
+          authMode: "key",
+          apiKey: "relay-test",
+          allowEncryptedV2AgentTasks: true,
+        },
+      },
+    });
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(cfg, {
+      model: "xai/grok-4.5",
+      input: encryptedAgentInput(),
+      stream: false,
+    });
+
+    expect(response.status).toBe(200);
+    expect(capture.urls).toHaveLength(1);
+    expect(capture.urls[0]).toContain("relay.example.test");
+    expect(capture.urls[0]).not.toContain("api.openai.com");
+    expect(capture.bodies[0]).toContain(FERNET_TASK);
+  });
+
+  test("selects an openai-chat fallback alias whose wire model resolves to trusted Responses", async () => {
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      subagentModelFallback: ["openai-apikey/gpt-5.6-sol-pro"],
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "xai-test",
+        },
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "openai-test",
+          allowEncryptedV2AgentTasks: true,
+          modelAdapters: {
+            "gpt-5.6-sol-pro": "openai-chat",
+            "gpt-5.6-sol": "openai-responses",
+          },
+        },
+      },
+    });
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(cfg, {
+      model: "xai/grok-4.5",
+      input: encryptedAgentInput(),
+      stream: false,
+    });
+
+    expect(response.status).toBe(200);
+    expect(capture.urls).toHaveLength(1);
+    expect(capture.urls[0]).toEndWith("/responses");
+    expect(capture.bodies[0]).toContain(FERNET_TASK);
+  });
+
   test("rejects encrypted routed primary when only routed fallbacks exist", async () => {
     const cfg = poolNativePlusRoutedConfig({
       defaultProvider: "xai",
