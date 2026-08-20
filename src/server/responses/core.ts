@@ -37,6 +37,7 @@ import {
 } from "../../responses/state";
 import {
   isValidProviderContinuationOwner,
+  mergeProviderContinuationPayload,
   providerContinuationOwnerFromReplayIdentity,
   providerContinuationRouteScope,
   sameProviderContinuationOwner,
@@ -2569,13 +2570,10 @@ async function handleResponsesInner(
     const inherited = providerContinuationPayload(parsed._providerContinuation);
     const emittedPayload = providerContinuationPayload(emitted);
     if (!emittedPayload && !inherited && !cursorConversationId) return undefined;
-    const merged: OcxProviderContinuationState = { ...(inherited ?? {}) };
-    for (const [provider, value] of Object.entries(emittedPayload ?? {})) {
-      const prior = merged[provider];
-      merged[provider] = prior && value
-        ? { ...prior, ...value }
-        : value;
-    }
+    const merged = mergeProviderContinuationPayload(
+      inherited ?? {},
+      emittedPayload ?? {},
+    ) as OcxProviderContinuationState;
     if (cursorConversationId) {
       merged.cursor = { ...(merged.cursor ?? {}), conversationId: cursorConversationId };
     }

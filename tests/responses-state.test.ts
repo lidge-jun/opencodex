@@ -21,6 +21,7 @@ import { buildResponseJSON } from "../src/bridge";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { createCursorContextUsageTracker } from "../src/adapters/cursor/protobuf-events";
 import { parseRequest } from "../src/responses/parser";
+import { mergeProviderContinuationPayload } from "../src/responses/provider-continuation";
 import { createSseInspector } from "../src/server/relay";
 import {
   clearResponseStateForTests,
@@ -801,6 +802,24 @@ describe("Responses previous_response_id state", () => {
     expect(readResponseSpill("resp_invalid_spill_owner", invalid)).toEqual({
       ok: false,
       reason: "corrupt",
+    });
+  });
+
+  test("deep provider-state merge keeps __proto__ as data", () => {
+    const inherited = JSON.parse(
+      '{"__proto__":{"stable":"keep"},"future":{"metadata":{"stable":"keep","list":["old"]}}}',
+    ) as Record<string, unknown>;
+    const emitted = JSON.parse(
+      '{"__proto__":{"changed":"new"},"future":{"metadata":{"changed":"new","list":["new"]}}}',
+    ) as Record<string, unknown>;
+
+    const merged = mergeProviderContinuationPayload(inherited, emitted);
+
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+    expect(Object.hasOwn(merged, "__proto__")).toBe(true);
+    expect(merged["__proto__"]).toEqual({ stable: "keep", changed: "new" });
+    expect(merged.future).toEqual({
+      metadata: { stable: "keep", changed: "new", list: ["new"] },
     });
   });
 

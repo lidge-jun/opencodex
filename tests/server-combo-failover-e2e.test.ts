@@ -1673,11 +1673,27 @@ describe("server combo failover 030 activation matrix", () => {
         providerState: turn === 1
           ? {
               cursor: { checkpointRef: "opaque-ref" },
-              future: { stable: "keep", changed: "old" },
+              future: {
+                stable: "keep",
+                changed: "old",
+                metadata: {
+                  stable: "keep-nested",
+                  changed: "old-nested",
+                  list: ["old"],
+                  scalar: "old",
+                },
+              },
             }
           : {
               cursor: { checkpointUsable: true },
-              future: { changed: "new" },
+              future: {
+                changed: "new",
+                metadata: {
+                  changed: "new-nested",
+                  list: ["new"],
+                  scalar: 42,
+                },
+              },
             },
       });
     };
@@ -1699,6 +1715,12 @@ describe("server combo failover 030 activation matrix", () => {
     expect(stored?.future).toEqual({
       stable: "keep",
       changed: "new",
+      metadata: {
+        stable: "keep-nested",
+        changed: "new-nested",
+        list: ["new"],
+        scalar: 42,
+      },
     });
     expect(stored?.cursor).toEqual({ checkpointRef: "opaque-ref", checkpointUsable: true });
     expect(stored?.__ocxOwner?.providerName).toBe("a");
