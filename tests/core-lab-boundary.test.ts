@@ -100,16 +100,29 @@ function firstLabPath(entry: string): string[] | null {
   return null;
 }
 
+/**
+ * Guard 1's predicate, defined ONCE so the test that claims to protect it actually calls it.
+ *
+ * It previously lived inline in the assertion while the self-test below re-declared its own
+ * copy of the regex — so the self-test proved a local literal behaved, not that the guard did.
+ * A copy cannot fail when the original drifts, which is the specific way a guard rots.
+ *
+ * The trailing-slash forms are not sufficient either: `src/lab/index.ts` exists, so
+ * `import("../lab")` resolves to the Lab entrypoint while matching none of them. The
+ * directory specifier is matched explicitly.
+ */
+export function namesLabDirectly(source: string): boolean {
+  return /^\s*(?:import|export)\s+(?!type\b)[^;]*?["'][^"']*\/lab(?:\/|["'])/m.test(source)
+    || /^\s*import\s+["'][^"']*\/lab(?:\/|["'])/m.test(source)
+    // A protected file may lazily reach Lab through a handler it imports, but must not
+    // name Lab itself -- not even dynamically, and not as a bare directory.
+    || /\bimport\s*\(\s*["'][^"']*\/lab(?:\/|["'])/.test(source);
+}
+
 describe("core / Compatibility Lab boundary", () => {
   // Guard 1: the obvious case, a direct import.
   test.each(PROTECTED)("%s has no direct src/lab import", file => {
-    const source = readFileSync(resolve(repoRoot, file), "utf8");
-    const direct = /^\s*(?:import|export)\s+(?!type\b)[^;]*?["'][^"']*\/lab\//m.test(source)
-      || /^\s*import\s+["'][^"']*\/lab\//m.test(source)
-      // A protected file may lazily reach Lab through a handler it imports, but must not
-      // name Lab itself -- not even dynamically.
-      || /\bimport\s*\(\s*["'][^"']*\/lab\//.test(source);
-    expect(direct).toBe(false);
+    expect(namesLabDirectly(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
   });
 
   // Guard 2: the case that actually caused this work. The original defect reached Lab
@@ -156,11 +169,18 @@ describe("boundary guard cannot be defeated", () => {
   // -- lazy loading is the remedy, not the defect. Guard 1 is what stops a protected file
   // from naming Lab dynamically, so the coverage moves there rather than disappearing.
   test("guard 1 forbids a direct dynamic Lab import in a protected file", () => {
-    const direct = (source: string) => /\bimport\s*\(\s*["'][^"']*\/lab\//.test(source);
-    expect(direct('void import("../lab/paths");')).toBe(true);
-    expect(direct('const m = await import("./management/lab-routes");')).toBe(false);
+    // Calls the SAME predicate the guard uses, so a drift in one cannot pass in the other.
+    expect(namesLabDirectly('void import("../lab/paths");')).toBe(true);
+    // A bare directory specifier resolves to src/lab/index.ts and must be caught too --
+    // matching only `/lab/` left this shape as a silent way through.
+    expect(namesLabDirectly('void import("../lab");')).toBe(true);
+    expect(namesLabDirectly('import "../lab";')).toBe(true);
+    expect(namesLabDirectly('import { x } from "../lab";')).toBe(true);
+    // A module whose NAME merely contains "lab" is not Lab.
+    expect(namesLabDirectly('const m = await import("./management/lab-routes");')).toBe(false);
+    expect(namesLabDirectly('import { x } from "./collaboration";')).toBe(false);
     for (const file of PROTECTED) {
-      expect(direct(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
+      expect(namesLabDirectly(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
     }
   });
 

@@ -380,15 +380,36 @@ console.log("→ privacy scan");
 await runLoud(["bun", "run", "privacy:scan"]);
 
 // 2. Bump package.json only; the workflow creates the version tag after npm publish.
-console.log(`→ bump package.json → ${version}`);
-await runLoud(["npm", "version", version, "--no-git-tag-version"]);
+//
+// A dry run bumps and pushes exactly like a real one, because the point of the dry run is to
+// exercise the workflow against the REAL release commit. That makes the second invocation
+// re-enter with package.json already at `version`, where `npm version <same>` exits
+// "Version not changed" — so the documented "re-run with --publish" path could never
+// complete. Treat an already-correct version as satisfied rather than as an error: the
+// bump is a desired end state, not an action that must happen every time.
+const currentVersion = JSON.parse(await Bun.file("package.json").text()).version as string;
+if (currentVersion === version) {
+  console.log(`→ package.json already at ${version}; leaving it alone`);
+} else {
+  console.log(`→ bump package.json → ${version}`);
+  await runLoud(["npm", "version", version, "--no-git-tag-version"]);
+}
 
-// 3. Commit + push the version bump.
-await runLoud(["git", "add", "package.json"]);
-await runLoud(["git", "commit", "-m", `release: v${version}`]);
+// 3. Commit + push the version bump — only if it is not already committed and pushed. On the
+// --publish re-run of a dry run there is nothing to commit, and `git commit` with an empty
+// index fails, which would strand the release just as surely as the bump did.
+const pendingBump = (await capture(["git", "status", "--porcelain", "package.json"])).trim() !== "";
+if (pendingBump) {
+  await runLoud(["git", "add", "package.json"]);
+  await runLoud(["git", "commit", "-m", `release: v${version}`]);
+}
 const releaseSha = await capture(["git", "rev-parse", "HEAD"]);
-console.log(`→ push origin ${branch}`);
-await runLoud(["git", "push", "origin", branch]);
+if (pendingBump) {
+  console.log(`→ push origin ${branch}`);
+  await runLoud(["git", "push", "origin", branch]);
+} else {
+  console.log(`→ release commit ${releaseSha.slice(0, 9)} already pushed; reusing it`);
+}
 
 // 4. Wait for the pushed release commit to pass CI, then dispatch the Release workflow.
 console.log(`→ wait for Cross-platform CI (${releaseSha})`);
