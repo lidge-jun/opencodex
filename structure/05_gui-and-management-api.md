@@ -320,6 +320,9 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 ## Usage accounting
 
 `src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`.
+An opt-in shadow-call rewrite persists the bounded, redacted original helper model as
+`shadowCallRewrittenFrom`, so helper traffic remains identifiable after restart without storing
+request content or inferring a helper subtype from timing.
 `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
 A Codex-surface response also includes an `accounts` breakdown keyed by the stable non-PII
