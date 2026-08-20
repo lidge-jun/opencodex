@@ -11,7 +11,10 @@ const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", a
 
 async function collect(gen: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[]> {
   const out: AdapterEvent[] = [];
-  for await (const e of gen) out.push(e);
+  // Heartbeats are invisible downstream: the bridge consumes them to re-arm its stall
+  // watchdog and emits nothing. Dropping them here keeps these assertions about the wire
+  // the client actually sees (#2156).
+  for await (const e of gen) if (e.type !== "heartbeat") out.push(e);
   return out;
 }
 

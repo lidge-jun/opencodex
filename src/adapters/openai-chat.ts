@@ -1743,6 +1743,21 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               if (idDelta && !call.id) call.id = idDelta;
               if (typeof rawName === "string" && rawName && !call.name) call.name = rawName;
               if (typeof rawArguments === "string") call.sawArgumentsString = true;
+              // Tool-call deltas are BUFFERED until a terminal signal, so this adapter can
+              // consume upstream frames for a long time while yielding nothing. The Responses
+              // bridge reads adapter activity, not socket activity, so a model that streams a
+              // large argument payload looks identical to a hung upstream and the stall
+              // watchdog can abort a turn that was progressing normally.
+              //
+              // Found while investigating #2156, but it is NOT that bug: a stall abort emits
+              // `response.incomplete` with `upstream_stall_timeout` from the bridge, whereas
+              // that report shows the adapter's own end-of-stream error after `reader.read()`
+              // returned EOF with tool calls still pending. Different path, different frame.
+              //
+              // A heartbeat is invisible downstream — the bridge consumes it to re-arm the
+              // watchdog and emits nothing — which is the same remedy the Cursor, Anthropic,
+              // Google, and Kiro adapters already use for their own silent phases.
+              yield { type: "heartbeat" };
               if (typeof rawArguments === "string" && rawArguments) {
                 const previousBytes = call.argsBytes;
                 const nextBytes = previousBytes + budgetEncoder.encode(rawArguments).byteLength;

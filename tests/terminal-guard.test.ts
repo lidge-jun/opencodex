@@ -188,6 +188,54 @@ describe("terminal guard", () => {
     expect(actual.at(-1)).toMatchObject({ usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35 } });
   });
 
+
+  // A heartbeat is adapter liveness, not turn content. The openai-chat adapter emits one per
+  // tool-call delta while it buffers, so retaining them here would let a single large argument
+  // payload grow `seen` without bound — and `seen` is what both the continuation analysis and
+  // the rebuilt request read. Passing them through unretained is what the empty-completion
+  // guard already does.
+  // A heartbeat is adapter liveness, not turn content. The openai-chat adapter emits one per
+  // tool-call delta while it buffers, so retaining them would grow the guard's record without
+  // bound on a large argument payload. `analyzeTerminalTurn` and `buildContinuationRequest`
+  // both read that record, so pin the contract on the pure functions that consume it plus the
+  // observable passthrough.
+  test("a retained heartbeat would corrupt the continuation record", () => {
+    const clean: AdapterEvent[] = [
+      { type: "text_delta", text: "我接下来会修改相关文件。" },
+    ];
+    const padded: AdapterEvent[] = [
+      { type: "text_delta", text: "我接下来会修改相关文件。" },
+      ...Array.from({ length: 50 }, () => ({ type: "heartbeat" }) as AdapterEvent),
+    ];
+    const request = parsed("继续检查");
+    // The guard must not let liveness markers change what the continuation decides or sends.
+    expect(analyzeTerminalTurn(request, padded).assistantText)
+      .toBe(analyzeTerminalTurn(request, clean).assistantText);
+    expect(JSON.stringify(buildContinuationRequest(request, padded).context.messages))
+      .toBe(JSON.stringify(buildContinuationRequest(request, clean).context.messages));
+  });
+
+  test("heartbeats reach the consumer so the bridge watchdog stays armed", async () => {
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("继续检查"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        for (let i = 0; i < 50; i++) yield { type: "heartbeat" } as AdapterEvent;
+        yield { type: "tool_call_start", id: "call_1", name: "exec_command" } as AdapterEvent;
+        yield { type: "tool_call_end" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "done" } as AdapterEvent;
+      })(),
+      adapterName: "openai-chat",
+    })) actual.push(event);
+
+    expect(actual.filter(event => event.type === "heartbeat")).toHaveLength(50);
+    expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+  });
+
   test("stops after the configured continuation bound", async () => {
     let continuations = 0;
     const actual: AdapterEvent[] = [];

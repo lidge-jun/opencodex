@@ -193,6 +193,16 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
     const seen: AdapterEvent[] = [];
     let terminalSeen = false;
     for await (const event of source) {
+      // A heartbeat is adapter liveness, not turn content: it exists so the bridge watchdog
+      // can tell a buffering adapter from a hung one. Retaining it here would put an
+      // unbounded number of empty markers into `seen`, which feeds both the continuation
+      // analysis and the rebuilt request — and the openai-chat adapter now emits one per
+      // tool-call delta, so a long argument payload alone could grow this array without
+      // limit. The empty-completion guard already passes them through unretained; match it.
+      if (event.type === "heartbeat") {
+        yield event;
+        continue;
+      }
       if (event.type === "done") {
         terminalSeen = true;
         const analysis = (options.adapterName === "anthropic" || options.adapterName === "openai-chat")

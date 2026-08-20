@@ -40,7 +40,10 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
 
 async function collect(stream: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[]> {
   const events: AdapterEvent[] = [];
-  for await (const event of stream) events.push(event);
+  // Heartbeats are invisible downstream: the bridge consumes them to re-arm its stall
+  // watchdog and emits nothing. Dropping them here keeps these assertions about the wire
+  // the client actually sees.
+  for await (const event of stream) if (event.type !== "heartbeat") events.push(event);
   return events;
 }
 
@@ -920,4 +923,33 @@ describe("openai-chat response_format emission", () => {
         .toEqual({ type: "json_object" });
     });
   });
+
+// Tool-call deltas are BUFFERED until a terminal signal, so this adapter can consume upstream
+// frames for a long time while yielding nothing downstream. The Responses bridge arms its
+// stall watchdog on ADAPTER activity, not socket activity, so a model streaming a large
+// argument payload was indistinguishable from a hung upstream.
+//
+// Found while investigating #2156 but deliberately NOT claimed as its fix: a stall abort
+// emits `response.incomplete` with `upstream_stall_timeout`, while that report shows the
+// adapter's own EOF error with tool calls still pending. This pins the mechanism only.
+test("tool-call deltas emit heartbeats so a long buffering phase is not read as a stall", async () => {
+  const adapter = createOpenAIChatAdapter(provider());
+  const frames = ['data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call_a", function: { name: "shell", arguments: "" } }] } }] }) + '\n\n'];
+  // Many argument chunks and nothing else: exactly the shape that looked like silence.
+  for (let i = 0; i < 12; i += 1) {
+    frames.push('data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"x"' } }] } }] }) + '\n\n');
+  }
+  frames.push('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n', "data: [DONE]\n\n");
+
+  const raw: AdapterEvent[] = [];
+  for await (const event of adapter.parseStream(new Response(frames.join("")))) raw.push(event);
+
+  // One per consumed tool-call delta: the watchdog sees activity for the whole phase.
+  expect(raw.filter(e => e.type === "heartbeat").length).toBeGreaterThanOrEqual(12);
+  // And the client-visible wire is unchanged -- a heartbeat is consumed by the bridge.
+  const visible = raw.filter(e => e.type !== "heartbeat");
+  expect(visible.some(e => e.type === "error")).toBe(false);
+  expect(visible).toContainEqual({ type: "tool_call_start", id: "call_a", name: "shell" });
+  expect(visible.at(-1)).toMatchObject({ type: "done" });
+});
 });
