@@ -28,7 +28,11 @@ import {
   type CodexCapacityAggregation,
   type CodexCapacityQuota,
 } from "./codex-capacity";
-import { fetchAntigravityLiveQuota } from "./antigravity-quota";
+import {
+  AntigravityQuotaRpcError,
+  fetchAntigravityLiveQuota,
+  isTerminalAntigravityQuotaStatus,
+} from "./antigravity-quota";
 import { antigravityHostCandidates, isAntigravityHttpsHost } from "../adapters/google-antigravity-hosts";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
@@ -2083,12 +2087,20 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     return null;
   }
   const baseUrl = (config.baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
-  const liveQuota = await fetchAntigravityLiveQuota({
-    accessToken,
-    projectId: credential.projectId,
-    baseUrl,
-    timeoutMs: REQUEST_TIMEOUT_MS,
-  });
+  let liveQuota: ProviderQuota | null;
+  try {
+    liveQuota = await fetchAntigravityLiveQuota({
+      accessToken,
+      projectId: credential.projectId,
+      baseUrl,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (error instanceof AntigravityQuotaRpcError && isTerminalAntigravityQuotaStatus(error.status)) {
+      return null;
+    }
+    liveQuota = null;
+  }
 
   const windows = new Map<string, ProviderQuotaWindow>();
   for (const [index, host] of antigravityHostCandidates(baseUrl).entries()) {

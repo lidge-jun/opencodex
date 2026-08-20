@@ -84,15 +84,19 @@ function collectCandidates(value: unknown, path: string[] = [], output: QuotaCan
   return output;
 }
 
-function candidateModelName(candidate: QuotaCandidate): string {
-  const { record, path } = candidate;
-  const explicit = record.modelId ?? record.model_id ?? record.modelName ?? record.model ?? record.name;
-  return `${typeof explicit === "string" ? explicit : ""} ${path.join(" ")}`.toLowerCase();
+function candidateModelName(record: Record<string, unknown>): string {
+  const explicit = record.modelId
+    ?? record.model_id
+    ?? record.modelName
+    ?? record.model
+    ?? record.name
+    ?? record.displayName;
+  return typeof explicit === "string" ? explicit.toLowerCase() : "";
 }
 
 function parseGeminiWindow(payload: unknown): ProviderQuotaWindow | undefined {
   for (const candidate of collectCandidates(payload)) {
-    if (!candidateModelName(candidate).includes("gemini")) continue;
+    if (!candidateModelName(candidate.record).includes("gemini")) continue;
     const percent = usedPercent(candidate.record);
     if (percent === undefined) continue;
     const reset = recordResetAt(candidate.record);
@@ -127,14 +131,19 @@ async function readJson(response: Response, timeoutMs: number): Promise<unknown>
   return payload;
 }
 
-class AntigravityQuotaRpcError extends Error {
+export class AntigravityQuotaRpcError extends Error {
   constructor(readonly status: number) {
     super(`Antigravity quota RPC failed: ${status}`);
   }
 }
 
-function shouldRetryPeer(status: number): boolean {
-  return status === 404 || status === 503;
+export function isTerminalAntigravityQuotaStatus(status: number): boolean {
+  return status === 401 || status === 403 || status === 429;
+}
+
+function terminalRpcError(result: PromiseSettledResult<unknown>): AntigravityQuotaRpcError | null {
+  if (result.status !== "rejected" || !(result.reason instanceof AntigravityQuotaRpcError)) return null;
+  return isTerminalAntigravityQuotaStatus(result.reason.status) ? result.reason : null;
 }
 
 async function fetchRpc(
@@ -169,13 +178,8 @@ async function fetchHostQuota(
     fetchRpc(fetchImpl, host, "retrieveUserQuota", args),
     fetchRpc(fetchImpl, host, "retrieveUserQuotaSummary", args),
   ]);
-  if (
-    quotaResult.status === "rejected"
-    && quotaResult.reason instanceof AntigravityQuotaRpcError
-    && !shouldRetryPeer(quotaResult.reason.status)
-  ) {
-    throw quotaResult.reason;
-  }
+  const terminalError = terminalRpcError(quotaResult) ?? terminalRpcError(summaryResult);
+  if (terminalError) throw terminalError;
   if (quotaResult.status === "rejected") return null;
   const quotaPayload = quotaResult.value;
   const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : null;
@@ -201,8 +205,10 @@ export async function fetchAntigravityLiveQuota(
     try {
       const quota = await fetchHostQuota(fetchImpl, host, args);
       if (quota) return quota;
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof AntigravityQuotaRpcError && isTerminalAntigravityQuotaStatus(error.status)) {
+        throw error;
+      }
     }
   }
   return null;
