@@ -908,7 +908,7 @@ export interface ZcodeModelEntry {
 
 export interface ZcodeProviderBlock {
   name: "OpenCodex";
-  kind: "anthropic";
+  kind: "openai-compatible";
   enabled: true;
   source: "custom";
   options: {
@@ -1288,12 +1288,12 @@ function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig {
     provider: {
       [OPENCODE_PROVIDER_ID]: {
         name: "OpenCodex",
-        kind: "anthropic",
+        kind: "openai-compatible",
         enabled: true,
         source: "custom",
         options: {
           apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
-          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, ""),
+          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, "") + "/v1",
           apiKeyRequired: true,
         },
         models,

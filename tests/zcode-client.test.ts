@@ -43,12 +43,12 @@ describe("ZCode client config", () => {
     expect(Object.keys(document)).toEqual(["provider"]);
     const provider = document.provider[OPENCODE_PROVIDER_ID]!;
     expect(provider.name).toBe("OpenCodex");
-    expect(provider.kind).toBe("anthropic");
+    expect(provider.kind).toBe("openai-compatible");
     expect(provider.enabled).toBe(true);
     expect(provider.source).toBe("custom");
     expect(provider.options).toEqual({
       apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
-      baseURL: "http://127.0.0.1:10100",
+      baseURL: "http://127.0.0.1:10100/v1",
       apiKeyRequired: true,
     });
   });
