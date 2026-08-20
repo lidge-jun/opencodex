@@ -70,10 +70,6 @@ function buildFastPolicyAuthority(
   capabilityProvider: ServiceTierCapabilityProvider = provider,
 ): FastPolicyAuthority {
   const registry = registryTransportMatch ? getProviderRegistryEntry(providerName) : undefined;
-  const registryModelCapabilities = registry
-    && registryModelServiceTierCapabilityApplies(registry, capabilityProvider)
-    ? registry.modelSupportsServiceTier
-    : undefined;
   const authTransport = resolveProviderAuthTransport(
     provider.adapter,
     provider.authMode ?? registry?.authKind ?? "key",
@@ -83,9 +79,13 @@ function buildFastPolicyAuthority(
     && (authTransport === "authorization_bearer" || authTransport === "x_api_key")
     ? registry.keyAuthServiceTier
     : undefined;
+  const registryModelCapabilities = registry
+    && registryModelServiceTierCapabilityApplies(registry, capabilityProvider)
+    ? registry.modelSupportsServiceTier
+    : undefined;
   const providerCapability = capabilityProvider.supportsServiceTier
-    ?? registry?.supportsServiceTier
-    ?? keyAuthDefaults?.supportsServiceTier;
+    ?? keyAuthDefaults?.supportsServiceTier
+    ?? registry?.supportsServiceTier;
   const authority: FastPolicyAuthority = Object.freeze({
     providerAdapter: provider.adapter,
     providerAuthMode: provider.authMode ?? registry?.authKind ?? "key",
