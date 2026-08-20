@@ -362,6 +362,49 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  test("uses the request inbound wire when preflighting encrypted combo targets", async () => {
+    const config = mixedComboConfig();
+    config.providers.deepseek = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.deepseek.com",
+      authMode: "key",
+      apiKey: "test-deepseek-key",
+      // Startup and management validation reject this combination. Keep the runtime
+      // guard defensive as well: the Responses-only registry default must not make a
+      // Chat replay look eligible during combo preflight.
+      allowEncryptedV2AgentTasks: true,
+    };
+    config.combos!.mixed!.targets = [
+      { provider: "deepseek", model: "deepseek-v4-flash" },
+    ];
+    const logCtx = { model: "", provider: "" };
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("provider dispatch must not happen");
+    }) as typeof fetch;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/mixed",
+        input: agentMessage([
+          { type: "input_text", text: ROUTING_ENVELOPE },
+          { type: "encrypted_content", encrypted_content: FERNET_TASK },
+        ]),
+        stream: false,
+      }),
+    }), config, logCtx, { inboundWire: "chat" });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "unreadable_encrypted_agent_task" },
+    });
+    expect(logCtx.attempts).toBeUndefined();
+    expect(fetchCalls).toBe(0);
+  });
+
   test("keeps encrypted combo failover on native targets after a native failure", async () => {
     const config = mixedComboConfig();
     config.providers["openai-backup"] = {

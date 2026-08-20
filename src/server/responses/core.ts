@@ -1820,7 +1820,7 @@ export async function handleComboResponses(
     if (!provider || provider.disabled === true) return false;
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
-      return routeCanReceiveEncryptedV2AgentTasks(route);
+      return routeCanReceiveEncryptedV2AgentTasks(route, options.inboundWire ?? "responses");
     } catch {
       return false;
     }
