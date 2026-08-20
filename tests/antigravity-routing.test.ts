@@ -1,18 +1,48 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { AdapterRequest } from "../src/adapters/base";
+import { fetchAntigravityWithRetry } from "../src/adapters/google-http";
 import {
   clearAntigravityAccountCooldown,
+  getAntigravityAccountCooldown,
   isAntigravityAccountInCooldown,
   nextAntigravityAccount,
   recordAntigravityCooldown,
   sweepExpiredAntigravityRoutingHealth,
 } from "../src/oauth/antigravity-routing";
 
+const realFetch = globalThis.fetch;
+
 const NOW = 1_700_000_000_000;
 const ACCOUNT_IDS = ["account-a", "account-b", "account-c"];
 
 afterEach(() => {
+  globalThis.fetch = realFetch;
   for (const accountId of ACCOUNT_IDS) clearAntigravityAccountCooldown(accountId);
+  clearAntigravityAccountCooldown("account-http-retry");
 });
+
+const antigravityRequest: AdapterRequest = {
+  url: "https://daily-cloudcode-pa.googleapis.com/v1/projects/p:generateContent",
+  method: "POST",
+  headers: { authorization: "Bearer tok", "content-type": "application/json" },
+  body: "{}",
+};
+
+function mockFetch(responses: Array<Response | Error>): { calls: RequestInit[] } {
+  const calls: RequestInit[] = [];
+  let i = 0;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    calls.push(init ?? {});
+    const next = responses[i++] ?? responses[responses.length - 1];
+    if (next instanceof Error) throw next;
+    return next;
+  }) as typeof fetch;
+  return { calls };
+}
+
+function googleError(code: number, status: string, message: string): string {
+  return JSON.stringify({ error: { code, status, message } });
+}
 
 describe("Antigravity account cooldowns", () => {
   test("records a rate-limit cooldown and sweeps it after expiry", () => {
@@ -75,5 +105,105 @@ describe("Antigravity account cooldowns", () => {
     expect(isAntigravityAccountInCooldown("account-a", NOW + 5_001)).toBe(true);
     expect(isAntigravityAccountInCooldown("account-a", NOW + 59_999)).toBe(true);
     expect(isAntigravityAccountInCooldown("account-a", NOW + 60_001)).toBe(false);
+  });
+
+  test("records and returns the cooldown reason via getAntigravityAccountCooldown", () => {
+    recordAntigravityCooldown("account-a", "rate_limited", undefined, NOW);
+    expect(getAntigravityAccountCooldown("account-a", NOW)).toEqual({
+      cooldownUntil: NOW + 5_000,
+      reason: "rate_limited",
+    });
+
+    recordAntigravityCooldown("account-b", "quota_exhausted", 30_000, NOW);
+    expect(getAntigravityAccountCooldown("account-b", NOW)).toEqual({
+      cooldownUntil: NOW + 30_000,
+      reason: "quota_exhausted",
+    });
+
+    recordAntigravityCooldown("account-c", "geo_blocked", undefined, NOW);
+    expect(getAntigravityAccountCooldown("account-c", NOW)).toEqual({
+      cooldownUntil: NOW + 24 * 60 * 60_000,
+      reason: "geo_blocked",
+    });
+    expect(getAntigravityAccountCooldown("account-c", NOW + 24 * 60 * 60_000)).toBeUndefined();
+  });
+
+  test("keeps the longer cooldown and its reason when a shorter one is recorded", () => {
+    recordAntigravityCooldown("account-a", "geo_blocked", undefined, NOW);
+    recordAntigravityCooldown("account-a", "rate_limited", undefined, NOW + 1);
+
+    expect(getAntigravityAccountCooldown("account-a", NOW)).toEqual({
+      cooldownUntil: NOW + 24 * 60 * 60_000,
+      reason: "geo_blocked",
+    });
+  });
+
+  test("updates reason when a longer cooldown replaces a shorter one", () => {
+    recordAntigravityCooldown("account-a", "rate_limited", undefined, NOW);
+    recordAntigravityCooldown("account-a", "quota_exhausted", 60_000, NOW);
+
+    expect(getAntigravityAccountCooldown("account-a", NOW)).toEqual({
+      cooldownUntil: NOW + 60_000,
+      reason: "quota_exhausted",
+    });
+  });
+});
+
+describe("Antigravity HTTP cooldown fail-fast", () => {
+  test("does not retry a rate-limited 429 after recording cooldown", async () => {
+    const mock = mockFetch([
+      new Response(googleError(429, "RESOURCE_EXHAUSTED", "rate limit, try again"), {
+        status: 429,
+        headers: { "Retry-After": "0" },
+      }),
+      new Response("ok", { status: 200 }),
+    ]);
+
+    const res = await fetchAntigravityWithRetry(antigravityRequest, {
+      timeoutMs: 5_000,
+      accountId: "account-http-retry",
+    });
+
+    expect(res.status).toBe(429);
+    expect(mock.calls).toHaveLength(1);
+    expect(getAntigravityAccountCooldown("account-http-retry")?.reason).toBe("rate_limited");
+  });
+
+  test("does not retry a quota-exhausted 429 after recording cooldown", async () => {
+    const mock = mockFetch([
+      new Response(
+        googleError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for your current billing plan"),
+        { status: 429, headers: { "Retry-After": "0" } },
+      ),
+      new Response("ok", { status: 200 }),
+    ]);
+
+    const res = await fetchAntigravityWithRetry(antigravityRequest, {
+      timeoutMs: 5_000,
+      accountId: "account-http-retry",
+    });
+
+    expect(res.status).toBe(429);
+    expect(mock.calls).toHaveLength(1);
+    expect(getAntigravityAccountCooldown("account-http-retry")?.reason).toBe("quota_exhausted");
+  });
+
+  test("does not retry a geo-blocked 403 after recording cooldown", async () => {
+    const mock = mockFetch([
+      new Response(
+        googleError(403, "PERMISSION_DENIED", "User location is not supported for the API use"),
+        { status: 403 },
+      ),
+      new Response("ok", { status: 200 }),
+    ]);
+
+    const res = await fetchAntigravityWithRetry(antigravityRequest, {
+      timeoutMs: 5_000,
+      accountId: "account-http-retry",
+    });
+
+    expect(res.status).toBe(403);
+    expect(mock.calls).toHaveLength(1);
+    expect(getAntigravityAccountCooldown("account-http-retry")?.reason).toBe("geo_blocked");
   });
 });

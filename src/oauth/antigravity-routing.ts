@@ -1,3 +1,8 @@
+/**
+ * Process-local Antigravity account health (cooldowns). Stored in an in-memory
+ * `Map<string, AntigravityAccountHealth>` for the lifetime of this process only —
+ * cooldowns reset on restart and are not shared across workers.
+ */
 export type AntigravityCooldownReason = "rate_limited" | "quota_exhausted" | "geo_blocked";
 
 const DEFAULT_RATE_LIMITED_COOLDOWN_MS = 5_000;
@@ -8,6 +13,7 @@ const GEO_BLOCKED_COOLDOWN_MS = 24 * 60 * 60_000;
 
 type AntigravityAccountHealth = {
   cooldownUntil: number;
+  reason: AntigravityCooldownReason;
 };
 
 const accountHealth = new Map<string, AntigravityAccountHealth>();
@@ -54,8 +60,21 @@ export function recordAntigravityCooldown(
   const cooldownUntil = now + cooldownDurationMs(reason, retryAfterMs);
   const current = accountHealth.get(accountId);
   if (!current || current.cooldownUntil < cooldownUntil) {
-    accountHealth.set(accountId, { cooldownUntil });
+    accountHealth.set(accountId, { cooldownUntil, reason });
   }
+}
+
+export function getAntigravityAccountCooldown(
+  accountId: string,
+  now = Date.now(),
+): { cooldownUntil: number; reason: AntigravityCooldownReason } | undefined {
+  const health = accountHealth.get(accountId);
+  if (!health) return undefined;
+  if (health.cooldownUntil <= now) {
+    accountHealth.delete(accountId);
+    return undefined;
+  }
+  return { cooldownUntil: health.cooldownUntil, reason: health.reason };
 }
 
 export function isAntigravityAccountInCooldown(accountId: string, now = Date.now()): boolean {
