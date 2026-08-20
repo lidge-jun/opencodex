@@ -70,6 +70,36 @@ alone never opt a gateway in.
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
+and the client replays it on every later turn. The proxy's own `ocx1:` envelopes are transparent
+base64, so they always lower to plain user messages. A native blob is relayed only to destinations
+that mint them — forward-auth routes, which relay the caller's own OpenAI credentials to the ChatGPT
+backend or a relay in front of it, and the official OpenAI API under key auth. On any other routed
+destination it degrades to the same opaque note the bridged parser uses, because forwarding it there
+fails the turn and the item outlives the failure in the client transcript, repeating on every later
+turn including the compaction turn the proxy itself drives. Compact-wire items are also exempt from
+the `store: false` item-id strip and from response-side field backfill: their id is not a stored-item
+reference, and editing the item is what the minting backend rejects as modified.
+
+[Decision Log]
+- 목적과 의도: Keep a session usable after its history crosses backends, instead of wedging it on a
+  compaction blob the current upstream cannot decode.
+- 기존 구현 및 제약 조건: Compaction handling was binary — `ocx1:` envelopes were ours, everything
+  else was assumed to be OpenAI's and forwarded verbatim, with no record of which upstream minted a
+  blob. Response-side field backfill exempted only `compaction`, so its two sibling types received
+  synthesized ids the client then replayed.
+- 검토한 주요 대안: Tag every compaction item with its minting provider/credential/model identity;
+  drop compaction items on any route change; gate relay on the destination that would decode them.
+- 선택한 방식: Relay a native blob only to destinations that mint them and degrade it elsewhere, and
+  treat the compact wire family as one enumeration so id-bearing passes cannot diverge per type.
+- 다른 대안 대신 이 방식을 선택한 이유: Full provenance tagging needs per-conversation state this
+  boundary does not have, while dropping on any change would discard compacted context that still
+  round-trips correctly; the destination test is decidable from the request alone.
+- 장점, 단점 및 영향: A cross-backend session degrades one compaction summary to a note instead of
+  failing every later turn. A self-hosted forward relay keeps its blobs. The cost is that a routed
+  gateway that did mint its own native blob would also see a note — no such gateway exists today,
+  since routed compaction always produces an `ocx1:` envelope.
+
 ### Mixed-wire provider defaults
 
 Registry `modelWireDefaults` select an evidence-backed upstream protocol for an exact model without

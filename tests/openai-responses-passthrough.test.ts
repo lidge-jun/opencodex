@@ -4,6 +4,11 @@ import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import {
+  encodeCompactionSummary,
+  OPAQUE_COMPACTION_NOTE,
+  SUMMARY_PREFIX,
+} from "../src/responses/compaction";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -734,6 +739,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(omittedStoreBody.input.map(item => item.id)).toEqual(["msg_abc", "fc_xyz", "rs_123"]);
     expect(storedBody.input.map(item => item.id)).toEqual(["msg_abc", "fc_xyz", "rs_123"]);
   });
+
 
   test("drops raw reasoning input content before native GPT passthrough", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
@@ -2132,6 +2138,87 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
 
     expect(body.max_output_tokens).toBe(32000);
     expect(body.metadata).toEqual({ user_id: "u-1" });
+  });
+});
+
+describe("replayed compaction blobs", () => {
+  type PassthroughProvider = Parameters<typeof createResponsesPassthroughAdapter>[0];
+
+  // Shaped like a blob minted by an OpenAI-operated backend: opaque, no `ocx1:` envelope.
+  const NATIVE_BLOB = "gAAAAAB-openai-minted-compaction-blob";
+  const routedProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "key",
+    apiKey: "xai-test",
+  };
+  const openaiKeyedProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    authMode: "key",
+    apiKey: "sk-test",
+  };
+  // Forward auth relays the caller's own OpenAI credentials, so a self-hosted relay is standing in
+  // front of an OpenAI backend and must keep its users' compacted history.
+  const forwardRelayProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://relay.example/backend-api/codex",
+    authMode: "forward",
+  };
+
+  function forwardedInput(target: PassthroughProvider, input: unknown[]): Record<string, unknown>[] {
+    const request = createResponsesPassthroughAdapter(target).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input;
+  }
+
+  // Forwarding a blob to a backend that did not mint it fails the turn, and because the item lives
+  // in the client transcript the failure repeats on every later turn — including the compaction turn
+  // — so the session cannot recover until its history is cleared.
+  test("degrades a foreign blob to a note on a destination that cannot decode it", () => {
+    for (const type of ["compaction", "compaction_summary", "context_compaction"]) {
+      const forwarded = forwardedInput(routedProvider, [
+        { type, encrypted_content: NATIVE_BLOB },
+      ]);
+      expect(forwarded[0]).toEqual({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+      });
+      expect(JSON.stringify(forwarded)).not.toContain(NATIVE_BLOB);
+    }
+  });
+
+  test("forwards a foreign blob untouched to the backends that mint them", () => {
+    const item = { type: "compaction", encrypted_content: NATIVE_BLOB };
+    for (const target of [provider, openaiKeyedProvider, forwardRelayProvider]) {
+      expect(forwardedInput(target, [item])[0]).toEqual(item);
+    }
+  });
+
+  // The proxy's own envelope is transparent base64, so no upstream can read it anywhere.
+  test("lowers proxy-minted ocx1 envelopes on every destination", () => {
+    const item = { type: "compaction", encrypted_content: encodeCompactionSummary("prior work") };
+    for (const target of [provider, openaiKeyedProvider, routedProvider]) {
+      expect(forwardedInput(target, [item])[0]).toEqual({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\nprior work` }],
+      });
+    }
+  });
+
+  // A bare marker carries no blob, so there is nothing to mis-route.
+  test("leaves a bare context_compaction marker alone", () => {
+    const item = { type: "context_compaction" };
+    for (const target of [provider, routedProvider]) {
+      expect(forwardedInput(target, [item])[0]).toEqual(item);
+    }
   });
 });
 

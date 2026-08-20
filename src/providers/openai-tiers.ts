@@ -54,6 +54,25 @@ export function supportsNativeResponsesCompactEndpoint(
     && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
 }
 
+/**
+ * Whether this destination can decode a native (non-`ocx1:`) compaction blob.
+ *
+ * Only the backend that minted a blob can decode it, and only OpenAI-operated Responses surfaces
+ * mint them. Forward auth relays the caller's own OpenAI credentials, so a forward destination is
+ * either the ChatGPT backend or a relay standing in front of one — both can read what they issued,
+ * and a self-hosted relay must not lose its users' compacted history to a guess about its URL. The
+ * remaining positive case is the official OpenAI API under key auth.
+ *
+ * Everything else is a routed provider carrying its own credentials to a non-OpenAI backend, which
+ * can only reject a blob it never issued. Keyed by destination rather than provider id: a blob's
+ * issuer is the URL that produced it, not the local config key a replay travels under.
+ */
+export function destinationDecodesNativeCompactionBlob(provider: OcxProviderConfig): boolean {
+  if (provider.authMode === "forward") return true;
+  return provider.adapter === "openai-responses"
+    && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
+}
+
 export interface OpenAiTierMigrationProjection {
   config: OcxConfig;
   changed: boolean;
