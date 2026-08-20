@@ -77,11 +77,13 @@ export function repairGoogleToolPairs(messages: readonly OcxMessage[]): OcxMessa
  * CCA expects the next turn to be generated instead, except when that model
  * turn is the entire conversation and must remain as the initial context.
  */
-export function stripTrailingClaudePrefill(contents: unknown[]): unknown[] {
+export function stripTrailingClaudePrefill(contents: unknown[]): boolean {
+  let strippedModelTail = false;
   while (contents.length >= 2) {
     const last = contents[contents.length - 1];
     if (typeof last !== "object" || last === null || (last as { role?: unknown }).role !== "model") break;
     contents.pop();
+    strippedModelTail = true;
   }
-  return contents;
+  return strippedModelTail;
 }

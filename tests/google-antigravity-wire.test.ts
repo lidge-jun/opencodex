@@ -115,7 +115,7 @@ describe("antigravity CCA envelope", () => {
       },
     } as unknown as OcxParsedRequest;
     const prefillEnv = JSON.parse((await createGoogleAdapter(provider).buildRequest(withPrefill)).body);
-    expect(prefillEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["user"]);
+    expect(prefillEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["user", "user"]);
 
     const loneModel = {
       ...withPrefill,
@@ -747,10 +747,12 @@ describe("Google Antigravity history repair", () => {
   });
 
   test("strips only trailing model turns when another content turn remains", () => {
-    expect(stripTrailingClaudePrefill([{ role: "user" }, { role: "model" }, { role: "model" }]))
-      .toEqual([{ role: "user" }]);
-    expect(stripTrailingClaudePrefill([{ role: "model" }]))
-      .toEqual([{ role: "model" }]);
+    const contents = [{ role: "user" }, { role: "model" }, { role: "model" }];
+    expect(stripTrailingClaudePrefill(contents)).toBe(true);
+    expect(contents).toEqual([{ role: "user" }]);
+    const soloModel = [{ role: "model" }];
+    expect(stripTrailingClaudePrefill(soloModel)).toBe(false);
+    expect(soloModel).toEqual([{ role: "model" }]);
   });
 });
 

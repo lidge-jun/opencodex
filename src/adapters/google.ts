@@ -751,7 +751,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // Compile names before replay: signatures are keyed by the exact provider-visible name.
         if (Array.isArray((request as { contents?: unknown[] }).contents)) {
           const contents = (request as { contents: unknown[] }).contents;
-          if (/claude/i.test(wireModelId)) stripTrailingClaudePrefill(contents);
+          const strippedModelTail = /claude/i.test(wireModelId) ? stripTrailingClaudePrefill(contents) : false;
           if (antigravityUsesReplayCache(wireModelId)) {
             applyAntigravityReplay(wireModelId, sessionId, contents);
           } else {
@@ -762,9 +762,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           // must end with a user message." Context compaction, previous_response_id expansion,
           // and interrupted-turn replay can all produce a model-tail history. Append a user
           // "(continue)" nudge, mirroring the anthropic adapter's tail guard (src/adapters/anthropic.ts).
+          // When a trailing model turn was stripped, append even if the history now ends with user.
           if (/claude/i.test(wireModelId)) {
             const last = contents.length > 0 ? contents[contents.length - 1] as { role?: string } : undefined;
-            if (!last || last.role === "model") {
+            if (strippedModelTail || !last || last.role === "model") {
               contents.push({ role: "user", parts: [{ text: "(continue)" }] });
             }
           }
