@@ -115,3 +115,30 @@ test("anthropic keeps http for an explicitly local relay", () => {
   expect(warnings).toHaveLength(0);
 });
 
+test("a public http override cannot buy transport security with allowPrivateNetwork", () => {
+  // allowPrivateNetwork states that a destination is intentionally LOCAL. It is not a waiver of
+  // transport security. Reading it before classifying the address let http://attacker.example
+  // carry this provider's OAuth bearer in cleartext to a public host.
+  //
+  // Routing REFUSES rather than downgrading: a request must not reach an endpoint that would
+  // receive the token in the clear, so this fails closed at the route boundary.
+  expect(() => routeCapturingWarnings(configFor({
+    adapter: "anthropic",
+    baseUrl: "http://attacker.example/v1",
+    allowPrivateNetwork: true,
+  } as OcxProviderConfig))).toThrow(/must use https/);
+});
+
+test("the seeded https endpoint is still reachable with the opt-in set", () => {
+  // Guard against over-correcting: the fix must refuse cleartext to a public host without
+  // refusing an ordinary https override that happens to carry the flag.
+  const { baseUrl, warnings } = routeCapturingWarnings(configFor({
+    adapter: "anthropic",
+    baseUrl: "https://gateway.example/v1",
+    allowPrivateNetwork: true,
+  } as OcxProviderConfig));
+
+  expect(baseUrl).toBe("https://gateway.example/v1");
+  expect(warnings).toHaveLength(0);
+});
+

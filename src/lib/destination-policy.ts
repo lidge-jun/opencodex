@@ -150,9 +150,6 @@ export function providerSecureTransportConfigError(
   provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">,
 ): string | null {
   if (!registrySendsOAuthToOverriddenBaseUrl(name)) return null;
-  // An explicit allowPrivateNetwork opt-in is the documented "intentionally local/self-hosted"
-  // contract; a named local relay (http://relay.corp.internal) stays reachable through it.
-  if (providerAllowsPrivateNetwork(name, provider)) return null;
   let parsed: URL;
   try {
     parsed = new URL(provider.baseUrl.trim());
@@ -161,9 +158,18 @@ export function providerSecureTransportConfigError(
   }
   if (parsed.protocol !== "http:") return null;
   const assessment = assessDestination(provider.baseUrl);
+  // Classify FIRST, then consult the opt-in. `allowPrivateNetwork` says "this destination is
+  // intentionally local", which is a statement about the address, not a waiver of transport
+  // security — reading it before classification let `http://attacker.example` with the opt-in
+  // set carry an OAuth bearer in cleartext to a public host.
   if (!assessment) return null;
-  if (assessment.kind === "localhost" || assessment.kind === "loopback" || assessment.kind === "private") {
-    return null; // local relays; the private-network gate below still applies
+  const local = assessment.kind === "localhost"
+    || assessment.kind === "loopback"
+    || assessment.kind === "private";
+  if (local && providerAllowsPrivateNetwork(name, provider)) {
+    // A genuinely local relay over http stays reachable through the explicit opt-in; the
+    // private-network gate still governs whether it may be reached at all.
+    return null;
   }
   return "baseUrl must use https: this provider sends OAuth credentials to its endpoint, and http is allowed only for loopback/private relays";
 }
