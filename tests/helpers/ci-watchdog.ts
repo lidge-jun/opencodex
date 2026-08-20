@@ -11,7 +11,14 @@
  * hung test, not to assert latency. Local behaviour is unchanged. Bun's own
  * per-test timeout (`--timeout`, 60 s on CI) would pre-empt a 30 s watchdog,
  * so the lane timeout and this floor move together.
+ *
+ * Windows needs a higher floor still. Its shards run four Bun pools on one runner, and process
+ * spawn there is slower than on the POSIX lanes to begin with — a `ocx restore --json` child
+ * that finishes comfortably elsewhere was observed failing the 30 s floor at 30,147 ms (#2152).
+ * 45 s keeps the watchdog meaningful while staying under the lane's own 60 s per-test timeout,
+ * so a genuinely hung test is still bounded by something rather than running to the ceiling.
  */
 export function watchdogMs(base: number): number {
-  return process.env.CI === "true" ? Math.max(base, 30_000) : base;
+  if (process.env.CI !== "true") return base;
+  return Math.max(base, process.platform === "win32" ? 45_000 : 30_000);
 }

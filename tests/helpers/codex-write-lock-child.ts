@@ -17,6 +17,7 @@ const payload = JSON.parse(process.env.OCX_LOCK_CHILD_PAYLOAD ?? "{}") as {
   timeoutMs?: number;
   holdMarker?: string;
   releaseMarker?: string;
+  holdMs?: number;
 };
 
 const admitted = { authoritySnapshotId: "authority-child" } as AdmissionSnapshot;
@@ -40,7 +41,12 @@ const result = await withCodexWriteLock(
       // an unheld lock and saw `acquired` where the test demands `busy`, which
       // reads exactly like a broken exclusion invariant rather than a late marker.
       writeFileSync(payload.holdMarker, "held");
-      const until = Date.now() + 3_000;
+      // The release marker is the real signal; this is only the ceiling for how long we wait
+      // to see it. Three seconds was enough where the contender starts quickly, but on a
+      // Windows shard the contender's process spawn can outlast the hold — the holder then
+      // releases first and the parent sees `acquired` where it demands `busy`, which reads as
+      // a broken exclusion invariant rather than as a hold that expired too early (#2152).
+      const until = Date.now() + (payload.holdMs ?? 3_000);
       while (Date.now() < until) {
         if (payload.releaseMarker && Bun.file(payload.releaseMarker).size > 0) break;
       }

@@ -133,6 +133,15 @@ export interface LogEntry {
   provider: string;
   surface?: LogSurface;
   conversationId?: string;
+  /**
+   * The original helper model, when Shadow Call Intercept rewrote this request.
+   *
+   * Present ONLY for an intercepted request. A helper request that was not intercepted --
+   * interception off, no replacement model, or a slug the matcher does not recognize -- is
+   * indistinguishable here from ordinary traffic, which is why the filter below says
+   * "intercepted" rather than "helper".
+   */
+  shadowCallRewrittenFrom?: string;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -174,6 +183,7 @@ function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
       || typeof entry.provider !== "string"
       || typeof entry.status !== "number"
       || typeof entry.durationMs !== "number"
+      || (entry.shadowCallRewrittenFrom !== undefined && typeof entry.shadowCallRewrittenFrom !== "string")
       || !validCachedRouteDecision(entry.routeDecision)
     ) {
       return null;
@@ -355,6 +365,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
   const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
+  const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -472,6 +483,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
 
   const filteredLogs = logs.filter(log => (
     logMatchesSurface(log, surfaceFilter)
+    && (!interceptedHelpersOnly || Boolean(log.shadowCallRewrittenFrom))
     && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
   ));
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
@@ -566,6 +578,20 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             </button>
           ))}
         </div>
+        {/*
+          "Intercepted", not "helper". The marker only exists when Shadow Call Intercept
+          rewrote the request, so a helper request that was not intercepted looks exactly like
+          ordinary traffic here. A broader label would promise a classification this data
+          cannot support.
+        */}
+        <label className="muted text-control logs-filter-field">
+          <input
+            type="checkbox"
+            checked={interceptedHelpersOnly}
+            onChange={event => setInterceptedHelpersOnly(event.target.checked)}
+          />
+          {t("logs.filter.interceptedHelpersOnly")}
+        </label>
         <label className="muted text-control logs-filter-field">
           {t("logs.filter.conversation.label")}
           <input
@@ -717,8 +743,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                     {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log, t)}>
-                   <span className="logs-model-cell">
-                    <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                  <span className="logs-model-cell">
+                   <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                      {log.shadowCallRewrittenFrom && (
+                        <span
+                          className="badge badge-muted"
+                          style={{ whiteSpace: "nowrap" }}
+                          title={t("logs.badge.interceptedHelperTitle")}
+                        >
+                          {t("logs.badge.interceptedHelper", { model: log.shadowCallRewrittenFrom })}
+                        </span>
+                      )}
                       {(log.surface === "claude" || log.surface === "claude-desktop") && (
                         <span className="badge badge-accent">{t("logs.badge.claude")}</span>
                       )}

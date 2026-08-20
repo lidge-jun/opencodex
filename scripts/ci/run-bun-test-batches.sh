@@ -78,7 +78,7 @@ is_bun_runtime_crash() {
   fi
 
   grep -Eqi \
-    'oh no: Bun has crashed|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' \
+    'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' \
     "$log_file"
 }
 

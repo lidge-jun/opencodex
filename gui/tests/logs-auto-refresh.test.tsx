@@ -481,3 +481,56 @@ test("Logs: inside-card clicks keep the detail dialog open; backdrop dismiss clo
 
   await act(async () => { root.unmount(); });
 });
+
+// #2157: the Codex App sends helper requests on every message and turn completion. That
+// traffic is the App's, not ours -- what is ours is making an INTERCEPTED one identifiable, so
+// the reporter can tell recurring helper spend from their own work.
+//
+// "Intercepted", deliberately. A helper request that was not intercepted carries no marker and
+// is indistinguishable from ordinary traffic here, so the filter must not promise more.
+test("Logs: an intercepted helper row is badged and filterable", async () => {
+  const interceptedLog = {
+    ...sampleLog,
+    requestId: "req-shadow",
+    model: "grok-4.6",
+    shadowCallRewrittenFrom: "gpt-5.6-luna",
+  };
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([interceptedLog, sampleLog]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  // The badge names the ORIGINAL helper model, which is the attribution that was being lost.
+  expect(container.textContent).toContain("I · gpt-5.6-luna");
+  expect(container.textContent).toContain("gpt-test");
+
+  const toggle = [...container.querySelectorAll("input[type=checkbox]")].find(
+    input => input.closest("label")?.textContent?.includes("Intercepted helpers only"),
+  ) as HTMLInputElement | undefined;
+  expect(toggle).toBeDefined();
+
+  await act(async () => { toggle!.click(); });
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+    await Promise.resolve();
+  });
+
+  // Filtered: the marked row stays, the ordinary one goes.
+  expect(container.textContent).toContain("I · gpt-5.6-luna");
+  expect(container.textContent).not.toContain("gpt-test");
+
+  await act(async () => { toggle!.click(); });
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+    await Promise.resolve();
+  });
+
+  expect(container.textContent).toContain("gpt-test");
+
+  await act(async () => { root.unmount(); });
+});
+

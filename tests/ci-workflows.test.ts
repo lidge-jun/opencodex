@@ -48,6 +48,21 @@ function hasExactShellCommand(run: string | undefined, expected: string): boolea
     .includes(expected);
 }
 
+/**
+ * Same intent as {@link hasExactShellCommand}, but for a command that is the HEAD of a
+ * pipeline. The retry loops capture the suite with `… 2>&1 | tee "$suite_log"`, so an exact
+ * whole-line match would reject the very shape the retry requires. Anchoring at the start of
+ * the line still rejects an `echo` of the command or a commented-out copy, which is what the
+ * exact match was protecting against.
+ */
+function hasShellCommandHead(run: string | undefined, expected: string): boolean {
+  return (run ?? "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.startsWith("#"))
+    .some(line => line === expected || line.startsWith(`${expected} `));
+}
+
 function expectSecureLinuxKeyringBootstrap(workflow: string): void {
   const smokeStep = workflow
     .split("- name: OS keyring create/read/delete smoke")[1]
@@ -224,16 +239,51 @@ describe("GitHub Actions hardening", () => {
     // Three composed-acceptance failures were that default firing on tests still working
     // at 41s. Pin the flag so the leg cannot silently drift back to the default.
     const windowsTestCommand = `bun test --isolate --timeout 60000 tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
-    expect(hasExactShellCommand(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
+    expect(hasShellCommandHead(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
     // Binding the assertion to an executable line is only half the guarantee: a
     // step carrying the exact command still runs nothing under `if: false`, and
     // the suite would stay green against a Windows leg that never tests. Require
     // the matching step to be unconditional.
-    const windowsTestSteps = winSteps.filter(step => hasExactShellCommand(step.run, windowsTestCommand));
+    const windowsTestSteps = winSteps.filter(step => hasShellCommandHead(step.run, windowsTestCommand));
     expect(windowsTestSteps.length).toBeGreaterThan(0);
     expect(windowsTestSteps.every(step => step.if === undefined)).toBe(true);
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
+
+    // The three crash-signature lists must stay identical, and they must not key on
+    // `panic(thread`.
+    //
+    // Bun emits BOTH `panic(thread 2852)` and `panic(main thread)` for the same class of
+    // failure, so a grep anchored on the numbered form silently misses half of them and the
+    // shard fails on a crash it was supposed to retry. This repository already learned that
+    // once — `devlog/_fin/260731_pr_issue_triage_round/050_windows_ci_flake_rca.md` names
+    // `Internal assertion failure` as the stable fingerprint — and #2152 reintroduced it.
+    // Three copies of one list is the real hazard, so pin the sync rather than the text.
+    const crashSignatures = [
+      "oh no: Bun has crashed",
+      "Internal assertion failure",
+      "Segmentation fault at address",
+      "Illegal instruction",
+      "Bus error",
+    ];
+    const windowsTestRun = windowsTestSteps[0]?.run ?? "";
+    const batchScript = await readText("scripts/ci/run-bun-test-batches.sh");
+    for (const signature of crashSignatures) {
+      expect(`macos:${signature}:${macosTestRun.includes(signature)}`).toBe(`macos:${signature}:true`);
+      expect(`windows:${signature}:${windowsTestRun.includes(signature)}`).toBe(`windows:${signature}:true`);
+      expect(`script:${signature}:${batchScript.includes(signature)}`).toBe(`script:${signature}:true`);
+    }
+    // The thread-numbered form must not be the anchor anywhere.
+    expect(macosTestRun).not.toContain("panic\\(thread");
+    expect(windowsTestRun).not.toContain("panic\\(thread");
+    expect(batchScript).not.toContain("panic\\(thread");
+
+    // Windows carries the same bounded retry as macOS: one attempt, crash-only.
+    expect(hasExactShellCommand(windowsTestRun, "set +e")).toBe(true);
+    expect(windowsTestRun).toContain("for attempt in 1 2");
+    expect(windowsTestRun).not.toContain("while true");
+    expect(windowsTestRun).toContain("assertion failures are not retried");
+    expect(windowsTestRun).toContain("failing after one retry");
 
     // Every job that runs the root suite must build the GUI first, unconditionally.
     // Tests that fetch the served dashboard read their session bootstrap out of

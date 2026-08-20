@@ -516,7 +516,7 @@ jobs:
             if [ "$suite_status" -eq 0 ]; then
               exit 0
             fi
-            if ! grep -Eqi 'oh no: Bun has crashed|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
               echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
               exit "$suite_status"
             fi
@@ -611,7 +611,31 @@ jobs:
         # the only one left on Bun's 5s default, and it is the slowest hardware on the board.
         # Three of its failures were the default firing on tests that had not hung — the
         # composed-acceptance cases spawn a real `ocx start` and were still working at 41s.
-        run: bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/4
+        #
+        # The retry is the same one the macOS leg already carries, for the same reason: a Bun
+        # runtime panic is a crash in the interpreter, not a test result, and failing the shard
+        # on it reports a defect this repository does not have (#2152). An ordinary assertion
+        # failure returns its status immediately — only the crash signatures below are retried,
+        # and only once, so a genuinely broken build cannot be retried into green.
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          suite_log="$(mktemp -t ocx-windows-suite.XXXXXX)"
+          for attempt in 1 2; do
+            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/4 2>&1 | tee "$suite_log"
+            suite_status="${PIPESTATUS[0]}"
+            if [ "$suite_status" -eq 0 ]; then
+              exit 0
+            fi
+            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+              echo "::error::Windows shard ${{ matrix.shard }}/4 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
+              exit "$suite_status"
+            fi
+            echo "::warning::Bun runtime crash in Windows shard ${{ matrix.shard }}/4 (exit ${suite_status}, attempt ${attempt})."
+          done
+          echo "::error::Bun runtime crash repeated on Windows shard ${{ matrix.shard }}/4; failing after one retry."
+          exit 1
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help

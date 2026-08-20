@@ -266,7 +266,11 @@ class Fixture {
     runtime: RuntimeRecord,
     path: string,
     init: RequestInit = {},
-    timeoutMs = 10_000,
+    // Scaled like every other budget in this file. This one was left unscaled, and it is what
+    // actually failed `A-reduced` on Windows: the case has a 150 s ceiling and reported ~80 s
+    // elapsed, so the outer budget was never the constraint — a single request hit this fixed
+    // 10 s AbortSignal and aborted the case from inside (#2152).
+    timeoutMs = watchdogMs(10_000),
   ): Promise<{ status: number; body: Record<string, unknown> }> {
     const response = await fetch(`http://127.0.0.1:${runtime.port}${path}`, {
       ...init,
@@ -619,7 +623,18 @@ describe("WP13 composed toggle acceptance", () => {
     const release = join(fx.root, "release");
     const holder = Bun.spawn([process.execPath, lockChildPath], {
       cwd: repoRoot,
-      env: { ...fx.env(fx.homeA, fx.userprofileA), OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 5_000, holdMarker: held, releaseMarker: release }) },
+      // The hold has to outlast the contender's process spawn, which is the slow part on a
+      // Windows shard. The release marker below still ends it early everywhere else, so this
+      // is a ceiling rather than a sleep the test pays for.
+      env: {
+        ...fx.env(fx.homeA, fx.userprofileA),
+        OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({
+          timeoutMs: 5_000,
+          holdMarker: held,
+          releaseMarker: release,
+          holdMs: watchdogMs(3_000),
+        }),
+      },
       stdout: "pipe", stderr: "pipe",
     });
     fx.children.push(holder);

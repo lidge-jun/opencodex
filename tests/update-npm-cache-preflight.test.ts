@@ -27,6 +27,20 @@ const canSymlink = (() => {
   }
 })();
 
+/**
+ * Windows needs its own guard, separate from `canSymlink`.
+ *
+ * The capability probe answers "may this user create a symlink", and on a GitHub-hosted
+ * Windows runner the answer is YES — so these cases ran and then failed in the fixture with
+ * `cache_entry_inaccessible`, because what actually differs there is how the preflight reads
+ * mode and access through a Windows symlink, not whether the link can be made (#2152).
+ *
+ * Two neighbouring cases in this file already skip on `process.platform === "win32"` for the
+ * same reason, so this reuses that guard rather than inventing a second mechanism. The
+ * capability check stays: an unprivileged POSIX-like environment still skips honestly.
+ */
+const WINDOWS = process.platform === "win32";
+
 function tempRoot(name: string): string {
   const root = join(tmpdir(), `ocx-cache-preflight-${name}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(root, { recursive: true });
@@ -67,7 +81,7 @@ describe("npm cache access pre-flight", () => {
     }
   });
 
-  test.skipIf(!canSymlink)("lstats normal nested symlinks but never traverses their targets", () => {
+  test.skipIf(WINDOWS || !canSymlink)("lstats normal nested symlinks but never traverses their targets", () => {
     const cache = tempRoot("symlink-cache");
     const missingTarget = join(tempRoot("symlink-target"), "does-not-exist");
     const npx = join(cache, "_npx");
@@ -79,7 +93,7 @@ describe("npm cache access pre-flight", () => {
     expect(inspectNpmCacheDirectory(cache)).toEqual({ ok: true, reason: "cache_accessible" });
   });
 
-  test.skipIf(!canSymlink)("a foreign-owned nested symlink does not block the update", () => {
+  test.skipIf(WINDOWS || !canSymlink)("a foreign-owned nested symlink does not block the update", () => {
     // The distinction that decides whether this feature is usable. A real npm cache is full of
     // symlinks below _npx/node_modules/.bin, and their owner is irrelevant because we never
     // follow them. Rejecting on ownership before skipping the link would abort updates for
@@ -164,7 +178,7 @@ describe("npm cache access pre-flight", () => {
     })).toEqual({ ok: false, reason: "worker_output_malformed" });
   });
 
-  test.skipIf(!canSymlink)("a cache root symlinked to another volume is inspected, not rejected", () => {
+  test.skipIf(WINDOWS || !canSymlink)("a cache root symlinked to another volume is inspected, not rejected", () => {
     // Pointing ~/.npm at another volume is ordinary npm configuration. Rejecting it outright was
     // the same class of false positive as failing on a large cache: it blocks updates for users
     // whose setup is fine. The root is resolved once; nested links are still never followed.
