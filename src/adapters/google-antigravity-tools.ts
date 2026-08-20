@@ -25,8 +25,17 @@ function isToolResult(message: OcxMessage): message is OcxToolResultMessage {
  * The allocator maps one raw id to one wire id, so a second complete exchange
  * that reuses the same raw id would serialize as a colliding pair. Keep only
  * the first matched occurrence per raw id.
+ *
+ * Direct Gemini and Vertex accept an unmatched trailing `functionCall`, so
+ * `dropUnmatchedCalls` is CCA-only. Orphan results are still dropped in every
+ * Google mode so they cannot reserve allocator slots or emit a lone
+ * `functionResponse`.
  */
-export function repairGoogleToolPairs(messages: readonly OcxMessage[]): OcxMessage[] {
+export function repairGoogleToolPairs(
+  messages: readonly OcxMessage[],
+  opts: { dropUnmatchedCalls?: boolean } = {},
+): OcxMessage[] {
+  const dropUnmatchedCalls = opts.dropUnmatchedCalls ?? true;
   const pendingCalls = new Map<string, Array<{ messageIndex: number; partIndex: number }>>();
   const seenRawCallIds = new Set<string>();
   const matchedCallParts = new Set<string>();
@@ -69,7 +78,9 @@ export function repairGoogleToolPairs(messages: readonly OcxMessage[]): OcxMessa
     }
 
     const content = message.content.filter((part, partIndex) =>
-      part.type !== "toolCall" || matchedCallParts.has(`${messageIndex}:${partIndex}`));
+      part.type !== "toolCall"
+      || matchedCallParts.has(`${messageIndex}:${partIndex}`)
+      || !dropUnmatchedCalls);
     if (content.length > 0) {
       repaired.push(content.length === message.content.length ? message : { ...message, content });
     }

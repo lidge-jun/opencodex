@@ -186,6 +186,7 @@ function geminiOrphanToolResultParts(msg: OcxToolResultMessage): unknown[] {
 function messagesToGeminiFormat(
   parsed: OcxParsedRequest,
   identityModelId: string,
+  repairToolPairs: boolean,
 ): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -198,7 +199,7 @@ function messagesToGeminiFormat(
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
-  const messages = repairGoogleToolPairs(parsed.context.messages);
+  const messages = repairGoogleToolPairs(parsed.context.messages, { dropUnmatchedCalls: repairToolPairs });
 
   const callIds = createToolCallIdAllocator();
   for (const msg of messages) {
@@ -654,7 +655,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
-      const { systemInstruction, contents } = messagesToGeminiFormat(parsed, identityModelId);
+      const { systemInstruction, contents } = messagesToGeminiFormat(
+        parsed,
+        identityModelId,
+        provider.googleMode === "cloud-code-assist",
+      );
       const tools = toolsToGeminiFormat(parsed);
 
       const body: Record<string, unknown> = { contents };
@@ -731,9 +736,6 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // nested) — matching CLIProxyAPI `generateStableSessionID`. An extra top-level/snake_case
         // spelling is a non-first-party key, so we send the single canonical location.
         const draftRequest: Record<string, unknown> = { ...body, sessionId };
-        if (systemInstruction) {
-          draftRequest.preambleConfig = { mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" };
-        }
         // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
         if (/claude/i.test(wireModelId)) {
           // VALIDATED would defeat a client's tool_choice "none": honor it by dropping the

@@ -731,6 +731,21 @@ describe("Google Antigravity history repair", () => {
     expect((repaired[2] as { toolCallId: string }).toolCallId).toBe("call-1");
   });
 
+  test("keeps unmatched trailing calls when dropUnmatchedCalls is false", () => {
+    const messages = [
+      { role: "user", content: "run tools" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-pending", name: "one", arguments: {} }],
+      },
+      { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages, { dropUnmatchedCalls: false });
+    expect(repaired).toHaveLength(2);
+    expect((repaired[1] as { content: { id: string }[] }).content.map(part => part.id)).toEqual(["call-pending"]);
+  });
+
   test("keeps parallel calls when every call has a later result", () => {
     const messages = [
       { role: "assistant", content: [

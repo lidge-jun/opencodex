@@ -144,6 +144,17 @@ describe("google adapter — tool-call ids on the wire", () => {
     expect(JSON.stringify(contents)).not.toContain("orphan");
   });
 
+  test("AI Studio keeps an unmatched trailing tool call", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call_pending", name: "bash", arguments: { cmd: "ls" } }] },
+    ]));
+
+    const modelTurn = contents.find(content => content.role === "model");
+    const functionCall = modelTurn?.parts.find(part => "functionCall" in part) as { functionCall: { id?: string } } | undefined;
+    expect(functionCall?.functionCall.id).toBe("call_pending");
+  });
+
   test("orphan result ids do not reserve allocator slots", async () => {
     const rawId = "call:a";
     const normalizedId = anthropicToolCallId(rawId)!;
