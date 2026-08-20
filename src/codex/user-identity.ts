@@ -40,6 +40,26 @@ const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
 const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 8_000;
 
 /**
+ * The same budget, widened for a contended CI runner.
+ *
+ * 8s is a generous ceiling for `powershell.exe -Command` on a real desktop and is not one
+ * on a GitHub Windows runner executing a quarter of this suite: the composed-acceptance
+ * cases fail there with "Windows effective-account lookup timed out" while the child is
+ * still starting. That is runner contention, not a hung lookup, and the budget exists to
+ * bound the latter.
+ *
+ * Gated on `CI` alone. A user's machine keeps the 8s ceiling exactly as before, so the
+ * recoverable-refusal contract this budget protects is unchanged where it matters.
+ */
+const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS = 30_000;
+
+function windowsIdentityLookupTimeoutMs(): number {
+  return process.env.CI === "true"
+    ? WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS
+    : WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;
+}
+
+/**
  * FOLDERID_LocalAppData, and the flag that makes the lookup ignore the caller's
  * environment.
  *
@@ -108,7 +128,7 @@ function windowsIdentityPowerShellSpawnOptions(): {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    timeout: WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS,
+    timeout: windowsIdentityLookupTimeoutMs(),
     windowsHide: true,
   };
 }

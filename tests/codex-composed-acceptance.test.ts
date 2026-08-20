@@ -151,6 +151,11 @@ class Fixture {
       // A fixed fixture value avoids reading the generated credential file.
       OPENCODEX_ADMIN_AUTH_TOKEN: this.managementToken,
       NO_PROXY: "127.0.0.1,localhost",
+      // The env is a whitelist, so CI does not reach the child unless it is named. It must:
+      // the CLI's Windows identity lookup keeps an 8s budget locally and widens on CI, and
+      // without this the child spawned by a CI runner refuses with "Windows effective-account
+      // lookup timed out" while powershell.exe is still starting.
+      ...(process.env.CI === "true" ? { CI: "true" } : {}),
       ...this.serviceManagerEnv,
     };
   }
@@ -276,13 +281,34 @@ class Fixture {
   }
 
   async cleanup(): Promise<void> {
+    // Teardown must not be able to leave a child behind. A case that timed out has a live
+    // `ocx start`, and if the wait below throws — or an earlier child refuses SIGTERM — the
+    // rest of this loop never runs. The survivor is then killed by Bun's between-file
+    // "killed N dangling process" sweep, which on the Windows shard surfaced as the NEXT
+    // case failing with exit 143: one slow case cascading into unrelated ones.
+    //
+    // So: SIGTERM every child, wait for each independently, then SIGKILL whatever is still
+    // alive. Errors are collected rather than thrown mid-loop.
     for (const child of this.children) {
       if (child.exitCode === null) child.kill("SIGTERM");
     }
+    const stubborn: Array<ReturnType<typeof Bun.spawn>> = [];
     for (const child of this.children) {
-      if (child.exitCode === null) await Promise.race([
+      if (child.exitCode === null) {
+        const exited = await Promise.race([
+          child.exited.then(() => true),
+          new Promise<boolean>(resolve => setTimeout(() => resolve(false), 10_000)),
+        ]);
+        if (!exited) stubborn.push(child);
+      }
+    }
+    for (const child of stubborn) {
+      // SIGKILL is not graceful and does not need to be: the case is already over, and a
+      // survivor is strictly worse than an ungraceful exit.
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      await Promise.race([
         child.exited,
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`child ${child.pid} did not exit`)), 10_000)),
+        new Promise<void>(resolve => setTimeout(resolve, 2_000)),
       ]);
     }
     // Re-resolve before the limited four-name removal: never glob or inspect a
@@ -303,7 +329,19 @@ function fixture(): Fixture {
 }
 
 afterEach(async () => {
-  while (roots.length) await roots.pop()!.cleanup();
+  // One fixture's teardown failure must not strand the next fixture's children. Drain every
+  // fixture, then report. Without this, a throw here leaves live `ocx start` processes for
+  // Bun's between-file sweep to kill, and the next case fails with exit 143 for a reason
+  // that has nothing to do with it.
+  const failures: unknown[] = [];
+  while (roots.length) {
+    try {
+      await roots.pop()!.cleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
 });
 
 describe("WP13 composed toggle acceptance", () => {
@@ -388,7 +426,9 @@ describe("WP13 composed toggle acceptance", () => {
       // The fixture records itself as the active service install, so the
       // production ownership preflight admits this home and P08 completes the
       // enable transition through the real CLI.
-      expect(back.exitCode).toBe(0);
+      // The CLI's own output is the assertion message: a bare "expected 0, got 1" sent two
+      // Windows CI rounds chasing a timeout that was never the cause.
+      expect(`exit=${back.exitCode}\nstderr: ${back.stderr}\nstdout: ${back.stdout}`).toContain("exit=0");
       expect((await fx.request(server.runtime, "/api/native-integrations/codex", {
         method: "PUT", body: JSON.stringify({ enabled: false }),
       })).body).toMatchObject({ desiredEnabled: false });
@@ -407,6 +447,12 @@ describe("WP13 composed toggle acceptance", () => {
     const enteredGather = new Promise<void>(resolveEntered => { entered = resolveEntered; });
     const provider = Bun.serve({
       port: 0,
+      // This fixture HOLDS the /models response open on purpose — that hold is the test's
+      // instrument for keeping a provider-discovery request in flight while the toggle flips.
+      // Bun's default request idleTimeout is 10s, so on a loaded Windows shard the runtime
+      // cancelled the very request the test was holding and the assertion saw a 500 instead
+      // of the 200 it was waiting for. The hold is bounded by `released`, not by this value.
+      idleTimeout: 255,
       fetch: async request => {
         if (new URL(request.url).pathname.endsWith("/models")) {
           if (hold) {
@@ -596,7 +642,7 @@ describe("WP13 composed toggle acceptance", () => {
     expect(existsSync(join(fx.homeB, "native-write-locks"))).toBe(false);
     writeFileSync(release, "release");
     expect(await holder.exited).toBe(0);
-  }, 30_000);
+  }, CASE_TIMEOUT_MS);
 
   /** RED: delete the durable Grok intent or bypass `shouldSyncGrokOnStart`; startup recreates the fence. */
   test("Grok E2E: route-disabled Grok stays absent across a real startup", async () => {
@@ -671,7 +717,7 @@ describe("WP13 composed toggle acceptance", () => {
     // A 15 s watchdog left almost no margin and fired on a loaded macOS runner
     // (dev CI run 31105071651). Give the wait its budget plus real headroom;
     // the case's own 45 s test timeout still bounds it.
-    const blocked = await fx.runCli(["restore", "--json"], fx.homeA, fx.userprofileA, 30_000);
+    const blocked = await fx.runCli(["restore", "--json"], fx.homeA, fx.userprofileA, watchdogMs(30_000));
     expect(blocked.exitCode).toBe(1);
     const envelope = JSON.parse(blocked.stdout) as { success: boolean; artifacts: { history: { state: string; reason?: string } } };
     expect(envelope).toMatchObject({ success: false, artifacts: { history: { state: "failed", reason: "busy" } } });

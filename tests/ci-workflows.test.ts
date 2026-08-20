@@ -219,7 +219,11 @@ describe("GitHub Actions hardening", () => {
     // the runner's disk and the suite passes against a tree that no longer
     // exists in git.
     const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
-    const windowsTestCommand = `bun test --isolate tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
+    // --timeout is part of the contract, not incidental: this leg ran on Bun's 5s default
+    // while Linux and macOS both pass 60000, and it is the slowest hardware on the board.
+    // Three composed-acceptance failures were that default firing on tests still working
+    // at 41s. Pin the flag so the leg cannot silently drift back to the default.
+    const windowsTestCommand = `bun test --isolate --timeout 60000 tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
     expect(hasExactShellCommand(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
     // Binding the assertion to an executable line is only half the guarantee: a
     // step carrying the exact command still runs nothing under `if: false`, and

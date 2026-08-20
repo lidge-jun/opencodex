@@ -51,7 +51,22 @@ describe("Windows identity lookup popup fix (#1278)", () => {
     expect(options.stdin).toBe("ignore");
     // Assert the exact budget: the identity lookup contract is an 8-second
     // bound, and a looser assertion would let a silent re-tune through.
-    expect(options.timeout).toBe(8_000);
+    //
+    // Both values are pinned, because there are now two. A contended CI runner cannot start
+    // powershell.exe inside 8s while it runs a quarter of this suite, and the composed
+    // acceptance cases failed there with "Windows effective-account lookup timed out" —
+    // contention, not a hung child, which is the only thing this budget exists to bound.
+    // A user's machine keeps 8s exactly as before.
+    const previous = process.env.CI;
+    try {
+      delete process.env.CI;
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(8_000);
+      process.env.CI = "true";
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(30_000);
+    } finally {
+      if (previous === undefined) delete process.env.CI;
+      else process.env.CI = previous;
+    }
   });
 
   test("decodes non-ASCII known-folder values from the ASCII-safe envelope", () => {

@@ -607,7 +607,11 @@ jobs:
           bun run build
 
       - name: Test
-        run: bun test --isolate tests --shard=${{ matrix.shard }}/4
+        # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
+        # the only one left on Bun's 5s default, and it is the slowest hardware on the board.
+        # Three of its failures were the default firing on tests that had not hung — the
+        # composed-acceptance cases spawn a real `ocx start` and were still working at 41s.
+        run: bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/4
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
