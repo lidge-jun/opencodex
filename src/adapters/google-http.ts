@@ -7,7 +7,11 @@ import {
 } from "./google-errors";
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
-import { antigravityHostCandidates, isAntigravityHttpsHost } from "./google-antigravity-hosts";
+import {
+  antigravityHostCandidates,
+  canonicalAntigravityHttpsHost,
+  isAntigravityHttpsHost,
+} from "./google-antigravity-hosts";
 import {
   abortError,
   cancelResponseBodyBestEffort,
@@ -19,8 +23,8 @@ import {
 const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
-export const CCA_STREAM_PROBE_MAX_BYTES = 100 * 1024 * 1024;
 export const CCA_STREAM_CLASSIFY_MAX_BYTES = 256 * 1024;
+export const CCA_STREAM_PROBE_MAX_BYTES = CCA_STREAM_CLASSIFY_MAX_BYTES;
 
 function isAntigravitySseRequest(request: AdapterRequest): boolean {
   return request.url.includes("/v1internal:streamGenerateContent?alt=sse");
@@ -84,6 +88,7 @@ export class CcaProbeBuffer {
   }
 
   append(next: Uint8Array): boolean {
+    if (next.byteLength === 0) return true;
     const required = this.length + next.byteLength;
     if (required > this.maxBytes) return false;
     if (required > this.storage.byteLength) {
@@ -188,7 +193,7 @@ async function prepareCcaSseResponse(
     return fetchPeer();
   };
   try {
-    while (probeBuffer.length < CCA_STREAM_PROBE_MAX_BYTES) {
+    while (probeBuffer.length < CCA_STREAM_CLASSIFY_MAX_BYTES) {
       if (scanned >= CCA_STREAM_CLASSIFY_MAX_BYTES || probeBuffer.length >= CCA_STREAM_CLASSIFY_MAX_BYTES) {
         return passthrough();
       }
@@ -212,9 +217,12 @@ async function prepareCcaSseResponse(
         return failoverOrPassthrough();
       }
       if (!value?.byteLength) continue;
-      const available = CCA_STREAM_PROBE_MAX_BYTES - probeBuffer.length;
-      const overflow = value.byteLength > available ? value.subarray(available) : undefined;
-      probeBuffer.append(overflow ? value.subarray(0, available) : value);
+      const classifyRemaining = CCA_STREAM_CLASSIFY_MAX_BYTES - probeBuffer.length;
+      const copyBytes = Math.min(value.byteLength, classifyRemaining);
+      const overflow = value.byteLength > copyBytes ? value.subarray(copyBytes) : undefined;
+      if (copyBytes > 0) {
+        probeBuffer.append(value.subarray(0, copyBytes));
+      }
       const buffered = probeBuffer.view();
       while (true) {
         if (scanned >= CCA_STREAM_CLASSIFY_MAX_BYTES) return passthrough(overflow);
@@ -284,9 +292,11 @@ async function fetchGoogleWithRetryInternal(
   let activeRequest = request;
   if (label === "Antigravity" && isAntigravitySseRequest(activeRequest)) {
     const origin = new URL(activeRequest.url).origin;
-    if (!isAntigravityHttpsHost(origin)) {
-      const httpsHost = antigravityHostCandidates(origin).find(isAntigravityHttpsHost);
-      if (httpsHost) activeRequest = requestForHost(activeRequest, httpsHost);
+    const canonicalHttps = canonicalAntigravityHttpsHost(origin);
+    if (canonicalHttps) {
+      activeRequest = requestForHost(activeRequest, canonicalHttps);
+    } else if (!isAntigravityHttpsHost(origin)) {
+      throw new Error("Antigravity OAuth bearer requests must use HTTPS");
     }
   }
   const antigravityHosts = allowAntigravityHostFailover && label === "Antigravity" && isAntigravitySseRequest(activeRequest)

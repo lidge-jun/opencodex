@@ -215,10 +215,46 @@ describe("google provider hardening", () => {
   test("CCA probe buffer refuses bytes beyond its hard cap", () => {
     const cap = 16;
     const buffer = new CcaProbeBuffer(cap);
-    expect(CCA_STREAM_PROBE_MAX_BYTES).toBe(100 * 1024 * 1024);
+    expect(CCA_STREAM_PROBE_MAX_BYTES).toBe(CCA_STREAM_CLASSIFY_MAX_BYTES);
     expect(buffer.append(new Uint8Array(cap))).toBe(true);
     expect(buffer.append(new Uint8Array(1))).toBe(false);
     expect(buffer.length).toBe(cap);
+  });
+
+  test("CCA large first chunk bounds probe retention and replays losslessly", async () => {
+    const encoder = new TextEncoder();
+    const candidateFrame = 'data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}}\n\n';
+    const padLen = 512 * 1024 - candidateFrame.length;
+    const fullBody = candidateFrame + "x".repeat(padLen);
+    const firstChunk = encoder.encode(fullBody);
+    expect(firstChunk.byteLength).toBe(512 * 1024);
+
+    const probeBuffer = new CcaProbeBuffer(CCA_STREAM_CLASSIFY_MAX_BYTES);
+    const classifyRemaining = CCA_STREAM_CLASSIFY_MAX_BYTES - probeBuffer.length;
+    const copyBytes = Math.min(firstChunk.byteLength, classifyRemaining);
+    expect(probeBuffer.append(firstChunk.subarray(0, copyBytes))).toBe(true);
+    expect(probeBuffer.length).toBe(CCA_STREAM_CLASSIFY_MAX_BYTES);
+    expect(probeBuffer.append(firstChunk.subarray(copyBytes, copyBytes + 1))).toBe(false);
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(firstChunk);
+        controller.close();
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    try {
+      const response = await fetchAntigravityWithRetry({
+        url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: {},
+        body: "{}",
+      }, { timeoutMs: 5_000, stream: true });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(fullBody);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("CCA open empty SSE stream passes through at the classify cap without buffering 100 MiB", async () => {
@@ -267,7 +303,7 @@ describe("google provider hardening", () => {
         "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
       ]);
       expect(enqueuedBytes).toBeGreaterThanOrEqual(CCA_STREAM_CLASSIFY_MAX_BYTES);
-      expect(enqueuedBytes).toBeLessThan(CCA_STREAM_PROBE_MAX_BYTES);
+      expect(enqueuedBytes).toBeLessThan(CCA_STREAM_CLASSIFY_MAX_BYTES * 2);
       await response.body?.cancel();
     } finally {
       abortController.abort();
@@ -673,14 +709,14 @@ describe("google provider hardening", () => {
       message: "google-antigravity response missing response wrapper",
     }]);
 
-    // Plain JSON without SSE framing: CCA parseResponse delegates to parseStream, which reads until
-    // EOF without finding a `data:` frame and fails closed as truncated SSE transport.
+    // CCA parseResponse delegates to parseStream, so the same SSE-framed payload yields the
+    // same terminal error rather than a separate unary JSON code path.
     const responseEvents = await adapter.parseResponse!(
       sseResponse([flatPayload]),
     );
     expect(responseEvents).toEqual([{
       type: "error",
-      message: "upstream stream ended with an incomplete SSE frame — possible truncation",
+      message: "google-antigravity response missing response wrapper",
     }]);
   });
 
