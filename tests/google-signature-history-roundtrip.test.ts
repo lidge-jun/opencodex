@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
-import { __resetAntigravityReplayCache } from "../src/adapters/google-antigravity-replay";
+import { __resetAntigravityReplayCache, observeAntigravityReplay } from "../src/adapters/google-antigravity-replay";
 import { parseRequest } from "../src/responses/parser";
 import {
   flushThoughtSignatureReplayForTests,
@@ -255,6 +255,44 @@ describe("#1735 thought signature survives history replay", () => {
     const request = await createGoogleAdapter(provider).buildRequest(parsed);
     const part = modelParts(request.body as string).find(candidate => "functionCall" in candidate);
     expect(part?.thoughtSignature).toBe(SIGNATURE_B);
+  });
+
+  test("a custom_tool_call without call_id store entry falls back to in-memory replay cache by unwrapped args", async () => {
+    const adapter = createGoogleAdapter({
+      ...provider,
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      project: "test-proj",
+      apiKey: "test-token",
+    });
+    const parsedDummy = parseRequestScoped({
+      model: MODEL,
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "test-session-freeform" }] }],
+      tools: [{ type: "function", name: "default_api:exec", description: "run", parameters: { type: "object" } }],
+    }, undefined);
+    const dummyReq = await adapter.buildRequest(parsedDummy);
+    const wireModel = JSON.parse(dummyReq.body as string).model;
+    const wireSession = JSON.parse(dummyReq.body as string).request.sessionId;
+    const wireToolName = JSON.parse(dummyReq.body as string).request.tools[0].functionDeclarations[0].name;
+
+    // Warm up the Antigravity replay cache with parsed function args:
+    observeAntigravityReplay(wireModel, wireSession, [
+      { functionCall: { name: wireToolName, args: { cmd: "whoami" } }, thoughtSignature: SIGNATURE },
+    ]);
+    const parsed = parseRequestScoped({
+      model: MODEL,
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "test-session-freeform" }] },
+        { type: "custom_tool_call", call_id: "call_custom_unscoped", name: "default_api:exec", input: JSON.stringify({ cmd: "whoami" }) },
+        { type: "custom_tool_call_output", call_id: "call_custom_unscoped", output: "agent" },
+      ],
+      tools: [{ type: "function", name: "default_api:exec", description: "run", parameters: { type: "object" } }],
+    }, undefined); // unscoped so durable store cannot hit
+    const request = await adapter.buildRequest(parsed);
+    const reqObj = JSON.parse(request.body as string);
+    const contents = reqObj.request.contents;
+    const modelTurn = contents.find((c: { role: string }) => c.role === "model");
+    expect(modelTurn.parts[0].thoughtSignature).toBe(SIGNATURE);
   });
 
   test("a tool_search_call replay is re-signed from the proxy-side store", async () => {

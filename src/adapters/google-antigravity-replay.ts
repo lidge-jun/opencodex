@@ -702,11 +702,38 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
       if (!fc) continue;
       if (part.thoughtSignature !== undefined || part.thought_signature !== undefined) continue;
       const ck = functionCallKey(fc.name, fc.args);
-      const call = ck ? entry.byCall.get(ck) : undefined;
-      if (call && ck) {
+      let call = ck ? entry.byCall.get(ck) : undefined;
+      let matchedKey = ck;
+      if (!call && typeof fc.name === "string" && typeof fc.args === "object" && fc.args !== null) {
+        // Freeform / custom tool replay unwrap:
+        // The client replays custom_tool_call with arguments: { input: "..." }.
+        // Upstream was invoked with args: { input: "..." } or raw string or parsed JSON.
+        const argsObj = fc.args as Record<string, unknown>;
+        if (typeof argsObj.input === "string") {
+          const trimmedInput = argsObj.input.trim();
+          if (
+            trimmedInput.length <= REPLAY_MAX_CANONICAL_ARGS_BYTES
+            && utf8.encode(trimmedInput).byteLength <= REPLAY_MAX_CANONICAL_ARGS_BYTES
+          ) {
+            try {
+              const parsedInput = JSON.parse(trimmedInput);
+            if (parsedInput && typeof parsedInput === "object") {
+              const altKey = functionCallKey(fc.name, parsedInput);
+              if (altKey && entry.byCall.has(altKey)) {
+                call = entry.byCall.get(altKey);
+                matchedKey = altKey;
+              }
+            }
+            } catch {
+              // not JSON, keep default
+            }
+          }
+        }
+      }
+      if (call && matchedKey) {
         part.thoughtSignature = call.signature;
-        entry.byCall.delete(ck);
-        entry.byCall.set(ck, { ...call, touchedAtMs: now });
+        entry.byCall.delete(matchedKey);
+        entry.byCall.set(matchedKey, { ...call, touchedAtMs: now });
         touched = true;
       }
     }
