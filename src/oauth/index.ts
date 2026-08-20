@@ -232,6 +232,10 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: (rt, signal) => refreshGeminiToken(rt, "code-assist", signal),
     providerConfig: oauthConfig(GEMINI_CODE_ASSIST_PROVIDER),
     defaultModel: oauthDefaultModel(GEMINI_CODE_ASSIST_PROVIDER),
+    // Presents Google's first-party Gemini CLI client from a proxy, and each refresh also re-runs
+    // Code Assist project discovery — a proactive policy would multiply that traffic under client
+    // identifiers we do not own. Anchor lazy-only explicitly so it cannot drift to proactive.
+    defaultRefreshPolicy: "lazy-only",
   },
   [GEMINI_AI_STUDIO_PROVIDER]: {
     login: (ctrl, opts) => loginGemini(ctrl, "ai-studio", { forceAccountSelect: opts?.forceLogin === true }),

@@ -61,7 +61,7 @@ registre intégré classe séparément les préréglages locaux ; ceux-ci omette
 | --- | --- | --- |
 | `key` | Envoie votre clé API (`Authorization: Bearer …`, ou `x-api-key` / `api-key` par adaptateur). La clé peut être un littéral ou une référence `${ENV_VAR}`. | La plupart des fournisseurs. |
 | `forward` | Transmet **à l'identique vos en-têtes d'authentification Codex entrants** au fournisseur, sans enregistrer de clé. Il s'agit du transfert de la connexion ChatGPT. | OpenAI (adaptateur `openai-responses`). |
-| `oauth` | Résout un jeton d'accès OAuth enregistré — automatiquement actualisé avant son expiration — et l'utilise comme jeton porteur. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, Command Code, GitHub Copilot, Nous Portal. |
+| `oauth` | Résout un jeton d'accès OAuth enregistré — automatiquement actualisé avant son expiration — et l'utilise comme jeton porteur. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Gemini, Cursor, Command Code, GitHub Copilot, Nous Portal. |
 
 La relance d'une requête 429 avec la même clé, configurée par
 [`retryOn429`](/fr/reference/configuration/), s'applique uniquement aux fournisseurs à clé API
@@ -94,7 +94,7 @@ Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifi
 
 ## 2. Connexion au compte (OAuth)
 
-Huit préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
+Dix préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
 expérimental et non officiel reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
 `~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également `chatgpt` ;
 elle obtient un identifiant ChatGPT tout en créant une entrée de fournisseur en mode `forward`.
@@ -106,6 +106,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login nous         # Nous Portal (device grant; free + paid models)
 ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
+ocx login gemini-cli       # OAuth Gemini (compte Google) — sous-type Code Assist
+ocx login gemini-ai-studio # OAuth Gemini (compte Google) — sous-type AI Studio
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
@@ -121,6 +123,8 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Passerelle d'abonnement Nous Research (le même service en amont que celui utilisé par Hermes Agent). Connexion par autorisation d'appareil auprès de `portal.nousresearch.com` ; le jeton d'accès est le JWT d'inférence envoyé avec chaque requête. Le catalogue mixte de modèles payants et `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) est découvert en direct pour le compte connecté. Les jetons d'actualisation sont à usage unique et renouvelés à chaque actualisation. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
+| `gemini-cli` | `google` | `https://cloudcode-pa.googleapis.com` | OAuth Gemini (compte Google), sous-type **Code Assist**. Fonctionne avec les forfaits Google One AI Pro/Ultra. Même hôte qu'Antigravity mais une famille de clients différente — voir « Connexion OAuth (Gemini) » ci-dessous. |
+| `gemini-ai-studio` | `google` | `https://generativelanguage.googleapis.com` | OAuth Gemini (compte Google), sous-type **AI Studio** : l'API Generative Language avec un jeton bearer au lieu d'une clé API. Nécessite votre propre client OAuth enregistré. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Connexion PKCE expérimentale, transport HTTP/2 en direct et découverte de modèles filtrés par compte. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Expérimental. Flux d'appareil GitHub et échange `copilot_internal` (client OAuth de VS Code). Nécessite un abonnement Copilot actif ; il ne s'agit pas d'une API tierce officielle. |
 
@@ -145,6 +149,66 @@ compte** préserve cet emplacement et en active un nouveau, distinct. Les compte
 profil. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
 registre distinct. Les jetons restent dans `~/.opencodex/auth.json` ; `/api/oauth/accounts` ne renvoie que des
 métadonnées masquées.
+
+### Connexion OAuth (Gemini)
+
+Autorisez avec un compte Google et choisissez un **sous-type OAuth**. Chaque sous-type est un
+fournisseur distinct avec son propre ensemble de comptes, car Google les place derrière des clients
+OAuth et des portées différents — un identifiant émis pour l'un n'est pas accepté par l'autre.
+
+| Sous-type | Id du fournisseur | De quoi il s'agit | Quand le choisir |
+| --- | --- | --- | --- |
+| **Code Assist** | `gemini-cli` | Cloud Code Assist, le backend qu'utilise le Gemini CLI de Google. La connexion découvre (et intègre si nécessaire) un projet Code Assist, ensuite envoyé avec chaque requête. | Par défaut. Un compte Google ordinaire, y compris les forfaits Google One AI Pro / Ultra. |
+| **AI Studio** | `gemini-ai-studio` | L'API Generative Language atteinte avec un jeton bearer au lieu d'un `x-goog-api-key`. | Vous avez enregistré votre propre client OAuth Google et préférez OAuth à une clé API. |
+
+**Depuis le tableau de bord.** Ouvrez **Providers → Ajouter un fournisseur → Accounts**. Deux lignes
+apparaissent — *Gemini (Code Assist)* et *Gemini (AI Studio)* — chacune étiquetée avec son sous-type.
+Cliquez sur celle voulue, complétez l'écran de consentement Google dans le navigateur qui s'ouvre, et
+la ligne affiche alors l'adresse e-mail du compte connecté. **Ajouter un compte** sur la même ligne
+autorise un second compte Google sans déconnecter le premier.
+
+**Depuis la CLI.**
+
+```bash
+ocx login gemini-cli        # sous-type Code Assist
+ocx login gemini-ai-studio  # sous-type AI Studio
+ocx logout gemini-cli
+```
+
+La connexion ouvre votre navigateur et écoute sur `http://127.0.0.1:51122/callback`. Si le navigateur
+ne peut pas joindre l'écouteur en boucle locale, collez l'URL de redirection (ou le `code` seul) dans
+l'invite.
+
+**Découverte du projet Code Assist.** Après l'échange du jeton, le sous-type Code Assist appelle
+`loadCodeAssist` puis, pour un compte sans projet, `onboardUser`. L'id du projet découvert est
+enregistré avec l'identifiant et revérifié à chaque actualisation. Si aucun projet ne peut être
+découvert, **la connexion échoue** au lieu d'enregistrer un identifiant dont chaque requête serait
+rejetée — le compte apparaîtrait sinon comme « connecté » alors que rien ne fonctionne. Vérifiez que
+le compte Google dispose bien de l'accès à Gemini Code Assist, puis réessayez.
+
+**AI Studio exige votre propre client OAuth.** Le client Gemini CLI intégré de Google n'est pas
+enregistré pour les portées generative-language ; ce sous-type échoue donc de manière explicite tant
+que vous ne fournissez pas les identifiants d'un client issu de votre propre projet Google Cloud
+(type de client OAuth *Application de bureau*, avec `http://127.0.0.1:51122/callback` comme URI de
+redirection autorisée) :
+
+```bash
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_ID="<your-client-id>.apps.googleusercontent.com"
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET="<your-client-secret>"
+ocx login gemini-ai-studio
+```
+
+Le sous-type Code Assist ne demande aucune configuration : il utilise les identifiants de client
+publics que Google distribue dans le Gemini CLI. `GEMINI_CLI_OAUTH_CLIENT_ID` /
+`GEMINI_CLI_OAUTH_CLIENT_SECRET` les remplacent si vous préférez votre propre client.
+
+:::caution[Conditions d'utilisation]
+Le sous-type Code Assist présente les identifiants du client Gemini CLI propriétaire de Google depuis
+un proxy plutôt que depuis la CLI elle-même. Comme les autres passerelles non officielles de cette
+page, cela peut entrer en conflit avec les conditions de Google, et la détection d'abus peut
+suspendre l'accès. Le sous-type AI Studio ne comporte pas ce risque — il autorise un client que vous
+avez enregistré vous-même.
+:::
 
 ### Importation Cockpit Tools Antigravity
 
