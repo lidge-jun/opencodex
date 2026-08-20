@@ -256,7 +256,7 @@ describe("resolveFastPolicy matrix", () => {
     expect(fastPolicyForModel(provider, MODEL, "fixture").capability).toBe(false);
   });
 
-  test("captured xAI registry defaults keep OAuth and key transports separate", () => {
+  test("captured xAI registry defaults keep the OAuth fallback on Chat", () => {
     const oauthProvider = Object.freeze({
       adapter: "openai-chat",
       baseUrl: "https://api.x.ai/v1",
@@ -269,7 +269,7 @@ describe("resolveFastPolicy matrix", () => {
     });
 
     expect(fastPolicyForModel(oauthProvider, "grok-4.6", "xai")).toMatchObject({
-      adapter: "openai-responses",
+      adapter: "openai-chat",
       eligibility: "unclassified",
       forwardCallerTier: false,
     });

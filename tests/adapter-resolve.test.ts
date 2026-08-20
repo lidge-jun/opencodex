@@ -100,10 +100,10 @@ describe("registry per-model wire defaults", () => {
     });
   }
 
-  test("routes current xAI subscription models through Responses for native Codex traffic", () => {
+  test("keeps current xAI subscription models on Chat by default", () => {
     for (const model of ["grok-4.6", "grok-4.5"]) {
       expect(resolveWireProtocolOverride("xai", model, xai("oauth"), "responses").adapter)
-        .toBe("openai-responses");
+        .toBe("openai-chat");
     }
   });
 
@@ -118,10 +118,12 @@ describe("registry per-model wire defaults", () => {
       .toBe("openai-chat");
   });
 
-  test("an explicit xAI Chat override opts out of the subscription Responses default", () => {
-    const provider = xai("oauth", { modelAdapters: { "grok-4.6": "openai-chat" } });
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", provider, "responses").adapter)
-      .toBe("openai-chat");
+  test("an explicit xAI Responses override opts into the native wire", () => {
+    for (const model of ["grok-4.6", "grok-4.5"]) {
+      const provider = xai("oauth", { modelAdapters: { [model]: "openai-responses" } });
+      expect(resolveWireProtocolOverride("xai", model, provider, "responses").adapter)
+        .toBe("openai-responses");
+    }
   });
 
   function deepseek(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {

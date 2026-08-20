@@ -56,6 +56,8 @@ function config(): OcxConfig {
         baseUrl: "https://api.x.ai/v1",
         authMode: "oauth",
         models: ["grok-4.6"],
+        modelAdapters: { "grok-4.6": "openai-responses" },
+        modelSupportsServiceTier: { "grok-4.6": false },
       },
     },
   } as OcxConfig;
@@ -65,7 +67,7 @@ function sse(payload: unknown): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-describe("xAI OAuth Responses streaming", () => {
+describe("xAI OAuth Responses streaming opt-in", () => {
   test("uses the native Responses wire and relays the first delta before completion", async () => {
     let releaseCompletion!: () => void;
     const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });

@@ -1023,19 +1023,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     defaultModel: "grok-4.5",
-    // The current Grok CLI catalog declares both subscription models as native Responses
-    // backends. Keep API-key and translated Chat/Anthropic callers on their existing wire;
-    // Codex Responses traffic can relay xAI's SSE as it arrives instead of waiting for the
-    // Chat Completions compatibility stream to flush at the end of a reasoning turn.
+    // Keep Codex Responses callers on the compatibility Chat wire until xAI can replay
+    // opaque reasoning continuation and compaction state across later turns. The scoped
+    // declaration also keeps caller-owned service tiers off the OAuth subscription route.
     modelWireDefaults: {
       "grok-4.6": {
-        wire: "openai-responses",
+        wire: "openai-chat",
         inbound: ["responses"],
         authModes: ["oauth"],
         forwardCallerServiceTier: false,
       },
       "grok-4.5": {
-        wire: "openai-responses",
+        wire: "openai-chat",
         inbound: ["responses"],
         authModes: ["oauth"],
         forwardCallerServiceTier: false,

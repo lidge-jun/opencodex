@@ -80,14 +80,14 @@ different custom destination does not inherit its upstream assumptions. Object-f
 also narrow the decision by inbound protocol and authentication mode; an auth-scoped default must
 not leak from a subscription transport into an API-key or forwarded-credential route.
 
-xAI keeps `openai-chat` as its provider-wide compatibility wire. The official Grok CLI catalog
-declares the Grok 4.5 and 4.6 subscription models as Responses backends, so only OAuth-backed native
-Responses traffic for those exact models selects `openai-responses`. API-key requests, translated
-Chat/Anthropic callers, other Grok models, and explicit model adapter overrides retain their
-existing wire. This lets Codex receive native xAI SSE deltas as they arrive without widening the
-credential or compatibility boundary. These OAuth subscription defaults drop caller-owned
-`service_tier`; they neither advertise nor inject Fast. The API-key transport remains governed by
-its separate capability declaration.
+xAI keeps `openai-chat` as both its provider-wide compatibility wire and the default for Grok 4.5
+and 4.6 subscription traffic. The official Grok CLI catalog declares those models as Responses
+backends, but the current gateway rejects opaque reasoning continuation and compaction state on
+later turns. Operators may still select `openai-responses` with an explicit model adapter override
+while that compatibility work continues. The default OAuth route continues to drop caller-owned
+`service_tier`, and native Responses OAuth 401 replay remains available to explicit opt-ins.
+API-key requests, translated Chat/Anthropic callers, and other Grok models retain their existing
+wire.
 
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and

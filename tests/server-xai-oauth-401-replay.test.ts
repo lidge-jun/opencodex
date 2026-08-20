@@ -60,6 +60,7 @@ function xaiConfig(authMode: "oauth" | "key" = "oauth"): OcxConfig {
         baseUrl: "https://api.x.ai/v1",
         authMode,
         ...(authMode === "key" ? { apiKey: "xai-api-key" } : {}),
+        ...(authMode === "oauth" ? { modelAdapters: { "grok-4.5": "openai-responses" } } : {}),
         models: ["grok-4.5"],
       },
     },
@@ -142,7 +143,7 @@ function installOAuthFetch(
   return { chatAuth, counts };
 }
 
-describe("xAI OAuth upstream 401 replay", () => {
+describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
   test("initial OAuth refresh projects raw provider failures before responding", async () => {
     await seedOAuth(0);
     saveConfig(xaiConfig());
