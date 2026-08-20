@@ -17,7 +17,7 @@ import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
-import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -835,7 +835,16 @@ export function buildModelsRequest(
     undefined,
     copilotApiBaseUrl,
   );
-  const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
+  // Model discovery is an upstream request like any other, so it carries the same registry
+  // static headers the inference path does. Without this a provider is identified correctly
+  // when it answers a completion but anonymously when it lists its own models, which is the
+  // kind of split fingerprint an upstream rate limiter reads as two different clients.
+  const registryStaticHeaders = providerMatchesRegistryTransport(providerName, effectiveProvider)
+    ? getProviderRegistryEntry(providerName)?.staticHeaders
+    : undefined;
+  const headers: Record<string, string> = {
+    ...(mergeRegistryStaticHeaders(registryStaticHeaders, effectiveProvider.headers) ?? {}),
+  };
   const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
     providerName,
     prov,

@@ -2480,6 +2480,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "No key needed — public desktop tier. OpenCode currently advertises about 200 Big Pickle/free-model requests per 5 hours. The same Zen gateway can also short-window rate-limit free models at roughly 15-20 requests/minute, and may return generic 429s without Retry-After (opencodex synthesizes backoff only when that header is omitted). Free models are discovered live from Zen. Data use: per OpenCode's Zen docs (https://opencode.ai/docs/zen/), prompts sent to free models may be retained and used for training/improvement — do not send confidential material through this provider.",
     dashboardUrl: "https://opencode.ai",
     staticHeaders: {
+      // Zen answers a bare runtime User-Agent (Bun/x.y.z) more aggressively than a client
+      // that identifies itself, which is what the 429 in #2067 traced to. The value is
+      // deliberately unversioned: a pinned "opencode-cli/<version>" is a claim about an
+      // install we do not have and goes stale on the vendor's schedule, not ours.
+      // Corroboration, not authority: OmniRoute — an independent open-source broker against
+      // the same Zen upstream — defaults to exactly this pair (userAgent "opencode", client
+      // "desktop") in open-sse/executors/opencode.ts, and got there by RETREATING from its
+      // own earlier "opencode-cli/1.0.0" pin. An operator can still override either value
+      // through the provider headers API; user headers win case-insensitively at route time.
+      "User-Agent": "opencode",
       "x-opencode-client": "desktop",
     },
     modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
@@ -2634,6 +2644,36 @@ for (const entry of PROVIDER_REGISTRY) {
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(entry => entry.id === id);
+}
+
+/**
+ * Merge a registry row's `staticHeaders` beneath a provider's own headers.
+ *
+ * The field is documented as "merged into every upstream request for this provider", but that
+ * was only ever true for a freshly seeded config: `providerConfigSeed` copies the block once
+ * (`derive.ts`), `enrichProviderFromCatalog` fills it only when the whole block is absent, and
+ * nothing merged it at request time. So an install that predates a header — or that saved any
+ * header of its own — never received the new one, which is exactly what #2067 would have
+ * shipped for every existing opencode-free user.
+ *
+ * The comparison is case-insensitive on purpose. HTTP header names are case-insensitive, but a
+ * plain object spread is not: merging a registry `User-Agent` over a user's `user-agent`
+ * produces two entries that `Headers` serializes as one comma-joined value
+ * ("opencode, custom-agent"), which is a corrupted request rather than an override. The user's
+ * spelling and value both win; the registry only fills names the user has not spoken for.
+ */
+export function mergeRegistryStaticHeaders(
+  staticHeaders: Record<string, string> | undefined,
+  userHeaders: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!staticHeaders) return userHeaders;
+  if (!userHeaders) return { ...staticHeaders };
+  const claimed = new Set(Object.keys(userHeaders).map(name => name.toLowerCase()));
+  const merged: Record<string, string> = { ...userHeaders };
+  for (const [name, value] of Object.entries(staticHeaders)) {
+    if (!claimed.has(name.toLowerCase())) merged[name] = value;
+  }
+  return merged;
 }
 
 /** Whether this registry row's per-model service-tier evidence applies to one configured target. */

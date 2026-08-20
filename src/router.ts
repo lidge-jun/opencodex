@@ -14,6 +14,7 @@ import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
   PROVIDER_REGISTRY,
+  mergeRegistryStaticHeaders,
   providerCodexAccountMode,
   registryModelServiceTierCapabilityApplies,
 } from "./providers/registry";
@@ -296,6 +297,11 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
     : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
   const modelInputModalities = mergeRecordFill(registryEntry.modelInputModalities, provider.modelInputModalities);
+  // Registry static headers are documented as applying to every upstream request, so they are
+  // filled at resolve time rather than only at seed time: a config written before a header
+  // existed, or one carrying any header of its own, would otherwise never receive it. User
+  // headers win, matched case-insensitively so an override replaces rather than duplicates.
+  const headers = mergeRegistryStaticHeaders(registryEntry.staticHeaders, provider.headers);
   const modelMaxInputTokens = providerName === OPENAI_API_PROVIDER_ID
     ? mergePositiveNumberCaps(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens)
     : mergeRecordFill(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens);
@@ -372,6 +378,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
     ...(staticModelCatalog ? { liveModels: false } : {}),
+    ...(headers ? { headers } : {}),
     // Backfill the Google wire mode + Vertex project/location from the registry when the user
     // config omits them, so a minimal `google-vertex`/`google-antigravity` entry still routes
     // through the correct branch (CCA/Vertex) instead of falling back to AI Studio.
