@@ -183,10 +183,16 @@ export function createRoutedToolSearchRestoreBlockRewrite(
       const restoredBlock = restored.changed
         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
         : block;
-      if (type === "response.output_item.done" && itemId) {
-        routedItemIds.delete(itemId);
-        ordinaryItemIds.delete(itemId);
-      }
+      // Classification is retained past `output_item.done` for BOTH kinds, until the terminal
+      // event releases everything.
+      //
+      // `done` ends the item, not the id's relevance. Forgetting a ROUTED id let a trailing
+      // `function_call_arguments.*` — which some upstreams emit after done — fall through to
+      // the unknown-id branch and reach the client as a public frame for an item the client
+      // was told is a private `tool_search_call`: the mixed lifecycle this rewrite exists to
+      // prevent. Forgetting an ORDINARY id is not leak-shaped but is not free either, because
+      // the same fall-through buffers its trailing frames as unknown and delays them until an
+      // item that will never arrive. Neither id is dropped early.
       return routed ? [restoredBlock] : [...pending, restoredBlock];
     }
 

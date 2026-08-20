@@ -118,8 +118,16 @@ export function uninstallShellHook(): { removed: boolean; reason?: string } {
   try {
     const content = readFileSync(zshrcPath, "utf8");
     if (!content.includes(SHELL_HOOK_MARKER)) return { removed: false, reason: "not installed" };
-    // Remove the hook block (marker line + source line + surrounding newlines)
-    const cleaned = content.replace(/\n?# opencodex claude-env hook\n\[.*claude-env\.sh.*\n?/g, "\n");
+    // Match CR?LF, not LF alone. A .zshrc with CRLF line endings — ordinary on a home
+    // directory an editor or another OS has touched — did not match, so the file was
+    // rewritten unchanged and the caller was told the hook was removed. Reporting success
+    // while the hook still sources on every new shell is the worse of the two failures.
+    const cleaned = content.replace(/\r?\n?# opencodex claude-env hook\r?\n\[.*claude-env\.sh.*(?:\r?\n)?/g, "\n");
+    // Verify instead of assuming: if the marker survives, the block is shaped in a way this
+    // pattern does not own, and the honest answer is failure rather than a silent no-op.
+    if (cleaned.includes(SHELL_HOOK_MARKER)) {
+      return { removed: false, reason: "hook block present but not in the expected shape; remove it manually" };
+    }
     writeFileSync(zshrcPath, cleaned, { encoding: "utf8", mode: 0o644 });
     return { removed: true };
   } catch (error) {

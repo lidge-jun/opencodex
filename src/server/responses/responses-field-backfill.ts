@@ -38,6 +38,9 @@ const ITEM_ID_PREFIXES: Readonly<Record<string, string>> = {
   file_search_call: "fs_",
   code_interpreter_call: "ci_",
   computer_call: "cc_",
+  // The Responses wire type is `image_generation_call`; `image_gen_call` is kept only so a
+  // relay that emits the short spelling is not silently demoted to the generic `item_`.
+  image_generation_call: "ig_",
   image_gen_call: "ig_",
 };
 
@@ -48,27 +51,36 @@ const ITEM_ID_PREFIXES: Readonly<Record<string, string>> = {
  * generated id is deterministic per (type, output index) so it stays stable
  * across streaming events that reference the same item.
  */
-function backfillItemId(item: Record<string, unknown>, outputIndex: number): Record<string, unknown> {
+function backfillItemId(item: Record<string, unknown>, slot: ItemIdSlot): Record<string, unknown> {
   if (typeof item.id === "string" && item.id.length > 0) return item;
   const type = typeof item.type === "string" ? item.type : "";
   const prefix = Object.prototype.hasOwnProperty.call(ITEM_ID_PREFIXES, type) ? ITEM_ID_PREFIXES[type] : "item_";
-  return { ...item, id: prefix + "ocx_" + outputIndex };
+  return { ...item, id: prefix + "ocx_" + (slot.kind === "index" ? String(slot.index) : "fallback_" + slot.ordinal) };
 }
+
+/**
+ * Which namespace a synthesized id comes from.
+ *
+ * Keeping the fallback counter in the SAME numeric namespace as real output indexes only
+ * pushed the collision out of reach rather than removing it: a response whose real index
+ * happened to be 1_000_001 would produce the same id as the first malformed-index fallback,
+ * and a duplicate id is exactly what this backfill exists to prevent. The namespaces are now
+ * lexically disjoint, so no index value can ever collide with a fallback.
+ */
+type ItemIdSlot = { kind: "index"; index: number } | { kind: "fallback"; ordinal: number };
 
 /**
  * Monotonic ordinal for an event whose `output_index` is absent or malformed.
  *
- * Starts far above any plausible real index so a synthesized id can never collide with an
- * index-derived one inside the same response. Process-global rather than per-response because
- * this module is stateless by design and the value only has to be unique, not meaningful.
+ * Process-global rather than per-response because this module is stateless by design and the
+ * value only has to be unique, not meaningful. It carries its own `fallback_` namespace, so
+ * uniqueness no longer depends on a real index never reaching some arbitrary ceiling.
  */
-const SYNTHETIC_ITEM_ORDINAL_BASE = 1_000_000;
 let syntheticItemOrdinal = 0;
-function nextSyntheticItemOrdinal(): number {
+function nextSyntheticItemSlot(): ItemIdSlot {
   syntheticItemOrdinal += 1;
-  return SYNTHETIC_ITEM_ORDINAL_BASE + syntheticItemOrdinal;
+  return { kind: "fallback", ordinal: syntheticItemOrdinal };
 }
-
 
 /**
  * Backfill annotations: [] on an output_text content part if missing.
@@ -100,15 +112,26 @@ function backfillContentArray(content: unknown): unknown {
 }
 
 /**
+ * Item types that are NOT Responses output items and must be returned byte-for-byte.
+ *
+ * `compaction` is the `/v1/responses/compact` wire format, not a Responses output item. It has
+ * no `id` in that contract, so synthesizing one changes a response body the client compares
+ * exactly. The backfill exists to satisfy strict Responses decoders; a shape those decoders
+ * never see is outside its remit.
+ */
+const NON_RESPONSES_ITEM_TYPES: ReadonlySet<string> = new Set(["compaction"]);
+
+/**
  * Walk an output item and backfill output_text parts in its content.
  * Also backfills a missing required id on the item itself.
  * Returns the same object reference if nothing changed.
  */
-function backfillOutputItem(item: unknown, outputIndex: number): unknown {
+function backfillOutputItem(item: unknown, slot: ItemIdSlot): unknown {
   if (!isPlainObject(item)) return item;
+  if (typeof item.type === "string" && NON_RESPONSES_ITEM_TYPES.has(item.type)) return item;
   const content = item.content;
   const repaired = backfillContentArray(content);
-  const withId = backfillItemId(item, outputIndex);
+  const withId = backfillItemId(item, slot);
   if (repaired === content && withId === item) return item;
   return { ...withId, ...(repaired === content ? {} : { content: repaired }) };
 }
@@ -124,7 +147,7 @@ function backfillResponseOutput(response: unknown): unknown {
   let changed = false;
   const repaired = output.map((item, idx) => {
     if (!isPlainObject(item)) return item;
-    const next = backfillOutputItem(item, idx);
+    const next = backfillOutputItem(item, { kind: "index", index: idx });
     if (next !== item) changed = true;
     return next;
   });
@@ -150,8 +173,8 @@ function rewriteEvent(event: Record<string, unknown>): Record<string, unknown> {
     // is not recoverable in that case, but a unique id is what strict decoders require, and a
     // well-formed stream still gets the stable index-derived id.
     const item = typeof rawIndex === "number" && Number.isInteger(rawIndex) && rawIndex >= 0
-      ? backfillOutputItem(event.item, rawIndex)
-      : backfillOutputItem(event.item, nextSyntheticItemOrdinal());
+      ? backfillOutputItem(event.item, { kind: "index", index: rawIndex })
+      : backfillOutputItem(event.item, nextSyntheticItemSlot());
     if (item !== event.item) {
       next = { ...next, item };
       changed = true;

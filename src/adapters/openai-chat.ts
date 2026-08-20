@@ -10,7 +10,7 @@ import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
 import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
-import { buildNonOpenAIToolCatalogNudgeForTools, effectiveInstructionText, isCanonicalNativeOpenAIRoute, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
+import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import {
   canForwardForeignServiceTierForChatModel,
@@ -569,7 +569,13 @@ function developerSystemText(message: OcxMessage): string | undefined {
   return message.content.map(part => (part as OcxTextContent).text).join("");
 }
 
-const isNativeOpenAIChatTarget = isCanonicalNativeOpenAIRoute;
+function isNativeOpenAIChatTarget(provider: OcxProviderConfig): boolean {
+  try {
+    return new URL(provider.baseUrl).hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
@@ -652,7 +658,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
   const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
-    ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice, undefined, effectiveInstructionText(context.messages, context.systemPrompt))
+    ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
     : undefined;
   const developerSystemParts = nativeOpenAI
     ? []
@@ -1317,11 +1323,14 @@ function canSerializeOpenAIChatServiceTier(
   if (tierDecision !== undefined) {
     return tierDecision.kind === "set" || tierDecision.kind === "forward-caller";
   }
+  // No decision from the router means this call did not go through the tier state machine, so
+  // ask that machine rather than re-deriving a looser answer beside it. The previous fallback
+  // returned true whenever foreign forwarding was allowed at all, which let a caller tier
+  // reach the wire in cases `decideTier` would have dropped — the two paths disagreeing is
+  // precisely the bug, so there is now only one authority.
   const callerTier = typeof serviceTier === "string" ? serviceTier : undefined;
-  const callerCanonicalFast = canonicalFastTierMarker(callerTier) !== undefined;
-  const capability = supportsServiceTierForModel(provider, modelId);
-  const callerTierForwardAllowed = canForwardForeignServiceTierForChatModel(provider, modelId);
-  return callerTierForwardAllowed || (callerCanonicalFast && capability === true);
+  const decision = decideTier(fastPolicyForModel(provider, modelId, undefined, "chat"), undefined, callerTier);
+  return decision.kind === "set" || decision.kind === "forward-caller";
 }
 
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {

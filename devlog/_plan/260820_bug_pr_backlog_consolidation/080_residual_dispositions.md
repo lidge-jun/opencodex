@@ -272,3 +272,44 @@ not as a side effect of a quota fix.
 The defensive canonical-URL check inside `fetchOpenCodeGoQuota` (`quota.ts:485-494`) stays: it
 is what stops an API key being sent to a non-canonical host, and it should not depend on the
 dispatch predicate being correct.
+
+### wp18-wp20 — the rest of the chain
+
+**#2027 @yzxcj797 -> PR #2164.** Dispatch gated on the literal name `opencode-go`, so the
+multi-account sibling rows in #1924 had no quota panel and no CLI report. The contributor's
+base-URL swap is closer but does not check the adapter; `registryEntryForProviderDestination`
+already answers exactly this question (endpoint + adapter + key auth) and is the existing
+convention for renamed rows. Rejected: `providerMatchesRegistryTransport` would need
+`preserveCustomDestination`, which also changes routing for same-named custom rows.
+
+**#2155 @waw4303 -> PR #2165.** Field validation ran before the pending-call lookup, so a
+non-string repeat of an already-canonical field killed the turn with a 502. Two corrections:
+`arguments` was gated on a canonical NAME (a name is not evidence about the arguments field,
+so a real payload could be dropped) — now keyed on `sawArgumentsString`; and `id` stayed
+unconditionally terminal. Diagnostics now come from the rejection site, because a stateless
+rescan blamed call 0's accepted padding for call 1's real defect.
+
+**#2163 @Ingwannu -> PR #2166.** Scored 65. Backend attribution was correct; sanitization sat
+at the one call site rather than in the logging layer, so `/api/logs` carried the raw
+caller-supplied value. Moved into `addFinalRequestLog`. #2157 stays open: the GUI half is not
+built, and closing it would claim an affordance that does not exist.
+
+### The stack
+
+Six layers, each rebased onto the current `dev` tip, base refs verified:
+
+#2134 -> #2160 -> #2162 -> #2164 -> #2165 -> #2166
+
+Only one true dependency edge exists in the whole set (none of the six share files). They are
+chained rather than opened as siblings because the user asked for one reviewable stack; that is
+a review-workflow choice, stated rather than dressed up as a code constraint.
+
+A privacy-scan failure caught in CI and not locally: a test fixture API key over 24 characters
+reads as a real bearer token to `scripts/privacy-scan.ts`. Fixed at the L4 commit.
+
+### End state
+
+`gh pr list --label bug --state open` returns only lidge-jun PRs plus #2054, which stays open
+by explicit instruction and carries the wire-probe request. Nine contributor PRs closed with
+attribution across this unit; none was closed without a named reason.
+

@@ -11,6 +11,7 @@ import {
 } from "../src/server";
 import {
   aggregateAttemptUsage,
+  addRequestLog,
   beginRequestAttempt,
   clearRequestLogsForTests,
   finishRequestAttempt,
@@ -309,6 +310,42 @@ describe("request log metadata", () => {
       expect(marker!.length).toBeLessThanOrEqual(64);
       expect(marker!.startsWith("gpt-5.6-luna")).toBe(true);
       expect(getRequestLogEntries()[0]?.shadowCallRewrittenFrom).not.toContain("\n");
+    } finally {
+      clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // `addFinalRequestLog` is not the only ingress: `addRequestLog` is exported and callable
+  // directly. Sanitizing only on the disk projection left the in-memory ring — and therefore
+  // /api/logs — serving the raw value, which is the worst shape for a sanitization bug
+  // because the surface you would check is the clean one.
+  test("the direct addRequestLog ingress sanitizes memory and disk identically", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-shadow-ingress-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      addRequestLog({
+        requestId: "ocx-shadow-direct",
+        timestamp: Date.now(),
+        provider: "xai",
+        model: "grok-4.5",
+        status: 200,
+        shadowCallRewrittenFrom: `gpt-5.6-luna\nInjected: yes ${"x".repeat(80)}`,
+      } as RequestLogEntry);
+
+      const inMemory = getRequestLogEntries()[0]?.shadowCallRewrittenFrom;
+      const [persisted] = readUsageEntries();
+      expect(inMemory).toBeDefined();
+      expect(inMemory).not.toContain("\n");
+      expect(inMemory!.length).toBeLessThanOrEqual(64);
+      // The two surfaces must agree: a divergence here is exactly the bug.
+      expect(inMemory).toBe(persisted?.shadowCallRewrittenFrom);
     } finally {
       clearRequestLogsForTests();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;

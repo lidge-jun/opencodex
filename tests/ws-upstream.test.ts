@@ -3,7 +3,6 @@ import { providerFetch } from "../src/server/responses/fetch-helpers";
 import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
 import { isWin32EagerRewrite } from "../src/lib/bun-stream-caps";
-import { createResponsesFieldBackfillBlockRewrite } from "../src/server/responses/responses-field-backfill";
 import {
   bunSupportsBoundedCodexWsRelay,
   codexWsUpstreamFetch as rawCodexWsUpstreamFetch,
@@ -347,20 +346,59 @@ describe("handleResponses Codex WS relay selection", () => {
       expect(await response.text()).toContain("response.completed");
     },
   );
+
+  // The two cases above assert the marker against `EAGER_RELAY_FORCED_BY_PLATFORM`,
+  // which is only the right expectation while `needsClientRewrite` is genuinely
+  // `true`. Rather than assert that through the rewrite factory — which would stay
+  // green if `handleResponses` stopped registering it — this drives a real Responses
+  // stream through the handler and reads the rewrite's own effect off the client
+  // bytes. `createResponsesFieldBackfillBlockRewrite()` is the unconditional entry in
+  // `blockRewrites`, so observing its transformation is what proves
+  // `clientBlockRewrite !== undefined`, hence `needsClientRewrite === true`.
+  test("the registered rewrite chain transforms the client stream, so needsClientRewrite is true", async () => {
+    const upstreamEvent = {
+      type: "response.completed",
+      response: {
+        id: "r-backfill",
+        status: "completed",
+        // Deliberately spec-non-compliant: `annotations` is required on
+        // `output_text` and this upstream omits it. Only the backfill rewrite
+        // puts it back.
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "hi" }],
+        }],
+      },
+    };
+    globalThis.fetch = (async () => new Response(
+      `event: response.completed\ndata: ${JSON.stringify(upstreamEvent)}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch;
+
+    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
+    const text = await response.text();
+
+    const payload = text
+      .split("\n")
+      .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+      .map(line => JSON.parse(line.slice("data: ".length)))
+      .find(event => event.type === "response.completed");
+
+    expect(payload).toBeDefined();
+    // Absent on the wire, present to the client: the chain ran.
+    expect(payload.response.output[0].content[0]).toHaveProperty("annotations");
+    expect(payload.response.output[0].content[0].annotations).toEqual([]);
+
+    // And with the chain proven non-empty, the marker is exactly the win32 rule.
+    expect(isEagerRelaySseResponse(response)).toBe(EAGER_RELAY_FORCED_BY_PLATFORM);
+  });
 });
 
-describe("eager-relay marker preconditions", () => {
-  test("the client rewrite chain is never empty, so win32 always takes the eager path", () => {
-    // This is the coupling that silently changed the two cases above.
-    // `createResponsesFieldBackfillBlockRewrite()` is added to `blockRewrites`
-    // unconditionally and returns a rewrite rather than `undefined`, so
-    // `needsClientRewrite` in `handleResponses` is a constant `true`. Combined with
-    // the win32 rule that makes the eager relay the only safe path for rewrite
-    // traffic, every Responses stream on Windows is marked. If either half changes,
-    // this fails here rather than in an assertion that looks like it is about
-    // WebSocket selection.
-    expect(typeof createResponsesFieldBackfillBlockRewrite()).toBe("function");
-
+describe("isWin32EagerRewrite", () => {
+  test("marks rewrite traffic on win32 only", () => {
+    // #864 is a win32-only Bun sink defect, so the rule must not widen to other
+    // platforms, and must not fire when there is nothing to rewrite.
     expect(isWin32EagerRewrite("win32", true)).toBe(true);
     expect(isWin32EagerRewrite("win32", false)).toBe(false);
     expect(isWin32EagerRewrite("darwin", true)).toBe(false);

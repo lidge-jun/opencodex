@@ -103,6 +103,48 @@ describe("Claude Code shell-hook reconciliation", () => {
     expect(readFileSync(zshrcPath, "utf8")).not.toContain("opencodex claude-env hook");
   });
 
+  // A .zshrc with CRLF endings is ordinary on a home directory an editor or another OS has
+  // touched. The removal pattern matched LF only, so the file was rewritten unchanged while
+  // the caller was told the hook was gone — the worse outcome, because the hook keeps
+  // sourcing on every new shell and the reported state says it does not.
+  test("removes a CRLF-terminated hook block instead of reporting a false success", () => {
+    installClaudeCli();
+    reconcileShellHook(true);
+    const installed = readFileSync(zshrcPath, "utf8");
+    writeFileSync(zshrcPath, installed.replace(/\n/g, "\r\n"), "utf8");
+
+    const result = reconcileShellHook(false);
+
+    expect(readFileSync(zshrcPath, "utf8")).not.toContain("opencodex claude-env hook");
+    expect(result.state).toBe("absent");
+  });
+
+  test("unrelated CRLF lines survive the removal", () => {
+    installClaudeCli();
+    writeFileSync(zshrcPath, "export FOO=1\n", "utf8");
+    reconcileShellHook(true);
+    const installed = readFileSync(zshrcPath, "utf8");
+    writeFileSync(zshrcPath, installed.replace(/\n/g, "\r\n"), "utf8");
+
+    reconcileShellHook(false);
+    const after = readFileSync(zshrcPath, "utf8");
+
+    expect(after).toContain("export FOO=1");
+    expect(after).not.toContain("claude-env.sh");
+  });
+
+  test("a marker block this pattern does not own is reported failed, not removed", () => {
+    installClaudeCli();
+    // The marker is there but the next line is not the block we wrote, so it is not ours to
+    // delete. Answering "removed" here would be a claim the user acts on and it would be false.
+    writeFileSync(zshrcPath, "# opencodex claude-env hook\n# hand-edited by the user\n", "utf8");
+
+    const result = reconcileShellHook(false);
+
+    expect(result.state).toBe("failed");
+    expect(readFileSync(zshrcPath, "utf8")).toContain("hand-edited by the user");
+  });
+
   test("ignores empty PATH segments instead of trusting a workspace-local claude file", () => {
     writeFileSync(join(root, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const previousCwd = process.cwd();

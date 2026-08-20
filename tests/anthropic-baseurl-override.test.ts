@@ -115,6 +115,7 @@ test("anthropic keeps http for an explicitly local relay", () => {
   expect(warnings).toHaveLength(0);
 });
 
+
 test("a public http override cannot buy transport security with allowPrivateNetwork", () => {
   // allowPrivateNetwork states that a destination is intentionally LOCAL. It is not a waiver of
   // transport security. Reading it before classifying the address let http://attacker.example
@@ -141,4 +142,3 @@ test("the seeded https endpoint is still reachable with the opt-in set", () => {
   expect(baseUrl).toBe("https://gateway.example/v1");
   expect(warnings).toHaveLength(0);
 });
-

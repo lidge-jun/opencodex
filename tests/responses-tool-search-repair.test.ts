@@ -575,4 +575,57 @@ describe("routed Responses tool-search compatibility", () => {
     const other = rewrite(frame("response.output_text.delta", { output_index: 2, delta: "hi" }));
     expect(other).toHaveLength(1);
   });
+
+  // `output_item.done` ends the ITEM, not the id's relevance. Forgetting the routed id there
+  // meant a trailing argument frame — which some upstreams emit after done — fell through to
+  // the unknown-id branch and reached the client as a public `function_call_arguments.*` for
+  // an item the client was told is a private `tool_search_call`.
+  test("a routed id stays suppressed after output_item.done", () => {
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]));
+
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_search", name: "tool_search", arguments: "" },
+    }));
+    const done = rewrite(frame("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_search", name: "tool_search", arguments: "{}" },
+    }));
+    expect(dataPayload(done[0]!).item).toMatchObject({ type: "tool_search_call" });
+
+    const trailing = rewrite(frame("response.function_call_arguments.done", {
+      output_index: 0,
+      item_id: "fc_search",
+      arguments: "{}",
+    }));
+    expect(trailing).toEqual([]);
+
+    const trailingDelta = rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: "fc_search",
+      delta: "x",
+    }));
+    expect(trailingDelta).toEqual([]);
+  });
+
+  test("an ordinary item's frames still pass through after its done", () => {
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]));
+
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_plain", name: "not_routed", arguments: "" },
+    }));
+    rewrite(frame("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_plain", name: "not_routed", arguments: "{}" },
+    }));
+
+    // Retaining routed ids must not accidentally start swallowing ordinary ones.
+    const trailing = rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: "fc_plain",
+      delta: "x",
+    }));
+    expect(trailing).toHaveLength(1);
+  });
 });

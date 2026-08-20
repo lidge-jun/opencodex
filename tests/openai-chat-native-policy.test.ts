@@ -82,6 +82,29 @@ function forwardsTier(body: Record<string, unknown>): boolean {
   return Object.hasOwn(body, "service_tier");
 }
 
+/**
+ * The translated path WITHOUT a router-supplied `tierDecision`.
+ *
+ * `mainPathBody` always computes and passes a decision, so it never exercises the adapter's
+ * absent-decision fallback. That fallback used to re-derive its own looser answer beside
+ * `decideTier` instead of asking it, which let a foreign caller tier reach the wire on a
+ * provider whose policy drops foreign tiers.
+ */
+function undecidedPathBody(
+  target: OcxProviderConfig,
+  callerTier: string | undefined,
+  modelId = MODEL_ID,
+): Record<string, unknown> {
+  const parsed: OcxParsedRequest = {
+    modelId,
+    stream: false,
+    context: { messages: [{ role: "user", content: "ping" }], tools: [] },
+    options: { ...(callerTier === undefined ? {} : { serviceTier: callerTier }) },
+  };
+  const request = createOpenAIChatAdapter(target).buildRequest(parsed);
+  return JSON.parse(request.body) as Record<string, unknown>;
+}
+
 describe("native Chat passthrough service-tier policy", () => {
   test.each([
     {
@@ -142,6 +165,39 @@ describe("native Chat passthrough service-tier policy", () => {
     const body = nativeBody(provider(config), callerTier);
     if (expectedTier === undefined) expect(body).not.toHaveProperty("service_tier");
     else expect(body.service_tier).toBe(expectedTier);
+  });
+
+  describe("the translated path with no router tier decision defers to decideTier", () => {
+    const dropsForeign = {
+      supportsServiceTier: true,
+      chatServiceTier: true,
+      fastWire: {
+        kind: "service-tier" as const,
+        canonicalToWire: { priority: "priority" },
+        foreignCallerTiers: "drop" as const,
+      },
+    };
+
+    test("a foreign caller tier is dropped when the policy drops foreign tiers", () => {
+      // Before the fix this serialized `flex` because the fallback only asked whether foreign
+      // forwarding was allowed anywhere, not what the policy decided for this tier.
+      expect(undecidedPathBody(provider(dropsForeign), "flex")).not.toHaveProperty("service_tier");
+    });
+
+    test("a canonical Fast tier still serializes through the same path", () => {
+      expect(undecidedPathBody(provider(dropsForeign), "priority").service_tier).toBe("priority");
+    });
+
+    test("the fallback and decideTier cannot disagree", () => {
+      // The invariant, stated directly: whatever the state machine decides for this caller
+      // tier is what the wire carries, with or without a router-supplied decision.
+      for (const callerTier of ["flex", "priority", "auto", "default"]) {
+        const target = provider(dropsForeign);
+        const decision = decideTier(fastPolicyForModel(target, MODEL_ID, undefined, "chat"), undefined, callerTier);
+        const serializes = decision.kind === "set" || decision.kind === "forward-caller";
+        expect(forwardsTier(undecidedPathBody(target, callerTier))).toBe(serializes);
+      }
+    });
   });
 
   test("the native handler passes its resolved fail-closed policy to the builder", async () => {

@@ -334,6 +334,20 @@ export function hydrateRequestLogsFromDisk(
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
+  // Sanitize ONCE, at the ingress, and use that one value for both destinations.
+  //
+  // `addFinalRequestLog` is not the only way in: `addRequestLog` is exported and callable
+  // directly, and it retained the caller's entry verbatim in the in-memory ring while only the
+  // field-by-field disk projection below saw a sanitized value. That split let `/api/logs`
+  // serve a raw upstream-supplied marker — a newline in it can forge a record boundary in a
+  // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
+  // sanitization bug because the safe surface is the one you check.
+  const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
+    ? entry
+    : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
+  if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  entry = retained;
   retainRequestLogEntry(entry);
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted

@@ -267,7 +267,8 @@ describe("responses-field-backfill", () => {
       };
       const [out] = apply(sseBlock(event));
       const parsed = parseData([out])[0];
-      expect(parsed.item.id).toMatch(/^msg_ocx_\d+$/);
+      // The fallback carries its own namespace so it can never equal an index-derived id.
+      expect(parsed.item.id).toMatch(/^msg_ocx_fallback_\d+$/);
     }
   });
 
@@ -287,8 +288,8 @@ describe("responses-field-backfill", () => {
     const first = parseData(apply(sseBlock(event("one"))))[0];
     const second = parseData(apply(sseBlock(event("two"))))[0];
 
-    expect(first.item.id).toMatch(/^msg_ocx_\d+$/);
-    expect(second.item.id).toMatch(/^msg_ocx_\d+$/);
+    expect(first.item.id).toMatch(/^msg_ocx_fallback_\d+$/);
+    expect(second.item.id).toMatch(/^msg_ocx_fallback_\d+$/);
     expect(first.item.id).not.toBe(second.item.id);
   });
 
@@ -347,5 +348,76 @@ describe("responses-field-backfill", () => {
     };
     const result = JSON.parse(backfillResponsesFieldsJson(JSON.stringify(response))) as typeof response;
     expect(result.output[0].id).toBe("msg_real");
+  });
+
+  test("the canonical image_generation_call type gets its own prefix", () => {
+    const response = {
+      id: "resp_1",
+      object: "response",
+      status: "completed",
+      output: [{ type: "image_generation_call", result: "..." }],
+    };
+    const result = JSON.parse(backfillResponsesFieldsJson(JSON.stringify(response))) as {
+      output: { id: string }[];
+    };
+    // The wire type is `image_generation_call`; keying the table on the short spelling alone
+    // silently demoted every real one to the generic `item_` prefix.
+    expect(result.output[0]!.id).toBe("ig_ocx_0");
+  });
+
+  // A malformed `output_index` falls back to a counter. While that counter lived in the same
+  // numeric namespace as real indexes, a response whose real index reached the counter's base
+  // produced the SAME id as a fallback — a duplicate, which is the one thing this backfill
+  // exists to prevent.
+  test("a fallback id cannot collide with any index-derived id", () => {
+    const malformed = parseData(apply(sseBlock({
+      type: "response.output_item.added",
+      output_index: "not-a-number",
+      item: { type: "message", role: "assistant", content: [] },
+    })));
+    const fallbackId = (malformed[0]!.item as { id: string }).id;
+
+    // Every index-derived id is `msg_ocx_<digits>`; the fallback namespace is lexically
+    // disjoint from it, so no integer index can ever produce this string.
+    expect(fallbackId).toMatch(/^msg_ocx_fallback_\d+$/);
+    expect(fallbackId).not.toMatch(/^msg_ocx_\d+$/);
+
+    for (const index of [0, 1, 1_000_000, 1_000_001, 1_000_002]) {
+      const derived = parseData(apply(sseBlock({
+        type: "response.output_item.added",
+        output_index: index,
+        item: { type: "message", role: "assistant", content: [] },
+      })));
+      expect((derived[0]!.item as { id: string }).id).not.toBe(fallbackId);
+    }
+  });
+
+  test("consecutive malformed indexes still get distinct ids", () => {
+    const ids = [0, 1].map(() => {
+      const out = parseData(apply(sseBlock({
+        type: "response.output_item.added",
+        item: { type: "message", role: "assistant", content: [] },
+      })));
+      return (out[0]!.item as { id: string }).id;
+    });
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  // `compaction` is the /v1/responses/compact wire format, not a Responses output item: it
+  // carries no id in that contract, and clients compare the body exactly. Synthesizing an id
+  // here changed a response that had nothing to do with strict Responses decoding — a defect
+  // that only appeared once this backfill and the compact endpoint were on the same tree.
+  test("a compaction item is returned byte-for-byte", () => {
+    const response = {
+      id: "resp_1",
+      object: "response",
+      status: "completed",
+      output: [{ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" }],
+    };
+    const result = JSON.parse(backfillResponsesFieldsJson(JSON.stringify(response))) as {
+      output: Record<string, unknown>[];
+    };
+    expect(result.output[0]).toEqual({ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" });
+    expect(result.output[0]).not.toHaveProperty("id");
   });
 });

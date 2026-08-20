@@ -56,6 +56,18 @@ import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
 
+/**
+ * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
+ * `claude-env.sh` from every new interactive shell, pointing at a proxy or a CLI that may no
+ * longer exist. `reconcileShellHook` already reports `state: "failed"`, but both call sites
+ * discarded it, so the one outcome the user has to act on was the one they never saw.
+ */
+function reportShellHookFailure(result: { state: "installed" | "absent" | "failed"; reason?: string }): void {
+  if (result.state !== "failed") return;
+  console.warn(`   Claude shell hook not reconciled${result.reason ? `: ${result.reason}` : ""}`);
+  console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
+}
+
 
 import { removeOwnedConfigState } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
@@ -368,7 +380,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   const systemEnv = await injectSystemEnv(port, config).catch(() => ({ injected: false }));
   // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
   // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
-  reconcileShellHook(systemEnv.injected);
+  reportShellHookFailure(reconcileShellHook(systemEnv.injected));
 
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Post-startup sync drives the readiness gate AND the #1046 stale app-server
@@ -456,7 +468,7 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
       if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
       const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
-      reconcileShellHook(systemEnv.injected);
+      reportShellHookFailure(reconcileShellHook(systemEnv.injected));
       // Refresh the Grok Build fence too (same contract as start). live.hostname is the
       // hostname the running proxy actually bound — config.hostname may have drifted.
       try {
