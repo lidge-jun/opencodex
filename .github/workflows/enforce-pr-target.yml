@@ -251,7 +251,7 @@ jobs:
               ),
             );
 
-            const ALLOWED_BASES = ["dev"];
+            const ALLOWED_BASES = ["dev", "main"];
             const DEFAULT_BASE = "dev";
             const TITLE_PREFIX = "[WRONG BRANCH] ";
             const LEGACY_COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
