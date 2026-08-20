@@ -37,6 +37,7 @@ import type {
 import { visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
+import { configuredAdminToken } from "../lib/admin-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
@@ -85,6 +86,7 @@ export interface OpencodeProxyModelRow {
   disabled?: boolean;
   displayName?: string;
   contextWindow?: number;
+  inputModalities?: string[];
 }
 
 const PROJECT_CONFIG_FILENAMES = ["opencode.json", "opencode.jsonc"] as const;
@@ -315,6 +317,9 @@ export function opencodeCatalogFromProxyRows(
       id: row.id,
       contextWindow: row.contextWindow,
       displayName: row.displayName,
+      ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
+        ? { inputModalities: row.inputModalities }
+        : {}),
     });
   }
   return catalog;
@@ -538,9 +543,13 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   }
 
   const apiKey = opencodeApiKey(config);
+  // `/api/models` is a management endpoint — it requires the admin token, not the
+  // data-plane admission key. The proxy is already running at this point so
+  // configuredAdminToken() finds the same token the server initialized with.
+  const managementToken = configuredAdminToken() ?? "";
   let proxyModels: OpencodeProxyModelRow[];
   try {
-    proxyModels = await fetchOpencodeProxyModels(live, apiKey);
+    proxyModels = await fetchOpencodeProxyModels(live, managementToken);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`❌ Could not fetch the model catalog from the proxy: ${reason}`);
