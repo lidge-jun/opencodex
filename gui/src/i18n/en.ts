@@ -1193,7 +1193,7 @@ export const en = {
   "pws.allowPrivateNetwork": "Allow local/private network",
   "pws.encryptedV2Passthrough": "Pass through encrypted V2 agent tasks",
   "pws.encryptedV2PassthroughDesc": "Trust this Responses endpoint to consume or relay Codex's opaque encrypted V2 child-task ciphertext. OpenCodex will not decrypt, translate, or recover it. Enable only after verifying provider compatibility.",
-  "pws.encryptedV2Confirm": "Trust this provider to consume or relay opaque encrypted V2 child-task ciphertext? Incompatible endpoints may fail because they cannot read the assignment.",
+  "pws.encryptedV2Confirm": "Trust this provider to consume opaque encrypted V2 child-task ciphertext or relay it byte-for-byte? Incompatible endpoints may fail if they require plaintext or modify the ciphertext.",
   "pws.liveModels": "Discover models from provider",
   "pws.liveModelsDesc": "Fetch the provider's live model catalog. Turn this off to use only configured/static models.",
   "pws.xaiResponsesOptIn": "Use Responses API for Grok 4.5 and 4.6",
