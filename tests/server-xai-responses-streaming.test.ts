@@ -228,7 +228,6 @@ describe("xAI OAuth Responses streaming opt-in", () => {
 
   test("lowers Codex namespaces for xAI and restores routed calls on the client stream", async () => {
     let outboundBody: Record<string, unknown> | undefined;
-
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
@@ -405,6 +404,216 @@ describe("xAI OAuth Responses streaming opt-in", () => {
         name: "spawn_agent",
         call_id: "call_spawn_json",
       });
+    } finally {
+      await server.stop(true);
+    }
+  }, 10_000);
+
+  test("maps the Grok edit catalog and restores native edit calls to Codex exec", async () => {
+    const execDescription = "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
+    let outboundBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        id: "resp_xai_edit",
+        object: "response",
+        status: "completed",
+        model: "grok-4.6",
+        output: [{
+          type: "function_call",
+          id: "fc_xai_edit",
+          call_id: "call_xai_edit",
+          name: "search_replace",
+          arguments: JSON.stringify({
+            file_path: "src/a.ts",
+            old_string: "old",
+            new_string: "new",
+          }),
+          status: "completed",
+        }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          input: "edit the file",
+          stream: false,
+          tools: [{
+            type: "custom",
+            name: "exec",
+            description: execDescription,
+          }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        output: Array<Record<string, unknown>>;
+      };
+      const upstreamTools = (outboundBody?.tools ?? []) as Array<Record<string, unknown>>;
+
+      expect(upstreamTools.map(tool => tool.name)).toContain("write");
+      expect(upstreamTools.map(tool => tool.name)).toContain("search_replace");
+      expect(upstreamTools.map(tool => tool.name)).not.toContain("exec");
+      expect(body.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        id: "ctc_xai_edit",
+        call_id: "call_xai_edit",
+        name: "exec",
+      });
+      expect(body.output[0]?.input).toContain("await tools.apply_patch");
+      expect(body.output[0]?.input).toContain("*** Update File: src/a.ts");
+    } finally {
+      await server.stop(true);
+    }
+  }, 10_000);
+
+  test("keeps a caller-owned write call unchanged in xAI Responses JSON", async () => {
+    const execDescription = "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
+    const callerParameters = {
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+      additionalProperties: false,
+    };
+    let outboundBody: Record<string, unknown> | undefined;
+    const call = {
+      type: "function_call",
+      id: "fc_caller_write_json",
+      call_id: "call_caller_write_json",
+      name: "write",
+      arguments: JSON.stringify({ message: "caller payload" }),
+      status: "completed",
+    };
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        id: "resp_caller_write_json",
+        object: "response",
+        status: "completed",
+        model: "grok-4.6",
+        output: [call],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          input: "use the caller tool",
+          stream: false,
+          tools: [
+            { type: "custom", name: "exec", description: execDescription },
+            { type: "function", name: "write", description: "Caller-owned tool", parameters: callerParameters },
+          ],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+      const upstreamTools = (outboundBody?.tools ?? []) as Array<Record<string, unknown>>;
+      const upstreamWrites = upstreamTools.filter(tool => tool.name === "write");
+
+      expect(upstreamWrites).toHaveLength(1);
+      expect(upstreamWrites[0]?.parameters).toEqual(callerParameters);
+      expect(body.output[0]).toEqual(call);
+    } finally {
+      await server.stop(true);
+    }
+  }, 10_000);
+
+  test("keeps a caller-owned write call unchanged in xAI Responses SSE", async () => {
+    const execDescription = "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
+    const callerParameters = {
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+      additionalProperties: false,
+    };
+    const call = {
+      type: "function_call",
+      id: "fc_caller_write_sse",
+      call_id: "call_caller_write_sse",
+      name: "write",
+      arguments: JSON.stringify({ message: "caller payload" }),
+      status: "completed",
+    };
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
+      const outbound = JSON.parse(String(init?.body)) as { tools?: Array<Record<string, unknown>> };
+      const writes = (outbound.tools ?? []).filter(tool => tool.name === "write");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.parameters).toEqual(callerParameters);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(sse({ type: "response.output_item.added", sequence_number: 0, output_index: 0, item: call }));
+          controller.enqueue(sse({ type: "response.output_item.done", sequence_number: 1, output_index: 0, item: call }));
+          controller.enqueue(sse({
+            type: "response.completed",
+            sequence_number: 2,
+            response: {
+              id: "resp_caller_write_sse",
+              object: "response",
+              status: "completed",
+              model: "grok-4.6",
+              output: [call],
+              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+            },
+          }));
+          controller.close();
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          input: "use the caller tool",
+          stream: true,
+          tools: [
+            { type: "custom", name: "exec", description: execDescription },
+            { type: "function", name: "write", description: "Caller-owned tool", parameters: callerParameters },
+          ],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const payloads = (await response.text())
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map(line => JSON.parse(line.slice(6)) as Record<string, unknown>);
+      const added = payloads.find(payload => payload.type === "response.output_item.added") as {
+        item?: Record<string, unknown>;
+      } | undefined;
+      const completed = payloads.find(payload => payload.type === "response.completed") as {
+        response?: { output?: Array<Record<string, unknown>> };
+      } | undefined;
+
+      expect(added?.item).toEqual(call);
+      expect(completed?.response?.output?.[0]).toEqual(call);
     } finally {
       await server.stop(true);
     }

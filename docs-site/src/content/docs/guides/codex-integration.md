@@ -240,6 +240,21 @@ encodes that declaration and its history as an upstream function tool, then rest
 function-call lifecycle to `custom_tool_call` before Codex sees it. Native OpenAI forward routing
 and the supported `apply_patch` custom tool stay unchanged.
 
+For an xAI/Grok destination, a writable Code Mode turn uses a provider-native catalog instead of
+asking Grok to author JavaScript for Codex's freeform `exec` tool. OpenCodex exposes `read_file`,
+`grep`, `list_dir`, `search_replace`, `write`, and `run_terminal_command` upstream. It translates
+file edits into the caller's existing `apply_patch` helper, translates reads and commands into the
+existing `exec_command` helper, and restores the original `exec` call shape, ids, and stream events
+before Codex sees the response. Supported calls in prior history are reconstructed into the same
+Grok-native vocabulary for continuation turns.
+
+This bridge is automatic and has no configuration switch. It activates only when the destination
+is xAI, Codex supplied a visible freeform `exec` declaration with `apply_patch`, and the turn allows
+mutation. Plan/no-mutation turns and non-xAI providers keep their existing tool catalog. OpenCodex
+only translates declarations and calls; it never executes the filesystem or shell operation.
+Codex remains responsible for sandboxing and approval prompts, including escalation requested for
+git mutations.
+
 The selected provider must support function/tool calling. A text-only provider without tool-call
 support cannot use `exec`, Browser, or Computer Use. Native OpenAI rows keep their upstream tool
 mode unchanged.

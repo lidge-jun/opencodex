@@ -1156,6 +1156,43 @@ describe("Responses bridge web_search_call native item", () => {
   });
 });
 
+describe("Grok buffered event budget ownership", () => {
+  test("atomically replaces retained native events before building a near-limit response", () => {
+    const large = "x".repeat(128 * 1024);
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_grok_budget", name: "search_replace" },
+      {
+        type: "tool_call_delta",
+        arguments: JSON.stringify({ file_path: "src/large.ts", old_string: "old", new_string: large }),
+      },
+      { type: "tool_call_end" },
+      { type: "text_delta", text: large },
+      { type: "done" },
+    ];
+    const budget = createTranslatorBudget({ maxTurnBytes: 480 * 1024 });
+    let disposedBalance = -1;
+    try {
+      retainTranslatedEventBatch(events, budget);
+      const json = buildResponseJSON(events, "xai/grok-4.6", {
+        translatorBudget: budget,
+        freeformToolNames: new Set(["exec"]),
+        declaredToolNames: new Set(["exec"]),
+        convertedGrokNativeToolNames: new Set(["search_replace"]),
+      });
+      const output = json.output as Record<string, unknown>[];
+      const outputBytes = output.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0);
+
+      expect(json.status).toBe("completed");
+      expect(output.some(item => item.type === "custom_tool_call" && item.name === "exec")).toBe(true);
+      expect(budget.snapshot().currentBytes).toBe(outputBytes);
+    } finally {
+      budget.dispose();
+      disposedBalance = budget.snapshot().currentBytes;
+    }
+    expect(disposedBalance).toBe(0);
+  });
+});
+
 describe("Responses bridge stopReason threading (issue #246)", () => {
   test("done with stopReason max_tokens emits response.incomplete", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([

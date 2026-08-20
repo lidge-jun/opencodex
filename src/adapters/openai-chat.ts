@@ -10,7 +10,8 @@ import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
 import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
-import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
+import { grokFacingTools, grokNativeCatalogTools, reconstructGrokToolCallFromExec, rewriteCodexFileEditGuidanceForGrok } from "./grok-structured-edit";
+import { buildNonOpenAIToolCatalogNudgeForTools, effectiveInstructionText, isCanonicalNativeOpenAIRoute, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import {
   canForwardForeignServiceTierForChatModel,
@@ -569,13 +570,7 @@ function developerSystemText(message: OcxMessage): string | undefined {
   return message.content.map(part => (part as OcxTextContent).text).join("");
 }
 
-function isNativeOpenAIChatTarget(provider: OcxProviderConfig): boolean {
-  try {
-    return new URL(provider.baseUrl).hostname === "api.openai.com";
-  } catch {
-    return false;
-  }
-}
+const isNativeOpenAIChatTarget = isCanonicalNativeOpenAIRoute;
 
 /**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
@@ -657,17 +652,38 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
+  const grokInstructions = effectiveInstructionText(context.messages, context.systemPrompt);
+  const grokTools = grokFacingTools(
+    context.tools,
+    options.toolChoice,
+    provider,
+    grokInstructions,
+  );
+  const grokNativeToolNames = new Set(grokNativeCatalogTools(
+    context.tools,
+    options.toolChoice,
+    provider,
+    grokInstructions,
+  ).map(tool => tool.name));
+  const restoreGrokHistory = grokNativeToolNames.size > 0;
   const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
-    ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
+    ? buildNonOpenAIToolCatalogNudgeForTools(
+      grokTools ?? context.tools,
+      options.toolChoice,
+      undefined,
+      grokInstructions,
+      grokNativeToolNames,
+    )
     : undefined;
   const developerSystemParts = nativeOpenAI
     ? []
     : context.messages
       .map(developerSystemText)
       .filter((part): part is string => part !== undefined && part.length > 0);
+  const grokEditGuidance = restoreGrokHistory ? rewriteCodexFileEditGuidanceForGrok : (text: string) => text;
   const systemParts = [
-    ...(context.systemPrompt ?? []),
-    ...developerSystemParts,
+    ...(context.systemPrompt ?? []).map(grokEditGuidance),
+    ...developerSystemParts.map(grokEditGuidance),
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
   ];
   if (systemParts.length > 0) {
@@ -751,11 +767,24 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           return { tc, id };
         });
         if (wireToolCalls.length > 0) {
-          chatMsg.tool_calls = wireToolCalls.map(({ tc, id }) => ({
-            id,
-            type: "function",
-            function: { name: namespacedToolName(tc.namespace, tc.name), arguments: JSON.stringify(tc.arguments) },
-          }));
+          chatMsg.tool_calls = wireToolCalls.map(({ tc, id }) => {
+            const reconstructedCandidate = restoreGrokHistory
+              && !tc.namespace
+              && (tc.name === "exec" || tc.name.endsWith("__exec"))
+              ? reconstructGrokToolCallFromExec(tc.arguments)
+              : undefined;
+            const reconstructed = reconstructedCandidate && grokNativeToolNames.has(reconstructedCandidate.name)
+              ? reconstructedCandidate
+              : undefined;
+            return {
+              id,
+              type: "function",
+              function: {
+                name: reconstructed?.name ?? namespacedToolName(tc.namespace, tc.name),
+                arguments: JSON.stringify(reconstructed?.arguments ?? tc.arguments),
+              },
+            };
+          });
           if (!chatMsg.content) chatMsg.content = emptyAssistantContent(provider);
         }
         if (chatMsg.reasoning_content !== undefined && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
@@ -1225,7 +1254,12 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
 
 function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
-  const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
+  const tools = grokFacingTools(
+    parsed.context.tools,
+    parsed.options.toolChoice,
+    provider,
+    effectiveInstructionText(parsed.context.messages, parsed.context.systemPrompt),
+  ) ?? parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
   const formatted = tools.flatMap(t => {

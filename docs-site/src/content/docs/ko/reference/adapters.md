@@ -47,6 +47,19 @@ interface ProviderAdapter {
   유지하고, `delta.reasoning_content` 또는 `delta.reasoning`을 reasoning delta로 처리하며,
   `stream_options.include_usage`로 스트림 usage를 요청하고 비스트림 응답 envelope에서도 usage를 읽습니다.
 
+## xAI/Grok Code Mode bridge
+
+`openai-chat`과 `openai-responses` 경로는 수정 가능한 xAI Code Mode 턴에 같은 bridge를 적용합니다.
+Codex가 `apply_patch`를 포함한 visible freeform `exec` 선언을 보내면 adapter는 `read_file`, `grep`,
+`list_dir`, `search_replace`, `write`, `run_terminal_command` 중 caller-owned tool과 충돌하지 않는
+request-local 이름만 노출합니다. Plan/no-mutation 턴, xAI가 아닌 대상, 같은 이름의 caller-owned tool은
+변경하지 않습니다.
+
+실시간 호출과 지원되는 history는 호출자의 기존 `apply_patch` 및 `exec_command` helper를 통해 변환되며,
+응답 이름, ID, JSON/SSE event lifecycle은 Codex에 도달하기 전에 복원됩니다. proxy는 filesystem 또는 shell
+작업을 실행하지 않습니다. git mutation의 권한 상승 prompt를 포함해 sandbox와 승인 권한은 계속 Codex가
+담당합니다.
+
 ## `openai-responses`
 
 **대상:** OpenAI **Responses API**. **`passthrough: true`** — 일반적으로 원본 요청과 응답을

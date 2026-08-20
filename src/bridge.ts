@@ -22,11 +22,13 @@ import { usageDisplayTotalTokens } from "./usage/totals";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "./web-search/sources";
 import {
   isTranslatorBudgetExceededError,
+  replaceRetainedTranslatedEventBatch,
   releaseTranslatedEvent,
   createTranslatorBudget,
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "./lib/translator-budget";
+import { rewriteGrokNativeCallEventList, rewriteGrokNativeCallsForCodexExec } from "./adapters/grok-structured-edit";
 
 function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -198,6 +200,8 @@ export function bridgeToResponsesSSE(
     onUsage?: (usage: OcxUsage | undefined) => void;
     /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
     declaredToolNames?: ReadonlySet<string>;
+    /** Exact upstream-only Grok tool names introduced for this request. */
+    convertedGrokNativeToolNames?: ReadonlySet<string>;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
     toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     /**
@@ -227,6 +231,12 @@ export function bridgeToResponsesSSE(
     };
   },
 ): ReadableStream<Uint8Array> {
+  events = rewriteGrokNativeCallsForCodexExec(
+    events,
+    freeformToolNames,
+    options?.declaredToolNames,
+    options?.convertedGrokNativeToolNames,
+  );
   const replayCacheScope = options?.replayCacheScope;
   const setBeatInterval = options?.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearBeatInterval = options?.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
@@ -1468,6 +1478,8 @@ function buildResponseJSONWithBudget(
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
     /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
     declaredToolNames?: ReadonlySet<string>;
+    /** Exact upstream-only Grok tool names introduced for this request. */
+    convertedGrokNativeToolNames?: ReadonlySet<string>;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
     toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     freeformToolNames?: Set<string>;
@@ -1482,10 +1494,21 @@ function buildResponseJSONWithBudget(
     replayCacheScope?: OcxReasoningReplayScopeRef;
   },
 ): Record<string, unknown> {
+  const budget = options?.translatorBudget;
+  const sourceEvents = events;
+  const grokRewrite = rewriteGrokNativeCallEventList(
+    events,
+    options?.freeformToolNames,
+    options?.declaredToolNames,
+    options?.convertedGrokNativeToolNames,
+  );
+  events = grokRewrite.events;
+  if (budget && grokRewrite.rewritten) {
+    replaceRetainedTranslatedEventBatch(sourceEvents, grokRewrite.events, budget);
+  }
   const responseId = `resp_${uuid()}`;
   const replayCacheScope = options?.replayCacheScope;
   const output: OutputItem[] = [];
-  const budget = options?.translatorBudget;
   const encoder = new TextEncoder();
   const bytesOf = (value: string): number => Buffer.byteLength(value);
   const appendBatchString = (

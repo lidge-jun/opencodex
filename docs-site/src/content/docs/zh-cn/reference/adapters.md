@@ -43,6 +43,17 @@ interface ProviderAdapter {
   `medium`、`high`、`xhigh` 或 `max` 档位，把 `delta.reasoning_content` 或 `delta.reasoning`
   作为 reasoning delta，通过 `stream_options.include_usage` 请求流式 usage，并从非流式响应 envelope 中读取 usage。
 
+## xAI/Grok Code Mode bridge
+
+`openai-chat` 和 `openai-responses` 路径会对可写的 xAI Code Mode 回合应用同一个 bridge。
+当 Codex 提供包含 `apply_patch` 的可见 freeform `exec` 声明时，adapter 只会公开 `read_file`、`grep`、
+`list_dir`、`search_replace`、`write` 和 `run_terminal_command` 中不与 caller-owned tool 冲突的
+request-local 子集。Plan/no-mutation 回合、非 xAI 目标和调用方拥有的同名工具保持不变。
+
+实时调用和受支持的历史记录会通过调用方现有的 `apply_patch` 与 `exec_command` helper 转换；响应名称、ID
+以及 JSON/SSE 事件生命周期会在到达 Codex 前恢复。proxy 不会执行 filesystem 或 shell 操作。包括 git
+mutation 权限提升提示在内的 sandbox 和审批权仍由 Codex 负责。
+
 ## `openai-responses`
 
 **目标：** OpenAI **Responses API**。**`passthrough: true`** —— 通常原样转发请求与响应，仅对

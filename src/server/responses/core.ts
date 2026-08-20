@@ -27,6 +27,11 @@ import {
 } from "../../responses/reasoning-replay-cache";
 import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
+import {
+  grokNativeCallToCodexCustomTool,
+  grokNativeToolNamesForRequest,
+  rewriteAdapterEventsForGrokStructuredEdits,
+} from "../../adapters/grok-structured-edit";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
   copyPreviousResponseReplayProvenance,
@@ -3412,6 +3417,12 @@ async function handleResponsesInner(
     }
     break;
     }
+    const grokNativeToolNames = request.convertedGrokNativeToolNames ?? new Set<string>();
+    const grokExecSinkName = request.grokStructuredEditExecSinkName;
+    const grokCallTransform = grokExecSinkName
+      ? (name: string, argumentsText: string, complete: boolean) =>
+        grokNativeCallToCodexCustomTool(name, argumentsText, grokExecSinkName, complete)
+      : undefined;
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) logCtx.resolvedModel = resolvedModel;
@@ -3587,6 +3598,13 @@ async function handleResponsesInner(
           : undefined,
         routedToolSearchNames.size > 0
           ? createRoutedToolSearchRestoreBlockRewrite(routedToolSearchNames, translatorBudget)
+          : undefined,
+        grokNativeToolNames.size > 0 && grokCallTransform
+          ? createRoutedCustomToolRestoreBlockRewrite(
+            grokNativeToolNames,
+            translatorBudget,
+            grokCallTransform,
+          )
           : undefined,
         githubCopilotRepairEnabled
           ? createGithubCopilotResponsesBlockRewrite(translatorBudget)
@@ -3789,8 +3807,11 @@ async function handleResponsesInner(
           restoredNamespace,
           routedCustomToolNames,
         );
+        const restoredGrok = grokCallTransform
+          ? restoreRoutedCustomCallsInJson(restored, grokNativeToolNames, grokCallTransform)
+          : restored;
         const restoredToolSearch = restoreRoutedToolSearchCallsInJson(
-          restored,
+          restoredGrok,
           routedToolSearchNames,
         );
         const repaired = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
@@ -3996,6 +4017,7 @@ async function handleResponsesInner(
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      convertedGrokNativeToolNames: grokNativeToolNamesForRequest(parsed, route.provider),
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
@@ -4084,6 +4106,7 @@ async function handleResponsesInner(
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      convertedGrokNativeToolNames: grokNativeToolNamesForRequest(parsed, route.provider),
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,
@@ -4254,6 +4277,7 @@ async function handleResponsesInner(
     };
 
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const convertedGrokNativeToolNames = grokNativeToolNamesForRequest(parsed, route.provider);
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
@@ -4276,7 +4300,7 @@ async function handleResponsesInner(
           })
         : eventSource;
       const sseStream = bridgeToResponsesSSE(
-        guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        rewriteAdapterEventsForGrokStructuredEdits(guardedSource, parsed, route.provider), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           runTurnAbort.abort();
           queue.close();
@@ -4288,6 +4312,7 @@ async function handleResponsesInner(
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
+          convertedGrokNativeToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
@@ -4335,6 +4360,15 @@ async function handleResponsesInner(
     } else {
       events = firstAttemptEvents;
     }
+    {
+      const rewritten: AdapterEvent[] = [];
+      for await (const event of rewriteAdapterEventsForGrokStructuredEdits(
+        (async function* () { yield* events; })(),
+        parsed,
+        route.provider,
+      )) rewritten.push(event);
+      events = rewritten;
+    }
     if (options.comboAttempt) {
       const firstMeaningful = events.find(event => event.type !== "heartbeat");
       if (!firstMeaningful || firstMeaningful.type === "error") {
@@ -4351,6 +4385,7 @@ async function handleResponsesInner(
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       declaredToolNames,
+      convertedGrokNativeToolNames,
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,
@@ -5159,8 +5194,9 @@ async function handleResponsesInner(
         })
       : eventStream;
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const convertedGrokNativeToolNames = grokNativeToolNamesForRequest(parsed, route.provider);
     const sseStream = bridgeToResponsesSSE(
-      guardedEventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+      rewriteAdapterEventsForGrokStructuredEdits(guardedEventStream, parsed, route.provider), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
       {
         translatorBudget,
@@ -5169,7 +5205,8 @@ async function handleResponsesInner(
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         declaredToolNames,
-      toolParameterSchemas,
+        convertedGrokNativeToolNames,
+        toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
         // Same grok-surface split as the runTurn branch above.
@@ -5238,7 +5275,17 @@ async function handleResponsesInner(
     } finally {
       cleanupUpstreamAbort();
     }
+    {
+      const rewritten: AdapterEvent[] = [];
+      for await (const event of rewriteAdapterEventsForGrokStructuredEdits(
+        (async function* () { yield* events; })(),
+        parsed,
+        route.provider,
+      )) rewritten.push(event);
+      events = rewritten;
+    }
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const convertedGrokNativeToolNames = grokNativeToolNamesForRequest(parsed, route.provider);
     let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
       translatorBudget,
@@ -5246,6 +5293,7 @@ async function handleResponsesInner(
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       declaredToolNames,
+      convertedGrokNativeToolNames,
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,

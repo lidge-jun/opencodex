@@ -5,6 +5,7 @@ import {
   rewriteRoutedCustomToolsForUpstream,
 } from "../src/responses/custom-tool-compat";
 import { createRoutedCustomToolRestoreBlockRewrite } from "../src/server/responses-custom-tool-repair";
+import { grokNativeCallToCodexCustomTool } from "../src/adapters/grok-structured-edit";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -86,6 +87,65 @@ describe("routed Responses custom-tool compatibility", () => {
     });
     expect(restored.output[0]).not.toHaveProperty("arguments");
     expect(restored.output[1]).toMatchObject({ type: "function_call", name: "ordinary", arguments: "{}" });
+  });
+
+  test("restores Grok search_replace as a Codex exec call in JSON and SSE", () => {
+    const names = new Set(["search_replace", "write"]);
+    const transform = (name: string, argumentsText: string, complete: boolean) =>
+      grokNativeCallToCodexCustomTool(name, argumentsText, "exec", complete);
+    const argumentsText = JSON.stringify({
+      file_path: "src/a.ts",
+      old_string: "old",
+      new_string: "new",
+    });
+    const upstreamItem = {
+      type: "function_call",
+      id: "fc_grok_edit",
+      call_id: "call_grok_edit",
+      name: "search_replace",
+      arguments: argumentsText,
+      status: "completed",
+    };
+    const restoredJson = JSON.parse(restoreRoutedCustomCallsInJson(
+      JSON.stringify({ id: "resp_grok", output: [upstreamItem] }),
+      names,
+      transform,
+    )) as { output: Array<Record<string, unknown>> };
+    expect(restoredJson.output[0]).toMatchObject({
+      type: "custom_tool_call",
+      id: "ctc_grok_edit",
+      name: "exec",
+    });
+    expect(restoredJson.output[0]?.input).toContain("await tools.apply_patch");
+    expect(restoredJson.output[0]?.input).toContain("*** Update File: src/a.ts");
+
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(names, undefined, transform);
+    const added = rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { ...upstreamItem, arguments: "", status: "in_progress" },
+    }));
+    expect(dataPayload(added[0]!).item).toMatchObject({
+      type: "custom_tool_call",
+      id: "ctc_grok_edit",
+      name: "exec",
+      input: "",
+    });
+    expect(rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: "fc_grok_edit",
+      delta: argumentsText,
+    }))).toEqual([]);
+    const done = rewrite(frame("response.function_call_arguments.done", {
+      output_index: 0,
+      item_id: "fc_grok_edit",
+      arguments: argumentsText,
+    }));
+    expect(dataPayload(done[0]!)).toMatchObject({
+      type: "response.custom_tool_call_input.done",
+      item_id: "ctc_grok_edit",
+    });
+    expect(dataPayload(done[0]!).input).toContain("await tools.apply_patch");
+    rewrite.dispose?.();
   });
 
   test("restores the streamed exec lifecycle and unwraps progressive input", () => {
@@ -726,6 +786,75 @@ describe("routed Responses custom-tool compatibility", () => {
       expect(clientSse).toContain('"type":"response.custom_tool_call_input.done"');
       expect(clientSse).toContain("data: [DONE]");
       expect(clientSse).not.toContain('"type":"function_call"');
+      expect(clientSse).not.toContain("response.function_call_arguments.done");
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("handleResponses maps Grok Responses edits back to the caller's exec tool", async () => {
+    const savedFetch = globalThis.fetch;
+    let outboundBody: Record<string, unknown> | undefined;
+    const argumentsText = JSON.stringify({
+      file_path: "src/a.ts",
+      old_string: "old",
+      new_string: "new",
+    });
+    const upstreamItem = {
+      type: "function_call",
+      id: "fc_grok_edit",
+      call_id: "call_grok_edit",
+      name: "search_replace",
+      arguments: argumentsText,
+      status: "completed",
+    };
+    const upstream = [
+      frame("response.output_item.added", { output_index: 0, item: { ...upstreamItem, arguments: "", status: "in_progress" } }),
+      frame("response.function_call_arguments.delta", { output_index: 0, item_id: "fc_grok_edit", delta: argumentsText }),
+      frame("response.function_call_arguments.done", { output_index: 0, item_id: "fc_grok_edit", arguments: argumentsText }),
+      frame("response.output_item.done", { output_index: 0, item: upstreamItem }),
+      frame("response.completed", { response: { id: "resp_grok", status: "completed", output: [upstreamItem] } }),
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n";
+    globalThis.fetch = (async (_input, init) => {
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const config = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+        },
+      },
+    } as OcxConfig;
+    const execDescription = "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/grok-4.6",
+          stream: true,
+          input: [{ role: "user", content: [{ type: "input_text", text: "edit src/a.ts" }] }],
+          tools: [{ type: "custom", name: "exec", description: execDescription }],
+        }),
+      }), config, { model: "", provider: "" });
+      const clientSse = await response.text();
+      const outboundTools = outboundBody?.tools as Array<Record<string, unknown>> | undefined;
+
+      expect(outboundTools?.map(tool => tool.name)).toContain("write");
+      expect(outboundTools?.map(tool => tool.name)).toContain("search_replace");
+      expect(outboundTools?.map(tool => tool.name)).not.toContain("exec");
+      expect(clientSse).toContain('"type":"custom_tool_call"');
+      expect(clientSse).toContain('"name":"exec"');
+      expect(clientSse).toContain("await tools.apply_patch");
+      expect(clientSse).toContain("*** Update File: src/a.ts");
       expect(clientSse).not.toContain("response.function_call_arguments.done");
     } finally {
       globalThis.fetch = savedFetch;

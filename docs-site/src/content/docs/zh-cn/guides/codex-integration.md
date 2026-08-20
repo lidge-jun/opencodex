@@ -191,6 +191,17 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 历史记录编码成上游 function tool，再在 Codex 收到结果前，把流式 function-call lifecycle 还原成
 `custom_tool_call`。原生 OpenAI forward routing 和已支持的 `apply_patch` custom tool 保持不变。
 
+对于 xAI/Grok 目标，可写的 Code Mode 回合会使用 provider-native catalog，而不是要求 Grok 直接为 Codex 的
+freeform `exec` 工具编写 JavaScript。OpenCodex 会向上游公开 `read_file`、`grep`、`list_dir`、
+`search_replace`、`write` 和 `run_terminal_command`。文件编辑会转换为调用方已有的 `apply_patch` helper，
+读取和命令会转换为现有的 `exec_command` helper；在响应到达 Codex 前，还会恢复原始 `exec` 调用形状、ID 和
+流式事件。历史记录中受支持的调用也会重建为同一套 Grok-native vocabulary，以供后续回合继续使用。
+
+该 bridge 无需配置，会自动工作。它只在目标为 xAI、Codex 提供了一个包含 `apply_patch` 的可见 freeform
+`exec` 声明，并且当前回合允许修改时启用。Plan/no-mutation 回合和非 xAI provider 会保留原有 tool catalog；
+调用方拥有的同名工具也不会被转换。OpenCodex 只转换声明和调用，绝不会执行 filesystem 或 shell 操作。
+包括 git mutation 权限提升请求在内的 sandbox 和审批提示仍由 Codex 负责。
+
 所选 provider 必须支持 function/tool calling。不支持 tool call 的 text-only provider 无法使用 `exec`、
 Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不变。
 

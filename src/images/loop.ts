@@ -257,6 +257,8 @@ export interface ImageBridgeDeps {
   waitForRequestSlot?: (signal?: AbortSignal) => Promise<void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
+  /** Exact upstream-only Grok tool names introduced for this request. */
+  convertedGrokNativeToolNames?: ReadonlySet<string>;
   /**
    * Optional 429 key-failover for the routed (non-xAI) model. Return a rebuilt adapter for the
    * rotated key, or null when the pool is exhausted.
@@ -944,6 +946,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         // Terminal done/incomplete already includes hiddenUsage (merged above). Do not
         // add it again here or request logs double-count multi-iteration image turns.
         onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(usage),
+      } : {}),
+      ...(deps.convertedGrokNativeToolNames ? {
+        convertedGrokNativeToolNames: deps.convertedGrokNativeToolNames,
       } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },

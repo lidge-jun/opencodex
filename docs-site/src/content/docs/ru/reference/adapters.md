@@ -51,6 +51,19 @@ interface ProviderAdapter {
   `delta.reasoning_content` или `delta.reasoning`, запрашивает usage потока через
   `stream_options.include_usage` и читает usage из envelope нестримингового ответа.
 
+## Bridge xAI/Grok Code Mode
+
+Пути `openai-chat` и `openai-responses` применяют один bridge к изменяемым turns xAI Code Mode.
+Когда Codex передаёт видимое freeform-объявление `exec` с `apply_patch`, adapter показывает только
+не конфликтующее с caller-owned tools request-local подмножество `read_file`, `grep`, `list_dir`,
+`search_replace`, `write` и `run_terminal_command`. Plan/no-mutation turns, назначения не-xAI и
+одноимённые caller-owned tools остаются без изменений.
+
+Live calls и поддерживаемая history преобразуются через существующие helpers `apply_patch` и
+`exec_command` вызывающей стороны; имена ответов, ID и lifecycle событий JSON/SSE восстанавливаются
+до передачи в Codex. Proxy не выполняет операции filesystem или shell. Codex остаётся владельцем
+sandbox и approval prompts, включая повышение прав для git mutations.
+
 ## `openai-responses`
 
 **Назначение:** OpenAI **Responses API**. **`passthrough: true`** — пересылает исходное тело

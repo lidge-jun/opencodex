@@ -196,6 +196,24 @@ switch write normalizes both.
 - 다른 대안 대신 이 방식을 선택한 이유: One-field stripping exposes the next schema mismatch and turning `external_web_access:false` into xAI live search widens the caller's network policy; destination scoping leaves custom gateways and canonical OpenAI byte-shape native.
 - 장점, 단점 및 영향: Grok 4.5/4.6 no longer fail every default Codex turn with an unsupported-argument 400; live search remains available when explicitly enabled, while cached search degrades to no hosted search on xAI rather than silently going live.
 
+Writable xAI Code Mode turns also have a provider-native tool projection. When the incoming Codex
+catalog contains a visible freeform `exec` tool whose declared helper surface includes
+`apply_patch`, the adapter replaces that one upstream declaration with Grok's `read_file`, `grep`,
+`list_dir`, `search_replace`, `write`, and `run_terminal_command` vocabulary. Edit calls lower to
+the caller-authorized patch helper; reads and commands lower to the caller's command helper. The
+response boundary restores the original Codex call name, ids, output types, and stream lifecycle,
+and the history boundary reconstructs only the supported generated shapes. Plan/no-mutation turns,
+non-xAI destinations, and unknown history shapes stay outside this projection. The proxy never
+executes the translated operation, so Codex remains the sandbox and approval authority.
+
+[Decision Log]
+- 목적과 의도: Give Grok the structured file and shell vocabulary it was trained to call while preserving Codex's existing freeform `exec` contract and permission boundary.
+- 기존 구현 및 제약 조건: Codex exposes nested helpers through JavaScript inside one custom tool, while Grok's native tool surface expects one schema per operation; either representation sent unchanged forces the other endpoint to understand a private contract.
+- 검토한 주요 대안: Keep prompting Grok to generate nested JavaScript; expose the Codex names as ordinary JSON functions; or project a Grok-native catalog and translate both live calls and continuation history.
+- 선택한 방식: Use the six Grok-native tools only behind the xAI plus writable-Code-Mode activation guard, inject only names that do not collide with caller tools, carry that exact request-local name set through Chat events and Responses JSON/SSE restoration, convert edits to patch envelopes and shell operations to platform-aware command calls, restore Codex response semantics before other custom-tool repair, and fail closed on unsupported reverse-history shapes.
+- 다른 대안 대신 이 방식을 선택한 이유: The native vocabulary removes a model-authored serialization layer for common operations without moving execution or authorization into the proxy, while the guarded bidirectional mapping keeps the client contract stable.
+- 장점, 단점 및 영향: Grok receives direct structured operations and Codex keeps its sandbox prompts; a caller-owned `read_file`, `grep`, `list_dir`, `search_replace`, `write`, `write_file`, or `run_terminal_command` remains byte- and identity-stable instead of being captured by compatibility restoration. The adapter now owns POSIX/Windows quoting, patch construction, git escalation metadata, request-local provenance, and exact response/history ordering as review-critical compatibility behavior.
+
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and
 keeps the provider-wide `openai-chat` default for other non-pinned models. This endpoint correction

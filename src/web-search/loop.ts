@@ -299,6 +299,8 @@ export interface WebSearchLoopDeps {
   onFirstOutput?: () => void;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
+  /** Exact upstream-only Grok tool names introduced for this request. */
+  convertedGrokNativeToolNames?: ReadonlySet<string>;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
@@ -886,6 +888,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+      ...(deps.convertedGrokNativeToolNames ? {
+        convertedGrokNativeToolNames: deps.convertedGrokNativeToolNames,
+      } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );

@@ -204,9 +204,13 @@ async function withMimoBootstrap<T>(adapterId: string, run: () => Promise<T>): P
   }
 }
 
-async function outbound(adapterId: string, parsed: OcxParsedRequest): Promise<string> {
+async function outbound(
+  adapterId: string,
+  parsed: OcxParsedRequest,
+  provider?: OcxProviderConfig,
+): Promise<string> {
   const contract = effectiveAdapterContract(adapterId);
-  const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
+  const adapter = createRegisteredAdapter(provider ?? providerFixture(adapterId, contract.wire));
   return await withMimoBootstrap(adapterId, () => TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed));
 }
 
@@ -414,17 +418,39 @@ describe("registry-derived routed tool conformance", () => {
     }
   });
 
-  test("every registered adapter keeps the nested apply_patch helper in its final request", async () => {
+  test("every registered adapter keeps a client-executable file-edit path in its final request", async () => {
     for (const [adapterId] of adapterDefinitions()) {
       const contract = effectiveAdapterContract(adapterId);
       const body = await outbound(adapterId, codeModeParsed(contract.wire));
       const advertised = advertisedToolNames(contract.wire, body);
-      expect(advertised.some(name => name === "exec" || name.endsWith("_exec")), adapterId).toBe(true);
+      const codeModeExec = advertised.some(name => name === "exec" || name.endsWith("_exec"));
+      const grokStructuredEdit = advertised.includes("write") && advertised.includes("search_replace");
+      expect(codeModeExec || grokStructuredEdit, adapterId).toBe(true);
       const normalized = body.replace(/\\n/g, " ").replace(/\s+/g, " ");
+      if (grokStructuredEdit) {
+        expect(normalized, adapterId).toContain("OpenCodex converts those calls into Codex apply_patch");
+        expect(normalized, adapterId).toContain("Callable file edits are `write` and `search_replace`");
+        continue;
+      }
       expect(normalized, adapterId).toContain("apply_patch(input: string)");
       expect(normalized, adapterId).not.toMatch(/(?:do not|don't|never|must not|cannot|can't)[^.]{0,260}\bapply_patch\b/i);
       expect(normalized, adapterId).not.toMatch(/\bapply_patch\b[^.]{0,180}\b(?:forbidden|unavailable|off-limits)\b/i);
     }
+  });
+
+  test("keeps the legacy code-mode exec contract on a non-xAI openai-chat provider", async () => {
+    const provider = {
+      ...providerFixture("openai-chat", "openai-chat"),
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies OcxProviderConfig;
+    const body = await outbound("openai-chat", codeModeParsed("openai-chat"), provider);
+    const advertised = advertisedToolNames("openai-chat", body);
+    const normalized = body.replace(/\\n/g, " ").replace(/\s+/g, " ");
+
+    expect(advertised.some(name => name === "exec" || name.endsWith("_exec"))).toBe(true);
+    expect(normalized).toContain("apply_patch(input: string)");
+    expect(normalized).not.toMatch(/(?:do not|don't|never|must not|cannot|can't)[^.]{0,260}\bapply_patch\b/i);
+    expect(normalized).not.toMatch(/\bapply_patch\b[^.]{0,180}\b(?:forbidden|unavailable|off-limits)\b/i);
   });
 
   test("tool_choice none disables every registered adapter's callable tool surface", async () => {

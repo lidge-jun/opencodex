@@ -212,14 +212,22 @@ export function rewriteRoutedCustomToolsForUpstream(
   return { body: rewriteForUpstream(body, conversionNames, callIds), names };
 }
 
+export type RoutedCustomToolCallTransform = (
+  name: string,
+  argumentsText: string,
+  complete: boolean,
+) => { name: string; input: string };
+
 export function restoreRoutedCustomCalls(
   value: unknown,
   names: ReadonlySet<string>,
+  transform?: RoutedCustomToolCallTransform,
+  complete = true,
 ): { value: unknown; changed: boolean } {
   if (Array.isArray(value)) {
     let changed = false;
     const restored = value.map(entry => {
-      const result = restoreRoutedCustomCalls(entry, names);
+      const result = restoreRoutedCustomCalls(entry, names, transform, complete);
       changed ||= result.changed;
       return result.value;
     });
@@ -230,16 +238,28 @@ export function restoreRoutedCustomCalls(
   let changed = false;
   const restored: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    const result = restoreRoutedCustomCalls(entry, names);
+    const result = restoreRoutedCustomCalls(entry, names, transform, complete);
     restored[key] = result.value;
     changed ||= result.changed;
   }
 
   const wireName = routedCustomToolWireName(value);
-  if (value.type === "function_call" && wireName !== undefined && names.has(wireName)) {
+  if (
+    value.type === "function_call"
+    && typeof value.name === "string"
+    && wireName !== undefined
+    && names.has(wireName)
+  ) {
+    const call = transform
+      ? transform(value.name, typeof value.arguments === "string" ? value.arguments : "", complete)
+      : {
+          name: value.name,
+          input: customToolInput(value.arguments),
+        };
     restored.type = "custom_tool_call";
     restored.id = customToolItemId(value.id);
-    restored.input = customToolInput(value.arguments);
+    restored.name = call.name;
+    restored.input = call.input;
     delete restored.arguments;
     changed = true;
   }
@@ -249,6 +269,7 @@ export function restoreRoutedCustomCalls(
 export function restoreRoutedCustomCallsInJson(
   text: string,
   names: ReadonlySet<string>,
+  transform?: RoutedCustomToolCallTransform,
 ): string {
   if (names.size === 0) return text;
   let payload: unknown;
@@ -257,7 +278,7 @@ export function restoreRoutedCustomCallsInJson(
   } catch {
     return text;
   }
-  const restored = restoreRoutedCustomCalls(payload, names);
+  const restored = restoreRoutedCustomCalls(payload, names, transform);
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 

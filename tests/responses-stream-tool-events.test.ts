@@ -44,6 +44,52 @@ describe("Responses streaming tool event contract", () => {
     expect((failed.error as Record<string, unknown>).message).toContain("apply_patch");
   });
 
+  test("Grok native tools become code-mode exec when exec is freeform", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_1", name: "list_dir" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ path: "." }) },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "xai/grok-4.6", undefined, new Set(["exec"]), undefined, undefined, undefined, {
+      declaredToolNames: new Set(["exec"]),
+      convertedGrokNativeToolNames: new Set(["list_dir"]),
+    }));
+
+    const added = frames.find(frame => frame.event === "response.output_item.added")?.data.item as Record<string, unknown>;
+    expect(added).toMatchObject({ type: "custom_tool_call", name: "exec" });
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+    expect(output[0]).toMatchObject({ type: "custom_tool_call", name: "exec", status: "completed" });
+    expect(String(output[0].input)).toContain("tools.exec_command");
+    expect(String(output[0].input)).toContain("ls -la --");
+  });
+
+  test("Grok conversion leaves a caller-owned colliding tool untouched", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_write", name: "write" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ message: "caller payload" }) },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "call_list", name: "list_dir" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ path: "." }) },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "xai/grok-4.6", undefined, new Set(["exec"]), undefined, undefined, undefined, {
+      declaredToolNames: new Set(["exec", "write"]),
+      convertedGrokNativeToolNames: new Set(["list_dir"]),
+    }));
+
+    const added = frames
+      .filter(frame => frame.event === "response.output_item.added")
+      .map(frame => frame.data.item as Record<string, unknown>);
+    expect(added[0]).toMatchObject({ type: "function_call", name: "write", call_id: "call_write" });
+    expect(added[1]).toMatchObject({ type: "custom_tool_call", name: "exec", call_id: "call_list" });
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.output).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "function_call", name: "write", arguments: JSON.stringify({ message: "caller payload" }) }),
+      expect.objectContaining({ type: "custom_tool_call", name: "exec" }),
+    ]));
+  });
+
   test("adapter tool events produce OpenAI-compatible streamed function-call frames", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "tool_call_start", id: "call_1", name: "read_file" },

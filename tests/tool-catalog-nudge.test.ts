@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   buildNonOpenAIToolCatalogNudgeForTools,
   buildNonOpenAIToolCatalogNudgeFromNames,
+  effectiveInstructionText,
   shouldInjectNonOpenAIToolCatalogNudge,
+  isCanonicalNativeOpenAIRoute,
+  shouldSuppressCodeModePatchGuidance,
 } from "../src/adapters/tool-catalog-nudge";
 import type { OcxTool } from "../src/types";
 
@@ -212,5 +215,101 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://api.openai.com/v1" })).toBe(false);
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(false);
     expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://api.kimi.com/coding/v1" })).toBe(true);
+  });
+
+  test("classifies only canonical native routes", () => {
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-chat", authMode: "key", baseUrl: "https://api.openai.com/v1" })).toBe(true);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1" })).toBe(true);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(true);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-chat", authMode: "oauth", baseUrl: "https://chatgpt.com/backend-api/codex" })).toBe(false);
+    expect(isCanonicalNativeOpenAIRoute({ adapter: "openai-chat", authMode: "key", baseUrl: "https://api.openai.com.proxy/v1" })).toBe(false);
+    expect(shouldInjectNonOpenAIToolCatalogNudge({ adapter: "openai-chat", authMode: "key", baseUrl: "https://api.openai.com.proxy/v1" })).toBe(false);
+    expect(shouldInjectNonOpenAIToolCatalogNudge({ baseUrl: "https://fooopenai.com/v1" })).toBe(true);
+  });
+
+  test("preserves structured developer instructions for mutation gating", () => {
+    const instructions = effectiveInstructionText([
+      { role: "developer", timestamp: 1, content: [{ type: "text", text: "Do not modify files." }, { type: "image", imageUrl: "data:image/png;base64,AA==" }] },
+      { role: "user", timestamp: 2, content: "stale user text" },
+      { role: "user", timestamp: 3, content: [{ type: "text", text: "current user text" }] },
+    ], ["system"]);
+    expect(instructions).toEqual(["system", "Do not modify files.", "current user text"]);
+  });
+
+  test("injects contextual patch guidance only for declared nested helpers", () => {
+    const exec = (description: string): OcxTool => ({ name: "exec", freeform: true, description, parameters: {} });
+    const note = buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { apply_patch(input: string): Promise<unknown>; exec_command(cmd: string): Promise<unknown> }")]);
+    expect(note).toContain("tools.apply_patch");
+    expect(note).toContain("@@");
+    expect(note).toContain("tools.exec_command");
+    expect(note).toContain("`*** Begin Patch`");
+    expect(note).not.toContain("`*** Begin Patch ***`");
+    expect(note).toContain("exec` body itself must remain JavaScript");
+    expect(note).toContain("retry `tools.apply_patch`");
+    expect(note).toContain("File writes, creates, and splits");
+    expect(note).toContain("large refactors");
+    expect(note).toContain("nested `tools.apply_patch`");
+    expect(note).not.toContain("targeted code edits");
+    expect(note).not.toContain("focused patch");
+    expect(note).not.toContain("mechanical transformations");
+    expect(note).toContain("reads, searches, tests, builds, and formatters");
+    const nestedInput = buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { exec_command(input: { cmd: string }): Promise<unknown>; apply_patch(input: string): Promise<unknown> }")]);
+    expect(nestedInput).toContain("File writes, creates, and splits");
+    expect(nestedInput).toContain("tools.exec_command");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec("JavaScript; apply_patch is mentioned in prose")])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec("For example, tools.apply_patch({ patch: '...' }) may exist")])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { apply_patch(input: string): Promise<unknown> }")])).not.toContain("exec_command");
+    const grokWrite = buildNonOpenAIToolCatalogNudgeForTools([
+      exec("declare const tools: { apply_patch(input: string): Promise<unknown>; exec_command(cmd: string): Promise<unknown> }"),
+      { name: "search_replace", description: "edit", parameters: {} },
+      { name: "write", description: "create", parameters: {} },
+    ], undefined, undefined, undefined, new Set(["write", "search_replace"]));
+    expect(grokWrite?.startsWith("Codex instructions that say to use `apply_patch` do not add a top-level `apply_patch` or `exec` tool on this turn.")).toBe(true);
+    expect(grokWrite).toContain("Callable file edits are `write` and `search_replace`");
+    expect(grokWrite).toContain("Create or split a file with `write` (file_path, content)");
+    expect(grokWrite).toContain("Edit a file with `search_replace` (file_path, old_string, new_string)");
+    expect(grokWrite).toContain("converts those calls into Codex apply_patch");
+    expect(grokWrite).toContain("A request to make code easier to analyze or modify is a refactor to implement");
+    expect(grokWrite).toContain("do not keep ranged-reading files you have already sampled");
+    expect(grokWrite).toContain("Commentary that only promises a split or refactor is not a workspace change");
+    expect(grokWrite).toContain("Splitting a large file is many `write` calls");
+    expect(grokWrite).toContain("do not draft the new tree only in assistant text");
+    expect(grokWrite).toContain("Git add/commit must set `with_escalated_permissions` on `run_terminal_command`");
+    expect(grokWrite).not.toContain("Discover them from the isolate global `ALL_TOOLS`");
+    expect(grokWrite).not.toContain("ALL_TOOLS");
+
+    const callerOwned = buildNonOpenAIToolCatalogNudgeForTools([
+      exec("declare const tools: { apply_patch(input: string): Promise<unknown>; exec_command(cmd: string): Promise<unknown> }"),
+      { name: "search_replace", description: "caller-owned", parameters: {} },
+      { name: "write", description: "caller-owned", parameters: {} },
+      { name: "run_terminal_command", description: "caller-owned", parameters: {} },
+    ]);
+    expect(callerOwned).not.toContain("converts those calls into Codex apply_patch");
+    expect(callerOwned).not.toContain("with_escalated_permissions");
+  });
+
+  test("suppresses contextual guidance for disallowed, planned, structured, and MCP tools", () => {
+    const exec = { name: "exec", freeform: true, description: "declare const tools: { apply_patch(input: string): Promise<unknown> }", parameters: {} } as OcxTool;
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], "none") ?? "").not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], { mode: "required", allowedTools: ["other"] }) ?? "").not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["You are in **Plan Mode**"])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["do not make any mutations"])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["<collaboration_mode># Collaboration Mode: Plan"])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([exec], undefined, undefined, ["Do not use apply_patch"])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([{ ...exec, freeform: undefined }])).not.toContain("File writes, creates, and splits");
+    expect(buildNonOpenAIToolCatalogNudgeForTools([{ ...exec, namespace: "mcp__tools" }])).not.toContain("File writes, creates, and splits");
+  });
+
+  test("does not treat Codex Default-mode copy as a no-mutation turn", () => {
+    const defaultMode = [
+      "<collaboration_mode># Collaboration Mode: Default",
+      "You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.",
+      "Never write a multiple choice question as a textual assistant message.",
+      "</collaboration_mode>",
+    ].join("\n");
+    expect(shouldSuppressCodeModePatchGuidance(defaultMode)).toBe(false);
+    expect(shouldSuppressCodeModePatchGuidance("Never write a multiple choice question as a textual assistant message.")).toBe(false);
+    expect(shouldSuppressCodeModePatchGuidance("never write files")).toBe(true);
+    expect(shouldSuppressCodeModePatchGuidance("You are in **Plan Mode**")).toBe(true);
   });
 });

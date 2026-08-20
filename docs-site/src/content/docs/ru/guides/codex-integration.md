@@ -217,6 +217,21 @@ opencodex кодирует объявление и историю как functio
 потоковый lifecycle function call в `custom_tool_call` до передачи в Codex. Нативная forward-
 маршрутизация OpenAI и поддерживаемый custom tool `apply_patch` остаются без изменений.
 
+Для назначения xAI/Grok изменяемый turn Code Mode использует provider-native catalog вместо того,
+чтобы Grok напрямую писал JavaScript для freeform-инструмента `exec` в Codex. OpenCodex показывает
+upstream-инструменты `read_file`, `grep`, `list_dir`, `search_replace`, `write` и
+`run_terminal_command`. Изменения файлов преобразуются в существующий helper `apply_patch`
+вызывающей стороны, а чтение и команды — в существующий helper `exec_command`. До передачи ответа
+в Codex восстанавливаются исходные shape вызова `exec`, ID и stream events; поддерживаемые вызовы
+из предыдущей history также реконструируются в тот же Grok-native vocabulary для продолжения.
+
+Bridge работает автоматически и не требует настройки. Он включается только для назначения xAI,
+когда Codex передал видимое freeform-объявление `exec` с `apply_patch` и turn разрешает изменения.
+Plan/no-mutation turns и provider'ы не-xAI сохраняют прежний tool catalog; одноимённые caller-owned
+tools также не преобразуются. OpenCodex меняет только объявления и вызовы, но не выполняет операции
+filesystem или shell. Sandboxing и approval prompts, включая запрос повышения прав для git
+mutations, остаются ответственностью Codex.
+
 Выбранный provider должен поддерживать function/tool calling. Text-only provider без tool calls
 не может использовать `exec`, Browser или Computer Use. Нативные записи OpenAI сохраняют свой
 upstream tool mode без изменений.

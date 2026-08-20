@@ -4,7 +4,23 @@ import {
   type OcxRequestOptions,
   type OcxTool,
   type OcxProviderConfig,
+  type OcxMessage,
 } from "../types";
+
+/** Collect authoritative system/developer text plus only the latest user turn. */
+export function effectiveInstructionText(messages: readonly OcxMessage[] | undefined, system?: readonly string[]): string[] {
+  const out = [...(system ?? [])];
+  let latestUserText: string[] = [];
+  for (const message of messages ?? []) {
+    if (message.role !== "developer" && message.role !== "user") continue;
+    const text = typeof message.content === "string"
+      ? [message.content]
+      : message.content.filter(part => part.type === "text").map(part => part.text);
+    if (message.role === "developer") out.push(...text);
+    else latestUserText = text;
+  }
+  return [...out, ...latestUserText];
+}
 
 // Tool names that exist only in OTHER agent harnesses (Claude Code and friends). Naming one
 // here tells a routed model not to call it unless this turn's catalog really lists it.
@@ -57,18 +73,67 @@ function uniqueNames(names: readonly string[]): string[] {
   return [...new Set(names.filter(name => name.trim().length > 0))];
 }
 
-function isOpenAIOrChatGPTHost(hostname: string): boolean {
-  return hostname === "openai.com"
-    || hostname.endsWith(".openai.com")
-    || hostname === "chatgpt.com"
-    || hostname.endsWith(".chatgpt.com");
+function isOpenAIBrandedDestination(hostname: string): boolean {
+  // A custom endpoint containing an OpenAI/ChatGPT DNS label is ambiguous: it is not canonical
+  // native OpenAI, but injecting an aggressive non-OpenAI tool policy would be unsafe too.
+  const labels = hostname.toLowerCase().split(".");
+  return labels.includes("openai") || labels.includes("chatgpt");
 }
 
-export function shouldInjectNonOpenAIToolCatalogNudge(provider: Pick<OcxProviderConfig, "baseUrl">): boolean {
+export function shouldSuppressCodeModePatchGuidance(instructions: string): boolean {
+  // Codex Default-mode developer text includes "Never write a multiple choice question".
+  // A bare `never write` match treated that as a no-mutation turn and hid the Grok catalog.
+  return /<collaboration_mode>\s*#?\s*Collaboration Mode:\s*Plan\b|You are in \*\*Plan Mode\*\*|\b(?:do not|must not|never)\s+(?:make|perform)\s+(?:any\s+)?mutations?\b|\b(?:do not|must not|never)\s+(?:edit|modify|use\s+apply_patch)\b|\b(?:do not|must not|never)\s+write\s+(?:to\s+)?(?:any\s+)?(?:files?|code|the\s+workspace)\b|\buse\s+(?:the\s+)?shell\s+for\s+(?:file\s+)?edits\b/i.test(instructions);
+}
+
+export function declaredToolsBlock(description: string): string | undefined {
+  const declaration = /(?:declare\s+)?const\s+tools\s*:\s*\{/i.exec(description);
+  if (!declaration) return undefined;
+  const open = declaration.index + declaration[0].lastIndexOf("{");
+  let depth = 0;
+  let quote: "'" | '"' | "`" | undefined;
+  let escaped = false;
+  for (let index = open; index < description.length; index += 1) {
+    const character = description[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return description.slice(open + 1, index);
+  }
+  return undefined;
+}
+
+export function shouldInjectNonOpenAIToolCatalogNudge(provider: Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>): boolean {
   try {
-    return !isOpenAIOrChatGPTHost(new URL(provider.baseUrl).hostname);
+    const host = new URL(provider.baseUrl).hostname;
+    return !isOpenAIBrandedDestination(host);
   } catch {
     return true;
+  }
+}
+
+/** True only for the two routes on which OpenAI's native tool contract is authoritative. */
+export function isCanonicalNativeOpenAIRoute(
+  provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl">,
+): boolean {
+  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") return false;
+  try {
+    const url = new URL(provider.baseUrl);
+    if (url.port || url.search || url.hash || url.username || url.password) return false;
+    const auth = provider.authMode;
+    const openai = url.protocol === "https:" && url.hostname === "api.openai.com" && url.pathname.replace(/\/$/, "") === "/v1";
+    const chatgpt = url.protocol === "https:" && url.hostname === "chatgpt.com" && url.pathname.replace(/\/$/, "") === "/backend-api/codex";
+    return (openai && (auth === undefined || auth === "key")) || (chatgpt && provider.adapter === "openai-responses" && auth === "forward");
+  } catch {
+    return false;
   }
 }
 
@@ -99,6 +164,7 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
   wireNames: readonly string[] | undefined,
   toWireName: (name: string) => string = name => name,
   codeModeExecName?: string,
+  catalogWriteToolNames?: readonly string[],
 ): string | undefined {
   const names = uniqueNames(wireNames ?? []);
   if (names.length === 0) return undefined;
@@ -112,6 +178,12 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
     name => !advertised.has(name) && !advertised.has(toWireName(name)),
   );
   const verifiedCodeModeExecName = codeModeExecWireName(advertised, codeModeExecName);
+  const writeNames = uniqueNames(catalogWriteToolNames ?? []).filter(name => advertised.has(name));
+  const codeModeContract = !verifiedCodeModeExecName
+    ? "If a listed tool exposes nested helpers such as a tools.* API, call the listed parent tool and use those helpers only inside that tool's input."
+    : writeNames.length > 0
+      ? "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, such as `await tools.exec_command(...)` or `await tools.codex_app__list_threads({})`."
+      : "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, such as `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names.";
 
   return [
     "Tool contract: use the current tool catalog as ground truth.",
@@ -119,9 +191,7 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
     "These listed names are the complete top-level tool-call surface for this turn.",
     "Call only listed names with their listed argument keys; do not invent, translate, or rename tools.",
     "Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.",
-    verifiedCodeModeExecName
-      ? "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, for example `await tools.exec_command({cmd: \"ls\"})` or `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names."
-      : "If a listed tool exposes nested helpers such as a tools.* API, call the listed parent tool and use those helpers only inside that tool's input.",
+    codeModeContract,
     unavailableNeighborNames.length > 0
       ? "Do not use neighboring-agent tool names " + quoteNames(unavailableNeighborNames) + " unless this turn's catalog lists those exact names."
       : undefined,
@@ -131,9 +201,11 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
 }
 
 export function buildNonOpenAIToolCatalogNudgeForTools(
-  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform" | "description">[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
   toWireName: (tool: Pick<OcxTool, "namespace" | "name">) => string = tool => namespacedToolName(tool.namespace, tool.name),
+  effectiveInstructions?: readonly string[],
+  convertedNativeToolNames?: ReadonlySet<string>,
 ): string | undefined {
   const visible = tools?.filter(toolChoiceToolPredicate(toolChoice, tools));
   const visibleNames = visible?.map(toWireName);
@@ -145,10 +217,52 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
     && !visible?.some(isBareShellBridgeTool)
     ? toWireName(codeModeExecTool)
     : undefined;
+  const grokWrite = convertedNativeToolNames?.has("write") === true
+    && convertedNativeToolNames.has("search_replace")
+    && visibleNames?.includes("write") === true
+    && visibleNames.includes("search_replace");
+  const grokWriteNames = grokWrite ? ["write", "search_replace"] : [];
   // Neighbor names are bare and un-namespaced, so probe the same transform with a bare tool.
-  return buildNonOpenAIToolCatalogNudgeFromNames(
+  const base = buildNonOpenAIToolCatalogNudgeFromNames(
     visibleNames,
     name => toWireName({ name }),
-    codeModeExecName,
+    grokWrite ? undefined : codeModeExecName,
+    grokWriteNames,
   );
+  if (!base) return base;
+  if (grokWrite) {
+    return (
+      "Codex instructions that say to use `apply_patch` do not add a top-level `apply_patch` or `exec` tool on this turn. "
+      + "Callable file edits are `write` and `search_replace`. "
+      + base
+      + " Create or split a file with `write` (file_path, content)."
+      + " Edit a file with `search_replace` (file_path, old_string, new_string) and exact leading whitespace."
+      + " OpenCodex converts those calls into Codex apply_patch."
+      + " A request to make code easier to analyze or modify is a refactor to implement, not a turn spent only reading."
+      + " After a short survey, start `write`/`search_replace`; do not keep ranged-reading files you have already sampled."
+      + " Commentary that only promises a split or refactor is not a workspace change — emit the tool calls in that same turn."
+      + " Splitting a large file is many `write` calls (one new file each) plus `search_replace` on the original. Start from slices already read; do not wait to ingest the whole file, and do not draft the new tree only in assistant text."
+      + " Git add/commit must set `with_escalated_permissions` on `run_terminal_command` so Codex can prompt to write `.git/index.lock`; commentary cannot request that permission."
+    );
+  }
+  if (!codeModeExecTool) return base;
+  const description = codeModeExecTool.description ?? "";
+  const helperDeclarations = declaredToolsBlock(description);
+  const hasApplyPatch = !!helperDeclarations && /\bapply_patch\s*\(\s*input\s*:\s*string\s*\)/i.test(helperDeclarations);
+  if (!hasApplyPatch) return base;
+  const instructions = (effectiveInstructions ?? []).join("\n");
+  if (shouldSuppressCodeModePatchGuidance(instructions)) return base;
+  const mentionsExecCommand = !!helperDeclarations && /\bexec_command\s*\(/i.test(helperDeclarations);
+  const nested = mentionsExecCommand
+    ? " Use nested `tools.exec_command` for reads, searches, tests, builds, and formatters; do not print a pretend tool call."
+    : "";
+  return base
+    + " File writes, creates, and splits use the nested `tools.apply_patch` helper, including large refactors rather than only one-hunk edits."
+    + " The `exec` body itself must remain JavaScript; never send a raw patch envelope directly as the `exec` body."
+    + " Call `await tools.apply_patch(patchString)` from inside the JavaScript body."
+    + " The patch string MUST begin with the exact line `*** Begin Patch` and end with the exact line `*** End Patch`."
+    + " Example: `await tools.apply_patch(\"*** Begin Patch\\n*** Update File: path\\n@@\\n-old\\n+new\\n*** End Patch\")`."
+    + " If `apply_patch` rejects the patch because of its envelope or delimiter, correct the patch string and retry `tools.apply_patch`; do not fall back to shell, Node, Python, sed, or heredoc for file writes."
+    + " Wait for its real tool result before continuing."
+    + nested;
 }

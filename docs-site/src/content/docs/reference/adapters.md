@@ -47,6 +47,19 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   tiers, accepts reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests
   streamed usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
 
+## xAI/Grok Code Mode bridge
+
+The `openai-chat` and `openai-responses` paths apply the same bridge to writable xAI Code Mode
+turns. When Codex supplies a visible freeform `exec` declaration containing `apply_patch`, the
+adapter projects the collision-free request-local subset of `read_file`, `grep`, `list_dir`,
+`search_replace`, `write`, and `run_terminal_command`. Plan/no-mutation turns, non-xAI destinations,
+and caller-owned tools with the same names remain unchanged.
+
+Live calls and supported history are translated through the caller's existing `apply_patch` and
+`exec_command` helpers; response names, IDs, and JSON/SSE event lifecycles are restored before they
+reach Codex. The proxy never executes the filesystem or shell operation. Codex remains the sandbox
+and approval authority, including escalation prompts for git mutations.
+
 ## `openai-responses`
 
 **Targets:** the OpenAI **Responses API**. **`passthrough: true`** — normally forwards the raw request

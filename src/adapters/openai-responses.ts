@@ -20,6 +20,7 @@ import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-com
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { normalizeXaiResponsesWebSearch } from "./xai-web-search";
+import { rewriteGrokResponsesRequestBody } from "./grok-structured-edit";
 import {
   createAdapterTierMetadata,
 } from "../providers/fastwire";
@@ -1686,6 +1687,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let convertedRoutedCustomToolNames: Set<string> | undefined;
       let convertedRoutedToolSearchNames: Set<string> | undefined;
       let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string }> | undefined;
+      let convertedGrokNativeToolNames: ReadonlySet<string> | undefined;
+      let grokStructuredEditExecSinkName: string | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -1733,6 +1736,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       outBody = backfillWebSearchQueries(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = promoteClientLoadedTools(outBody);
+      }
+      const grokRewrite = rewriteGrokResponsesRequestBody(outBody, parsed, provider);
+      outBody = grokRewrite.body;
+      if (grokRewrite.convertedNativeToolNames.size > 0) {
+        convertedGrokNativeToolNames = grokRewrite.convertedNativeToolNames;
+        grokStructuredEditExecSinkName = grokRewrite.execSinkName;
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         const rewritten = rewriteRoutedCustomToolsForUpstream(
@@ -1813,6 +1822,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
+        ...(convertedGrokNativeToolNames ? { convertedGrokNativeToolNames } : {}),
+        ...(grokStructuredEditExecSinkName ? { grokStructuredEditExecSinkName } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
     },

@@ -120,6 +120,174 @@ test("noncanonical pool-required providers use only their configured static cred
   expect(request.headers.session_id).toBeUndefined();
 });
 
+test("xAI Responses passthrough replaces code-mode exec with the Grok edit catalog", () => {
+  const execDescription = "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
+  const editConstraint = "Use `apply_patch` for local file edits. Do not create or edit files with `cat` or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need `apply_patch`. Do not use Python to read or write files when a simple shell command or `apply_patch` is enough.";
+  const patch = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch";
+  const adapter = createResponsesPassthroughAdapter({
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "forward",
+    headers: { authorization: "Bearer xai-oauth" },
+  });
+  const request = adapter.buildRequest({
+    modelId: "grok-4.6",
+    context: {
+      systemPrompt: [editConstraint],
+      messages: [],
+      tools: [{
+        name: "exec",
+        freeform: true,
+        description: execDescription,
+        parameters: {},
+      }],
+    },
+    stream: true,
+    options: { toolChoice: { allowedTools: ["exec"], mode: "auto" } },
+    _rawBody: {
+      model: "grok-4.6",
+      instructions: editConstraint,
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [
+            {
+              type: "namespace",
+              name: "functions",
+              tools: [{ type: "custom", name: "exec", description: execDescription }],
+            },
+            { type: "tool_search", name: "tool_search", description: "Load deferred tools" },
+          ],
+        },
+        {
+          role: "developer",
+          content: [{ type: "input_text", text: editConstraint }],
+        },
+        {
+          type: "custom_tool_call",
+          id: "ctc_edit",
+          call_id: "call_edit",
+          name: "exec",
+          input: `await tools.apply_patch(${JSON.stringify(patch)})`,
+        },
+        { type: "custom_tool_call_output", call_id: "call_edit", output: "Done" },
+      ],
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "auto",
+        tools: [{ type: "custom", name: "exec" }],
+      },
+    },
+  }, { headers: new Headers() });
+  const body = JSON.parse(request.body) as {
+    instructions: string;
+    input: Array<Record<string, unknown>>;
+    tool_choice: { tools: Array<{ type: string; name: string }> };
+  };
+  const additional = body.input.find(item => item.type === "additional_tools") as {
+    tools: Array<{ type: string; name?: string; parameters?: Record<string, unknown> }>;
+  };
+  const names = additional.tools.map(tool => tool.name).filter(Boolean);
+
+  expect(names).toContain("write");
+  expect(names).toContain("search_replace");
+  expect(names).toContain("tool_search");
+  expect(names).not.toContain("exec");
+  expect(additional.tools.find(tool => tool.name === "write")?.parameters)
+    .toMatchObject({ required: ["file_path", "content"] });
+  expect(body.instructions).toContain("listed tools `write` and `search_replace`");
+  expect(JSON.stringify(body.input)).not.toContain("Use `apply_patch` for local file edits");
+  expect(body.input.find(item => item.call_id === "call_edit")).toMatchObject({
+    type: "function_call",
+    id: "fc_edit",
+    name: "search_replace",
+    arguments: JSON.stringify({ file_path: "src/a.ts", old_string: "old", new_string: "new" }),
+  });
+  expect(body.input.find(item => item.type === "function_call_output"))
+    .toMatchObject({ call_id: "call_edit", output: "Done" });
+  expect(body.tool_choice.tools.map(tool => tool.name)).toEqual([
+    "read_file", "grep", "list_dir", "search_replace", "write", "run_terminal_command",
+  ]);
+  expect(request.convertedGrokNativeToolNames?.has("search_replace")).toBe(true);
+  expect(request.grokStructuredEditExecSinkName).toBe("exec");
+});
+
+test("xAI Responses tracks only request-local Grok tools after caller-name collisions", () => {
+  const execDescription = "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
+  const callerWrite = {
+    type: "function",
+    name: "write",
+    description: "Send a caller-owned message",
+    parameters: {
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+      additionalProperties: false,
+    },
+  };
+  const adapter = createResponsesPassthroughAdapter({
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "forward",
+    headers: { authorization: "Bearer xai-oauth" },
+  });
+  const request = adapter.buildRequest({
+    modelId: "grok-4.6",
+    context: {
+      messages: [],
+      tools: [
+        { name: "exec", freeform: true, description: execDescription, parameters: {} },
+        { name: "write", description: callerWrite.description, parameters: callerWrite.parameters },
+      ],
+    },
+    stream: true,
+    options: { toolChoice: { allowedTools: ["exec", "write"], mode: "auto" } },
+    _rawBody: {
+      model: "grok-4.6",
+      tools: [
+        { type: "custom", name: "exec", description: execDescription },
+        callerWrite,
+      ],
+      input: [{
+        type: "function_call",
+        id: "fc_caller_write",
+        call_id: "call_caller_write",
+        name: "write",
+        arguments: JSON.stringify({ message: "caller payload" }),
+      }],
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "auto",
+        tools: [{ type: "custom", name: "exec" }, { type: "function", name: "write" }],
+      },
+    },
+  }, { headers: new Headers() });
+  const body = JSON.parse(request.body) as {
+    tools: Array<Record<string, unknown>>;
+    input: Array<Record<string, unknown>>;
+    tool_choice: { tools: Array<{ name: string }> };
+  };
+  const writes = body.tools.filter(tool => tool.name === "write");
+
+  expect(writes).toEqual([callerWrite]);
+  expect(body.input[0]).toEqual({
+    type: "function_call",
+    id: "fc_caller_write",
+    call_id: "call_caller_write",
+    name: "write",
+    arguments: JSON.stringify({ message: "caller payload" }),
+  });
+  expect(body.tool_choice.tools.map(tool => tool.name)).toEqual([
+    "read_file", "grep", "list_dir", "search_replace", "run_terminal_command", "write",
+  ]);
+  expect(request.convertedGrokNativeToolNames).toEqual(new Set([
+    "read_file", "grep", "list_dir", "search_replace", "run_terminal_command",
+  ]));
+  expect(request.convertedGrokNativeToolNames?.has("write")).toBe(false);
+  expect(request.convertedGrokNativeToolNames?.has("write_file")).toBe(false);
+});
+
 test("passthrough serialized-body observation releases after the request settles", () => {
   const budget = createTranslatorBudget();
   const request = createResponsesPassthroughAdapter(provider).buildRequest({

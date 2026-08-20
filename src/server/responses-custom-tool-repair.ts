@@ -4,6 +4,7 @@ import {
   restoreRoutedCustomCalls,
   routedCustomToolWireName,
   unwrapRoutedCustomToolArguments,
+  type RoutedCustomToolCallTransform,
 } from "../responses/custom-tool-compat";
 import {
   replaceSseDataPayload,
@@ -85,6 +86,7 @@ type PendingArgumentBlock = {
 export function createRoutedCustomToolRestoreBlockRewrite(
   names: ReadonlySet<string>,
   budget?: TranslatorBudget,
+  transform?: RoutedCustomToolCallTransform,
 ): SseBlockRewrite {
   const itemNames = new Map<string, string>();
   const ordinaryItemIds = new Set<string>();
@@ -203,7 +205,12 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (upstreamItemId && pending.length > 0 && !openCalls.has(upstreamItemId)) {
         openCalls.set(upstreamItemId, { argumentsText: "", emittedInput: "", retainedBytes: 0 });
       }
-      const restored = restoreRoutedCustomCalls(parsed, names);
+      const restored = restoreRoutedCustomCalls(
+        parsed,
+        names,
+        transform,
+        type !== "response.output_item.added",
+      );
       const restoredBlock = restored.changed
         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
         : block;
@@ -233,6 +240,9 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       open.argumentsText += delta;
       open.retainedBytes += deltaBytes;
       openCalls.set(upstreamItemId, open);
+      // Structured transforms (for example Grok search_replace -> Codex exec)
+      // need the complete JSON arguments before they can produce freeform input.
+      if (transform) return [];
       // Still accumulating toward the compact wrapper, or an unrecognized shape:
       // suppress progressive emission and let the done event carry input.
       if (FREEFORM_WRAP_PREFIX.startsWith(open.argumentsText)) return [];
@@ -260,17 +270,22 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       const source = typeof parsed.arguments === "string"
         ? parsed.arguments
         : openCalls.get(upstreamItemId)?.argumentsText ?? "";
+      const call = transform
+        ? transform(itemNames.get(upstreamItemId) ?? "", source, true)
+        : {
+            input: unwrapRoutedCustomToolArguments(source),
+          };
       const { arguments: _arguments, ...rest } = parsed;
       const next = {
         ...rest,
         type: nextType,
         item_id: customToolItemId(upstreamItemId),
-        input: unwrapRoutedCustomToolArguments(source),
+        input: call.input,
       };
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];
     }
 
-    const restored = restoreRoutedCustomCalls(parsed, names);
+    const restored = restoreRoutedCustomCalls(parsed, names, transform);
     const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
     if (terminal) releaseAll();
     return restored.changed

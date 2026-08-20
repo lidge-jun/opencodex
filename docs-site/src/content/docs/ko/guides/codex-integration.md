@@ -136,6 +136,19 @@ history를 업스트림 function tool로 인코딩한 다음 스트리밍된 fun
 `custom_tool_call`로 복원합니다. 네이티브 OpenAI forward routing과 지원되는 `apply_patch` custom tool은 변경되지
 않습니다.
 
+xAI/Grok 대상에서는 파일 수정이 허용된 Code Mode 턴에 Grok이 Codex의 freeform `exec`용 JavaScript를 직접
+작성하도록 요구하는 대신 provider-native catalog를 사용합니다. OpenCodex는 upstream에 `read_file`, `grep`,
+`list_dir`, `search_replace`, `write`, `run_terminal_command`를 노출합니다. 파일 편집은 호출자가 원래 제공한
+`apply_patch` helper로, 읽기와 명령은 기존 `exec_command` helper로 변환하며, 응답이 Codex에 도달하기 전에 원래
+`exec` call shape, id, stream event를 복원합니다. 지원되는 이전 history call도 continuation 턴에서 같은
+Grok-native vocabulary로 재구성합니다.
+
+이 bridge는 별도 설정 없이 자동으로 동작합니다. 대상이 xAI이고, Codex가 `apply_patch`를 포함한 visible
+freeform `exec` 선언을 보냈으며, 해당 턴이 수정을 허용할 때만 활성화됩니다. Plan/no-mutation 턴과 xAI가 아닌
+provider는 기존 tool catalog를 유지합니다. OpenCodex는 선언과 호출만 변환하며 filesystem 또는 shell 작업을
+직접 실행하지 않습니다. git mutation에 필요한 권한 상승 요청을 포함해 sandbox와 승인 prompt는 계속 Codex가
+담당합니다.
+
 선택한 provider는 function/tool calling을 지원해야 합니다. tool call을 지원하지 않는 text-only provider에서는
 `exec`, Browser 또는 Computer Use를 사용할 수 없습니다. 네이티브 OpenAI 항목은 업스트림 tool mode를 그대로
 유지합니다.

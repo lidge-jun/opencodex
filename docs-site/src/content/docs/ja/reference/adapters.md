@@ -41,6 +41,18 @@ interface ProviderAdapter {
   `xhigh`、`max` tier をそのまま保持し、`delta.reasoning_content` または `delta.reasoning` を
   reasoning delta として扱い、`stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
 
+## xAI/Grok Code Mode bridge
+
+`openai-chat` と `openai-responses` は、変更可能な xAI Code Mode ターンに同じ bridge を適用します。
+Codex が `apply_patch` を含む可視の freeform `exec` 宣言を送ると、adapter は `read_file`、`grep`、
+`list_dir`、`search_replace`、`write`、`run_terminal_command` のうち、caller-owned tool と衝突しない
+request-local な名前だけを公開します。Plan/no-mutation ターン、xAI 以外の宛先、同名の caller-owned tool は
+変更されません。
+
+live call と対応済みの history は、呼び出し元の既存 `apply_patch` / `exec_command` helper を介して変換され、
+応答の名前、ID、JSON/SSE event lifecycle は Codex に届く前に復元されます。proxy は filesystem や shell 操作を
+実行しません。git mutation の権限昇格 prompt を含め、sandbox と承認の責任は Codex に残ります。
+
 ## `openai-responses`
 
 **対象:** OpenAI **Responses API**。**`passthrough: true`** — 通常は元のリクエストとレスポンスをそのまま渡し、ルーティング先ゲートウェイに必要な限定的な互換変換だけを適用します。

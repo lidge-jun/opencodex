@@ -74,6 +74,10 @@ export interface AdapterRequest {
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Upstream-only aliases for namespace tools flattened in this request. */
     convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string }>;
+    /** Native Grok tool names introduced while replacing Codex code-mode exec. */
+    convertedGrokNativeToolNames?: ReadonlySet<string>;
+    /** Caller-facing custom exec name that receives converted native Grok calls. */
+    grokStructuredEditExecSinkName?: string;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */

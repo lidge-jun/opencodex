@@ -146,6 +146,19 @@ Codex の `exec` custom-tool grammar を受け付けない key-auth Responses pr
 `custom_tool_call` へ復元します。ネイティブ OpenAI の forward routing と、対応済みの `apply_patch` custom tool は
 変更されません。
 
+xAI/Grok 宛てでは、変更可能な Code Mode ターンで Grok に Codex の freeform `exec` 用 JavaScript を直接
+書かせる代わりに、provider-native catalog を使用します。OpenCodex は上流に `read_file`、`grep`、`list_dir`、
+`search_replace`、`write`、`run_terminal_command` を公開します。ファイル編集は呼び出し元が用意した
+`apply_patch` helper に、読み取りとコマンドは既存の `exec_command` helper に変換されます。応答が Codex に
+届く前に元の `exec` call shape、ID、stream event を復元し、対応している過去の history call も継続ターン用に
+同じ Grok-native vocabulary へ再構成します。
+
+この bridge は設定なしで自動的に動作します。宛先が xAI で、Codex が `apply_patch` を含む可視の freeform
+`exec` 宣言を送り、そのターンで変更が許可されている場合にのみ有効になります。Plan/no-mutation ターンと
+xAI 以外の provider は従来の tool catalog を維持し、同名の caller-owned tool も変換されません。OpenCodex は
+宣言と call のみを変換し、filesystem や shell 操作を実行しません。git mutation の権限昇格要求を含め、
+sandbox と承認 prompt の責任は引き続き Codex にあります。
+
 選択した provider は function/tool calling をサポートしている必要があります。tool call に対応しない text-only
 provider では `exec`、Browser、Computer Use は使用できません。ネイティブ OpenAI の項目は上流の tool mode を
 そのまま維持します。
