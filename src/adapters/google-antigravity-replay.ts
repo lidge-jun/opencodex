@@ -599,12 +599,20 @@ export function antigravityUsesReplayCache(model: string): boolean {
  * Observe a parsed CCA chunk's `candidates[0].content.parts` and record thought signatures keyed by
  * the functionCall identity (name + args). Accumulates across the whole session so a sequential
  * multi-step tool loop keeps EVERY prior call's signature, not just the latest part-index slot.
- * A signature on a standalone thought part is paired with the next functionCall in the same
- * array (#897); a call's own signature takes precedence and an unpaired one is dropped.
+ * A signature on a standalone thought part applies to the functionCall parts that follow it in
+ * the same array AND to later arrays of the same turn: streaming splits a thought part and its
+ * calls across SSE chunks, so `carriedThoughtSig` threads the still-unpaired signature from the
+ * previous chunk and the return value hands the remainder to the next one (#897, #2125). A call's
+ * own signature always takes precedence over a carried one.
  * `parts` is the already-unwrapped `response.candidates[0].content.parts`.
  */
-export function observeAntigravityReplay(model: string, sessionId: string, parts: unknown[]): void {
-  if (!antigravityUsesReplayCache(model) || !Array.isArray(parts) || parts.length === 0) return;
+export function observeAntigravityReplay(
+  model: string,
+  sessionId: string,
+  parts: unknown[],
+  carriedThoughtSig?: string,
+): string | undefined {
+  if (!antigravityUsesReplayCache(model) || !Array.isArray(parts) || parts.length === 0) return carriedThoughtSig;
   ensureReplaySnapshotLoaded();
   const now = Date.now();
   deleteExpiredReplaySessionsThrottled(now);
@@ -618,7 +626,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     lastActiveAtMs: 0,
   };
   let inserted = false;
-  let pendingThoughtSig: string | undefined;
+  let pendingThoughtSig: string | undefined = carriedThoughtSig;
   for (const raw of parts) {
     if (!raw || typeof raw !== "object") continue;
     const part = raw as Record<string, unknown>;
@@ -632,7 +640,6 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
       continue;
     }
     const callSig = sig ?? pendingThoughtSig; // a signature on the call part itself wins
-    pendingThoughtSig = undefined;
     if (!callSig) continue;
     const ck = functionCallKey(fc.name, fc.args);
     if (!ck) continue; // only function-call signatures are replayable by identity
@@ -645,7 +652,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     replayBytes += sizeBytes;
     inserted = true;
   }
-  if (!inserted) return;
+  if (!inserted) return pendingThoughtSig;
   // Charge the fixed outer key only when the session is actually stored.
   if (!existing) replayBytes += REPLAY_SESSION_KEY_BYTES;
   evictInnerCalls(entry);
@@ -659,7 +666,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     } else {
       replayBytes -= REPLAY_SESSION_KEY_BYTES;
     }
-    return;
+    return pendingThoughtSig;
   }
   entry.expiresAtMs = now + REPLAY_TTL_MS;
   entry.lastActiveAtMs = now;
@@ -668,6 +675,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
   evictIfNeeded();
   enforceAppOwnedMemoryBudget();
   markReplayDirty();
+  return pendingThoughtSig;
 }
 
 /**

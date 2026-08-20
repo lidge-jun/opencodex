@@ -367,6 +367,7 @@ interface GoogleResponsePart {
   text?: string;
   thought?: boolean;
   thoughtSignature?: string;
+  thought_signature?: string;
   functionCall?: { name: string; args: unknown };
 }
 
@@ -377,8 +378,9 @@ interface GoogleResponsePart {
  */
 function googleToolCallMetadataFromPart(
   part: GoogleResponsePart,
+  fallbackSignature?: string,
 ): { providerMetadata: OcxProviderOpaqueToolCallMetadata } | undefined {
-  const signature = part.thoughtSignature;
+  const signature = part.thoughtSignature ?? part.thought_signature ?? fallbackSignature;
   if (!isLikelyRealThoughtSignature(signature)) return undefined;
   return { providerMetadata: { google: { thoughtSignature: signature } } };
 }
@@ -641,6 +643,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       let lastFinishReason: string | undefined;
       let sawAnyFrame = false;
       let sawTerminalSignal = false;
+      let pendingStreamThoughtSig: string | undefined;
 
       const handleDataLine = async function* (line: string): AsyncGenerator<AdapterEvent, "continue" | "content" | "terminate"> {
         const payload = line.slice(5).trim();
@@ -737,10 +740,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
         if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
           && parts && replayModel && replaySession) {
-          observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
+          pendingStreamThoughtSig = observeAntigravityReplay(
+            replayModel,
+            replaySession,
+            parts as unknown[],
+            pendingStreamThoughtSig,
+          );
         }
         if (parts) {
           for (const part of parts) {
+            const sig = part.thoughtSignature ?? part.thought_signature;
+            if (part.thought === true && sig && isLikelyRealThoughtSignature(sig)) {
+              pendingStreamThoughtSig = sig;
+            }
             const textEvent = googlePartTextEvent(part);
             if (textEvent) {
               emittedContentEvent = true;
@@ -769,7 +781,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
                 type: "tool_call_start",
                 id,
                 name: restoreGoogleToolName(part.functionCall.name),
-                ...googleToolCallMetadataFromPart(part),
+                ...googleToolCallMetadataFromPart(part, pendingStreamThoughtSig),
               };
               yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
               yield { type: "tool_call_end" };
@@ -973,7 +985,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (provider.googleMode === "vertex" && replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
+        let pendingThoughtSig: string | undefined;
         for (const part of candidates[0].content.parts) {
+          const sig = part.thoughtSignature ?? part.thought_signature;
+          if (part.thought === true && sig && isLikelyRealThoughtSignature(sig)) {
+            pendingThoughtSig = sig;
+          }
           const textEvent = googlePartTextEvent(part);
           if (textEvent) events.push(textEvent);
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
@@ -997,7 +1014,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               type: "tool_call_start",
               id,
               name: restoreGoogleToolName(part.functionCall.name),
-              ...googleToolCallMetadataFromPart(part),
+              ...googleToolCallMetadataFromPart(part, pendingThoughtSig),
             });
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) });
             events.push({ type: "tool_call_end" });

@@ -132,6 +132,59 @@ describe("#1735 thought signature survives history replay", () => {
     expect(signatures).toEqual([SIGNATURE, SIGNATURE_B]);
   });
 
+  test("a standalone thought part's signature attaches to all subsequent functionCalls in non-streaming parse", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(firstTurn());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify(googleBody([
+      { text: "thinking...", thought: true, thoughtSignature: SIGNATURE },
+      { functionCall: { name: "shell_command", args: { command: "pwd" } } },
+      { functionCall: { name: "shell_command", args: { command: "ls" } } },
+    ]))));
+    const starts = events.filter((e: AdapterEvent) => e.type === "tool_call_start");
+    expect(starts.length).toBe(2);
+    expect("providerMetadata" in starts[0] ? starts[0].providerMetadata?.google?.thoughtSignature : undefined)
+      .toBe(SIGNATURE);
+    expect("providerMetadata" in starts[1] ? starts[1].providerMetadata?.google?.thoughtSignature : undefined)
+      .toBe(SIGNATURE);
+  });
+
+  test("streaming SSE chunks carry thought signature across chunk boundaries to function calls", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(firstTurn());
+    // Each SSE frame arrives as its own transport chunk so the signature has to
+    // survive the chunk boundary between the thought part and the function calls.
+    const frames = [
+      `data: ${JSON.stringify(googleBody([{ text: "thinking...", thought: true, thought_signature: SIGNATURE }]))}\n\n`,
+      `data: ${JSON.stringify(googleBody([{ functionCall: { name: "shell_command", args: { command: "pwd" } } }]))}\n\n`,
+      `data: ${JSON.stringify(googleBody([{ functionCall: { name: "shell_command", args: { command: "ls" } } }]))}\n\n`,
+      // usageMetadata is the terminal signal; no [DONE] sentinel needed.
+      `data: ${JSON.stringify({ usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2 } })}\n\n`,
+    ];
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const frame of frames) controller.enqueue(encoder.encode(frame));
+        controller.close();
+      },
+    });
+
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(stream))) {
+      events.push(event);
+    }
+
+    // The turn completes cleanly: no error events, terminal done last.
+    expect(events.some((e: AdapterEvent) => e.type === "error")).toBe(false);
+    expect(events[events.length - 1]?.type).toBe("done");
+    const starts = events.filter((e: AdapterEvent) => e.type === "tool_call_start");
+    expect(starts.length).toBe(2);
+    expect("providerMetadata" in starts[0] ? starts[0].providerMetadata?.google?.thoughtSignature : undefined)
+      .toBe(SIGNATURE);
+    expect("providerMetadata" in starts[1] ? starts[1].providerMetadata?.google?.thoughtSignature : undefined)
+      .toBe(SIGNATURE);
+  });
+
   test("a signature replayed through Responses history reaches the rebuilt Google part", async () => {
     // No cache is warmed here: this is a cold process replaying client-supplied history.
     const parsed = parseRequestScoped({

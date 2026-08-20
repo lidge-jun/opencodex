@@ -97,6 +97,33 @@ describe("antigravity reasoning-replay cache", () => {
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
   });
 
+  test("a signature on a standalone thought part replays onto all subsequent functionCalls in the same turn", () => {
+    observeAntigravityReplay(MODEL, SESSION, [
+      { thought: true, thoughtSignature: SIG },
+      fcPart("get_x", { a: 1 }),
+      fcPart("get_y", { b: 2 }),
+    ]);
+    const contents = [{
+      role: "model",
+      parts: [
+        { functionCall: { name: "get_x", args: { a: 1 } } },
+        { functionCall: { name: "get_y", args: { b: 2 } } },
+      ],
+    }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    expect((contents[0].parts[1] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
+  test("carried thought signature across separate stream chunks pairs with subsequent functionCalls", () => {
+    const carried = observeAntigravityReplay(MODEL, SESSION, [{ thought: true, thought_signature: SIG }]);
+    expect(carried).toBe(SIG);
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 })], carried);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
   test("a call's own signature wins over a preceding standalone thought signature", () => {
     observeAntigravityReplay(MODEL, SESSION, [
       { thought: true, thoughtSignature: "sig-standalone-aaaa" },
