@@ -224,7 +224,15 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       // Keep Codex's image_gen visible to routed chat models. The hosted OpenAI tool
       // cannot execute on Grok; the model still has to see a callable image_gen so
       // Codex's client-side /v1/images request can fire and be relayed to xAI.
-      if (!out.some(tool => tool.name === IMAGE_GEN_TOOL_NAME)) out.push(buildImageTool());
+      // Identity is the un-namespaced synthetic root (`imageGeneration: true`), not
+      // the bare name: a namespaced ordinary `image_gen` must not suppress it.
+      const synthetic = buildImageTool();
+      const rootIdx = out.findIndex(tool => tool.name === IMAGE_GEN_TOOL_NAME && !tool.namespace);
+      if (rootIdx >= 0) {
+        if (!out[rootIdx]!.imageGeneration) out[rootIdx] = synthetic;
+      } else {
+        out.push(synthetic);
+      }
     }
     else if (typeof t.name === "string" && t.type !== "web_search" && t.type !== "image_generation") {
       // Any OTHER named tool (e.g. a native/computer-use tool type opencodex doesn't explicitly

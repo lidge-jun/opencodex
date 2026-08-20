@@ -37,7 +37,12 @@ import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
-import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
+import {
+  decodeValidatedImageBase64,
+  fetchPublicHttpsImage,
+  MAX_ENCODED_BYTES_PER_IMAGE,
+  type PinnedDownloadFn,
+} from "../images/artifacts";
 import { findXaiProvider, resolveXaiImageAuthToken } from "../images/plan";
 import { callXaiImages } from "../images/xai-client";
 import type { AdmissionLease } from "../lib/admission";
@@ -150,6 +155,17 @@ function xaiImageOutputTooLarge(): Response {
     "upstream_error",
     `xAI image generation output too large (exceeded ${IMAGES_RESPONSE_MAX_BYTES} bytes)`,
   );
+}
+
+function xaiImageDownloadFailed(): Response {
+  return formatErrorResponse(502, "upstream_error", "xAI image download failed");
+}
+
+/** Test seam: inject a pinned HTTPS GET so relay tests never open a real socket. */
+let xaiResultPinnedDownload: PinnedDownloadFn | undefined;
+
+export function setXaiResultPinnedDownloadForTests(fn: PinnedDownloadFn | undefined): void {
+  xaiResultPinnedDownload = fn;
 }
 
 /**
@@ -499,8 +515,17 @@ async function tryXaiImageRelay(
       if (typeof img.url !== "string" || !img.url) continue;
       const remaining = remainingRelayDecodedBytes(spentDecoded, spentEncoded);
       if (remaining <= 0) return xaiImageOutputTooLarge();
-      const fetched = await fetch(img.url, { signal: linkedSignal.signal, redirect: "follow" });
-      if (!fetched.ok) continue;
+      let fetched: Response;
+      try {
+        fetched = await fetchPublicHttpsImage(img.url, {
+          signal: linkedSignal.signal,
+          pinnedDownload: xaiResultPinnedDownload,
+          maxBytes: remaining,
+        });
+      } catch (err) {
+        if (signal?.aborted || linkedSignal.signal.aborted) throw err;
+        return xaiImageDownloadFailed();
+      }
       const observed = await readImageResponseBytes(fetched, {
         maxBytes: remaining,
         signal: linkedSignal.signal,
