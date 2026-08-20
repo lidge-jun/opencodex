@@ -151,3 +151,62 @@ test("stale encrypted V2 opt-in is cleared before entering Responses", async () 
   expect(confirmCalls).toHaveLength(0);
   await act(async () => { root.unmount(); });
 });
+
+test("confirmed encrypted V2 opt-in survives a successful provider refresh", async () => {
+  const staleItem: WorkspaceItem = {
+    name: "relay",
+    adapter: "openai-chat",
+    baseUrl: "https://relay.example.test/v1",
+    authMode: "key",
+    allowEncryptedV2AgentTasks: true,
+  };
+  const refreshedItem: WorkspaceItem = {
+    ...staleItem,
+    adapter: "openai-responses",
+    allowEncryptedV2AgentTasks: true,
+  };
+  const patches: ProviderUpdatePatch[] = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  let root!: Root;
+  const renderItem = (item: WorkspaceItem) => (
+    <LanguageProvider><ProviderSettings
+      item={item}
+      onUpdateProvider={async (_name, patch) => { patches.push(patch); return { ok: true }; }}
+    /></LanguageProvider>
+  );
+  await act(async () => {
+    root = createRoot(container);
+    root.render(renderItem(staleItem));
+  });
+
+  const adapterSelect = [...container.querySelectorAll<HTMLSelectElement>("select")]
+    .find(select => select.value === "openai-chat");
+  expect(adapterSelect).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
+      .set!.call(adapterSelect, "openai-responses");
+    adapterSelect!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  const checkbox = [...container.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("encrypted V2 agent tasks"))
+    ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(checkbox).toBeTruthy();
+  await act(async () => { checkbox!.click(); });
+  expect(confirmCalls).toHaveLength(1);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(patches).toHaveLength(1);
+  expect(patches[0]).toMatchObject({ adapter: "openai-responses", allowEncryptedV2AgentTasks: true });
+
+  await act(async () => { root.render(renderItem(refreshedItem)); });
+  const refreshedCheckbox = [...container.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("encrypted V2 agent tasks"))
+    ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(refreshedCheckbox?.checked).toBe(true);
+  expect(container.querySelector(".pwi-settings-sticky-bar")).toBeNull();
+  await act(async () => { root.unmount(); });
+});
