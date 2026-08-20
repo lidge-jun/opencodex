@@ -553,7 +553,16 @@ jobs:
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
     # same budget the Linux shards already hold.
-    timeout-minutes: 15
+    #
+    # 15 was that Linux budget, and on this leg it truncated the evidence rather
+    # than bounding a hang: shard 1/4 of run 32340498394 was CANCELLED at exactly
+    # 15m12s while still executing tests, so its result was neither pass nor fail
+    # and the composed-acceptance cases it carries could not be read at all. The
+    # other shards finished in 14-15 minutes, which is the wrong side of the
+    # margin. 25 leaves the outer bound in place — a wedged shard still dies —
+    # while making a completed shard the normal outcome. The crash-retry below can
+    # double a shard's work, and this ceiling has to cover that second attempt too.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

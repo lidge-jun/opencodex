@@ -83,13 +83,21 @@ describe("Claude Code shell-hook reconciliation", () => {
     expect(readFileSync(zshrcPath, "utf8").match(/opencodex claude-env hook/g)).toHaveLength(1);
   });
 
-  test("does not treat a non-executable claude file as an installed CLI", () => {
-    writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+  // Windows has no execute permission bit: `accessSync(path, X_OK)` succeeds for any
+  // readable file, so a 0o644 fixture cannot express "present but not executable" there.
+  // The case asserts a POSIX permission semantic, and skipping it on a platform that
+  // cannot represent the precondition is honest; asserting it anyway measured the
+  // fixture, not the product (#2152).
+  test.skipIf(originalPlatform === "win32")(
+    "does not treat a non-executable claude file as an installed CLI",
+    () => {
+      writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o644 });
 
-    expect(claudeCodeCliInstalled()).toBe(false);
-    expect(reconcileShellHook(true)).toMatchObject({ changed: false, state: "absent" });
-    expect(existsSync(zshrcPath)).toBe(false);
-  });
+      expect(claudeCodeCliInstalled()).toBe(false);
+      expect(reconcileShellHook(true)).toMatchObject({ changed: false, state: "absent" });
+      expect(existsSync(zshrcPath)).toBe(false);
+    },
+  );
 
   test("removes the hook when system environment integration is inactive", () => {
     installClaudeCli();
