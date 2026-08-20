@@ -12,7 +12,7 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth
 import { saveConfig } from "../src/config";
 import { selectImagesProvider } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
-import { handleImages, IMAGES_RESPONSE_MAX_BYTES, readImageResponseBytes } from "../src/server/images";
+import { handleImages, IMAGES_RESPONSE_MAX_BYTES, readImageResponseBytes, setXaiResultPinnedDownloadForTests } from "../src/server/images";
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire";
@@ -42,6 +42,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setXaiResultPinnedDownloadForTests(undefined);
   globalThis.fetch = originalFetch;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
@@ -159,15 +160,19 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
   const captured: CapturedRequest[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.includes("api.x.ai")) {
-      captured.push({
-        path: new URL(url).pathname,
-        headers: new Headers(init?.headers),
-        body: init?.body ? JSON.parse(String(init.body)) : undefined,
-      });
+    const parsed = new URL(url);
+    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
+      return originalFetch(input, init);
+    }
+    captured.push({
+      path: parsed.pathname,
+      headers: new Headers(init?.headers),
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+    });
+    if (parsed.hostname === "api.x.ai") {
       return Response.json({ data: [{ b64_json: "dHJhaW4=" }] });
     }
-    return originalFetch(input, init);
+    throw new Error(`unexpected upstream ${parsed.host}`);
   }) as typeof fetch;
   saveConfig({
     ...forwardConfig(),
@@ -188,8 +193,13 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
     expect(response.status).toBe(200);
     const json = await response.json() as { data?: Array<{ b64_json?: string }> };
     expect(json.data?.[0]?.b64_json).toBe("dHJhaW4=");
-    expect(captured.some(call => call.path === "/v1/images/generations" && JSON.stringify(call.body).includes("grok-imagine-image-quality"))).toBe(true);
-    expect(captured.every(call => !call.path.includes("/backend-api/codex"))).toBe(true);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.path).toBe("/v1/images/generations");
+    expect(JSON.stringify(captured[0]!.body)).toContain("grok-imagine-image-quality");
+    expect(captured[0]!.headers.get("authorization")).toBe("Bearer xai-test-token");
+    expect(captured[0]!.headers.get("chatgpt-account-id")).toBeNull();
+    expect(captured[0]!.headers.get("session_id")).toBeNull();
+    expect(captured[0]!.headers.get("x-codex-turn-metadata")).toBeNull();
   } finally {
     await server.stop(true);
   }
@@ -234,37 +244,45 @@ test("POST /v1/images/edits with no image URL does not call xAI generation", asy
   }
 });
 
-test("POST /v1/images/generations rejects xAI batches that exceed the aggregate output budget", async () => {
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.includes("api.x.ai")) {
-      return Response.json({
-        data: [
-          { b64_json: "dHJhaW4=" },
-          { url: "https://cdn.example.test/huge.png" },
-        ],
-      });
-    }
-    if (url.includes("cdn.example.test/huge.png")) {
-      // Declared size exceeds the remaining decoded/encoded budget; the reader
-      // rejects from Content-Length without buffering a 100 MiB body.
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) { controller.close(); },
-      }), {
-        status: 200,
-        headers: { "content-length": String(IMAGES_RESPONSE_MAX_BYTES) },
-      });
-    }
-    return originalFetch(input, init);
-  }) as typeof fetch;
-  saveConfig({
+function xaiBridgeConfig(): OcxConfig {
+  return {
     ...forwardConfig(),
     images: { bridgeEnabled: true },
     providers: {
       ...forwardConfig().providers,
       xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
     },
-  } as OcxConfig);
+  } as OcxConfig;
+}
+
+function stubXaiImagine(payload: unknown) {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const parsed = new URL(url);
+    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
+      return originalFetch(input, init);
+    }
+    if (parsed.hostname === "api.x.ai") {
+      return Response.json(payload);
+    }
+    throw new Error(`unexpected upstream ${parsed.host}`);
+  }) as typeof fetch;
+}
+
+test("POST /v1/images/generations rejects xAI batches that exceed the aggregate output budget", async () => {
+  stubXaiImagine({
+    data: [
+      { b64_json: "dHJhaW4=" },
+      { url: "https://8.8.8.8/huge.png" },
+    ],
+  });
+  setXaiResultPinnedDownloadForTests(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.close(); },
+  }), {
+    status: 200,
+    headers: { "content-length": String(IMAGES_RESPONSE_MAX_BYTES) },
+  }));
+  saveConfig(xaiBridgeConfig());
 
   const server = startServer(0);
   try {
@@ -283,29 +301,18 @@ test("POST /v1/images/generations rejects xAI batches that exceed the aggregate 
 
 test("POST /v1/images/generations returns multiple xAI URL images under the aggregate budget", async () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.includes("api.x.ai")) {
-      return Response.json({
-        data: [
-          { url: "https://cdn.example.test/one.png" },
-          { url: "https://cdn.example.test/two.png" },
-        ],
-      });
-    }
-    if (url.includes("cdn.example.test/")) {
-      return new Response(png, { status: 200, headers: { "content-length": String(png.byteLength) } });
-    }
-    return originalFetch(input, init);
-  }) as typeof fetch;
-  saveConfig({
-    ...forwardConfig(),
-    images: { bridgeEnabled: true },
-    providers: {
-      ...forwardConfig().providers,
-      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
-    },
-  } as OcxConfig);
+  const pinned: Array<{ address: string; family: number }> = [];
+  stubXaiImagine({
+    data: [
+      { url: "https://8.8.8.8/one.png" },
+      { url: "https://8.8.8.8/two.png" },
+    ],
+  });
+  setXaiResultPinnedDownloadForTests(async (_url, peer) => {
+    pinned.push(peer);
+    return new Response(png, { status: 200, headers: { "content-length": String(png.byteLength) } });
+  });
+  saveConfig(xaiBridgeConfig());
 
   const server = startServer(0);
   try {
@@ -319,6 +326,65 @@ test("POST /v1/images/generations returns multiple xAI URL images under the aggr
     expect(json.data).toHaveLength(2);
     expect(json.data?.[0]?.b64_json).toBe(Buffer.from(png).toString("base64"));
     expect(json.data?.[1]?.b64_json).toBe(Buffer.from(png).toString("base64"));
+    expect(pinned).toEqual([
+      { address: "8.8.8.8", family: 4 },
+      { address: "8.8.8.8", family: 4 },
+    ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations rejects a private xAI result URL without fetching it", async () => {
+  let pinnedCalls = 0;
+  stubXaiImagine({ data: [{ url: "https://127.0.0.1/secret.png" }] });
+  setXaiResultPinnedDownloadForTests(async () => {
+    pinnedCalls += 1;
+    return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+  });
+  saveConfig(xaiBridgeConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toBe("xAI image download failed");
+    expect(json.error?.message).not.toContain("127.0.0.1");
+    expect(pinnedCalls).toBe(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations does not follow a 3xx on an xAI result URL", async () => {
+  const seen: string[] = [];
+  stubXaiImagine({ data: [{ url: "https://8.8.8.8/img.png" }] });
+  setXaiResultPinnedDownloadForTests(async (url, pinned) => {
+    seen.push(`${pinned.address}:${url}`);
+    return new Response(null, {
+      status: 302,
+      headers: { location: "https://127.0.0.1/secret.png" },
+    });
+  });
+  saveConfig(xaiBridgeConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toBe("xAI image download failed");
+    expect(json.error?.message).not.toContain("127.0.0.1");
+    expect(seen).toEqual(["8.8.8.8:https://8.8.8.8/img.png"]);
   } finally {
     await server.stop(true);
   }

@@ -111,7 +111,19 @@ export async function callXaiImages(
     },
     body: JSON.stringify(body),
     signal: linkedSignal,
+    // Do not follow 3xx while carrying the xAI bearer. Bun may strip Authorization
+    // cross-origin but still leave the request on the redirect target.
+    redirect: "manual",
   });
+
+  const redirected = resp.type === "opaqueredirect" || (resp.status >= 300 && resp.status < 400);
+  if (redirected) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    const status = resp.status >= 300 && resp.status < 400 ? resp.status : 302;
+    const err = new Error("xAI images API returned " + status) as Error & { status: number };
+    err.status = status;
+    throw err;
+  }
 
   if (!resp.ok) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }
