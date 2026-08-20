@@ -92,7 +92,7 @@ describe("google provider hardening", () => {
 
   test("Antigravity rejects a cleartext http baseUrl before dispatch", async () => {
     const adapter = createGoogleAdapter(antigravityProvider({
-      baseUrl: "http://daily-cloudcode-pa.googleapis.com",
+      baseUrl: "http://custom-antigravity.invalid",
     }));
 
     await expect(adapter.buildRequest(parsed())).rejects.toThrow(
