@@ -2400,6 +2400,7 @@ async function handleResponsesInner(
       Date.now(),
       unreadableEncryptedAgentTask,
       previewSelectionOptions,
+      inboundWire,
     );
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
@@ -2490,6 +2491,7 @@ async function handleResponsesInner(
             Date.now(),
             false,
             previewSelectionOptions,
+            inboundWire,
           );
           if (fallback) {
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
@@ -2558,7 +2560,7 @@ async function handleResponsesInner(
   // Virtual model normalization can change both the wire model and its model-specific
   // adapter. Enforce the ciphertext boundary only after that final wire decision, while
   // still preceding auth, adapter construction, and all provider I/O.
-  if (!routeCanReceiveEncryptedV2AgentTasks(route, inboundWire) && unreadableEncryptedAgentTask) {
+  if (unreadableEncryptedAgentTask && !routeCanReceiveEncryptedV2AgentTasks(route, inboundWire)) {
     return unreadableEncryptedAgentTaskResponse();
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before

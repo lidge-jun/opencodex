@@ -29,7 +29,7 @@ import {
 import { isCodexAccountPaused } from "./account-pause";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
-import { PROVIDER_REGISTRY } from "../providers/registry";
+import { PROVIDER_REGISTRY, type InboundWire } from "../providers/registry";
 import {
   canReceiveEncryptedV2AgentTasks,
   CODEX_FORWARD_BASE_URL,
@@ -278,17 +278,20 @@ export function selectAvailableSubagentModel(
   nativeFallbackOnly = false,
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
   trailingFallback: readonly string[] = [],
+  inboundWire: InboundWire = "responses",
 ): { model: string; rewritten: boolean; skipped: string[] } {
   const chain = normalizedChain(primary, config, extraFallback, trailingFallback);
   const skipped: string[] = [];
   for (const candidate of chain) {
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
-      const wireModelId = route
-        ? resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId
-        : null;
-      const resolvedProvider = route && wireModelId
-        ? resolveWireProtocolOverride(route.providerName, wireModelId, route.provider)
+      const resolvedProvider = route
+        ? resolveWireProtocolOverride(
+            route.providerName,
+            resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId,
+            route.provider,
+            inboundWire,
+          )
         : null;
       if (!resolvedProvider || !canReceiveEncryptedV2AgentTasks(resolvedProvider)) {
         skipped.push(candidate);
@@ -524,6 +527,7 @@ export function applySubagentModelFallback(
   now = Date.now(),
   nativeFallbackOnly = false,
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
+  inboundWire: InboundWire = "responses",
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
   const tomlRoleFallback = resolveAgentModelFallbackForPrimary(
@@ -545,6 +549,7 @@ export function applySubagentModelFallback(
     nativeFallbackOnly,
     accountUsabilityOptions,
     tomlRoleFallback,
+    inboundWire,
   );
   if (!selection.rewritten) return selection.skipped.length > 0
     ? { from: parsed.modelId, to: parsed.modelId, skipped: selection.skipped }

@@ -56,6 +56,10 @@ function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): str
   ]);
 }
 
+function encryptedV2EnabledFor(adapter: string, value: boolean | undefined): boolean {
+  return adapter.trim() === "openai-responses" && value === true;
+}
+
 export default function ProviderSettings({
   item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
 }: {
@@ -79,7 +83,8 @@ export default function ProviderSettings({
   const [authMode, setAuthMode] = useState(initialAuth);
   const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
   const [note, setNote] = useState(item.note ?? "");
-  const [allowEncryptedV2AgentTasks, setAllowEncryptedV2AgentTasks] = useState(item.allowEncryptedV2AgentTasks ?? false);
+  const [allowEncryptedV2AgentTasks, setAllowEncryptedV2AgentTasks] = useState(() => encryptedV2EnabledFor(item.adapter, item.allowEncryptedV2AgentTasks));
+  const previousItemAdapter = useRef(item.adapter);
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
@@ -108,7 +113,12 @@ export default function ProviderSettings({
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? "");
-    setAllowEncryptedV2AgentTasks(item.allowEncryptedV2AgentTasks ?? false);
+    const enteredResponses = item.adapter.trim() === "openai-responses"
+      && previousItemAdapter.current.trim() !== "openai-responses";
+    setAllowEncryptedV2AgentTasks(enteredResponses
+      ? false
+      : encryptedV2EnabledFor(item.adapter, item.allowEncryptedV2AgentTasks));
+    previousItemAdapter.current = item.adapter;
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion);
@@ -306,7 +316,7 @@ export default function ProviderSettings({
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
-    setNote(item.note ?? ""); setAllowEncryptedV2AgentTasks(item.allowEncryptedV2AgentTasks ?? false);
+    setNote(item.note ?? ""); setAllowEncryptedV2AgentTasks(encryptedV2EnabledFor(item.adapter, item.allowEncryptedV2AgentTasks));
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
@@ -342,8 +352,11 @@ export default function ProviderSettings({
         <span className="pwi-settings-label">{t("modal.adapter")}</span>
         {isPreset ? <input className="input" value={adapter} readOnly disabled /> : (
           <select className="input" value={adapter} onChange={e => {
-            setAdapter(e.target.value);
-            if (e.target.value !== "openai-responses") setAllowEncryptedV2AgentTasks(false);
+            const nextAdapter = e.target.value;
+            setAdapter(nextAdapter);
+            if (nextAdapter.trim() !== "openai-responses" || adapter.trim() !== "openai-responses") {
+              setAllowEncryptedV2AgentTasks(false);
+            }
           }}>
             {adapterOptions.map(a => <option key={a} value={a}>{a}</option>)}
           </select>

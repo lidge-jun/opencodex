@@ -103,3 +103,51 @@ test("cancelling the encrypted V2 confirmation does not save the trust opt-in", 
   expect(patches).not.toContainEqual(expect.objectContaining({ allowEncryptedV2AgentTasks: true }));
   await act(async () => { root.unmount(); });
 });
+
+test("stale encrypted V2 opt-in is cleared before entering Responses", async () => {
+  const item: WorkspaceItem = {
+    name: "relay",
+    adapter: "openai-chat",
+    baseUrl: "https://relay.example.test/v1",
+    authMode: "key",
+    allowEncryptedV2AgentTasks: true,
+  };
+  const patches: ProviderUpdatePatch[] = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><ProviderSettings
+      item={item}
+      onUpdateProvider={async (_name, patch) => { patches.push(patch); return { ok: true }; }}
+    /></LanguageProvider>);
+  });
+
+  const adapterSelect = [...container.querySelectorAll<HTMLSelectElement>("select")]
+    .find(select => select.value === "openai-chat");
+  expect(adapterSelect).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
+      .set!.call(adapterSelect, "openai-responses");
+    adapterSelect!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+
+  const optInLabel = [...container.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("encrypted V2 agent tasks"));
+  const checkbox = optInLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(checkbox).toBeTruthy();
+  expect(checkbox!.checked).toBe(false);
+  expect(confirmCalls).toHaveLength(0);
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(patches).toHaveLength(1);
+  expect(patches[0]).toMatchObject({ adapter: "openai-responses", allowEncryptedV2AgentTasks: false });
+  expect(patches.some(patch => patch.allowEncryptedV2AgentTasks === true)).toBe(false);
+  expect(confirmCalls).toHaveLength(0);
+  await act(async () => { root.unmount(); });
+});

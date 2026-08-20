@@ -941,10 +941,62 @@ describe("encrypted child native-only fallback", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(capture.urls.some(url => url.includes("relay.example.test"))).toBe(true);
-    expect(capture.urls.some(url => url.includes("api.x.ai"))).toBe(false);
-    expect(capture.bodies.some(body => body.includes("encrypted_content"))).toBe(true);
+    expect(capture.urls).toHaveLength(1);
+    expect(capture.urls[0]).toContain("relay.example.test");
+    expect(capture.urls[0]).not.toContain("api.x.ai");
+    expect(capture.bodies[0]).toContain(FERNET_TASK);
   });
+
+  for (const inboundWire of ["chat", "anthropic"] as const) {
+    test(`uses the ${inboundWire} request wire when selecting encrypted routed fallbacks`, async () => {
+      const cfg = poolNativePlusRoutedConfig({
+        defaultProvider: "xai",
+        subagentModelFallback: [
+          "deepseek/deepseek-v4-flash",
+          "relay/gpt-5.6-luna",
+        ],
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "xai-test",
+          },
+          deepseek: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com",
+            authMode: "key",
+            apiKey: "deepseek-test",
+            // Config admission rejects this combination. Keep the request boundary
+            // defensive: the registry's Responses-only model default must not make
+            // this candidate eligible for a Chat or Anthropic replay.
+            allowEncryptedV2AgentTasks: true,
+          },
+          relay: {
+            adapter: "openai-responses",
+            baseUrl: "https://relay.example.test/v1",
+            authMode: "key",
+            apiKey: "relay-test",
+            allowEncryptedV2AgentTasks: true,
+          },
+        },
+      });
+      const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+      mockUpstream(capture);
+
+      const response = await postSpawn(cfg, {
+        model: "xai/grok-4.5",
+        input: encryptedAgentInput(),
+        stream: false,
+      }, { inboundWire });
+
+      expect(response.status).toBe(200);
+      expect(capture.urls).toHaveLength(1);
+      expect(capture.urls[0]).toContain("relay.example.test");
+      expect(capture.urls[0]).not.toContain("api.deepseek.com");
+      expect(capture.bodies[0]).toContain(FERNET_TASK);
+    });
+  }
 
   test("skips an opted-in fallback whose selected model resolves to openai-chat", async () => {
     const cfg = poolNativePlusRoutedConfig({
