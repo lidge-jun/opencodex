@@ -123,9 +123,22 @@ describe("registry per-model wire defaults", () => {
   test("an explicit xAI Responses override opts into the native wire", () => {
     for (const model of ["grok-4.6", "grok-4.5"]) {
       const provider = xai("oauth", { modelAdapters: { [model]: "openai-responses" } });
-      expect(resolveWireProtocolOverride("xai", model, provider, "responses").adapter)
-        .toBe("openai-responses");
+      const resolved = resolveWireProtocolOverride("xai", model, provider, "responses");
+      expect(resolved.adapter).toBe("openai-responses");
+      expect(resolved.customToolTransport).toBe("function-json");
     }
+  });
+
+  test("clears a stale function-json capability when a second resolve no longer qualifies", () => {
+    const provider = xai("oauth", { modelAdapters: { "grok-4.6": "openai-responses" } });
+    const resolved = resolveWireProtocolOverride("xai", "grok-4.6", provider, "responses");
+    expect(resolved.customToolTransport).toBe("function-json");
+    const optedOut = resolveWireProtocolOverride("xai", "grok-4.6", {
+      ...resolved,
+      modelAdapters: { "grok-4.6": "openai-chat" },
+    }, "responses");
+    expect(optedOut.adapter).toBe("openai-chat");
+    expect(optedOut.customToolTransport).toBeUndefined();
   });
 
   function deepseek(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {

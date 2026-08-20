@@ -128,8 +128,6 @@ export interface ProviderRegistryEntry {
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
-  /** Registry-only per-model routed tool surface capability. */
-  modelCodexToolModes?: Record<string, OcxProviderConfig["codexToolMode"]>;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;
   allowPrivateNetworkByDefault?: boolean;
@@ -1124,10 +1122,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     baseUrl: "https://api.x.ai/v1",
     authKind: "oauth",
-    modelCodexToolModes: {
-      "grok-4.5": "code_mode",
-      "grok-4.6": "code_mode",
-    },
     allowKeyAuthOverride: true,
     // Priority Processing is documented for xAI's public API-key Chat Completions and
     // Responses endpoints. OAuth is a separate Grok CLI subscription gateway and remains
@@ -2978,10 +2972,14 @@ export function providerModelCustomToolTransport(
   inbound: InboundWire = "responses",
 ): "freeform" | "function-json" | undefined {
   const entry = getProviderRegistryEntry(id);
-  if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  if (!entry?.modelWireDefaults) return undefined;
   const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
   if (!declared || typeof declared === "string") return undefined;
   if (declared.wire !== "openai-responses" || !declared.inbound.includes(inbound)) return undefined;
+  const matchesConfiguredTransport = providerMatchesRegistryTransport(id, provider);
+  const matchesResolvedModelWire = provider.adapter === declared.wire
+    && normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
+  if (!matchesConfiguredTransport && !matchesResolvedModelWire) return undefined;
   const authMode = provider.authMode ?? entry.authKind;
   if (declared.authModes && !declared.authModes.includes(authMode)) return undefined;
   return declared.customToolTransport;

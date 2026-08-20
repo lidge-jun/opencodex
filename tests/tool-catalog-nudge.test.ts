@@ -154,6 +154,33 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).not.toContain("await tools.apply_patch");
   });
 
+  test("does not invent an edit tool when only direct shell is listed", () => {
+    const note = buildNonOpenAIToolCatalogNudgeFromNames(
+      ["exec", "exec_command"],
+      name => name,
+      "exec",
+    );
+    expect(note).toContain("`exec_command` directly for reads");
+    expect(note).not.toContain("directly for targeted edits");
+    expect(note).not.toContain("apply_patch");
+    expect(note).not.toContain("targeted workspace edit");
+  });
+
+  test("recognizes transformed direct tool names without naming their bare aliases", () => {
+    const note = buildNonOpenAIToolCatalogNudgeForTools(
+      [
+        codeModeExec(),
+        { name: "apply_patch", parameters: {} } as OcxTool,
+        { name: "exec_command", parameters: {} } as OcxTool,
+      ],
+      undefined,
+      tool => `custom_${tool.name}`,
+    );
+    expect(note).toContain("`custom_apply_patch` directly for targeted edits");
+    expect(note).toContain("`custom_exec_command` directly for reads");
+    expect(note).toContain("Use `custom_exec` only for JavaScript control flow");
+  });
+
   // "Bare" means un-namespaced. An MCP server can advertise its own `exec_command` — docker,
   // k8s and ssh servers plausibly do — and that is not Codex's shell bridge. Letting it cancel
   // code mode silently strips the guidance from a genuine code-mode turn, which is how the

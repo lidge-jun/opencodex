@@ -149,11 +149,18 @@ describe("routed custom-tool compatibility", () => {
   });
 
   test("other converted custom tools keep the generic raw-input contract", () => {
-    expect(convertedInputDescription("review_patch")).toBeUndefined();
+    expect(convertedInputDescription("review_patch")).toContain("Raw input");
     const body = { tools: [{ type: "custom", name: "review_patch", description: "client tool" }] };
     const rewritten = rewriteRoutedCustomToolsForUpstream(body, "direct-first");
-    expect(rewritten.names).toEqual(new Set());
-    expect(rewritten.body).toBe(body);
+    expect(rewritten.names).toEqual(new Set(["review_patch"]));
+    expect((rewritten.body as { tools: Array<Record<string, unknown>> }).tools[0]).toMatchObject({
+      type: "function",
+      name: "review_patch",
+      parameters: {
+        properties: { input: { type: "string" } },
+        required: ["input"],
+      },
+    });
   });
 
   test("projects exec and apply_patch onto distinct Responses function fields", () => {
@@ -196,6 +203,8 @@ describe("routed custom-tool compatibility", () => {
     expect(projected.value).toMatchObject({ type: "custom_tool_call", input: "1+1", id: "ctc_1" });
     const legacy = restoreRoutedCustomCalls({ type: "function_call", name: "apply_patch", id: "fc_2", arguments: '{"input":"*** Begin Patch"}' }, new Set(["apply_patch"]));
     expect(legacy.value).toMatchObject({ type: "custom_tool_call", input: "*** Begin Patch" });
+    const generic = restoreRoutedCustomCalls({ type: "function_call", name: "review_patch", id: "fc_3", arguments: '{"input":"review this"}' }, new Set(["review_patch"]));
+    expect(generic.value).toMatchObject({ type: "custom_tool_call", input: "review this", id: "ctc_3" });
   });
 
   test("projects named and allowed custom tool choices while preserving ordinary modes", () => {
@@ -224,7 +233,7 @@ describe("routed custom-tool compatibility", () => {
     }, "direct-first").body as { tool_choice: { tools: Array<Record<string, unknown>> } };
     expect(allowed.tool_choice.tools).toEqual([
       { type: "function", name: "exec" },
-      { type: "custom", name: "unknown_custom" },
+      { type: "function", name: "unknown_custom" },
     ]);
   });
 });
