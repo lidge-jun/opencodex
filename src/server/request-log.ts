@@ -65,6 +65,8 @@ export interface RequestLogContext {
   /** Stable non-PII Codex Pool account identity for durable usage attribution. */
   accountLogLabel?: string;
   requestedModel?: string;
+  /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
+  shadowCallRewrittenFrom?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
   requestedEffort?: string;
@@ -142,6 +144,8 @@ export interface RequestLogEntry {
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   requestedModel?: string;
+  /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
+  shadowCallRewrittenFrom?: string;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -255,6 +259,9 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(entry.shadowCallRewrittenFrom
+      ? { shadowCallRewrittenFrom: entry.shadowCallRewrittenFrom }
+      : {}),
     ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
     ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
     ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
@@ -358,6 +365,9 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+      ...(entry.shadowCallRewrittenFrom
+        ? { shadowCallRewrittenFrom: entry.shadowCallRewrittenFrom }
+        : {}),
       ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
       ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
       ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
@@ -919,6 +929,9 @@ export function addFinalRequestLog(
       : {}),
     ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
+    ...(logCtx.shadowCallRewrittenFrom
+      ? { shadowCallRewrittenFrom: logCtx.shadowCallRewrittenFrom }
+      : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
     ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),

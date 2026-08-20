@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../src/server/responses";
 import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
+import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
@@ -90,7 +91,12 @@ function interceptConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-async function post(config: OcxConfig, model: string, requestKind?: string): Promise<Response> {
+async function post(
+  config: OcxConfig,
+  model: string,
+  requestKind?: string,
+  logCtx: RequestLogContext = { model: "", provider: "" },
+): Promise<Response> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (requestKind) {
     headers["x-codex-turn-metadata"] = JSON.stringify({ request_kind: requestKind });
@@ -104,7 +110,7 @@ async function post(config: OcxConfig, model: string, requestKind?: string): Pro
       stream: false,
       reasoning: { effort: "high" },
     }),
-  }), config, { model: "", provider: "" });
+  }), config, logCtx);
 }
 
 describe("shadow call intercept request path (issue #311)", () => {
@@ -130,6 +136,7 @@ describe("shadow call intercept request path (issue #311)", () => {
 
   test("rewrites a gpt-5.6-luna turn request too (#1684)", async () => {
     const bodies: Array<Record<string, unknown>> = [];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
       return new Response(JSON.stringify({
@@ -138,10 +145,11 @@ describe("shadow call intercept request path (issue #311)", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    await post(interceptConfig(), "gpt-5.6-luna", "turn");
+    await post(interceptConfig(), "gpt-5.6-luna", "turn", logCtx);
 
     expect(bodies.length).toBe(1);
     expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
+    expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
   });
 
   test("leaves gpt-5.6-terra requests unrewritten", async () => {
