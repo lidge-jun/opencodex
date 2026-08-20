@@ -161,6 +161,56 @@ Deliberately NOT copied from omniroute: `x-opencode-project`, `x-opencode-reques
 conversation-derived session identifier is a privacy-relevant change that needs its own
 evidence rather than a sibling project's precedent.
 
+### wp16 outcome — and the bug the absorb uncovered
+
+**PR #2160**, branch `codex/absorb-opencode-free-static-headers`, base `dev`. #2067 closed
+with attribution (`issuecomment-5349492578`).
+
+The audit is the interesting part. The plan as written — add the header to the registry row —
+passed my own reading and FAILED the reviewer, correctly. `staticHeaders` is documented at
+`registry.ts:149` as "merged into every upstream request for this provider", and that was
+false. It was copied at seed time only: `providerConfigSeed` writes the block once,
+`enrichProviderFromCatalog` fills it only when the whole block is absent, and nothing merged
+it at request time. `rg -n 'headers' src/router.ts` returned zero hits.
+
+Reproduced directly before accepting the finding:
+
+| persisted config | `routedProviderConfig("opencode-free", ...).headers` |
+|---|---|
+| no headers block | `undefined` |
+| `{x-opencode-client: desktop}` | unchanged — no UA |
+| `{user-agent: custom-agent}` | unchanged — no client marker |
+
+So the contributor's one-line registry patch would have shipped a header that **no existing
+install ever receives**. The management API strips a persisted block that exactly matches the
+registry set, which means the most common on-disk state is "no headers at all" — and that
+state gained nothing.
+
+Implementation, three parts:
+
+1. `mergeRegistryStaticHeaders(staticHeaders, userHeaders)` in `registry.ts` — registry values
+   fill only names the user has not claimed, compared **case-insensitively**. That last word is
+   load-bearing: HTTP header names are case-insensitive but object keys are not, so spreading a
+   registry `User-Agent` over a user's `user-agent` leaves both keys and `Headers` serializes
+   them as `"custom-agent, opencode"` — a corrupted request wearing the costume of an override.
+2. `routedProviderConfig` (`router.ts`) merges at resolve time.
+3. `buildModelsRequest` (`oauth/index.ts`) does the same, because a provider identified as
+   `opencode` when it completes but anonymous when it lists its own models reads as two
+   different clients to a rate limiter.
+
+Residual, stated rather than skipped: `validateApiKey` (`key-providers.ts:102`) still sends
+only `Authorization`. It is an auth probe by design; widening an auth-path request shape is a
+separate change with its own review burden.
+
+Evidence: 6 new regressions; reverting only `router.ts` + `oauth/index.ts` while keeping the
+registry header fails exactly 5 of them (13 pass / 5 fail), which is what makes them delivery
+tests rather than restatements of the registry constant. Full suite 13519 pass / 10 skip /
+0 fail across 856 files; typecheck and privacy scan clean.
+
+One existing expectation moved: `tests/management-provider-validation.test.ts` "provider PATCH
+clear keeps registry static headers" now asserts the two-header set. That is the same edit
+#2067 made, and it is the correct one — the test pins the registry-owned set, which grew.
+
 ## wp17-wp19 — the three that need new code
 
 Recorded here as each is decided; each is its own PABCD cycle.
