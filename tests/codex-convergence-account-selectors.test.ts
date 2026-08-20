@@ -325,6 +325,21 @@ test("convergence renders account-qualified rows and preserves only non-generate
   }
 });
 
+test("convergence preserves one configured soft budget on bare and account-native rows", async () => {
+  writeCatalog([nativeEntry()]);
+  const nextConfig = config(true);
+  nextConfig.providers.openai!.modelAutoCompactTokenLimits = { "gpt-5.6-sol": 120_000 };
+
+  const models = (await convergeCatalog(nextConfig)).models ?? [];
+  for (const slug of ["gpt-5.6-sol", "desktop/gpt-5.6-sol", "team/gpt-5.6-sol"]) {
+    expect(models.find(entry => entry.slug === slug)).toMatchObject({
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 120_000,
+    });
+  }
+});
+
 test("disabling the picker removes generated rows, restores bare rows, and retains foreign rows", async () => {
   writeCatalog([
     nativeEntry("hide"),

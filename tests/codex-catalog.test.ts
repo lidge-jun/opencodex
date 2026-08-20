@@ -199,9 +199,22 @@ describe("combo catalog capability intersection", () => {
       owned_by: "combo",
       contextWindow: 128_000,
       maxInputTokens: 100_000,
+      autoCompactTokenLimit: 100_000,
       inputModalities: ["text"],
       reasoningEfforts: ["low", "medium"],
       defaultReasoningEffort: "medium",
+    });
+  });
+
+  test("never advertises combo max-input or compaction above its smallest final window", () => {
+    const derived = deriveComboCatalogModel("bounded", normalizedCombo(), [
+      { provider: "a", id: "m1", contextWindow: 700_000, maxInputTokens: 922_000 },
+      { provider: "b", id: "m2", contextWindow: 800_000, maxInputTokens: 900_000 },
+    ]);
+    expect(derived).toMatchObject({
+      contextWindow: 700_000,
+      maxInputTokens: 700_000,
+      autoCompactTokenLimit: 630_000,
     });
   });
 
@@ -975,8 +988,8 @@ describe("combo catalog capability intersection", () => {
       port: 10100,
       defaultProvider: "a",
       providers: {
-        a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", liveModels: false, models: ["m1"], modelContextWindows: { m1: 200_000 } },
-        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", liveModels: false, models: ["m2"], modelContextWindows: { m2: 128_000 } },
+        a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", liveModels: false, models: ["m1"], modelContextWindows: { m1: 200_000 }, modelAutoCompactTokenLimits: { m1: 150_000 } },
+        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", liveModels: false, models: ["m2"], modelContextWindows: { m2: 128_000 }, modelAutoCompactTokenLimits: { m2: 80_000 } },
       },
       combos: {
         mixed: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
@@ -993,6 +1006,14 @@ describe("combo catalog capability intersection", () => {
       expect(first.map(model => `${model.provider}/${model.id}`)).toEqual([
         "a/m1", "b/m2", "combo/mixed",
       ]);
+      expect(first.find(model => model.provider === "combo" && model.id === "mixed"))
+        .toMatchObject({ contextWindow: 128_000, maxInputTokens: 128_000, autoCompactTokenLimit: 80_000 });
+      expect(buildCatalogEntries(nativeTemplate(), [], first)
+        .find(entry => entry.slug === "combo/mixed")).toMatchObject({
+        context_window: 128_000,
+        max_context_window: 128_000,
+        auto_compact_token_limit: 80_000,
+      });
       expect(filterCatalogVisibleModels(first, config).some(model => model.id === "mixed")).toBe(false);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0]?.[0])).toContain("[REDACTED]");
@@ -1890,6 +1911,54 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
       globalThis.fetch = originalFetch;
       clearModelCache("custom-provider");
     }
+  });
+
+  test("a custom row clamps its soft budget to the provider max-input ceiling", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "custom-budget",
+      providers: {
+        "custom-budget": {
+          baseUrl: "https://custom-budget.example.test/v1",
+          adapter: "openai-chat",
+          liveModels: false,
+          models: [],
+          modelMaxInputTokens: { renamed: 60_000, contextless: 60_000 },
+          modelAutoCompactTokenLimits: { renamed: 80_000, contextless: 10_000 },
+        },
+      },
+      customModels: [{
+        id: "custom-budget-row",
+        provider: "custom-budget",
+        modelId: "renamed",
+        contextWindow: 321_000,
+      }, {
+        id: "custom-budget-contextless",
+        provider: "custom-budget",
+        modelId: "contextless",
+      }],
+    });
+    const model = models.find(row => row.provider === "custom-budget" && row.id === "renamed");
+    expect(model).toMatchObject({
+      contextWindow: 321_000,
+      maxInputTokens: 60_000,
+      autoCompactTokenLimit: 60_000,
+    });
+    expect(buildCatalogEntries(nativeTemplate(), [], models)
+      .find(entry => entry.slug === "custom-budget/renamed")).toMatchObject({
+      context_window: 321_000,
+      max_context_window: 321_000,
+      auto_compact_token_limit: 60_000,
+    });
+    const contextless = models.find(row => row.provider === "custom-budget" && row.id === "contextless");
+    expect(contextless).toMatchObject({ maxInputTokens: 60_000 });
+    expect(contextless).not.toHaveProperty("autoCompactTokenLimit");
+    expect(buildCatalogEntries(nativeTemplate(), [], models)
+      .find(entry => entry.slug === "custom-budget/contextless")).toMatchObject({
+      context_window: 128_000,
+      max_context_window: 128_000,
+      auto_compact_token_limit: 60_000,
+    });
   });
 
   test("a customModel reasoning ladder overrides the inherited provider ladder end-to-end", async () => {
@@ -3085,6 +3154,38 @@ describe("Codex catalog routed normalization", () => {
       expect(account?.comp_hash).toBe(bare?.comp_hash);
       expect(account?.opencodex_catalog_kind).toBe(CODEX_ACCOUNT_BOUND_CATALOG_KIND);
     }
+  });
+
+  test("bare and account-qualified native rows inherit one lowering-only soft budget", () => {
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      NATIVE_OPENAI_MODELS,
+      [],
+      undefined,
+      false,
+      "default",
+      new Set(),
+      ["team"],
+      new Set(),
+      new Set(),
+      { modelAutoCompactTokenLimits: { "gpt-5.6-sol": 120_000 } },
+    );
+    const bare = entries.find(entry => entry.slug === "gpt-5.6-sol");
+    const account = entries.find(entry => entry.slug === "team/gpt-5.6-sol");
+
+    expect(bare).toMatchObject({
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 120_000,
+    });
+    expect(account).toMatchObject({
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 120_000,
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+    });
+    expect(account?.context_window).toBe(bare?.context_window);
+    expect(account?.max_context_window).toBe(bare?.max_context_window);
   });
 
   test("routed entries drop stale native max context with the template window (#992)", () => {
@@ -4655,6 +4756,7 @@ describe("Codex catalog routed normalization", () => {
           apiKey: "sk-test",
           models: ["static-model"],
           modelContextWindows: { "static-model": 321_000 },
+          modelAutoCompactTokenLimits: { "static-model": 80_000 },
           modelInputModalities: { "static-model": ["text", "image"] },
         },
       },
@@ -4664,8 +4766,35 @@ describe("Codex catalog routed normalization", () => {
 
     expect(routed?.context_window).toBe(321_000);
     expect(routed?.max_context_window).toBe(321_000);
-    expect(routed?.auto_compact_token_limit).toBe(288_900);
+    expect(routed?.auto_compact_token_limit).toBe(80_000);
     expect(routed?.input_modalities).toEqual(["text", "image"]);
+  });
+
+  test("an unknown window ignores the configured soft budget instead of treating 128k as policy evidence", async () => {
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as typeof fetch;
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "unknown-soft",
+      providers: {
+        "unknown-soft": {
+          adapter: "openai-chat",
+          baseUrl: "https://unknown-soft.test/v1",
+          liveModels: false,
+          models: ["model"],
+          modelAutoCompactTokenLimits: { model: 10_000 },
+        },
+      },
+    });
+    const model = models.find(row => row.provider === "unknown-soft" && row.id === "model");
+    expect(model).not.toHaveProperty("autoCompactTokenLimit");
+
+    const emitted = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(entry => entry.slug === "unknown-soft/model");
+    expect(emitted).toMatchObject({
+      context_window: 128_000,
+      max_context_window: 128_000,
+      auto_compact_token_limit: 115_200,
+    });
   });
 
   // #1073's exact reproduction: a provider whose /models returns nothing but ids. Two cases,
@@ -4874,6 +5003,7 @@ describe("Codex catalog routed normalization", () => {
           apiKey: "sk-test",
           contextWindow: 128_000,
           modelContextWindows: { "wide-model": 100_000 },
+          modelMaxInputTokens: { "wide-model": 200_000 },
           modelInputModalities: { "wide-model": ["text"] },
         },
       },
@@ -4881,6 +5011,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(models.find(m => m.id === "wide-model")).toMatchObject({
       contextWindow: 100_000,
+      maxInputTokens: 100_000,
       inputModalities: ["text"],
     });
     expect(models.find(m => m.id === "small-model")?.contextWindow).toBe(64_000);
@@ -5195,11 +5326,12 @@ describe("OpenAI API trusted catalog augmentation", () => {
 
   test("user values only lower trusted context and max-input baselines", () => {
     const lowered = augmentRoutedModelsWithRegistryOpenAiApiRows([], openAiApiCatalogConfig({
-      modelContextWindows: { "gpt-5.6-sol": 350_000, "gpt-5.6-terra": 2_000_000 },
-      modelMaxInputTokens: { "gpt-5.6-sol": 300_000, "gpt-5.6-terra": 945_000 },
+      modelContextWindows: { "gpt-5.6-sol": 350_000, "gpt-5.6-terra": 2_000_000, "gpt-5.6-luna": 350_000 },
+      modelMaxInputTokens: { "gpt-5.6-sol": 300_000, "gpt-5.6-terra": 945_000, "gpt-5.6-luna": 900_000 },
     }));
     expect(lowered.find(row => row.id === "gpt-5.6-sol")).toMatchObject({ contextWindow: 350_000, maxInputTokens: 300_000 });
     expect(lowered.find(row => row.id === "gpt-5.6-terra")).toMatchObject({ contextWindow: 1_050_000, maxInputTokens: 922_000 });
+    expect(lowered.find(row => row.id === "gpt-5.6-luna")).toMatchObject({ contextWindow: 350_000, maxInputTokens: 350_000 });
   });
 
   test("routed auto-compaction is bounded by max-input after effective context caps", () => {

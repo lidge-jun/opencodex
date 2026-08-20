@@ -1619,6 +1619,40 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("providers.custom.modelMaxInputTokens");
   });
 
+  test("disk config validates per-model auto-compaction budgets with native exact ids", () => {
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelAutoCompactTokenLimits: { model: 1.5 },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("providers.custom.modelAutoCompactTokenLimits");
+
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+          modelAutoCompactTokenLimits: { "team/gpt-5.6-sol": 64_000 },
+        },
+      },
+      defaultProvider: "openai",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("exact supported native model id");
+  });
+
   test("disk config preserves valid OpenRouter routing and rejects invalid destinations", () => {
     writeConfig({
       port: 10100,
