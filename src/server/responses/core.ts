@@ -1165,9 +1165,19 @@ async function resolveResponsesCodexAuth(
     // and can consume that credential; a key-authenticated routed provider carries its own and
     // never touches it. Keying on the caller alone made an install that deliberately never
     // logged into ChatGPT fail every routed request with "No usable Codex main credential".
-    // `codexAccountMode` is set only for the native openai row, which is exactly that test.
+    //
+    // But ask that question the way the ADAPTER asks it. `codexAccountMode` is derived from the
+    // provider NAME (`providerCodexAccountMode`), while the passthrough adapter decides whether
+    // to forward caller credentials from the TRANSPORT — adapter, auth mode, and base URL
+    // (`isCanonicalOpenAiForwardProvider`). A row the operator named anything other than
+    // `openai`, pointed at the canonical ChatGPT backend with `authMode: "forward"`, satisfies
+    // the adapter's test and fails this one, so substitution was skipped and the adapter then
+    // forwarded our own admission secret upstream. Two predicates answering one question is the
+    // bug; the transport is the authority, because the transport is what actually carries the
+    // header. A key-authenticated routed provider is still not canonical-forward, so #2132's
+    // no-ChatGPT-login install keeps working.
     const substituteMainCredential = options.admission?.source === "bearer"
-      && route.codexAccountMode !== undefined;
+      && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(req.headers, config);
     }

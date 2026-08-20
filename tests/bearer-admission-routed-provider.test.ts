@@ -186,3 +186,73 @@ describe("#2132 bearer admission does not require a ChatGPT credential for route
   });
 });
 
+/**
+ * The predicate above must be keyed on TRANSPORT, not on the provider's name.
+ *
+ * `codexAccountMode` comes from `providerCodexAccountMode`, which special-cases the id
+ * `openai`. The passthrough adapter decides whether it may forward caller credentials from
+ * `isCanonicalOpenAiForwardProvider` — adapter, auth mode, and base URL. A row the operator
+ * named anything else, pointed at the canonical ChatGPT backend, satisfies the adapter's test
+ * and fails the name-based one. Substitution was therefore skipped and the adapter forwarded
+ * our own admission secret to ChatGPT.
+ *
+ * These assert the invariant rather than the implementation: an admission bearer must never
+ * reach the wire, whatever the row is called.
+ */
+describe("an admission bearer never reaches a canonical ChatGPT transport, whatever the row is named", () => {
+  function customNamedCanonicalConfig(): OcxConfig {
+    const base = mixedConfig();
+    return {
+      ...base,
+      defaultProvider: "mirror",
+      providers: {
+        ...base.providers,
+        // Same adapter, same authMode, same canonical base URL as the `openai` row above.
+        // Only the name differs — and the name is not what carries the header upstream.
+        mirror: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          defaultModel: "gpt-5.6-luna",
+        },
+      },
+    } as OcxConfig;
+  }
+
+  test("with no stored credential it fails closed instead of forwarding our secret", async () => {
+    saveConfig(customNamedCanonicalConfig());
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server.url, "mirror/gpt-5.6-luna");
+
+      // Fail-before-I/O is the contract (src/codex/auth-context.ts): the only two acceptable
+      // outcomes for an admission bearer are replaced-with-stored-main, or refused. Reaching
+      // upstream at all with our secret in hand is the failure this pins.
+      expect(nativeAuth.join("|")).not.toContain(ADMISSION_SECRET);
+      expect(response.status).not.toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("with a stored credential the stored one is what goes upstream", async () => {
+    saveConfig(customNamedCanonicalConfig());
+    const stored = liveJwt();
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ tokens: { access_token: stored, account_id: "stored_main_acc" } }),
+    );
+
+    const server = startServer(0);
+    try {
+      await postResponses(server.url, "mirror/gpt-5.6-luna");
+
+      expect(nativeAuth.join("|")).not.toContain(ADMISSION_SECRET);
+      for (const sent of nativeAuth) expect(sent).toBe(`Bearer ${stored}`);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
