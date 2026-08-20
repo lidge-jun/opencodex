@@ -63,6 +63,7 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
           disabled: disabled.has(`${selector}/${slug}`) || disabled.has(slug),
           contextWindow: undefined,
           maxInputTokens: undefined,
+          autoCompactTokenLimit: undefined,
         })))
     : [];
   const native: ManagementModelRow[] = [...nativeRows, ...accountNativeRows].map(row => {
@@ -82,6 +83,9 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
       // 1.05M). Dropping it here made /api/models describe a native row as if the whole
       // window were usable as input, which is the claim the measurement disproved.
       ...(row.maxInputTokens !== undefined ? { maxInputTokens: row.maxInputTokens } : {}),
+      ...(row.autoCompactTokenLimit !== undefined
+        ? { autoCompactTokenLimit: row.autoCompactTokenLimit }
+        : {}),
     };
   });
   const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {

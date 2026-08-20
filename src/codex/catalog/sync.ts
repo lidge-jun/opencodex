@@ -1158,7 +1158,7 @@ export function mergeCatalogEntriesForSync(
       isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
     )),
   ),
-  openaiContextCap?: number,
+  openaiContextCap?: NativeContextLimitsInput,
   keepNativeChatGptOnV1 = false,
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must

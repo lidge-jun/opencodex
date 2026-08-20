@@ -54,6 +54,7 @@ import {
   disabledNativeSlugs,
   desktopAllowlistSuppressedNativeSlugs,
   NATIVE_OPENAI_MODELS,
+  nativeContextLimits,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
 } from "./catalog/metadata";
@@ -286,6 +287,7 @@ function prepareCatalog(
   // selector-qualified rows when a live selector is configured.
   const observedNativeSlugs: string[] = [];
   const disabledNative = disabledNativeSlugs(config);
+  const openaiContextCap = nativeContextLimits(config);
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
     [catalog.models ?? [], ...nativeRecoverySources],
@@ -304,6 +306,7 @@ function prepareCatalog(
     suppressedBareNativeSlugs,
     disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
+    openaiContextCap,
   });
   const accountBoundEntries = accountSelectors.length === 0
     ? []
@@ -320,6 +323,7 @@ function prepareCatalog(
       disabledNativeAccountSlugs: new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      openaiContextCap,
       accountNativeSlugs,
       accountNativeSlugsBySelector,
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
@@ -352,6 +356,7 @@ function prepareCatalog(
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
+    openaiContextCap,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],
