@@ -84,6 +84,8 @@ export interface PersistedUsageEntry {
   conversationId?: string;
   resolvedModel?: string;
   requestedModel?: string;
+  /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
+  shadowCallRewrittenFrom?: string;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
   requestedEffort?: string;
   /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
@@ -427,6 +429,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const tierOutcome = entry.tierOutcome ? normalizeAttemptTierOutcome(entry.tierOutcome) : undefined;
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
   const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
+  const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
@@ -453,6 +456,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
       : {}),

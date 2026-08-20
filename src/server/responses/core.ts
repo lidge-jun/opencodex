@@ -1921,7 +1921,7 @@ async function handleResponsesInner(
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
     }
-    (logCtx as unknown as Record<string, unknown>).shadowCallRewrittenFrom = _sciOriginal;
+    logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(_sciOriginal);
     // Helpers must not resume/append into the parent thread's Cursor conversation.
     parsed._cursorIsolateConversation = true;
   }
