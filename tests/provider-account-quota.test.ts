@@ -576,4 +576,36 @@ describe("fetchProviderAccountQuotas", () => {
     const second = await fetchProviderAccountQuotas("google-antigravity", false);
     expect(fetchCalls).toBe(1);
   });
+
+  test("clamps invalid or out-of-range remainingFraction values safely", async () => {
+    const { fetchAntigravityUsageQuota } = await import("../src/providers/quota");
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": { quotaInfo: { remainingFraction: 1.5, resetTime: "2026-07-05T14:00:00Z" } },
+          "claude-sonnet-4-6": { quotaInfo: { remainingFraction: -0.2, resetTime: "2026-07-05T15:00:00Z" } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const quota = await fetchAntigravityUsageQuota("token", "project-1");
+    expect(quota).not.toBeNull();
+    const gem = quota?.customWindows?.find(w => w.label === "Gem");
+    const cla = quota?.customWindows?.find(w => w.label === "Cla");
+    expect(gem?.percent).toBe(0);
+    expect(cla?.percent).toBe(100);
+  });
+
+  test("gracefully handles non-JSON upstream 502 error responses without uncaught exceptions", async () => {
+    const { fetchAntigravityUsageQuota } = await import("../src/providers/quota");
+    globalThis.fetch = (async () => {
+      return new Response("<html><head><title>502 Bad Gateway</title></head></html>", {
+        status: 502,
+        headers: { "content-type": "text/html" },
+      });
+    }) as typeof fetch;
+
+    const quota = await fetchAntigravityUsageQuota("token", "project-1");
+    expect(quota).toBeNull();
+  });
 });

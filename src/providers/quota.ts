@@ -2088,7 +2088,7 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
       ? toFiniteNumber(quotaInfo.remainingPercentage)! * 100
       : undefined);
   if (remaining === undefined) return undefined;
-  return normalizePercent(100 - remaining);
+  return Math.min(100, Math.max(0, normalizePercent(100 - remaining) ?? 0));
 }
 
 export async function fetchAntigravityUsageQuota(
@@ -2149,6 +2149,14 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
   }
   const quota = await fetchAntigravityUsageQuota(accessToken, credential.projectId, config.baseUrl);
   if (!quota) return null;
+  const probedAccountId = getAccountSet("google-antigravity")?.activeAccountId;
+  if (probedAccountId) {
+    const probedAccountKey = accountCacheKey("google-antigravity", probedAccountId);
+    const stillOwnsToken = getAccountCredential("google-antigravity", probedAccountId)?.access === accessToken;
+    if (stillOwnsToken && mayCommitAccountQuotaKey(probedAccountKey, captureConfigGeneration())) {
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    }
+  }
   return report(provider, "google-antigravity:fetchAvailableModels", {
     ...quota,
     updatedAt: Date.now(),
