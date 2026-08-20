@@ -72,11 +72,21 @@ Rehberlik değiştiğinde öndeki araç protokolü ilk sırada kalır ve değiş
 geçerli konuşma girdisinden önce eklenir.
 
 Bunlar ana ajana verilen talimatlardır, proxy tarafında bir spawn yönlendiricisi
-değildir. v2'de tam geçmişli bir çatal üst modeli devralır ve model veya çaba
-geçersiz kılmalarını reddeder. Bu nedenle rehberlik, `model` veya
-`reasoning_effort` iletirken Codex'e `fork_turns: "none"` (veya `"3"` gibi
-pozitif bir kısmi tur sayısı) kullanmasını ve görev mesajını bağımsız hale
-getirmesini söyler.
+değildir. Codex'in kendi v2 kullanım ipucu, tam geçmişli çatalların
+(`fork_turns` atlanmış ya da `"all"`) üst modeli ve akıl yürütme çabasını
+devraldığını, bu nedenle geçersiz kılma taşımaması gerektiğini ajana söyler. Bu
+nedenle rehberlik, `model` veya `reasoning_effort` iletirken Codex'e
+`fork_turns: "none"` (veya `"3"` gibi pozitif bir kısmi tur sayısı)
+kullanmasını ve görev mesajını bağımsız hale getirmesini söyler.
+
+Bunu çalışma zamanında sert bir ret değil, istem düzeyinde bir uzlaşım olarak
+değerlendirin. Codex bir zamanlar tam geçmişli v2 çatallarında `agent_type`,
+`model` ve `reasoning_effort` değerlerini gerçekten reddediyordu
+([openai/codex#20077](https://github.com/openai/codex/issues/20077)), ancak
+[#37252](https://github.com/openai/codex/pull/37252) bu denetimi kaldırdı ve
+geçerli v2 spawn işleyicisi çatal moduna bakmaksızın model geçersiz kılmalarını
+uygular. Yine de bu uzlaşıma uymak güvenilir yoldur; çünkü ajana tam çatalda
+geçersiz kılmalardan kaçınması istem yoluyla söylenmiştir.
 
 Özel `injectionPrompt` metni dört yer tutucunun tümünü kullanabilir:
 
@@ -252,9 +262,19 @@ yetkilendirmeyeceğine kendisi karar verir.
 
 ### v2 çocuğum neden üst modeli kullandı?
 
-Tam geçmişli bir v2 çatalı üst modeli devralır. Bir model veya çaba geçersiz
-kılmasını iletmeden önce `fork_turns` değerini `"none"` veya pozitif bir kısmi
-sayıya ayarlayan bir spawn kullanın.
+`model` atlandığı her durumda üretilen ajanlar üst modeli devralır; bu, tüm
+çatal modları için varsayılan davranıştır ve tek başına tam geçmişli çatalın yol
+açtığı bir sonuç değildir. Ayrıca Codex'in yerleşik v2 kullanım ipucu, tam
+geçmişli çatalda geçersiz kılma taşınmamasını söyler; bu nedenle ajan `model`
+alanını bilinçli olarak boş bırakabilir. `fork_turns` değerini `"none"` veya
+pozitif bir kısmi sayıya ayarlayan bir spawn üzerinde açık bir `model` iletin.
+
+`model` alanı araç şemasında hiç görünmüyorsa neden çatal modu değil, alanın
+açığa çıkarılmasıdır: Codex'te
+`features.multi_agent_v2.expose_spawn_agent_model_overrides` ayarını (varsayılan
+açık) denetleyin ve collaboration şeması arka uç tarafından sabitlenen
+ChatGPT-yerel üst ajanlar için
+[openai/codex#31814](https://github.com/openai/codex/issues/31814) sayfasına bakın.
 
 ### Yapılandırılmış bir model neden v2 kadrosunda eksik?
 
@@ -315,5 +335,3 @@ sabitler.
 
 Model bağlam sınırı alt ajan modundan bağımsızdır. Modeller sayfasında
 yapılandırın; yerel OpenAI modelleri gerçek bağlam pencerelerini korur.
-
-

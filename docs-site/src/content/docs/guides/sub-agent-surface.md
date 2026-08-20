@@ -63,10 +63,18 @@ tagged item in their trusted replay prefix. Other generated guidance is reused w
 developer item exists in that prefix. When guidance changes, leading tool protocol stays first and
 the replacement is inserted before current conversational input.
 
-These are instructions to the main agent, not a proxy-side spawn router. On v2, a full-history fork
-inherits the parent model and rejects model or effort overrides. Guidance therefore tells Codex to
-use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
+These are instructions to the main agent, not a proxy-side spawn router. Codex's own v2 usage hint
+tells the agent that full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model
+and reasoning effort and should not carry overrides. Guidance therefore tells Codex to use
+`fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
 `reasoning_effort`, and to make the task message self-contained.
+
+Treat that as a prompt-level convention rather than a hard rejection. Codex once rejected
+`agent_type`, `model`, and `reasoning_effort` on a full-history v2 fork
+([openai/codex#20077](https://github.com/openai/codex/issues/20077)), but
+[#37252](https://github.com/openai/codex/pull/37252) removed that check, and the current v2 spawn
+handler applies model overrides regardless of fork mode. Following the convention is still the
+reliable path, because the agent is prompted to avoid overrides on a full fork.
 
 Custom `injectionPrompt` text can use all four placeholders:
 
@@ -219,8 +227,16 @@ main agent still decides whether to delegate.
 
 ### Why did my v2 child use the parent model?
 
-A full-history v2 fork inherits the parent model. Use a spawn that sets `fork_turns` to `"none"` or
-a positive partial count before passing a model or effort override.
+Spawned agents inherit the parent model whenever `model` is omitted, and that is the default for
+every fork mode — not something a full-history fork causes on its own. Codex's built-in v2 usage
+hint also tells the agent not to carry overrides on a full-history fork, so it may leave `model`
+unset by design. Pass an explicit `model` on a spawn that sets `fork_turns` to `"none"` or a
+positive partial count.
+
+If `model` is missing from the tool schema altogether, the cause is exposure rather than fork mode:
+check Codex's `features.multi_agent_v2.expose_spawn_agent_model_overrides` (default on), and see
+[openai/codex#31814](https://github.com/openai/codex/issues/31814) for ChatGPT-native parents whose
+collaboration schema is fixed by the backend.
 
 ### Why is a configured model missing from the v2 roster?
 

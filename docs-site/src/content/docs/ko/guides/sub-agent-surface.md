@@ -43,7 +43,9 @@ v2 로스터의 경우 적합성은 세 가지 상태로 나뉩니다. `"v2"`로
 
 `multiAgentGuidanceEnabled`는 기본적으로 켜져 있으며, opencodex가 작성한 가이드에 대한 전역 스위치입니다. 이 값을 끄면 v2 지정 블록과 v1의 능동적 안내 문구가 모두 사라집니다.
 
-이 값들은 메인 에이전트에 대한 지시이며, 프록시 쪽 스폰 라우터가 아닙니다. v2에서는 전체 히스토리 fork가 부모 모델을 상속하고 모델 또는 추론 강도 오버라이드를 거부합니다. 그래서 가이드는 `model` 또는 `reasoning_effort`를 넘길 때 `fork_turns: "none"`(또는 `"3"` 같은 양수 부분 turn 수)을 사용하고, 작업 메시지를 자체 완결형으로 만들라고 안내합니다.
+이 값들은 메인 에이전트에 대한 지시이며, 프록시 쪽 스폰 라우터가 아닙니다. Codex 자체의 v2 usage hint는 전체 히스토리 fork(`fork_turns` 생략 또는 `"all"`)가 부모 모델과 추론 강도를 상속하므로 오버라이드를 함께 넘기지 말라고 에이전트에 지시합니다. 그래서 가이드는 `model` 또는 `reasoning_effort`를 넘길 때 `fork_turns: "none"`(또는 `"3"` 같은 양수 부분 turn 수)을 사용하고, 작업 메시지를 자체 완결형으로 만들라고 안내합니다.
+
+이는 런타임이 강제하는 거부가 아니라 프롬프트 수준의 관례입니다. 과거 Codex는 전체 히스토리 v2 fork에서 `agent_type`, `model`, `reasoning_effort`를 실제로 거부했지만([openai/codex#20077](https://github.com/openai/codex/issues/20077)), [#37252](https://github.com/openai/codex/pull/37252)에서 그 검사가 제거되어 현재 v2 spawn 핸들러는 fork 모드와 무관하게 모델 오버라이드를 적용합니다. 그래도 이 관례를 따르는 편이 안전한데, 에이전트가 전체 fork에서 오버라이드를 피하도록 프롬프트로 지시받기 때문입니다.
 
 사용자 정의 `injectionPrompt`에는 다음 네 개의 플레이스홀더를 모두 쓸 수 있습니다.
 
@@ -153,7 +155,9 @@ curl -X PUT http://localhost:10100/api/injection-model \
 
 ### v2 자식이 왜 부모 모델을 썼나요?
 
-전체 히스토리 v2 fork는 부모 모델을 상속합니다. `fork_turns`를 `"none"` 또는 양수의 부분 turn 수로 설정한 spawn을 사용한 뒤 모델이나 추론 강도 오버라이드를 넘기세요.
+`model`을 생략하면 서브에이전트는 부모 모델을 상속하며, 이는 fork 모드와 무관한 기본 동작입니다. 전체 히스토리 fork 자체가 원인이 아닙니다. 또한 Codex 내장 v2 usage hint가 전체 히스토리 fork에서는 오버라이드를 넘기지 말라고 지시하므로, 에이전트가 의도적으로 `model`을 비워 둘 수 있습니다. `fork_turns`를 `"none"` 또는 양수의 부분 turn 수로 설정한 spawn에 `model`을 명시해서 넘기세요.
+
+`model` 필드가 도구 스키마에 아예 보이지 않는다면 원인은 fork 모드가 아니라 노출 설정입니다. Codex의 `features.multi_agent_v2.expose_spawn_agent_model_overrides`(기본 켜짐)를 확인하고, 백엔드가 collaboration 스키마를 고정하는 ChatGPT 네이티브 부모의 경우 [openai/codex#31814](https://github.com/openai/codex/issues/31814)를 참고하세요.
 
 ### 왜 설정한 모델이 v2 로스터에서 빠지나요?
 
