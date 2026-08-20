@@ -28,7 +28,7 @@ import {
   type OAuthActiveTokenObservation,
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { modelInList } from "../../types";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED, modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
@@ -37,7 +37,7 @@ import {
   serviceTierSupportForModel,
 } from "../../providers/service-tier";
 import type { FastPolicyAuthority } from "../../providers/fastwire";
-import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, providerModelCustomToolTransport, providerModelWireDefault } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
@@ -632,8 +632,14 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
-  const registryMode = prov.authMode === "oauth"
-    ? getProviderRegistryEntry(name)?.modelCodexToolModes?.[model.id]
+  const configuredWire = prov.modelAdapters?.[model.id];
+  const defaultWire = providerModelWireDefault(name, prov, model.id, MODEL_ADAPTER_OVERRIDE_ALLOWED, "responses");
+  const effectiveWire = configuredWire && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configuredWire)
+    ? configuredWire
+    : (defaultWire ?? prov.adapter);
+  const registryMode = effectiveWire === "openai-responses"
+    && providerModelCustomToolTransport(name, prov, model.id, "responses") === "function-json"
+    ? "code_mode" as const
     : undefined;
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);

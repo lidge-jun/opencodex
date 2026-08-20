@@ -876,6 +876,12 @@ describe("provider registry parity", () => {
     const apiKeyModel = applyProviderConfigHints("xai", { ...seed, authMode: "key" }, { id: "grok-4.5", provider: "xai" });
     expect(apiKeyModel.codexToolMode).toBeUndefined();
 
+    const optedOut = applyProviderConfigHints("xai", {
+      ...seed,
+      modelAdapters: { "grok-4.5": "openai-chat" },
+    }, { id: "grok-4.5", provider: "xai" });
+    expect(optedOut.codexToolMode).toBeUndefined();
+
     const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
     const entry = entries.find(e => e.slug === "xai/grok-4.5");
     expect(entry).toBeTruthy();

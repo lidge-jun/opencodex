@@ -116,9 +116,23 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
   // Function-only providers such as Grok can use the direct Codex helpers without composing
   // JSON -> JavaScript -> nested helper calls. Keep the old nested-helper guidance for the
   // legacy one-tool catalog, but make a projected direct surface explicitly direct-first.
-  const directEditName = ["apply_patch", "functions__apply_patch"].find(name => advertised.has(name));
-  const directShellName = ["exec_command", "shell_command", "functions__exec_command"].find(name => advertised.has(name));
+  const directEditName = uniqueNames([
+    "apply_patch", "functions__apply_patch", toWireName("apply_patch"),
+  ]).find(name => advertised.has(name));
+  const directShellName = uniqueNames([
+    "exec_command", "shell_command", "functions__exec_command",
+    toWireName("exec_command"), toWireName("shell_command"),
+  ]).find(name => advertised.has(name));
   const directFirst = Boolean(verifiedCodeModeExecName && (directEditName || directShellName));
+  const directGuidance = directFirst && verifiedCodeModeExecName
+    ? [
+      "Use a direct listed tool whenever one call completes the operation.",
+      directEditName ? "Use `" + directEditName + "` directly for targeted edits." : undefined,
+      directShellName ? "Use `" + directShellName + "` directly for reads, searches, tests, builds, formatters, and genuinely mechanical transformations." : undefined,
+      "Use `" + verifiedCodeModeExecName + "` only for JavaScript control flow, dependent calls, aggregation, error handling, internal parallelism, or a helper available only inside Code Mode.",
+      "Emit a real tool call; never print JavaScript or JSON as ordinary text.",
+    ].filter((line): line is string => typeof line === "string").join(" ")
+    : undefined;
 
   return [
     "Tool contract: use the current tool catalog as ground truth.",
@@ -128,13 +142,13 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
     "Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.",
     verifiedCodeModeExecName
       ? directFirst
-        ? "Use a direct listed tool whenever one call completes the operation. Use `" + (directEditName ?? "apply_patch") + "` directly for targeted edits and `" + (directShellName ?? "exec_command") + "` directly for reads, searches, tests, builds, formatters, and genuinely mechanical transformations. Use `" + verifiedCodeModeExecName + "` only for JavaScript control flow, dependent calls, aggregation, error handling, internal parallelism, or a helper available only inside Code Mode. Emit a real tool call; never print JavaScript or JSON as ordinary text."
+        ? directGuidance
         : "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, for example `await tools.exec_command({cmd: \"ls\"})` or `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names."
       : "If a listed tool exposes nested helpers such as a tools.* API, call the listed parent tool and use those helpers only inside that tool's input.",
     unavailableNeighborNames.length > 0
       ? "Do not use neighboring-agent tool names " + quoteNames(unavailableNeighborNames) + " unless this turn's catalog lists those exact names."
       : undefined,
-    directFirst
+    directEditName
       ? "Do not use shell redirection, Node, Python, sed, or heredocs for a targeted workspace edit when the direct edit tool is listed; wait for its result before considering any fallback."
       : undefined,
     "If you need shell, file search, file read, edit, or discovery behavior, choose the listed tool that provides that capability.",

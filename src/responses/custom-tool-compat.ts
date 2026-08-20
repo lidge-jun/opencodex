@@ -41,9 +41,7 @@ export function collectRoutedCustomToolNames(
     if (
       value.type === "custom"
       && typeof value.name === "string"
-      && (projection === "direct-first"
-        ? value.name === "exec" || value.name === "apply_patch"
-        : !ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(value.name))
+      && (projection === "direct-first" || !ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(value.name))
     ) {
       names.add(value.name);
     }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   collectRoutedCustomToolNames,
   restoreRoutedCustomCallsInJson,
@@ -6,8 +6,23 @@ import {
 } from "../src/responses/custom-tool-compat";
 import { createRoutedCustomToolRestoreBlockRewrite } from "../src/server/responses-custom-tool-repair";
 import { handleResponses } from "../src/server/responses";
+import { removeCredential, saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+beforeAll(async () => {
+  await saveCredential("xai", {
+    access: "fixture-xai-access",
+    refresh: "fixture-xai-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId: "fixture-xai-account",
+    source: "oauth",
+  });
+});
+
+afterAll(async () => {
+  await removeCredential("xai");
+});
 
 function dataPayload(block: string): Record<string, unknown> {
   const line = block.split(/\r?\n/).find(entry => entry.startsWith("data:"));
@@ -182,6 +197,39 @@ describe("routed Responses custom-tool compatibility", () => {
     const response = dataPayload(completed[0]!).response as { output: Array<Record<string, unknown>> };
     expect(response.output[0]).toMatchObject({ type: "custom_tool_call", name: "exec", input: "apps.length" });
     rewrite.dispose?.();
+  });
+
+  test("streams projected code and patch fields without losing partial input", () => {
+    for (const [name, field, input] of [
+      ["exec", "code", "text(\"café\\n\")"],
+      ["apply_patch", "patch", "*** Begin Patch\n*** End Patch\n"],
+    ] as const) {
+      const rewrite = createRoutedCustomToolRestoreBlockRewrite(new Set([name]));
+      const itemId = `fc_${name}`;
+      rewrite(frame("response.output_item.added", {
+        output_index: 0,
+        item: { type: "function_call", id: itemId, call_id: `call_${name}`, name, arguments: "", status: "in_progress" },
+      }));
+      const encoded = JSON.stringify({ [field]: input });
+      let streamed = "";
+      for (const fragment of [encoded.slice(0, 5), encoded.slice(5, 11), encoded.slice(11)]) {
+        for (const block of rewrite(frame("response.function_call_arguments.delta", {
+          output_index: 0,
+          item_id: itemId,
+          delta: fragment,
+        }))) {
+          streamed += String(dataPayload(block).delta ?? "");
+        }
+      }
+      const done = rewrite(frame("response.function_call_arguments.done", {
+        output_index: 0,
+        item_id: itemId,
+        arguments: encoded,
+      }));
+      expect(streamed).toBe(input);
+      expect(dataPayload(done[0]!).input).toBe(input);
+      rewrite.dispose?.();
+    }
   });
 
   test("buffers argument events until a missing added event is identified by item done", () => {
@@ -507,14 +555,13 @@ describe("routed Responses custom-tool compatibility", () => {
     }) as typeof fetch;
     const config = {
       port: 0,
-      defaultProvider: "fixture",
+      defaultProvider: "xai",
       providers: {
-        fixture: {
-          adapter: "openai-responses",
-          baseUrl: "https://fixture.test/v1",
-          authMode: "key",
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
           apiKey: "fixture-key",
-          customToolTransport: "function-json",
         },
       },
     } as OcxConfig;
@@ -524,7 +571,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: true,
           input: [{ role: "user", content: [{ type: "input_text", text: "list apps" }] }],
           tools: [{ type: "custom", name: "exec", description: "Run JavaScript", format: { type: "grammar", syntax: "lark" } }],
@@ -587,14 +634,13 @@ describe("routed Responses custom-tool compatibility", () => {
     }) as typeof fetch;
     const config = {
       port: 0,
-      defaultProvider: "fixture",
+      defaultProvider: "xai",
       providers: {
-        fixture: {
-          adapter: "openai-responses",
-          baseUrl: "https://fixture.test/v1",
-          authMode: "key",
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
           apiKey: "fixture-key",
-          customToolTransport: "function-json",
         },
       },
     } as OcxConfig;
@@ -605,7 +651,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: true,
           input: [{ role: "user", content: [{ type: "input_text", text: "list apps" }] }],
           tools,
@@ -620,7 +666,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: true,
           input: [
             { role: "user", content: [{ type: "input_text", text: "list apps" }] },
@@ -684,14 +730,13 @@ describe("routed Responses custom-tool compatibility", () => {
     }), { headers: { "content-type": "application/json" } })) as typeof fetch;
     const config = {
       port: 0,
-      defaultProvider: "fixture",
+      defaultProvider: "xai",
       providers: {
-        fixture: {
-          adapter: "openai-responses",
-          baseUrl: "https://fixture.test/v1",
-          authMode: "key",
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
           apiKey: "fixture-key",
-          customToolTransport: "function-json",
         },
       },
     } as OcxConfig;
@@ -701,7 +746,7 @@ describe("routed Responses custom-tool compatibility", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model: "xai/grok-4.6",
           stream: false,
           input: [{ role: "user", content: [{ type: "input_text", text: "list apps" }] }],
           tools: [{ type: "custom", name: "exec", description: "Run JavaScript", format: { type: "grammar", syntax: "lark" } }],
