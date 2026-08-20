@@ -1475,13 +1475,13 @@ test("CCA fetch network failure returns 400 without leaking the timeout timer", 
   }
 }, 5_000);
 
-test("CCA body-read timeout returns 504 when upstream stalls after sending headers", async () => {
+test("CCA body-read timeout returns 400 when upstream stalls after sending headers", async () => {
   // Mock: CCA returns 200 OK headers immediately but the body stream never
   // produces data. The linked signal's timeout aborts reader.read(), which
-  // must be caught and mapped to 504. The abort surfaces as a generic
+  // must be caught and mapped to 400 because the paid POST may have started.
+  // The abort surfaces as a generic
   // AbortError (not TimeoutError) — just like in production Bun — so the
-  // signal-state check (linkedSignal.signal.aborted) is what maps it, not
-  // err.name matching.
+  // signal-state check (linkedSignal.signal.aborted) identifies it.
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
@@ -1520,14 +1520,49 @@ test("CCA body-read timeout returns 504 when upstream stalls after sending heade
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt: "a cat" }),
     });
-    expect(response.status).toBe(504);
+    expect(response.status).toBe(400);
     const json = await response.json() as { error: { message: string } };
-    // Either the body-read timeout message or the general timeout message.
-    expect(json.error.message).toMatch(/body read|timed out/i);
+    expect(json.error.message).toMatch(/may have started|must not be blindly retried/i);
   } finally {
     await server.stop(true);
   }
 }, 5_000);
+
+test("CCA body-read transport failure returns 400 after headers are received", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      const brokenBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new TypeError("connection reset after headers"));
+        },
+      });
+      return new Response(brokenBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  saveConfig({ ...ccaConfig(), images: { timeoutMs: 1_000 } } as OcxConfig);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toMatch(/may have started|must not be blindly retried/i);
+  } finally {
+    await server.stop(true);
+  }
+});
 
 test("CCA body-read client cancellation returns 499, not 504", async () => {
   // Regression for Wibias R4 finding 1: when the client aborts during the body-read
