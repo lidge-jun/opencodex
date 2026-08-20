@@ -110,6 +110,17 @@ In-flight requests keep their captured credentials, and a 401/403 reauthenticati
 may clear affinity and rotate to another eligible Pool account. This is separate from `openai-apikey`
 and other providers.
 
+:::caution[Provider-policy responsibility]
+The account pool is a technical account-management, routing, and resilience feature. It does not
+claim that having multiple accounts is itself prohibited; compliance depends on the account setup and
+use pattern. OpenCodex does not endorse using additional accounts to circumvent rate limits, quotas,
+plan limits, or other provider restrictions, or sharing account credentials between people. You are
+responsible for complying with the provider's current terms for every connected account and use
+pattern. Provider restrictions, suspension, or termination are outside OpenCodex's control;
+maintainers do not provide policy advice and cannot resolve provider enforcement. Review
+[OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/).
+:::
+
 - Manually choosing an account applies immediately: an already-bound thread moves to it on its next
   request, and only requests already in flight keep the account they captured. A manual choice is also
   pinned: the card shows a **PINNED** badge, and a higher selection order cannot preempt that account

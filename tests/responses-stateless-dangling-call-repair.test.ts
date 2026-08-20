@@ -125,6 +125,45 @@ describe("stateless Responses wire repairs orphaned tool calls", () => {
     expect(String((input[4] as { output: unknown }).output)).toContain("no tool result was recorded");
   });
 
+  test("repairs many separated dangling calls without recursive reprocessing", async () => {
+    const callCount = 20_000;
+    const requestInput = Array.from({ length: callCount }, (_, index) => [
+      { type: "function_call", id: `fc_${index}`, call_id: `call_${index}`, name: "exec_command", arguments: "{}" },
+      { type: "message", role: "user", content: [{ type: "input_text", text: `separator ${index}` }] },
+    ]).flat();
+
+    const { body } = await drive(requestInput);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input).toHaveLength(callCount * 3);
+    expect(input[0]).toMatchObject({ type: "function_call", call_id: "call_0" });
+    expect(input[1]).toMatchObject({ type: "function_call_output", call_id: "call_0" });
+    expect(input.at(-3)).toMatchObject({ type: "function_call", call_id: `call_${callCount - 1}` });
+    expect(input.at(-2)).toMatchObject({ type: "function_call_output", call_id: `call_${callCount - 1}` });
+    expect(input.at(-1)).toMatchObject({ type: "message" });
+  });
+
+  test("consumes repeated output-key indexes once without dropping repaired items", async () => {
+    const callCount = 2_000;
+    const requestInput = Array.from({ length: callCount }, (_, index) => [
+      { type: "function_call", id: `fc_repeat_${index}`, call_id: "call_repeat", name: "exec_command", arguments: "{}" },
+      { type: "message", role: "user", content: [{ type: "input_text", text: `separator ${index}` }] },
+    ]).flat();
+
+    const { body } = await drive(requestInput);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input).toHaveLength(callCount * 3);
+    expect(input.filter(item => item.type === "function_call")).toHaveLength(callCount);
+    expect(input.filter(item => item.type === "function_call_output")).toHaveLength(callCount);
+    expect(input.filter(item => item.type === "message")).toHaveLength(callCount);
+    for (let index = 0; index < callCount; index += 1) {
+      expect(input.slice(index * 3, index * 3 + 3)).toMatchObject([
+        { type: "function_call", call_id: "call_repeat" },
+        { type: "function_call_output", call_id: "call_repeat" },
+        { type: "message", content: [{ type: "input_text", text: `separator ${index}` }] },
+      ]);
+    }
+  });
+
   test("leaves intact call/output pairs untouched", async () => {
     const { body } = await drive([
       { type: "function_call", id: "fc_ok", call_id: "call_ok", name: "exec_command", arguments: "{}" },
