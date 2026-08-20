@@ -732,7 +732,7 @@ const providerConfigSchema = z.object({
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
   // operator asked for shell mode, got code mode, and was told nothing (#2106).
-  codexToolMode: z.enum(["code_mode_only", "shell"]).optional(),
+  codexToolMode: z.enum(["code_mode", "code_mode_only", "shell"]).optional(),
   responsesItemIdRepair: z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),

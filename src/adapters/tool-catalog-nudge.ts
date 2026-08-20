@@ -113,6 +113,13 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
   );
   const verifiedCodeModeExecName = codeModeExecWireName(advertised, codeModeExecName);
 
+  // Function-only providers such as Grok can use the direct Codex helpers without composing
+  // JSON -> JavaScript -> nested helper calls. Keep the old nested-helper guidance for the
+  // legacy one-tool catalog, but make a projected direct surface explicitly direct-first.
+  const directEditName = ["apply_patch", "functions__apply_patch"].find(name => advertised.has(name));
+  const directShellName = ["exec_command", "shell_command", "functions__exec_command"].find(name => advertised.has(name));
+  const directFirst = Boolean(verifiedCodeModeExecName && (directEditName || directShellName));
+
   return [
     "Tool contract: use the current tool catalog as ground truth.",
     "Valid tool names for this turn are exactly " + quoteNames(names) + ".",
@@ -120,10 +127,15 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
     "Call only listed names with their listed argument keys; do not invent, translate, or rename tools.",
     "Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.",
     verifiedCodeModeExecName
-      ? "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, for example `await tools.exec_command({cmd: \"ls\"})` or `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names."
+      ? directFirst
+        ? "Use a direct listed tool whenever one call completes the operation. Use `" + (directEditName ?? "apply_patch") + "` directly for targeted edits and `" + (directShellName ?? "exec_command") + "` directly for reads, searches, tests, builds, formatters, and genuinely mechanical transformations. Use `" + verifiedCodeModeExecName + "` only for JavaScript control flow, dependent calls, aggregation, error handling, internal parallelism, or a helper available only inside Code Mode. Emit a real tool call; never print JavaScript or JSON as ordinary text."
+        : "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, for example `await tools.exec_command({cmd: \"ls\"})` or `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names."
       : "If a listed tool exposes nested helpers such as a tools.* API, call the listed parent tool and use those helpers only inside that tool's input.",
     unavailableNeighborNames.length > 0
       ? "Do not use neighboring-agent tool names " + quoteNames(unavailableNeighborNames) + " unless this turn's catalog lists those exact names."
+      : undefined,
+    directFirst
+      ? "Do not use shell redirection, Node, Python, sed, or heredocs for a targeted workspace edit when the direct edit tool is listed; wait for its result before considering any fallback."
       : undefined,
     "If you need shell, file search, file read, edit, or discovery behavior, choose the listed tool that provides that capability.",
     "Count a tool call only after its tool result returns; batch independent read-only calls when the runtime supports it.",
@@ -141,8 +153,13 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
   // to wire names first throws away the only thing that distinguishes Codex's JavaScript
   // `exec` from an ordinary structured tool that happens to share the name.
   const codeModeExecTool = visible?.find(isCodexCodeModeExecTool);
+  const hasDirectEditTool = visible?.some(tool => !tool.namespace && tool.name === "apply_patch");
   const codeModeExecName = codeModeExecTool
-    && !visible?.some(isBareShellBridgeTool)
+    // A bare shell bridge normally identifies the legacy flat-tool shape rather than Code
+    // Mode. The hybrid direct-first surface is the intentional exception: its first-class
+    // apply_patch tool proves that exec and exec_command are being advertised together rather
+    // than that an ordinary structured shell tool merely happens to be named exec.
+    && (!visible?.some(isBareShellBridgeTool) || hasDirectEditTool)
     ? toWireName(codeModeExecTool)
     : undefined;
   // Neighbor names are bare and un-namespaced, so probe the same transform with a bare tool.

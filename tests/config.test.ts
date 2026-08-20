@@ -802,7 +802,7 @@ describe("opencodex config defaults", () => {
   });
 
   test("accepts both codexToolMode values and rejects a misspelled one (#2106)", () => {
-    for (const codexToolMode of ["code_mode_only", "shell"] as const) {
+    for (const codexToolMode of ["code_mode", "code_mode_only", "shell"] as const) {
       writeConfig({
         port: 12345,
         providers: {

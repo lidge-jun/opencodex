@@ -20,7 +20,7 @@ function frame(event: string, payload: Record<string, unknown>): string {
 }
 
 describe("routed Responses custom-tool compatibility", () => {
-  test("rewrites exec definitions and paired history without touching apply_patch", () => {
+  test("projects exec and apply_patch definitions and paired history onto native function fields", () => {
     const raw = {
       model: "deepseek-v4-flash",
       tools: [
@@ -36,35 +36,51 @@ describe("routed Responses custom-tool compatibility", () => {
       ],
     };
 
-    expect(collectRoutedCustomToolNames(raw)).toEqual(new Set(["exec"]));
-    const rewritten = rewriteRoutedCustomToolsForUpstream(raw);
-    expect(rewritten.names).toEqual(new Set(["exec"]));
+    expect(collectRoutedCustomToolNames(raw, "direct-first")).toEqual(new Set(["exec", "apply_patch"]));
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, "direct-first");
+    expect(rewritten.names).toEqual(new Set(["exec", "apply_patch"]));
     expect(rewritten.body).not.toBe(raw);
     expect(raw.tools[0]?.type).toBe("custom");
 
     const body = rewritten.body as typeof raw;
-    expect(body.tools[0]).toMatchObject({
+    const execTool = body.tools.find(tool => tool.name === "exec");
+    const patchTool = body.tools.find(tool => tool.name === "apply_patch");
+    expect(body.tools.map(tool => tool.name)).toEqual(["apply_patch", "ordinary", "exec"]);
+    expect(execTool).toMatchObject({
       type: "function",
       name: "exec",
       parameters: {
         type: "object",
-        properties: { input: { type: "string" } },
-        required: ["input"],
+        properties: { code: { type: "string" } },
+        required: ["code"],
       },
     });
-    expect(body.tools[0]).not.toHaveProperty("format");
-    expect(body.tools[1]).toEqual(raw.tools[1]);
-    expect(body.tools[2]).toEqual(raw.tools[2]);
+    expect(execTool).not.toHaveProperty("format");
+    expect(patchTool).toMatchObject({
+      type: "function",
+      name: "apply_patch",
+      parameters: {
+        type: "object",
+        properties: { patch: { type: "string" } },
+        required: ["patch"],
+      },
+    });
+    expect(body.tools[1]).toEqual(raw.tools[2]);
     expect(body.input[0]).toMatchObject({
       type: "function_call",
       call_id: "call_exec",
       name: "exec",
-      arguments: JSON.stringify({ input: "await sky.list_apps()" }),
+      arguments: JSON.stringify({ code: "await sky.list_apps()" }),
     });
     expect(body.input[0]).not.toHaveProperty("input");
     expect(body.input[1]).toMatchObject({ type: "function_call_output", call_id: "call_exec" });
-    expect(body.input[2]).toEqual(raw.input[2]);
-    expect(body.input[3]).toEqual(raw.input[3]);
+    expect(body.input[2]).toMatchObject({
+      type: "function_call",
+      call_id: "call_patch",
+      name: "apply_patch",
+      arguments: JSON.stringify({ patch: "*** Begin Patch" }),
+    });
+    expect(body.input[3]).toMatchObject({ type: "function_call_output", call_id: "call_patch" });
   });
 
   test("restores non-streaming exec calls while leaving ordinary functions alone", () => {
@@ -498,6 +514,7 @@ describe("routed Responses custom-tool compatibility", () => {
           baseUrl: "https://fixture.test/v1",
           authMode: "key",
           apiKey: "fixture-key",
+          customToolTransport: "function-json",
         },
       },
     } as OcxConfig;
@@ -577,6 +594,7 @@ describe("routed Responses custom-tool compatibility", () => {
           baseUrl: "https://fixture.test/v1",
           authMode: "key",
           apiKey: "fixture-key",
+          customToolTransport: "function-json",
         },
       },
     } as OcxConfig;
@@ -627,7 +645,7 @@ describe("routed Responses custom-tool compatibility", () => {
           type: "function_call",
           call_id: "call_exec",
           name: "exec",
-          arguments: JSON.stringify({ input: "const apps = await sky.list_apps();" }),
+          arguments: JSON.stringify({ code: "const apps = await sky.list_apps();" }),
         }),
         expect.objectContaining({
           type: "function_call_output",
@@ -673,6 +691,7 @@ describe("routed Responses custom-tool compatibility", () => {
           baseUrl: "https://fixture.test/v1",
           authMode: "key",
           apiKey: "fixture-key",
+          customToolTransport: "function-json",
         },
       },
     } as OcxConfig;

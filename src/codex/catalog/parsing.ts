@@ -128,10 +128,11 @@ export interface CatalogModel {
   supportsReasoningSummaries?: boolean;
   /**
    * Codex tool calling mode for this routed model.
+   * "code_mode" selects a direct-first routed surface and serializes entry.tool_mode = "code_mode".
    * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only".
    * "shell" leaves tool_mode unset so Codex declares top-level shell tools (exec_command).
    */
-  codexToolMode?: "code_mode_only" | "shell";
+  codexToolMode?: "code_mode" | "code_mode_only" | "shell";
   /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
   capabilities?: string[];
   /** OpenCodex-only catalog ownership marker; Codex ignores the serialized extension field. */
@@ -431,10 +432,14 @@ export const ROUTED_CODEX_TOOL_MODE = "code_mode_only";
 
 export function applyRoutedCodexToolMode(
   entry: RawEntry,
-  toolMode?: "code_mode_only" | "shell" | string,
+  toolMode?: "code_mode" | "code_mode_only" | "shell" | string,
 ): RawEntry {
   if (toolMode === "shell") {
     delete entry.tool_mode;
+    return entry;
+  }
+  if (toolMode === "code_mode") {
+    entry.tool_mode = "code_mode";
     return entry;
   }
   entry.tool_mode = ROUTED_CODEX_TOOL_MODE;
@@ -506,7 +511,7 @@ export function applyMultiAgentMode(
 export function normalizeRoutedCatalogEntry(
   entry: RawEntry,
   parallelToolCalls = false,
-  toolMode?: "code_mode_only" | "shell" | string,
+  toolMode?: "code_mode" | "code_mode_only" | "shell" | string,
 ): RawEntry {
   delete entry.model_messages;
   delete entry.tool_mode;

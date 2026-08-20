@@ -632,7 +632,9 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
-  void name;
+  const registryMode = prov.authMode === "oauth"
+    ? getProviderRegistryEntry(name)?.modelCodexToolModes?.[model.id]
+    : undefined;
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   let inputModalities = configuredInputModalities(prov, model.id);
@@ -676,6 +678,9 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     // advertise only on explicit opt-in.
     ...(prov.parallelToolCalls === true || (prov.adapter === "openai-chat" && prov.parallelToolCalls !== false)
       ? { parallelToolCalls: true }
+      : {}),
+    ...(registryMode !== undefined && model.codexToolMode === undefined
+      ? { codexToolMode: registryMode }
       : {}),
     ...(prov.codexToolMode !== undefined ? { codexToolMode: prov.codexToolMode } : {}),
   };

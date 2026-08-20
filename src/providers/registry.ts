@@ -39,6 +39,7 @@ export type ModelWireDefault = string | {
   authModes?: readonly ProviderAuthKind[];
   /** Whether this registry-selected route may relay a caller-owned service_tier. */
   forwardCallerServiceTier?: boolean;
+  customToolTransport?: "freeform" | "function-json";
 };
 
 export interface ResponsesTerminalRepairPolicy {
@@ -126,6 +127,8 @@ export interface ProviderRegistryEntry {
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
+  /** Registry-only per-model routed tool surface capability. */
+  modelCodexToolModes?: Record<string, OcxProviderConfig["codexToolMode"]>;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;
   allowPrivateNetworkByDefault?: boolean;
@@ -1002,6 +1005,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     baseUrl: "https://api.x.ai/v1",
     authKind: "oauth",
+    modelCodexToolModes: {
+      "grok-4.5": "code_mode",
+      "grok-4.6": "code_mode",
+    },
     allowKeyAuthOverride: true,
     featured: true,
     oauthId: "xai",
@@ -1032,12 +1039,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
+        customToolTransport: "function-json",
         forwardCallerServiceTier: false,
       },
       "grok-4.5": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
+        customToolTransport: "function-json",
         forwardCallerServiceTier: false,
       },
     },
@@ -2752,6 +2761,22 @@ export function providerModelWireDefault(
   }
   const wire = typeof declared === "string" ? declared : declared.wire;
   return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
+}
+
+export function providerModelCustomToolTransport(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+  inbound: InboundWire = "responses",
+): "freeform" | "function-json" | undefined {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  if (!declared || typeof declared === "string") return undefined;
+  if (declared.wire !== "openai-responses" || !declared.inbound.includes(inbound)) return undefined;
+  const authMode = provider.authMode ?? entry.authKind;
+  if (declared.authModes && !declared.authModes.includes(authMode)) return undefined;
+  return declared.customToolTransport;
 }
 
 /** Resolve a registry-only upstream-streaming compatibility hint for Responses turns. */
