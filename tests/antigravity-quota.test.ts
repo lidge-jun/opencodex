@@ -1,91 +1,3 @@
-import { expect, test } from "bun:test";
-import { fetchAntigravityLiveQuota } from "../src/providers/antigravity-quota";
-import { QUOTA_RESPONSE_MAX_BYTES } from "../src/providers/quota";
-
-test("does not classify an unlabelled daily summary window as weekly", async () => {
-  const requestOptions: Array<{ url: string; init?: RequestInit }> = [];
-  const result = await fetchAntigravityLiveQuota({
-    accessToken: "agy-access-secret",
-    projectId: "agy-project-secret",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-    timeoutMs: 1_000,
-    fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      requestOptions.push({ url, init });
-      if (url.endsWith(":retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          models: {
-            "gemini-test": { quotaInfo: { remainingFraction: 0.5 } },
-          },
-        }), { status: 200 });
-      }
-      if (url.endsWith(":retrieveUserQuotaSummary")) {
-        return new Response(JSON.stringify({
-          daily: { remainingFraction: 0.75 },
-        }), { status: 200 });
-      }
-      return new Response("not found", { status: 404 });
-    },
-  });
-
-  expect(result?.customWindows?.[0]?.label).toBe("Gem");
-  expect(result?.weeklyPercent).toBeUndefined();
-  expect(
-    requestOptions
-      .filter(({ url }) => url.includes(":retrieveUserQuota"))
-      .map(({ init }) => init?.redirect),
-  ).toEqual(["error", "error"]);
-});
-
-test("keeps the daily quota when the summary RPC fails", async () => {
-  const result = await fetchAntigravityLiveQuota({
-    accessToken: "agy-access-secret",
-    projectId: "agy-project-secret",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-    timeoutMs: 1_000,
-    fetchImpl: async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith(":retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          buckets: [
-            { modelId: "gemini-test", remainingFraction: 0.5 },
-          ],
-        }), { status: 200 });
-      }
-      if (url.endsWith(":retrieveUserQuotaSummary")) return new Response("unavailable", { status: 503 });
-      return new Response("not found", { status: 404 });
-    },
-  });
-
-  expect(result?.customWindows).toEqual([{ label: "Gem", percent: 50 }]);
-  expect(result?.weeklyPercent).toBeUndefined();
-});
-
-test("treats a daily quota JSON read failure as an RPC failure", async () => {
-  const result = await fetchAntigravityLiveQuota({
-    accessToken: "agy-access-secret",
-    projectId: "agy-project-secret",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-    timeoutMs: 1_000,
-    fetchImpl: async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith(":retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          padding: "x".repeat(QUOTA_RESPONSE_MAX_BYTES),
-        }), { status: 200 });
-      }
-      if (url.endsWith(":retrieveUserQuotaSummary")) {
-        return new Response(JSON.stringify({
-          weekly: { remainingPercentage: 75 },
-        }), { status: 200 });
-      }
-      return new Response("not found", { status: 404 });
-    },
-  });
-
-  expect(result).toBeNull();
-});
-
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -183,10 +95,121 @@ afterEach(() => {
   rmSync(opencodexHome, { recursive: true, force: true });
 });
 
+test("does not classify an unlabelled daily summary window as weekly", async () => {
+  const requestOptions: Array<{ url: string; init?: RequestInit }> = [];
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: "agy-access-secret",
+    projectId: "agy-project-secret",
+    baseUrl: DAILY_HOST,
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requestOptions.push({ url, init });
+      if (url.endsWith(":retrieveUserQuota")) {
+        return jsonResponse({
+          buckets: [
+            { modelId: "gemini-test", remainingFraction: 0.5 },
+          ],
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return jsonResponse({
+          daily: { remainingFraction: 0.75 },
+        });
+      }
+      return jsonResponse({}, 404);
+    },
+  });
+
+  expect(result?.customWindows?.[0]?.label).toBe("Gem");
+  expect(result?.weeklyPercent).toBeUndefined();
+  expect(
+    requestOptions
+      .filter(({ url }) => url.includes(":retrieveUserQuota"))
+      .map(({ init }) => init?.redirect),
+  ).toEqual(["error", "error"]);
+});
+
+test("keeps the daily quota when the summary RPC fails", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: "agy-access-secret",
+    projectId: "agy-project-secret",
+    baseUrl: DAILY_HOST,
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return jsonResponse({
+          buckets: [
+            { modelId: "gemini-test", remainingFraction: 0.5 },
+          ],
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) return jsonResponse({}, 503);
+      return jsonResponse({}, 404);
+    },
+  });
+
+  expect(result?.customWindows).toEqual([{ label: "Gem", percent: 50 }]);
+  expect(result?.weeklyPercent).toBeUndefined();
+});
+
+test("treats a daily quota JSON read failure as an RPC failure", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: "agy-access-secret",
+    projectId: "agy-project-secret",
+    baseUrl: DAILY_HOST,
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return oversizedJsonResponse({
+          buckets: [
+            { modelId: "gemini-3.6-pro", remainingFraction: 0.01 },
+          ],
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return jsonResponse({
+          weekly: { remainingPercentage: 75 },
+        });
+      }
+      return jsonResponse({}, 404);
+    },
+  });
+
+  expect(result).toBeNull();
+});
+
+test("does not parse gemini from ancestor JSON path keys", async () => {
+  const result = await fetchAntigravityLiveQuota({
+    accessToken: TOKEN,
+    projectId: PROJECT,
+    baseUrl: DAILY_HOST,
+    timeoutMs: 1_000,
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(":retrieveUserQuota")) {
+        return jsonResponse({
+          "gemini-quotas": {
+            items: [{ remainingFraction: 0.5 }],
+          },
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) return jsonResponse({}, 404);
+      return jsonResponse({}, 404);
+    },
+  });
+
+  expect(result?.customWindows).toBeUndefined();
+});
+
 describe("Antigravity live quota", () => {
   test("merges live Gemini and weekly quota with catalog-only Claude windows", async () => {
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const requestOptions: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      requestOptions.push({ url, init });
       if (url.endsWith(":retrieveUserQuota")) {
         return jsonResponse({
           buckets: [
@@ -213,6 +236,7 @@ describe("Antigravity live quota", () => {
     ]);
     expect(report?.quota.weeklyPercent).toBe(25);
     expect(report?.quota.weeklyResetAt).toBe(Date.parse("2026-08-25T00:00:00Z"));
+    expect(requestOptions.every(({ init }) => init?.redirect === "error")).toBe(true);
   });
 
   test("retries the production host after daily retrieveUserQuota returns 404", async () => {
@@ -299,7 +323,7 @@ describe("Antigravity live quota", () => {
     expect(report?.quota.weeklyPercent).toBeUndefined();
   });
 
-  test("does not fetch the production host after daily retrieveUserQuota returns 401", async () => {
+  test("does not fetch production or catalog after daily retrieveUserQuota returns 401", async () => {
     const requested: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -307,7 +331,7 @@ describe("Antigravity live quota", () => {
       if (url === `${DAILY_HOST}/v1internal:retrieveUserQuota`) return jsonResponse({}, 401);
       if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
       if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
-      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      if (url.endsWith(":fetchAvailableModels")) return jsonResponse({}, 404);
       return jsonResponse({}, 404);
     }) as typeof fetch;
 
@@ -315,10 +339,11 @@ describe("Antigravity live quota", () => {
 
     expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
     expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
-    expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
+    expect(requested.filter(url => url.endsWith(":fetchAvailableModels"))).toEqual([]);
+    expect(result.reports).toEqual([]);
   });
 
-  test("does not fetch the production host when daily retrieveUserQuota 401 races a 404 summary", async () => {
+  test("does not fetch production or catalog when daily retrieveUserQuota 401 races a 404 summary", async () => {
     const requested: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -330,7 +355,7 @@ describe("Antigravity live quota", () => {
       if (url === `${DAILY_HOST}/v1internal:retrieveUserQuotaSummary`) return jsonResponse({}, 404);
       if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
       if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
-      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      if (url.endsWith(":fetchAvailableModels")) return jsonResponse({}, 404);
       return jsonResponse({}, 404);
     }) as typeof fetch;
 
@@ -338,15 +363,36 @@ describe("Antigravity live quota", () => {
 
     expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
     expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
-    expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
+    expect(requested.filter(url => url.endsWith(":fetchAvailableModels"))).toEqual([]);
+    expect(result.reports).toEqual([]);
   });
 
-  test("does not fetch the production host after daily retrieveUserQuota returns 429", async () => {
+  test("does not fetch production or catalog after daily retrieveUserQuota returns 429", async () => {
     const requested: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       requested.push(url);
       if (url === `${DAILY_HOST}/v1internal:retrieveUserQuota`) return jsonResponse({}, 429);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      if (url.endsWith(":fetchAvailableModels")) return jsonResponse({}, 503);
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(), true);
+
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
+    expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
+    expect(requested.filter(url => url.endsWith(":fetchAvailableModels"))).toEqual([]);
+    expect(result.reports).toEqual([]);
+  });
+
+  test("does not fetch production or catalog after daily retrieveUserQuota returns 403", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === `${DAILY_HOST}/v1internal:retrieveUserQuota`) return jsonResponse({}, 403);
       if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
       if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
       if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
@@ -357,6 +403,30 @@ describe("Antigravity live quota", () => {
 
     expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
     expect(requested.filter(url => url.startsWith(PROD_HOST))).toEqual([]);
+    expect(requested.filter(url => url.endsWith(":fetchAvailableModels"))).toEqual([]);
+    expect(result.reports).toEqual([]);
+  });
+
+  test("does not fail over to daily or prod for a custom baseUrl on 404/503", async () => {
+    const customHost = "https://custom-proxy.example.com";
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.startsWith(customHost) && url.includes(":retrieveUserQuota")) return jsonResponse({}, 404);
+      if (url.startsWith(customHost) && url.includes(":retrieveUserQuotaSummary")) return jsonResponse({}, 503);
+      if (url.endsWith(":fetchAvailableModels")) return catalogResponse();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(config(customHost), true);
+
+    expect(requested.filter(url => url.startsWith(DAILY_HOST) || url.startsWith(PROD_HOST))).toEqual([]);
+    expect(requested.filter(url => url.startsWith(customHost))).toEqual([
+      `${customHost}/v1internal:retrieveUserQuota`,
+      `${customHost}/v1internal:retrieveUserQuotaSummary`,
+      `${customHost}/v1internal:fetchAvailableModels`,
+    ]);
     expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
   });
 
@@ -382,9 +452,7 @@ describe("Antigravity live quota", () => {
     expect(requested.filter(url => url.startsWith("http://"))).toEqual([]);
     expect(requested).not.toContain(`${httpHost}/v1internal:retrieveUserQuota`);
     expect(requested).not.toContain(`${httpHost}/v1internal:retrieveUserQuotaSummary`);
-    expect(quota?.customWindows).toEqual([
-      { label: "Gem", percent: 60, resetAt: Date.parse("2026-08-19T12:00:00Z") },
-    ]);
+    expect(quota).toBeNull();
   });
 
   test("does not POST fetchAvailableModels to an http host", async () => {
