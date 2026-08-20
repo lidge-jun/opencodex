@@ -2,7 +2,10 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   GEMINI_AI_STUDIO_PROVIDER,
   GEMINI_CODE_ASSIST_PROVIDER,
+  GeminiOAuthClientNotConfiguredError,
   discoverGeminiProject,
+  discoverGeminiProjectOutcome,
+  geminiOAuthClient,
   geminiSubtypeForProvider,
   isGeminiOAuthSubtypeConfigured,
   refreshGeminiToken,
@@ -37,14 +40,30 @@ describe("gemini oauth subtypes", () => {
     expect(geminiSubtypeForProvider(GEMINI_AI_STUDIO_PROVIDER)).toBe("ai-studio");
   });
 
-  test("code-assist is always configured; ai-studio needs operator client credentials", () => {
+  test("code-assist carries the built-in CLI client", () => {
     expect(isGeminiOAuthSubtypeConfigured("code-assist")).toBe(true);
+    const client = geminiOAuthClient("code-assist");
+    expect(client.clientId).toBeTruthy();
+    expect(client.clientSecret).toBeTruthy();
+    expect(client.scopes).toContain("https://www.googleapis.com/auth/cloud-platform");
+  });
+
+  test("ai-studio fails closed with an actionable error when no operator client is registered", () => {
     // The built-in Gemini CLI client is not registered for the generative-language scopes, so
     // this subtype must fail closed rather than send a request Google rejects as restricted_client.
-    const configured = isGeminiOAuthSubtypeConfigured("ai-studio");
+    // geminiOAuthClient reads module-level constants captured at import, so process.env cannot be
+    // mutated here; branch on the ambient value and assert the contract that holds either way.
     const hasOperatorClient = !!process.env.GEMINI_AI_STUDIO_OAUTH_CLIENT_ID?.trim()
       && !!process.env.GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET?.trim();
-    expect(configured).toBe(hasOperatorClient);
+    if (hasOperatorClient) {
+      expect(geminiOAuthClient("ai-studio").clientId).toBeTruthy();
+      return;
+    }
+    expect(isGeminiOAuthSubtypeConfigured("ai-studio")).toBe(false);
+    expect(() => geminiOAuthClient("ai-studio")).toThrow(GeminiOAuthClientNotConfiguredError);
+    // The message must name both variables, or the dashboard hint tells the user nothing.
+    expect(() => geminiOAuthClient("ai-studio"))
+      .toThrow(/GEMINI_AI_STUDIO_OAUTH_CLIENT_ID[\s\S]*GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET/);
   });
 
   test("both subtypes are registered as public OAuth providers derived from the registry", () => {
@@ -57,6 +76,13 @@ describe("gemini oauth subtypes", () => {
       expect(OAUTH_PROVIDERS[id]!.providerConfig).toBeDefined();
       expect(OAUTH_PROVIDERS[id]!.defaultModel).toBeTruthy();
     }
+  });
+
+  test("code-assist stays lazy-only so proactive refresh cannot multiply first-party-client traffic", () => {
+    // Each Code Assist refresh also re-runs project discovery against Google's own CLI client
+    // identifiers. Pinned here because the default when unset is silently "lazy-only" too, so a
+    // drift to "proactive" would otherwise pass unnoticed.
+    expect(OAUTH_PROVIDERS[GEMINI_CODE_ASSIST_PROVIDER]!.defaultRefreshPolicy).toBe("lazy-only");
   });
 
   test("registry pins each subtype's googleMode and host", () => {
@@ -153,6 +179,59 @@ describe("gemini code assist project discovery", () => {
     expect(await discoverGeminiProject("tok")).toBe("proj-T");
     expect(onboardCalls).toBe(2);
   });
+
+  test("transient retries do not consume the in-progress polling budget", async () => {
+    // Regression: one shared counter let a couple of 5xx responses exhaust the budget before
+    // onboarding could finish, turning a slow first-time provision into a login failure.
+    let onboardCalls = 0;
+    routeFetch((url) => {
+      if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({}), { status: 200 });
+      if (url.includes(":onboardUser")) {
+        onboardCalls++;
+        // Two transient failures, then four in-progress polls: more than the 5-attempt budget
+        // would allow if both drew from the same counter.
+        if (onboardCalls <= 2) return new Response("busy", { status: 503 });
+        if (onboardCalls <= 6) return new Response(JSON.stringify({ done: false }), { status: 200 });
+        return new Response(JSON.stringify({ done: true, response: { cloudaicompanionProject: "proj-slow" } }), { status: 200 });
+      }
+      return new Response("no", { status: 404 });
+    });
+    expect(await discoverGeminiProject("tok")).toBe("proj-slow");
+    // 2 transient sleeps + 4 in-progress polls at the real 2s ONBOARD_POLL_MS.
+  }, 20000);
+
+  test("still-provisioning onboarding is reported as pending, not as missing access", async () => {
+    // The two outcomes send the user to different places, so they must not collapse into one.
+    routeFetch((url) => {
+      if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({}), { status: 200 });
+      if (url.includes(":onboardUser")) return new Response(JSON.stringify({ done: false }), { status: 200 });
+      return new Response("no", { status: 404 });
+    });
+    expect(await discoverGeminiProjectOutcome("tok")).toEqual({ status: "pending" });
+    // Exhausts the full 5-poll budget at the real 2s ONBOARD_POLL_MS.
+  }, 20000);
+
+  test("a hard 4xx is reported as unavailable rather than pending", async () => {
+    routeFetch((url) => {
+      if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({}), { status: 200 });
+      if (url.includes(":onboardUser")) return new Response("forbidden", { status: 403 });
+      return new Response("no", { status: 404 });
+    });
+    expect(await discoverGeminiProjectOutcome("tok")).toEqual({ status: "unavailable" });
+  });
+
+  test("gives up once transient retries are exhausted", async () => {
+    let onboardCalls = 0;
+    routeFetch((url) => {
+      if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({}), { status: 200 });
+      if (url.includes(":onboardUser")) { onboardCalls++; return new Response("busy", { status: 503 }); }
+      return new Response("no", { status: 404 });
+    });
+    expect(await discoverGeminiProjectOutcome("tok")).toEqual({ status: "unavailable" });
+    // The transient budget bounds the retries; an unbounded loop would hang the login.
+    expect(onboardCalls).toBe(4);
+    // 3 transient sleeps at the real 2s ONBOARD_POLL_MS before giving up.
+  }, 20000);
 });
 
 describe("gemini refresh", () => {

@@ -76,6 +76,10 @@ const CALLBACK_PATH = "/callback";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const ONBOARD_ATTEMPTS = 5;
+// Transient 429/5xx retries get their own budget. Sharing one counter with the in-progress
+// polls below meant a couple of 5xx responses could exhaust the budget before onboarding
+// finished, and the login then blamed the account's entitlement for what was really a timeout.
+const ONBOARD_TRANSIENT_ATTEMPTS = 3;
 const ONBOARD_POLL_MS = 2_000;
 // Matches the Gemini CLI's own UA so Code Assist sees a client shape it recognizes.
 const GEMINI_CLI_USER_AGENT = "GeminiCLI/0.1.5 (Windows; AMD64)";
@@ -193,6 +197,17 @@ function extractDefaultTierId(data: Record<string, unknown> | undefined): string
   return "free-tier";
 }
 
+/**
+ * Why onboarding produced no project. `pending` means Google accepted the request and is still
+ * provisioning; `unavailable` means it refused or returned no project. The caller turns these
+ * into different login errors — telling a user to check Code Assist access when onboarding is
+ * merely slow sends them to the wrong place.
+ */
+type OnboardOutcome =
+  | { status: "ready"; projectId: string }
+  | { status: "pending" }
+  | { status: "unavailable" };
+
 async function loadCodeAssist(
   accessToken: string,
   signal?: AbortSignal,
@@ -212,8 +227,10 @@ async function loadCodeAssist(
   return (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
 }
 
-async function onboardProject(accessToken: string, tierId: string, signal?: AbortSignal): Promise<string | undefined> {
-  for (let attempt = 0; attempt < ONBOARD_ATTEMPTS; attempt++) {
+async function onboardProject(accessToken: string, tierId: string, signal?: AbortSignal): Promise<OnboardOutcome> {
+  let polls = 0;
+  let transientRetries = 0;
+  while (polls < ONBOARD_ATTEMPTS) {
     if (signal?.aborted) throw signal.reason ?? new Error("Gemini onboarding aborted");
     const response = await fetch(`${CODE_ASSIST_API}/${API_VERSION}:onboardUser`, {
       method: "POST",
@@ -227,26 +244,46 @@ async function onboardProject(accessToken: string, tierId: string, signal?: Abor
       signal: requestSignal(signal),
     });
     if (!response.ok) {
-      // Transient (429/5xx): keep polling within the attempt budget. Hard 4xx: give up now.
-      if (response.status === 429 || response.status >= 500) {
+      // Transient (429/5xx): retry on the transient budget so these do not eat the polling
+      // budget. Hard 4xx, or transient retries exhausted: give up now.
+      if ((response.status === 429 || response.status >= 500) && transientRetries < ONBOARD_TRANSIENT_ATTEMPTS) {
+        transientRetries += 1;
         await new Promise(resolve => setTimeout(resolve, ONBOARD_POLL_MS));
         continue;
       }
-      return undefined;
+      return { status: "unavailable" };
     }
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (data.done === true) {
-      return extractProjectId(data.response as Record<string, unknown> | undefined);
+      const projectId = extractProjectId(data.response as Record<string, unknown> | undefined);
+      return projectId ? { status: "ready", projectId } : { status: "unavailable" };
     }
+    polls += 1;
     await new Promise(resolve => setTimeout(resolve, ONBOARD_POLL_MS));
   }
-  return undefined;
+  // Onboarding was accepted and is still running. Distinguished from "unavailable" so the
+  // login error does not blame the account's entitlement for a slow first-time provision.
+  return { status: "pending" };
 }
 
-/** Discover the CCA project for an access token (loadCodeAssist → onboardUser fallback). */
-export async function discoverGeminiProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
+/**
+ * Discover the CCA project for an access token (loadCodeAssist → onboardUser fallback), keeping
+ * the reason when there is none. `pending` is not a failure to report as missing access.
+ */
+export async function discoverGeminiProjectOutcome(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<OnboardOutcome> {
   const loaded = await loadCodeAssist(accessToken, signal);
-  return extractProjectId(loaded) ?? (await onboardProject(accessToken, extractDefaultTierId(loaded), signal));
+  const existing = extractProjectId(loaded);
+  if (existing) return { status: "ready", projectId: existing };
+  return await onboardProject(accessToken, extractDefaultTierId(loaded), signal);
+}
+
+/** Discover the CCA project for an access token, or `undefined` when there is none yet. */
+export async function discoverGeminiProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
+  const outcome = await discoverGeminiProjectOutcome(accessToken, signal);
+  return outcome.status === "ready" ? outcome.projectId : undefined;
 }
 
 function credentialsFromPayload(payload: GoogleTokenPayload, refreshFallback = ""): OAuthCredentials {
@@ -320,13 +357,17 @@ class GeminiOAuthFlow extends OAuthCallbackFlow {
     const creds = credentialsFromPayload(payload);
     if (this.#subtype === "ai-studio") return creds;
     this.ctrl.onProgress?.("Discovering Cloud Code Assist project");
-    const projectId = await discoverGeminiProject(creds.access, this.ctrl.signal);
-    if (!projectId) {
+    const outcome = await discoverGeminiProjectOutcome(creds.access, this.ctrl.signal);
+    if (outcome.status !== "ready") {
       // Fail the login rather than persisting a credential that every request would reject for a
       // missing CCA project — otherwise status shows "logged in" while all calls fail closed.
-      throw new Error("Gemini login could not discover a Cloud Code Assist project for this account. Ensure the Google account has Gemini Code Assist access and try again.");
+      // Onboarding that is still running gets its own message: telling the user to check their
+      // Code Assist access would send them to look for a problem that does not exist.
+      throw new Error(outcome.status === "pending"
+        ? "Gemini login timed out waiting for Google to finish provisioning a Cloud Code Assist project for this account. This is normal for a first login — retry in a minute and it usually completes."
+        : "Gemini login could not discover a Cloud Code Assist project for this account. Ensure the Google account has Gemini Code Assist access and try again.");
     }
-    return { ...creds, projectId };
+    return { ...creds, projectId: outcome.projectId };
   }
 }
 

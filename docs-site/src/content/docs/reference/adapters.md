@@ -127,8 +127,8 @@ and the Gemini CLI client families). AI Studio uses
 | --- | --- | --- |
 | `ai-studio` (default) | `generativelanguage.googleapis.com` | API key in `x-goog-api-key`, or an OAuth bearer when `authMode` is `oauth` (the `gemini-ai-studio` preset). |
 | `vertex` | Vertex AI project/location endpoints | GCP ADC, or `x-goog-api-key`. |
-| `cloud-code-assist` | `v1internal` on `cloudcode-pa` | Antigravity OAuth. |
-| `gemini-cli` | `v1internal` on `cloudcode-pa` | Gemini CLI OAuth (the `gemini-cli` preset). |
+| `cloud-code-assist` | `cloudcode-pa.googleapis.com/v1internal:{action}` | Antigravity OAuth. |
+| `gemini-cli` | `cloudcode-pa.googleapis.com/v1internal:{action}` | Gemini CLI OAuth (the `gemini-cli` preset). |
 
 - The two Cloud Code Assist modes share the `v1internal` endpoint, the `response` envelope wrapper,
   and the retry/error classification, but they are **not** interchangeable: `cloud-code-assist`
