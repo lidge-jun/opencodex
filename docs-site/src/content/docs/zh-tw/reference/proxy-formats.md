@@ -213,7 +213,7 @@ Data-plane 金鑰不是管理憑證。管理 API 使用獨立的管理秘密；�
 | 401 | `authentication_error` | 必填的代理許可憑證缺失或無效 |
 | 403 | `origin_rejected` | Responses/OpenAI data-plane 請求或 WebSocket 升級來自不允許的來源 |
 | 503 | `combo_unavailable` | 所選組合中的每個目標都不可用、在冷卻中、停用或因其他原因不合格 |
-| 400 | `unreadable_encrypted_agent_task` | 加密的 v2 worker task 沒有可消耗它的合格原生 ChatGPT 目標 |
+| 400 | `unreadable_encrypted_agent_task` | 加密的 v2 worker task 沒有能消耗它或不透明轉發它的合格規範 ChatGPT 消費者或明確受信任的 Responses 目標 |
 | 426 | `upgrade_required` | Responses WebSocket 傳輸被停用或升級失敗；請使用 HTTP |
 
 Anthropic 來源的失敗以 Anthropic 的錯誤封裝渲染，因此該方言上的來源拒絕是 403 `permission_error`，而非 OpenAI 風格的 `origin_rejected` body。
@@ -222,4 +222,4 @@ Anthropic 來源的失敗以 Anthropic 的錯誤封裝渲染，因此該方言�
 
 代理將真實的後端密文視為不透明。結構有效的密文被逐位元組保留：opencodex 不解密它、轉譯其內容，或為另一個供應商重新加密它。
 
-某些 agent hook 在歷史上曾將明文控制文字放入 `encrypted_content` 插槽。為相容性，代理將該明文分離為 text 部分，同時保留任何結構有效的 Fernet run 不變。若 `agent_message` 在該修復期間失去所有加密部分，它成為普通使用者訊息。若目前的 v2 task 保持真正加密但所選路由目標無法讀取原生 ChatGPT 密文，opencodex 以 `unreadable_encrypted_agent_task` 失敗，而非發送不可讀的位元組給該供應商。關於 worker task 周圍的客戶端行為，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
+某些 agent hook 在歷史上曾將明文控制文字放入 `encrypted_content` 插槽。為相容性，代理將該明文分離為 text 部分，同時保留任何結構有效的 Fernet run 不變。若 `agent_message` 在該修復期間失去所有加密部分，它成為普通使用者訊息。若目前的 v2 task 保持真正加密，但沒有規範消費者或明確受信任、可不透明轉發的 Responses 目標，opencodex 以 `unreadable_encrypted_agent_task` 失敗，而非發送不可讀的位元組給該供應商。關於 worker task 周圍的客戶端行為，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。

@@ -116,26 +116,36 @@ pendant un temps de recharge, il manque un compte Codex poolé utilisable ou au-
 Les sondes de disponibilité sont mises en cache pendant `subagentModelFallbackPollMs` (60 secondes par défaut).
 
 La solution de secours ne rend pas lisibles les tâches chiffrées incompatibles. Lorsque la tâche enfant est chiffrée pour
-ChatGPT, la sélection est restreinte aux cibles ChatGPT natives canoniques même si un modèle externe
-apparaît plus tôt dans la chaîne.
+ChatGPT, la sélection est restreinte aux cibles capables de recevoir ce chiffrage : les cibles ChatGPT natives
+canoniques ou un fournisseur Responses avec l’option explicite `allowEncryptedV2AgentTasks: true`.
 
 ## Livraison de tâches v2 cryptées
 
-Codex peut envoyer une tâche enfant v2 native vers routé uniquement sous forme `encrypted_content` chiffrée par le backend. Cette
-charge utile peut être lue par le backend natif ChatGPT, mais pas par un fournisseur externe. C'est la
+Codex peut envoyer une tâche enfant v2 native vers routé uniquement sous forme `encrypted_content` chiffrée par le backend. Le
+backend natif ChatGPT peut consommer cette charge utile ; certains relais compatibles peuvent aussi la transmettre à un
+backend capable de la consommer. opencodex ne peut pas déduire cette capacité du nom du fournisseur ou de son Base URL. C'est la
 limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
 
 - Une route directe non native renvoie HTTP 400 avec
   `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré.
-- Un combo considère uniquement les cibles ChatGPT natives canoniques pour cette tâche, y compris les tentatives. Si aucun
-  est disponible, il renvoie la même erreur 400.
+- Un combo considère uniquement les cibles ChatGPT natives canoniques et les cibles Responses explicitement approuvées pour
+  cette tâche, y compris les tentatives. Si aucune n'est disponible, il renvoie la même erreur 400.
 - Une tâche lisible en texte clair conserve la route normale et le comportement de repli.
 
 Les options de récupération consistent à sélectionner un enfant ChatGPT natif, à ajouter une cible ChatGPT native au combo, à utiliser
 v1 pour la délégation de fournisseurs hétérogènes, ou renvoyer la tâche en texte brut v2 `agent_message`
 contenu lorsque vous contrôlez l’appelant.
+
+Si un endpoint Responses non canonique a été vérifié pour consommer ou relayer ce chiffrage, activez l’option **Passer les tâches
+d’agent V2 chiffrées** dans les paramètres de ce fournisseur, ou définissez `allowEncryptedV2AgentTasks: true` dans sa
+configuration. Cette option est désactivée par défaut et n’est valide que lorsque le wire final du modèle sélectionné est
+`openai-responses` ; une surcharge `modelAdapters` vers `openai-chat` reste donc non admissible. La charge utile opaque est
+transmise sans modification : opencodex ne la déchiffre pas, ne la traduit pas et ne la récupère pas, et cette option ne prouve
+pas la compatibilité du fournisseur. La cible ChatGPT canonique est toujours admissible sans cette option. Une cible ayant activé
+le relais opaque ignore `agentTaskRecovery` pour cette route, car la récupération et le relais opaque sont deux modes de confiance
+distincts.
 
 L’option expérimentale `agentTaskRecovery`, désactivée par défaut, peut récupérer cette forme précise de
 tâche native envoyée vers une route externe. Elle utilise un transfert Responses brut vers le point de
@@ -154,8 +164,8 @@ récupéré, la fidélité octet par octet n’est pas garantie. Les appelants g
 sont rejetés, et tout échec conserve l’erreur `unreadable_encrypted_agent_task`. Consultez
 [Configuration de l'agent : récupération de tâche chiffrée v2](/fr/reference/configuration/agents/#récupération-des-tâches-v2-chiffrées)
 pour la limite de confiance complète et la configuration.
-Le routage des combinaisons reste inchangé et continue de considérer uniquement les cibles ChatGPT natives
-canoniques pour les tâches chiffrées.
+Le routage des combinaisons applique les mêmes règles d’admissibilité : il considère les cibles ChatGPT natives canoniques et les
+cibles Responses explicitement approuvées pour les tâches chiffrées.
 
 ## Changer le mode
 
