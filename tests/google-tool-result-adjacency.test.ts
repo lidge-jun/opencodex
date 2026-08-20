@@ -136,6 +136,22 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
     });
   });
 
+  test("standalone remote-image results keep their marker without fabricating inline data", async () => {
+    const contents = await wire([
+      result("call_orphan", "snapshot", [
+        { type: "image", imageUrl: "https://example.com/screenshot.png" },
+      ]),
+    ]);
+
+    expect(contents).toHaveLength(1);
+    expect(functionResponses(contents[0])).toEqual([]);
+    expect(contents[0].parts).toEqual([
+      { text: "[tool_result without adjacent tool_use: snapshot (call_orphan)]\n[image]" },
+    ]);
+    expect(JSON.stringify(contents[0].parts)).not.toContain("inline_data");
+    expect(JSON.stringify(contents[0].parts)).not.toContain("(empty tool output)");
+  });
+
   test("a non-tool barrier closes the call before a later result becomes orphan text", async () => {
     const contents = await wire([
       assistant([{ id: "call_1", name: "bash" }]),
