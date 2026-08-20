@@ -1,4 +1,4 @@
-import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, GoogleAdapterMode, OcxProviderConfig } from "../types";
 import { cloneFastWire } from "./fastwire";
 import {
   PROVIDER_REGISTRY,
@@ -47,7 +47,7 @@ export interface DerivedKeyLoginProvider {
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
-  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  googleMode?: GoogleAdapterMode;
   project?: string;
   location?: string;
 }

@@ -21,6 +21,7 @@ import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
+import { geminiCliUserAgent } from "./client-fingerprint";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
@@ -383,19 +384,26 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   let vertexReplayModel: string | undefined;
   let vertexReplaySession: string | undefined;
   let restoreGoogleToolName = (name: string): string => name;
+  // Both CCA client families (Antigravity IDE and Gemini CLI) share the v1internal transport:
+  // the `response` envelope wrapper, the retry/error classification, and the replay namespace.
+  // They differ ONLY in the request envelope and User-Agent, handled in buildRequest.
+  const isCodeAssist = provider.googleMode === "cloud-code-assist" || provider.googleMode === "gemini-cli";
+  // Names the client family in user-visible errors. Antigravity's wording is kept verbatim so
+  // existing troubleshooting docs and log searches keep matching; `googleMode` would rename it.
+  const codeAssistLabel = provider.googleMode === "gemini-cli" ? "gemini-cli" : "google-antigravity";
   return {
     name: "google",
 
-    // Vertex + Antigravity get Kiro-style retry/timeout + classified, redacted errors.
+    // Vertex + CCA get Kiro-style retry/timeout + classified, redacted errors.
     // Direct AI-Studio uses the canonical server transport (fetchWithTransientRetry), which
     // retries transient 5xx responses through providerFetch while preserving multi-key pool
     // 429 rotation and raw error formatting.
-    ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
+    ...(provider.googleMode === "vertex" || isCodeAssist
       ? {
           fetchResponse: (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> =>
-            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(request, ctx),
+            (isCodeAssist ? fetchAntigravityWithRetry : fetchVertexWithRetry)(request, ctx),
           formatErrorBody: (status: number, _headers: Headers, payloadText: string): string =>
-            (provider.googleMode === "cloud-code-assist" ? safeAntigravityHttpErrorMessage : safeVertexHttpErrorMessage)(status, payloadText),
+            (isCodeAssist ? safeAntigravityHttpErrorMessage : safeVertexHttpErrorMessage)(status, payloadText),
         }
       : {}),
 
@@ -406,7 +414,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
             provider.baseUrl,
           ).wireModelId
-        : provider.googleMode === "vertex"
+        // gemini-cli joins vertex in sending the bare id: the `-tiered` spelling is a direct
+        // AI-Studio deployment quirk, and Cloud Code Assist does not serve those wire names.
+        : provider.googleMode === "vertex" || provider.googleMode === "gemini-cli"
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
@@ -434,6 +444,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
+      // gemini-cli is NOT excluded here: unlike Antigravity it has no effort-encoding wire-model
+      // suffixes, so a configured ladder must reach the wire through the standard thinkingConfig.
       const thinkingEligible = provider.googleMode !== "cloud-code-assist"
         && !isImageCapableModel(parsed.modelId)
         && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
@@ -452,6 +464,39 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const streamParam = parsed.stream ? "?alt=sse" : "";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (provider.headers) Object.assign(headers, provider.headers);
+
+      if (provider.googleMode === "gemini-cli") {
+        // Gemini CLI (Cloud Code Assist): same v1internal endpoint as Antigravity, but the CLI
+        // sends a plain `{model, project, request}` envelope and its own User-Agent. The
+        // Antigravity-only fields (userAgent/requestType/requestId, effort wire-model suffixes,
+        // Claude VALIDATED tool mode) belong to the IDE client family and are deliberately absent.
+        const token = provider.apiKey?.trim();
+        if (!token) throw new Error("gemini-cli oauth token missing — run ocx login gemini-cli");
+        const base = provider.baseUrl?.trim();
+        if (!base) throw new Error("gemini-cli requires a non-empty baseUrl");
+        const project = provider.project;
+        if (!project) throw new Error("Gemini CLI requires a discovered Cloud Code Assist project id (re-run `ocx login gemini-cli`).");
+        const sessionId = antigravitySessionId(parsed);
+        antigravityModel = `gemini-cli:${routedModelId}`;
+        antigravitySession = sessionId;
+        const compiled = compileGoogleWireBody(body);
+        const request = compiled.body;
+        restoreGoogleToolName = compiled.restoreToolName;
+        // Same bounded replay store as CCA/Vertex; the transport prefix on the model key keeps
+        // signatures from leaking across backends (#1254).
+        if (Array.isArray((request as { contents?: unknown[] }).contents)) {
+          applyAntigravityReplay(antigravityModel, sessionId, (request as { contents: unknown[] }).contents);
+        }
+        const url = `${base}/v1internal:${method}${streamParam}`;
+        headers["User-Agent"] = geminiCliUserAgent();
+        headers["Authorization"] = `Bearer ${token}`;
+        return {
+          url,
+          method: "POST",
+          headers,
+          body: JSON.stringify({ model: routedModelId, project, request }),
+        };
+      }
 
       if (provider.googleMode === "cloud-code-assist") {
         // Google Antigravity (Cloud Code Assist): wrap the flat Gemini body in the CCA envelope.
@@ -572,11 +617,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
-      // ai-studio (default): Generative Language API + x-goog-api-key.
+      // ai-studio (default): Generative Language API. An API key travels in x-goog-api-key; an
+      // OAuth credential must travel as a Bearer instead — the Generative Language API rejects a
+      // bearer token presented in the api-key header (mirrors sub2api's AccountTypeOAuth path).
       const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
-      headers["x-goog-api-key"] = apiKey;
+      if (provider.authMode === "oauth") headers["Authorization"] = `Bearer ${apiKey}`;
+      else headers["x-goog-api-key"] = apiKey;
 
       const compiled = compileGoogleWireBody(body);
       restoreGoogleToolName = compiled.restoreToolName;
@@ -638,9 +686,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const err = chunk.error as { message?: string } | undefined;
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
-          const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-          const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-          if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+          const replayModel = isCodeAssist ? antigravityModel : vertexReplayModel;
+          const replaySession = isCodeAssist ? antigravitySession : vertexReplaySession;
+          if ((isCodeAssist || provider.googleMode === "vertex")
             && replayModel && replaySession
             && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
             clearAntigravityReplay(replayModel, replaySession);
@@ -649,12 +697,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           return "terminate";
         }
 
-        // Antigravity (CCA) nests the standard Gemini payload under `response`.
+        // Cloud Code Assist nests the standard Gemini payload under `response`.
         let root = chunk;
-        if (provider.googleMode === "cloud-code-assist") {
+        if (isCodeAssist) {
           const wrapped = chunk.response;
           if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-            yield { type: "error", message: "google-antigravity response missing response wrapper" };
+            yield { type: "error", message: `${codeAssistLabel} response missing response wrapper` };
             return "terminate";
           }
           root = wrapped as Record<string, unknown>;
@@ -696,9 +744,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const parts = candidate.content?.parts as GoogleResponsePart[] | undefined;
         // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
         // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+        const replayModel = isCodeAssist ? antigravityModel : vertexReplayModel;
+        const replaySession = isCodeAssist ? antigravitySession : vertexReplaySession;
+        if ((isCodeAssist || provider.googleMode === "vertex")
           && parts && replayModel && replaySession) {
           pendingStreamThoughtSig = observeAntigravityReplay(
             replayModel,
@@ -807,7 +855,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
-        if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+        if ((provider.googleMode === "vertex" || isCodeAssist)
           && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
           yield { type: "error", message: vertexTruncationErrorMessage(lastFinishReason) };
           return;
@@ -913,12 +961,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const err = raw.error as { message?: string };
         return finish([{ type: "error", message: err.message ?? "upstream error" }]);
       }
-      // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.
+      // Cloud Code Assist nests the standard Gemini payload under `response`; unwrap it.
       let json = raw;
-      if (provider.googleMode === "cloud-code-assist") {
+      if (isCodeAssist) {
         const wrapped = raw.response;
         if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-          return finish([{ type: "error", message: "google-antigravity response missing response wrapper" }]);
+          return finish([{ type: "error", message: `${codeAssistLabel} response missing response wrapper` }]);
         }
         json = wrapped as Record<string, unknown>;
       }
@@ -933,9 +981,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (candidates?.[0]?.content?.parts) {
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+        const replayModel = isCodeAssist ? antigravityModel : vertexReplayModel;
+        const replaySession = isCodeAssist ? antigravitySession : vertexReplaySession;
+        if ((isCodeAssist || provider.googleMode === "vertex")
           && replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
@@ -978,7 +1026,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+      if ((provider.googleMode === "vertex" || isCodeAssist)
         && isVertexTruncatedTurn(candidates?.[0]?.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
       }

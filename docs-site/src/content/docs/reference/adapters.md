@@ -106,10 +106,25 @@ of the HTTP retry loop.
 
 ## `google`
 
-**Targets:** Google **Gemini**, **Vertex AI**, and Antigravity **Cloud Code Assist**. AI Studio uses
+**Targets:** Google **Gemini**, **Vertex AI**, and **Cloud Code Assist** (both the Antigravity IDE
+and the Gemini CLI client families). AI Studio uses
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
-**Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
+**Auth:** API key, Vertex ADC, or Google OAuth, selected by `googleMode`.
 
+| `googleMode` | Endpoint | Credential |
+| --- | --- | --- |
+| `ai-studio` (default) | `generativelanguage.googleapis.com` | API key in `x-goog-api-key`, or an OAuth bearer when `authMode` is `oauth` (the `gemini-ai-studio` preset). |
+| `vertex` | Vertex AI project/location endpoints | GCP ADC, or `x-goog-api-key`. |
+| `cloud-code-assist` | `v1internal` on `cloudcode-pa` | Antigravity OAuth. |
+| `gemini-cli` | `v1internal` on `cloudcode-pa` | Gemini CLI OAuth (the `gemini-cli` preset). |
+
+- The two Cloud Code Assist modes share the `v1internal` endpoint, the `response` envelope wrapper,
+  and the retry/error classification, but they are **not** interchangeable: `cloud-code-assist`
+  sends the Antigravity IDE envelope (`{model, userAgent, requestType, project, requestId, request}`)
+  with an `antigravity/ide/<ver>` User-Agent, while `gemini-cli` sends the CLI's plain
+  `{model, project, request}` with a `GeminiCLI/<ver>` User-Agent. Each token is issued to one
+  client family and rejected by the other. Their reasoning-replay caches are namespaced separately
+  for the same reason.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay

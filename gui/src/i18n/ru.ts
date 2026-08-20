@@ -1030,6 +1030,8 @@ export const ru: Record<TKey, string> = {
   "modal.accountCodexPool": "Пул аккаунтов ChatGPT",
   "modal.accountLoggedIn": "Вход выполнен",
   "modal.accountLoggedOut": "Вход не выполнен",
+  "modal.accountGeminiCodeAssist": "Аккаунт Google · подтип Code Assist",
+  "modal.accountGeminiAiStudio": "Аккаунт Google · подтип AI Studio (нужен свой OAuth-клиент)",
   "quota.fiveHourLimit": "5-часовой лимит",
   "quota.weeklyLimit": "Недельный лимит",
   "quota.monthlyLimit": "30-дневный лимит",

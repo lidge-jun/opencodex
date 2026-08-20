@@ -832,6 +832,8 @@ export const zhTW: Record<TKey, string> = {
   "modal.accountCodexPool": "ChatGPT 帳號池",
   "modal.accountLoggedIn": "已登入",
   "modal.accountLoggedOut": "未登入",
+  "modal.accountGeminiCodeAssist": "Google 帳號 · Code Assist 子類型",
+  "modal.accountGeminiAiStudio": "Google 帳號 · AI Studio 子類型（需自備 OAuth 用戶端）",
   "quota.fiveHourLimit": "5 小時限額",
   "quota.weeklyLimit": "每週限額",
   "quota.monthlyLimit": "30 天限額",
