@@ -64,11 +64,20 @@ export interface OpencodeCatalogModel {
   id?: string;
   contextWindow?: number;
   displayName?: string;
+  /** Input modalities declared by the model (e.g. `["text","image"]`). */
+  inputModalities?: string[];
 }
 
 export interface OpencodeModelEntry {
   name: string;
   limit?: { context: number; output: number };
+  /**
+   * Opencode v1 modality declaration. Only emitted when the catalog row
+   * carries at least one declared modality, so text-only models (which
+   * have no stored `inputModalities`) do not emit the block and opencode
+   * keeps its own defaults.
+   */
+  modalities?: { input: string[] };
 }
 
 export interface OpencodeProviderBlock {
@@ -641,6 +650,9 @@ function opencodeProviderBlock(
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context) };
+    }
+    if (Array.isArray(model.inputModalities) && model.inputModalities.length > 0) {
+      entry.modalities = { input: [...model.inputModalities] };
     }
     models[key] = entry;
   }

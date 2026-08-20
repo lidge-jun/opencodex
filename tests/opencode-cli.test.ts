@@ -20,6 +20,7 @@ import {
   opencodeApiKey,
   opencodeCatalogFromProxyRows,
   opencodeGlobalConfigPath,
+  requireOpencodeManagementToken,
   opencodeLaunchNativeSlugs,
   opencodeModelKey,
   opencodeNotFoundHint,
@@ -366,6 +367,43 @@ describe("ocx opencode proxy model catalog", () => {
       "kiro/glm-5",
     ]);
   });
+
+  test("opencodeCatalogFromProxyRows propagates inputModalities from proxy rows", () => {
+    const config = cfg();
+    const rows = [
+      { namespaced: "p/vision", provider: "p", id: "vision", disabled: false, inputModalities: ["text", "image"] },
+      { namespaced: "p/audio", provider: "p", id: "audio", disabled: false, inputModalities: ["text", "audio"] },
+      { namespaced: "p/text", provider: "p", id: "text", disabled: false },
+      { namespaced: "p/empty-arr", provider: "p", id: "empty-arr", disabled: false, inputModalities: [] },
+    ];
+    const catalog = opencodeCatalogFromProxyRows(rows, config);
+
+    const vision = catalog.find(m => m.namespaced === "p/vision")!;
+    expect(vision.inputModalities).toEqual(["text", "image"]);
+
+    const audio = catalog.find(m => m.namespaced === "p/audio")!;
+    expect(audio.inputModalities).toEqual(["text", "audio"]);
+
+    // No inputModalities field → absent in catalog (not replaced with [])
+    const text = catalog.find(m => m.namespaced === "p/text")!;
+    expect(text.inputModalities).toBeUndefined();
+
+    // Empty array → treated the same as absent
+    const emptyArr = catalog.find(m => m.namespaced === "p/empty-arr")!;
+    expect(emptyArr.inputModalities).toBeUndefined();
+  });
+
+  test("buildOpencodeProviderBlockFromCatalog emits modalities.input for multimodal models", () => {
+    const block = buildOpencodeProviderBlockFromCatalog(10100, [
+      { namespaced: "p/vision", provider: "p", id: "vision", inputModalities: ["text", "image"] },
+      { namespaced: "p/audio", provider: "p", id: "audio", inputModalities: ["text", "audio"] },
+      { namespaced: "p/text-only", provider: "p", id: "text-only" },
+    ]);
+    expect(block.models["p/vision"]?.modalities).toEqual({ input: ["text", "image"] });
+    expect(block.models["p/audio"]?.modalities).toEqual({ input: ["text", "audio"] });
+    // Text-only model: no modalities block emitted
+    expect(block.models["p/text-only"]?.modalities).toBeUndefined();
+  });
 });
 
 describe("ocx opencode native slug selection", () => {
@@ -519,6 +557,22 @@ describe("ocx opencode admission key", () => {
 
   test("falls back to a placeholder on an open loopback proxy", () => {
     expect(opencodeApiKey(cfg(), {})).toBe("ocx");
+  });
+});
+
+describe("ocx opencode management token", () => {
+  test("returns the configured admin token for management API calls", () => {
+    expect(requireOpencodeManagementToken(() => "ocx_admin_token")).toBe("ocx_admin_token");
+    expect(requireOpencodeManagementToken(() => "  ocx_admin_token  ")).toBe("ocx_admin_token");
+  });
+
+  test("fails early when the admin token is unavailable", () => {
+    expect(() => requireOpencodeManagementToken(() => null)).toThrow(
+      "opencodex admin token is not configured.",
+    );
+    expect(() => requireOpencodeManagementToken(() => "   ")).toThrow(
+      "opencodex admin token is not configured.",
+    );
   });
 });
 

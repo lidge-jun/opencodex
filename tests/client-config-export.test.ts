@@ -154,6 +154,21 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
       expect(entry.limit).toBeUndefined();
     }
   });
+
+  test("modalities.input is emitted when inputModalities is non-empty, omitted otherwise", () => {
+    const block = buildOpencodeProviderBlockFromCatalog(10100, [
+      { namespaced: "p/vision", provider: "p", id: "vision", inputModalities: ["text", "image"] },
+      { namespaced: "p/audio", provider: "p", id: "audio", inputModalities: ["text", "audio"] },
+      { namespaced: "p/text-only", provider: "p", id: "text-only" },
+      { namespaced: "p/empty-arr", provider: "p", id: "empty-arr", inputModalities: [] },
+    ], "127.0.0.1");
+    expect(block.models["p/vision"]?.modalities).toEqual({ input: ["text", "image"] });
+    expect(block.models["p/audio"]?.modalities).toEqual({ input: ["text", "audio"] });
+    // No inputModalities → modalities block is omitted; opencode keeps its own defaults
+    expect(block.models["p/text-only"]?.modalities).toBeUndefined();
+    // Empty array is treated as absent — no modalities block emitted
+    expect(block.models["p/empty-arr"]?.modalities).toBeUndefined();
+  });
 });
 
 describe("Pi serializer (accept criterion 2)", () => {
