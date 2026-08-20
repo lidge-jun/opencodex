@@ -18,32 +18,64 @@ function namespaceIdentity(namespace: string, name: string): string {
   return `${namespace}\u0000${name}`;
 }
 
-function namespaceToolIdentity(tool: unknown): RoutedNamespaceToolIdentity | undefined {
+/**
+ * A name that can become a wire tool name. Control characters are rejected because the identity
+ * key below joins namespace and name with NUL: a name carrying one could otherwise forge another
+ * tool's identity and silently take over its wire name.
+ */
+function isRepresentableName(name: unknown): name is string {
+  if (typeof name !== "string" || name.length === 0) return false;
+  for (let index = 0; index < name.length; index += 1) {
+    const code = name.charCodeAt(index);
+    // C0 controls and DEL, written as code points so this source never carries one itself.
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
+}
+
+type NamespaceGroup = {
+  namespace: string;
+  /** Children that can be lowered to a flat declaration; unrepresentable ones are omitted. */
+  children: Record<string, unknown>[];
+};
+
+/**
+ * Read a private namespace group, or return undefined when the value is not one.
+ *
+ * Children that cannot be expressed as a flat declaration — a nested group, a missing name, a
+ * control character in the name — are dropped, and a group left with no children is dropped whole
+ * by the rewrite. Preserving the private `namespace` shape instead would lose every tool in the
+ * request rather than one: the strict gateways this layer exists for reject that tool type before
+ * inference, which is the failure the layer was written to prevent.
+ */
+function parseNamespaceGroup(tool: unknown): NamespaceGroup | undefined {
   if (
     !isPlainObject(tool)
     || tool.type !== "namespace"
-    || typeof tool.name !== "string"
-    || tool.name.length === 0
+    || !isRepresentableName(tool.name)
     || !Array.isArray(tool.tools)
-    || tool.tools.length === 0
   ) return undefined;
-  return { namespace: tool.name, name: "" };
-}
-
-function namespaceChildren(tool: unknown): Record<string, unknown>[] | undefined {
-  const identity = namespaceToolIdentity(tool);
-  if (!identity || !isPlainObject(tool) || !Array.isArray(tool.tools)) return undefined;
   const children: Record<string, unknown>[] = [];
   for (const child of tool.tools) {
-    if (
-      !isPlainObject(child)
-      || child.type === "namespace"
-      || typeof child.name !== "string"
-      || child.name.length === 0
-    ) return undefined;
+    if (!isPlainObject(child) || child.type === "namespace" || !isRepresentableName(child.name)) continue;
     children.push(child);
   }
-  return children;
+  return { namespace: tool.name, children };
+}
+
+/**
+ * Wire identity of a lowered tool. A `functions` child and an identical top-level declaration share
+ * one identity because they denote the same logical tool: `buildTools` flattens the reserved group
+ * without a namespace, so the parser already treats them as one and tolerates the duplicate.
+ */
+function loweredIdentity(namespace: string, name: string): string {
+  return namespace === BUILTIN_FUNCTIONS_NAMESPACE
+    ? namespaceIdentity(BUILTIN_FUNCTIONS_NAMESPACE, name)
+    : namespaceIdentity(namespace, name);
+}
+
+function loweredWireName(namespace: string, name: string): string {
+  return namespace === BUILTIN_FUNCTIONS_NAMESPACE ? name : namespacedToolName(namespace, name);
 }
 
 function addSelector(
@@ -62,53 +94,48 @@ type NamespaceRewritePlan = {
   selectors: Map<string, string | null>;
 };
 
+/** Two distinct logical tools would occupy one wire name; the caller maps this to a 400. */
+export class NamespaceToolCollisionError extends Error {}
+
 function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
   const identities = new Map<string, string>();
   const selectors = new Map<string, string | null>();
-  const directNames = new Set<string>();
+  const wireOwners = new Map<string, string>();
 
   for (const group of groups) {
     for (const tool of group) {
-      if (
-        isPlainObject(tool)
-        && tool.type !== "namespace"
-        && typeof tool.name === "string"
-        && tool.name.length > 0
-      ) {
-        directNames.add(tool.name);
+      if (isPlainObject(tool) && tool.type !== "namespace" && isRepresentableName(tool.name)) {
+        // A bare declaration is the reserved group's flattened form, so it claims that identity:
+        // declaring the same tool both ways is the duplicate the parser already tolerates, not a
+        // collision, and `promoteClientLoadedTools` produces exactly that shape.
+        wireOwners.set(tool.name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, tool.name));
         addSelector(selectors, tool.name, tool.name);
       }
     }
   }
 
-  const wireOwners = new Map<string, string>();
-  for (const name of directNames) wireOwners.set(name, `direct:${name}`);
-
   for (const group of groups) {
     for (const tool of group) {
-      const parent = namespaceToolIdentity(tool);
-      const children = namespaceChildren(tool);
-      if (!parent || !children) continue;
-      for (const child of children) {
+      const parsed = parseNamespaceGroup(tool);
+      if (!parsed) continue;
+      for (const child of parsed.children) {
         const childName = child.name as string;
-        const identity = namespaceIdentity(parent.namespace, childName);
-        const wireName = parent.namespace === BUILTIN_FUNCTIONS_NAMESPACE
-          ? childName
-          : namespacedToolName(parent.namespace, childName);
+        const identity = loweredIdentity(parsed.namespace, childName);
+        const wireName = loweredWireName(parsed.namespace, childName);
         const owner = wireOwners.get(wireName);
         if (owner !== undefined && owner !== identity) {
-          throw new Error(
+          throw new NamespaceToolCollisionError(
             `namespace tool wire-name collision for "${wireName}"; rename one of the colliding tools`,
           );
         }
         wireOwners.set(wireName, identity);
         identities.set(identity, wireName);
         addSelector(selectors, wireName, wireName);
-        addSelector(selectors, `${parent.namespace}.${childName}`, wireName);
+        addSelector(selectors, `${parsed.namespace}.${childName}`, wireName);
         addSelector(selectors, childName, wireName);
-        if (parent.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
-          aliases.set(wireName, { namespace: parent.namespace, name: childName });
+        if (parsed.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
+          aliases.set(wireName, { namespace: parsed.namespace, name: childName });
         }
       }
     }
@@ -117,72 +144,96 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   return { aliases, identities, selectors };
 }
 
+/**
+ * Lower every namespace group in one tool container. `emitted` is shared across the whole body so
+ * a tool declared both bare and under `functions` is written once rather than twice.
+ *
+ * No `type: "namespace"` value survives this pass, including a group this layer cannot read:
+ * relaying the private shape is what the strict gateway rejects.
+ */
 function rewriteToolList(
   tools: unknown[],
   plan: NamespaceRewritePlan,
-): { tools: unknown[]; changed: boolean } {
+  emitted: Set<string>,
+): unknown[] {
   let changed = false;
   const rewritten: unknown[] = [];
   for (const tool of tools) {
-    const parent = namespaceToolIdentity(tool);
-    const children = namespaceChildren(tool);
-    if (!parent || !children) {
-      rewritten.push(tool);
+    if (isPlainObject(tool) && tool.type === "namespace") {
+      changed = true;
+      const parsed = parseNamespaceGroup(tool);
+      if (!parsed) continue;
+      for (const child of parsed.children) {
+        const wireName = plan.identities.get(loweredIdentity(parsed.namespace, child.name as string));
+        if (wireName === undefined || emitted.has(wireName)) continue;
+        emitted.add(wireName);
+        rewritten.push(wireName === child.name ? child : { ...child, name: wireName });
+      }
       continue;
     }
-    changed = true;
-    for (const child of children) {
-      const identity = namespaceIdentity(parent.namespace, child.name as string);
-      const wireName = plan.identities.get(identity);
-      rewritten.push(wireName && wireName !== child.name ? { ...child, name: wireName } : child);
-    }
+    if (isPlainObject(tool) && isRepresentableName(tool.name)) emitted.add(tool.name);
+    rewritten.push(tool);
   }
-  return changed ? { tools: rewritten, changed: true } : { tools, changed: false };
+  return changed ? rewritten : tools;
 }
 
-function rewriteNamedSelector(value: unknown, plan: NamespaceRewritePlan): unknown {
+/**
+ * Resolve one `{namespace?, name}` reference to its wire name and drop the private `namespace` key.
+ *
+ * `bareFallback` is for tool_choice, where a bare name is a selector the caller expects resolved
+ * against the catalog. Replayed call items pass `false`: a history item records which tool actually
+ * ran, so resolving a bare name through a same-named namespace child would rewrite history on a
+ * coincidence rather than translate it.
+ *
+ * An explicit namespace is always lowered, even when this turn's catalog no longer declares that
+ * group — a compaction turn drops the whole catalog, and a catalog can change mid-session. Leaving
+ * the key in place ships a Codex-private field to a gateway that rejects unknown fields, which is
+ * the failure this layer exists to prevent, and this layer's own response restoration is what put
+ * the key on the item.
+ */
+function rewriteNamedSelector(
+  value: unknown,
+  plan: NamespaceRewritePlan,
+  bareFallback: boolean,
+): unknown {
   if (!isPlainObject(value) || typeof value.name !== "string") return value;
-  const explicitNamespace = typeof value.namespace === "string" ? value.namespace : undefined;
-  const wireName = explicitNamespace
-    ? plan.identities.get(namespaceIdentity(explicitNamespace, value.name))
-    : plan.selectors.get(value.name) ?? undefined;
-  if (!wireName) return value;
-  const { namespace: _namespace, ...rest } = value;
-  return wireName === value.name && explicitNamespace === undefined
-    ? value
-    : { ...rest, name: wireName };
+  if (typeof value.namespace !== "string") {
+    if (!bareFallback) return value;
+    const wireName = plan.selectors.get(value.name) ?? undefined;
+    return wireName === undefined || wireName === value.name ? value : { ...value, name: wireName };
+  }
+  const { namespace, ...rest } = value;
+  const wireName = plan.identities.get(loweredIdentity(namespace, value.name))
+    ?? loweredWireName(namespace, value.name);
+  return { ...rest, name: wireName };
 }
 
 function rewriteToolChoice(value: unknown, plan: NamespaceRewritePlan): unknown {
   if (!isPlainObject(value)) return value;
   if ((value.type === "function" || value.type === "custom") && typeof value.name === "string") {
-    return rewriteNamedSelector(value, plan);
+    return rewriteNamedSelector(value, plan, true);
   }
   if (value.type !== "allowed_tools" || !Array.isArray(value.tools)) return value;
   let changed = false;
   const tools = value.tools.map(tool => {
-    if (
-      !isPlainObject(tool)
-      || (tool.type !== "function" && tool.type !== "custom")
-      || typeof tool.name !== "string"
-    ) return tool;
-    const rewritten = rewriteNamedSelector(tool, plan);
+    if (!isPlainObject(tool) || typeof tool.name !== "string") return tool;
+    const rewritten = rewriteNamedSelector(tool, plan, true);
     changed ||= rewritten !== tool;
     return rewritten;
   });
   return changed ? { ...value, tools } : value;
 }
 
-function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan): unknown {
+function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Set<string>): unknown {
   if (!isPlainObject(item)) return item;
   if (item.type === "additional_tools" && Array.isArray(item.tools)) {
-    const rewritten = rewriteToolList(item.tools, plan);
-    return rewritten.changed ? { ...item, tools: rewritten.tools } : item;
+    const tools = rewriteToolList(item.tools, plan, emitted);
+    return tools === item.tools ? item : { ...item, tools };
   }
   if (
     (item.type === "function_call" || item.type === "custom_tool_call")
     && typeof item.name === "string"
-  ) return rewriteNamedSelector(item, plan);
+  ) return rewriteNamedSelector(item, plan, false);
   return item;
 }
 
@@ -201,13 +252,23 @@ export function rewriteRoutedNamespaceToolsForUpstream(body: unknown): {
   if (!isPlainObject(body)) return { body, aliases: new Map() };
   const groups = collectResponsesToolGroups(body);
   const plan = buildRewritePlan(groups);
-  if (plan.identities.size === 0) return { body, aliases: plan.aliases };
 
-  let tools = body.tools;
-  if (Array.isArray(body.tools)) tools = rewriteToolList(body.tools, plan).tools;
+  // Deliberately not gated on the plan being non-empty: a turn whose catalog is gone still replays
+  // call items carrying a private `namespace`, and the routed compaction turn strips the whole tool
+  // surface before this runs.
+  const emitted = new Set<string>();
+  const tools = Array.isArray(body.tools) ? rewriteToolList(body.tools, plan, emitted) : body.tools;
 
   let input = body.input;
-  if (Array.isArray(body.input)) input = body.input.map(item => rewriteInputItem(item, plan));
+  if (Array.isArray(body.input)) {
+    let inputChanged = false;
+    const rewrittenInput = body.input.map(item => {
+      const next = rewriteInputItem(item, plan, emitted);
+      if (next !== item) inputChanged = true;
+      return next;
+    });
+    if (inputChanged) input = rewrittenInput;
+  }
 
   const toolChoice = rewriteToolChoice(body.tool_choice, plan);
   return {

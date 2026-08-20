@@ -122,28 +122,42 @@ function stripInvalidItemIds(body: unknown): unknown {
 }
 
 /**
- * Codex attaches ChatGPT's private `external_web_access` policy bit to the public
- * `web_search` tool. Third-party Responses APIs enable browsing by the presence of the tool and
- * commonly reject the extra argument (xAI returns `Argument not supported:
- * external_web_access`). Keep the hosted tool and every public option, but remove only that
- * canonical-only hint before a routed request reaches a non-OpenAI gateway.
+ * Codex-private tool fields that only the ChatGPT backend understands.
+ *
+ * A third-party Responses gateway validates its schema and rejects the whole request before
+ * inference — xAI answers `Argument not supported: external_web_access` — so these are removed at
+ * the noncanonical boundary while the tool and every public option stay.
+ *
+ * Keep this a table. Each private bit Codex attaches has so far arrived as its own bespoke strip
+ * with its own traversal, and the traversals disagreed about which containers they covered; a new
+ * one should be a row here instead. `toolTypes` omitted means the field is private on any tool.
  */
-function stripCanonicalWebSearchAccessHint(body: unknown): unknown {
+const CANONICAL_ONLY_TOOL_FIELDS: readonly { field: string; toolTypes?: ReadonlySet<string> }[] = [
+  // ChatGPT's browsing policy bit. The public hosted tool is enabled by its presence alone.
+  { field: "external_web_access", toolTypes: new Set(["web_search", "web_search_preview"]) },
+  // Deferred-discovery marker. `activateDeferredTool` clears it only for tools a `tool_search_output`
+  // already loaded, so a still-deferred declaration — including one promoted out of a namespace
+  // group — otherwise reaches the wire carrying it.
+  { field: "defer_loading" },
+];
+
+function stripCanonicalOnlyToolFields(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
 
   const rewriteTools = (tools: unknown[]): unknown[] => {
     let changed = false;
     const rewritten = tools.map(tool => {
-      if (
-        !isPlainObject(tool)
-        || tool.type !== "web_search"
-        || !Object.hasOwn(tool, "external_web_access")
-      ) {
-        return tool;
+      if (!isPlainObject(tool)) return tool;
+      let next = tool;
+      for (const { field, toolTypes } of CANONICAL_ONLY_TOOL_FIELDS) {
+        if (!Object.hasOwn(next, field)) continue;
+        if (toolTypes && (typeof next.type !== "string" || !toolTypes.has(next.type))) continue;
+        const { [field]: _private, ...rest } = next;
+        next = rest;
       }
+      if (next === tool) return tool;
       changed = true;
-      const { external_web_access: _externalWebAccess, ...rest } = tool;
-      return rest;
+      return next;
     });
     return changed ? rewritten : tools;
   };
@@ -1627,9 +1641,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
-      }
-      if (!isCanonicalOpenAiForwardProvider(provider)) {
-        outBody = stripCanonicalWebSearchAccessHint(outBody);
+        // Last, so promoted namespace children are also cleared of Codex-private fields.
+        outBody = stripCanonicalOnlyToolFields(outBody);
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(

@@ -113,14 +113,96 @@ describe("Responses namespace tool compatibility", () => {
     })).toThrow('namespace tool wire-name collision for "workspace__read"');
   });
 
-  test("preserves empty and malformed namespaces instead of dropping capabilities", () => {
-    const body = {
+  // Relaying `type: "namespace"` is what the strict gateway rejects, and it rejects the request
+  // rather than the tool — so a group this layer cannot represent costs every tool in the turn.
+  // Dropping what cannot be expressed costs only that.
+  test("lowers every namespace group rather than relaying the private shape", () => {
+    const body = rewriteRoutedNamespaceToolsForUpstream({
       tools: [
         { type: "namespace", name: "empty", tools: [] },
-        { type: "namespace", name: "nested", tools: [{ type: "namespace", name: "child", tools: [] }] },
+        {
+          type: "namespace",
+          name: "partial",
+          tools: [
+            { type: "namespace", name: "nested", tools: [] },
+            { type: "function", name: "", parameters: {} },
+            { type: "function", name: "ok", parameters: {} },
+          ],
+        },
       ],
-    };
-    expect(rewriteRoutedNamespaceToolsForUpstream(body).body).toEqual(body);
+    }).body as { tools: Array<Record<string, unknown>> };
+
+    expect(body.tools).toEqual([{ type: "function", name: "partial__ok", parameters: {} }]);
+    expect(body.tools.some(tool => tool.type === "namespace")).toBe(false);
+  });
+
+  // The identity key joins namespace and name with NUL, so a name carrying one could otherwise
+  // forge another tool's identity and silently take over its wire name.
+  test("drops children whose names cannot become a wire name", () => {
+    const NUL = String.fromCharCode(0);
+    const body = rewriteRoutedNamespaceToolsForUpstream({
+      tools: [
+        { type: "namespace", name: "a", tools: [{ type: "function", name: `b${NUL}c` }] },
+        { type: "namespace", name: `a${NUL}b`, tools: [{ type: "function", name: "c" }] },
+        { type: "namespace", name: "ok", tools: [{ type: "function", name: "run" }] },
+      ],
+    }).body as { tools: Array<Record<string, unknown>> };
+
+    expect(body.tools).toEqual([{ type: "function", name: "ok__run" }]);
+  });
+
+  // `buildTools` flattens the reserved group without a namespace, so the parser treats these as one
+  // logical tool and tolerates the duplicate; `promoteClientLoadedTools` produces exactly this shape.
+  test("treats a bare declaration and a functions child of the same name as one tool", () => {
+    const rewritten = rewriteRoutedNamespaceToolsForUpstream({
+      tools: [
+        { type: "function", name: "exec", parameters: {} },
+        { type: "namespace", name: "functions", tools: [{ type: "function", name: "exec", parameters: {} }] },
+      ],
+    });
+    const body = rewritten.body as { tools: Array<Record<string, unknown>> };
+
+    expect(body.tools).toEqual([{ type: "function", name: "exec", parameters: {} }]);
+    expect([...rewritten.aliases]).toEqual([]);
+  });
+
+  // The routed compaction turn strips the whole tool surface before this runs, and a catalog can
+  // change mid-session — but the client is still replaying items this layer's own restoration
+  // stamped with a private `namespace`.
+  test("lowers replayed calls even when this turn declares no namespace", () => {
+    const body = rewriteRoutedNamespaceToolsForUpstream({
+      input: [
+        { type: "function_call", namespace: "collaboration", name: "spawn_agent", call_id: "c1", arguments: "{}" },
+        { type: "custom_tool_call", namespace: "functions", name: "exec", call_id: "c2", input: "run" },
+      ],
+    }).body as { input: Array<Record<string, unknown>> };
+
+    expect(body.input[0]).toEqual({
+      type: "function_call",
+      name: "collaboration__spawn_agent",
+      call_id: "c1",
+      arguments: "{}",
+    });
+    expect(body.input[1]).toEqual({
+      type: "custom_tool_call",
+      name: "exec",
+      call_id: "c2",
+      input: "run",
+    });
+    expect(JSON.stringify(body)).not.toContain("namespace");
+  });
+
+  // A history item records which tool actually ran. Resolving its bare name through a same-named
+  // namespace child would rewrite that record on a coincidence rather than translate it.
+  test("does not re-point a replayed bare-named call at a namespace child", () => {
+    const body = rewriteRoutedNamespaceToolsForUpstream({
+      tools: [{ type: "namespace", name: "workspace", tools: [{ type: "function", name: "read" }] }],
+      input: [{ type: "function_call", name: "read", call_id: "c1", arguments: "{}" }],
+      tool_choice: { type: "function", name: "read" },
+    }).body as { input: Array<Record<string, unknown>>; tool_choice: { name: string } };
+
+    expect(body.input[0].name).toBe("read");
+    expect(body.tool_choice.name).toBe("workspace__read");
   });
 
   test("restores only aliases authorized by this request in JSON and SSE payloads", () => {

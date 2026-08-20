@@ -277,6 +277,7 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import {
   createRoutedNamespaceCallRestoreRewrite,
+  NamespaceToolCollisionError,
   restoreRoutedNamespaceCallsInJson,
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
@@ -2533,6 +2534,13 @@ async function handleResponsesInner(
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     } catch (error) {
       releaseCodexAuthContextProbeLease(authCtx);
+      // A tool catalog this proxy cannot lower onto one wire namespace is a client input error, and
+      // the rotation-rebuild and bridged paths already answer 400 for the identical throw. Rethrowing
+      // it here escaped every catch up to the Bun handler, so the same request produced an
+      // unstructured 500 — and no request log — depending only on whether a rotation ran first.
+      if (error instanceof NamespaceToolCollisionError) {
+        return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
+      }
       throw error;
     }
     if (route.provider.authMode !== "forward") {

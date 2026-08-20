@@ -870,6 +870,48 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.tools).toEqual([{ type: "web_search", external_web_access: true }]);
   });
 
+  // `activateDeferredTool` clears `defer_loading` only for tools a `tool_search_output` already
+  // loaded, so the first turn of a deferred catalog — and any child promoted out of a namespace
+  // group — otherwise carries the private field to a gateway that rejects unknown arguments.
+  test("drops Codex-private tool fields from routed declarations", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key" as const,
+      apiKey: "xai-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        tools: [
+          { type: "web_search_preview", external_web_access: true },
+          {
+            type: "namespace",
+            name: "workspace",
+            tools: [{ type: "function", name: "read", defer_loading: true, parameters: {} }],
+          },
+        ],
+        input: [{
+          type: "additional_tools",
+          tools: [{ type: "function", name: "loose", defer_loading: true, parameters: {} }],
+        }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      tools: Record<string, unknown>[];
+      input: Array<{ tools: Record<string, unknown>[] }>;
+    };
+
+    expect(body.tools[0]).toEqual({ type: "web_search_preview" });
+    expect(body.tools[1]).toMatchObject({ type: "function", name: "workspace__read" });
+    expect(body.tools[1]).not.toHaveProperty("defer_loading");
+    expect(body.input[0].tools[0]).not.toHaveProperty("defer_loading");
+  });
+
   test("preserves prompt_cache_key in the raw Responses passthrough body", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
@@ -1542,7 +1584,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(JSON.parse(secondRequest.body)).toEqual(firstBody);
   });
 
-  test("keyed platform flattens complete namespaces and preserves malformed ones", () => {
+  test("keyed platform flattens complete namespaces and drops ones it cannot express", () => {
     const adapter = createResponsesPassthroughAdapter(keyedProvider);
     const request = adapter.buildRequest({
       modelId: "gpt-5.6-sol",
@@ -1569,8 +1611,9 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       tool_choice: { type: string; name: string };
     };
 
+    // The empty `image_gen` group declares nothing, and relaying `type: "namespace"` is the shape a
+    // strict gateway rejects for the whole request.
     expect(body.tools).toEqual([
-      { type: "namespace", name: "image_gen", tools: [] },
       {
         type: "function",
         name: "web__run",
@@ -1948,10 +1991,8 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     }, meta);
     const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
 
-    expect(body.tools).toEqual([
-      { type: "namespace", name: "image_gen", tools: [] },
-      { type: "image_generation" },
-    ]);
+    // The empty namespace group is lowered away; only the hosted tool reaches the wire.
+    expect(body.tools).toEqual([{ type: "image_generation" }]);
   });
 
   test("hosted-tool preference uses the exact model id", () => {
@@ -1975,10 +2016,8 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     }, meta);
     const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
 
-    expect(body.tools).toEqual([
-      { type: "namespace", name: "image_gen", tools: [] },
-      { type: "image_generation" },
-    ]);
+    // The empty namespace group is lowered away; only the hosted tool reaches the wire.
+    expect(body.tools).toEqual([{ type: "image_generation" }]);
   });
 
   test("hosted-tool preference honors an OpenAI virtual model's selected id", () => {
