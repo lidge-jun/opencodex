@@ -52,7 +52,7 @@ Codex login を Pool モードで使うと、Providers の概要には任意の 
 | --- | --- | --- |
 | `key` | API キーを送信します(`Authorization: Bearer …`、またはアダプターにより `x-api-key` / `api-key`)。キーはリテラルまたは `${ENV_VAR}` 参照です。 | 大半のプロバイダー。 |
 | `forward` | **受け取った Codex 認証ヘッダーを**プロバイダーにそのまま中継します — キーを保存しません。ChatGPT ログインのパススルーです。 | OpenAI(`openai-responses` アダプター)。 |
-| `oauth` | 保存された OAuth アクセストークンを読み込み bearer キーとして使い、期限切れ前に自動更新します。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
+| `oauth` | 保存された OAuth アクセストークンを読み込み bearer キーとして使い、期限切れ前に自動更新します。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Gemini、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
 
 [`retryOn429`](/ja/reference/configuration/)（同一キーでの 429 リトライ）は API キー プロバイダー
 （`authMode: "key"`）のみに適用されます。OAuth・forward・ローカル プリセットは除外されます —
@@ -84,7 +84,7 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
+OAuth ログインを使うプロバイダープリセットは 10 個で、これに実験的な非公式デバイスフロー
 ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
 自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
 発行し `forward` モードのプロバイダーエントリを作成します。
@@ -96,6 +96,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login nous         # Nous Portal (デバイスグラント; 無料 + 有料モデル)
 ocx login kiro         # kiro-cli 認証情報の取り込み(トークンフォールバック対応)
 ocx login google-antigravity
+ocx login gemini-cli       # Gemini OAuth (Google アカウント) — Code Assist サブタイプ
+ocx login gemini-ai-studio # Gemini OAuth (Google アカウント) — AI Studio サブタイプ
 ocx login cursor       # Cursor 専用 PKCE ログイン
 ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
@@ -111,6 +113,8 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research サブスクリプションゲートウェイ（Hermes Agent と同じバックエンド）。`portal.nousresearch.com` へのデバイスグラントログイン; access トークンはリクエストごとの inference JWT。有料 + `:free` モデルの混在カタログ（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` など）はサインイン中のアカウントからライブ探索されます。Refresh トークンは単回使用で、更新のたびにローテーションされます。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
+| `gemini-cli` | `google` | `https://cloudcode-pa.googleapis.com` | Gemini OAuth (Google アカウント)、**Code Assist** サブタイプ。Google One AI Pro/Ultra プランで利用できます。ホストは Antigravity と同じですが、クライアントファミリーが異なります — 下記の「OAuth ログイン (Gemini)」を参照。 |
+| `gemini-ai-studio` | `google` | `https://generativelanguage.googleapis.com` | Gemini OAuth (Google アカウント)、**AI Studio** サブタイプ: API キーではなく bearer トークンで Generative Language API を使用します。自分で登録した OAuth クライアントが必要です。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
@@ -132,6 +136,65 @@ Providers ページでアカウントを追加し、別アカウントをログ�
 アカウント識別情報がない Kimi 認証情報は通常のログインではアクティブスロットを差し替えますが、明示的な **アカウントを追加** では既存スロットを保持し、別の新しいスロットをアクティブにします。Kiro アカウントはプロファイル ARN をキーに保存されます。
 `chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
+
+### OAuth ログイン (Gemini)
+
+Google アカウントで認可し、**OAuth サブタイプ**を選びます。Google は 2 つを異なる OAuth クライアント
+とスコープの背後に置いているため、各サブタイプは独自のアカウント集合を持つ別々のプロバイダーです
+— 一方に発行された資格情報はもう一方では受け付けられません。
+
+| サブタイプ | プロバイダー id | 内容 | 選ぶ基準 |
+| --- | --- | --- | --- |
+| **Code Assist** | `gemini-cli` | Google 公式 Gemini CLI が使うバックエンドである Cloud Code Assist。ログイン時に Code Assist プロジェクトを検出（必要なら onboard）し、以降すべてのリクエストに添えて送ります。 | 既定。Google One AI Pro / Ultra プランを含む通常の Google アカウント。 |
+| **AI Studio** | `gemini-ai-studio` | `x-goog-api-key` ではなく bearer トークンで到達する Generative Language API。 | 自分の Google OAuth クライアントを登録済みで、API キーではなく OAuth を使いたい場合。 |
+
+**ダッシュボードから。** **Providers → プロバイダーを追加 → Accounts** を開きます。*Gemini (Code
+Assist)* と *Gemini (AI Studio)* の 2 行が、それぞれサブタイプのラベル付きで表示されます。使いたい
+行をクリックし、開いたブラウザーで Google の同意画面を完了すると、その行はログインしたアカウントの
+メールアドレスに変わります。同じ行の**アカウントを追加**を使うと、最初のアカウントをログアウトさせ
+ずに 2 つ目の Google アカウントを認可できます。
+
+**CLI から。**
+
+```bash
+ocx login gemini-cli        # Code Assist サブタイプ
+ocx login gemini-ai-studio  # AI Studio サブタイプ
+ocx logout gemini-cli
+```
+
+ログインはブラウザーを開き、`http://127.0.0.1:51122/callback` で待ち受けます。ブラウザーがループ
+バックのリスナーに到達できない場合は、リダイレクト URL（または `code` のみ）をプロンプトに貼り
+付けてください。
+
+**Code Assist のプロジェクト検出。** トークン交換のあと、Code Assist サブタイプは `loadCodeAssist`
+を呼び、プロジェクトがまだ無いアカウントでは `onboardUser` も呼びます。検出したプロジェクト id は
+資格情報とともに保存され、更新時に再確認されます。プロジェクトを検出できない場合は、すべての
+リクエストが拒否される資格情報を保存する代わりに**ログインを失敗させます** — さもないとアカウント
+は「ログイン済み」に見えるのに何も動きません。その Google アカウントに Gemini Code Assist の
+アクセス権があることを確認してから再試行してください。
+
+**AI Studio には自分の OAuth クライアントが必要です。** Google 内蔵の Gemini CLI クライアントは
+generative-language スコープ向けに登録されていないため、自分の Google Cloud プロジェクトの
+クライアント資格情報（OAuth クライアントの種類は *デスクトップ アプリ*、承認済みリダイレクト URI に
+`http://127.0.0.1:51122/callback`）を渡すまで、このサブタイプは実行可能なメッセージとともに
+fail closed します:
+
+```bash
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_ID="<your-client-id>.apps.googleusercontent.com"
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET="<your-client-secret>"
+ocx login gemini-ai-studio
+```
+
+Code Assist サブタイプに設定は不要です。Google が Gemini CLI に同梱している公開クライアント識別子を
+使います。自分のクライアントを使いたい場合は `GEMINI_CLI_OAUTH_CLIENT_ID` /
+`GEMINI_CLI_OAUTH_CLIENT_SECRET` で上書きできます。
+
+:::caution[利用規約]
+Code Assist サブタイプは、CLI 自体ではなくプロキシから Google のファーストパーティ Gemini CLI
+クライアント識別子を提示します。このページの他の非公式ブリッジと同様、Google の規約に抵触する
+可能性があり、不正利用検知によってアクセスが停止されることがあります。AI Studio サブタイプに
+このリスクはありません — 自分で登録したクライアントを認可するためです。
+:::
 
 ### Cockpit Tools Antigravity のインポート
 

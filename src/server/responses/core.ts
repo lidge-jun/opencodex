@@ -2290,10 +2290,13 @@ async function handleResponsesInner(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
-        // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-        // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
-        // a fresh token with project metadata re-read from a different credential generation.
-        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
+        // Both Cloud Code Assist client families (Antigravity IDE and Gemini CLI) need the
+        // discovered CCA project id in their request envelope. Keep it paired with the token
+        // snapshot so an account rotation cannot mix a fresh token with project metadata re-read
+        // from a different credential generation.
+        const codeAssistEnvelope = route.provider.googleMode === "cloud-code-assist"
+          || route.provider.googleMode === "gemini-cli";
+        if (codeAssistEnvelope && !route.provider.project) {
           const projectId = resolved.projectId;
           if (projectId) route.provider = { ...route.provider, project: projectId };
         }

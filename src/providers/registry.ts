@@ -1,4 +1,4 @@
-import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, FastWire, GoogleAdapterMode, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
@@ -279,7 +279,7 @@ export interface ProviderRegistryEntry {
   jawcodeBundle?: string;
   extraMetadataAliases?: string[];
   metadataModelIdNormalize?: MetadataModelIdNormalize;
-  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  googleMode?: GoogleAdapterMode;
   project?: string;
   location?: string;
 }
@@ -301,6 +301,28 @@ export type ProviderConfigSeed = Pick<
 // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
 const ANTHROPIC_MODELS = ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
 const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+
+// Gemini CLI (Cloud Code Assist) seed catalog.
+//
+// Deliberately the PUBLIC Gemini model ids, not the Antigravity wire ids: the CLI OAuth client
+// talks to the same cloudcode-pa host but is a different client family, and the IDE-gated agent
+// wire ids (gemini-pro-agent, claude-*, gpt-oss-*) answer 404 for a CLI credential. Live
+// discovery is off for the same reason — CCA's :fetchAvailableModels is the IDE catalog.
+const GEMINI_CLI_MODELS = ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview"];
+const GEMINI_CLI_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-3.5-flash": 1_000_000,
+  "gemini-3.6-flash": 1_048_576,
+  "gemini-3.1-pro-preview": 1_048_576,
+};
+const GEMINI_CLI_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "gemini-3.6-flash": ["text", "image"],
+  "gemini-3.1-pro-preview": ["text", "image"],
+};
+const GEMINI_CLI_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
+  "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.1-pro-preview": ["low", "medium", "high"],
+};
 
 // 260814 GLM-5.3 is registered pre-emptively alongside 5.2 everywhere 5.2 appears. Z.AI's
 // devpack "How to Switch Models" page (docs.z.ai/devpack/latest-model) lists glm-5.3 and
@@ -1522,6 +1544,39 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
   { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.7-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  // Gemini OAuth (Google account), Code Assist subtype — the Gemini CLI first-party client.
+  // Same cloudcode-pa host as Antigravity but a DIFFERENT client family: `googleMode:
+  // "gemini-cli"` selects the CLI's plain `{model, project, request}` envelope and the
+  // `GeminiCLI/<ver>` User-Agent. See src/oauth/gemini-cli.ts.
+  {
+    id: "gemini-cli", label: "Gemini (Code Assist)", adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com",
+    // No allowBaseUrlOverride: unlike Antigravity (daily/prod hosts) the CLI endpoint is a single
+    // fixed host, so pinning it keeps the Google OAuth bearer from reaching an operator-set URL.
+    authKind: "oauth", dashboardPreset: true, dashboardUrl: "https://aistudio.google.com",
+    models: GEMINI_CLI_MODELS, defaultModel: "gemini-3.5-flash",
+    modelContextWindows: GEMINI_CLI_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: GEMINI_CLI_MODEL_INPUT_MODALITIES,
+    modelReasoningEfforts: GEMINI_CLI_MODEL_REASONING_EFFORTS,
+    // jawcodeBundle routes model metadata to Google's catalog. No extraMetadataAliases: the
+    // "gemini" alias already belongs to the `google` entry and a second claim would shadow it.
+    googleMode: "gemini-cli", jawcodeBundle: "google",
+    note: "OAuth (Google account) — Code Assist subtype. Works with Google One AI Pro/Ultra plans.",
+  },
+  // Gemini OAuth, AI Studio subtype: generativelanguage.googleapis.com with an OAuth bearer
+  // instead of an API key. Requires operator-registered client credentials (see oauth/gemini-cli.ts);
+  // login fails closed with an actionable message when they are unset.
+  {
+    id: "gemini-ai-studio", label: "Gemini (AI Studio OAuth)", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com",
+    // Fixed Generative Language host; see the gemini-cli entry for why the bearer is not
+    // allowed to follow an operator-set baseUrl.
+    authKind: "oauth", dashboardPreset: true, dashboardUrl: "https://aistudio.google.com/apikey",
+    models: GEMINI_CLI_MODELS, defaultModel: "gemini-3.5-flash",
+    modelContextWindows: GEMINI_CLI_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: GEMINI_CLI_MODEL_INPUT_MODALITIES,
+    modelReasoningEfforts: GEMINI_CLI_MODEL_REASONING_EFFORTS,
+    googleMode: "ai-studio", jawcodeBundle: "google",
+    note: "OAuth (Google account) — AI Studio subtype. Needs GEMINI_AI_STUDIO_OAUTH_CLIENT_ID/SECRET.",
+  },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -2799,8 +2854,8 @@ export function providerCodexAccountMode(id: string, provider?: OcxProviderConfi
  */
 export function effectiveGoogleMode(
   providerId: string,
-  prov: { adapter?: string; googleMode?: "ai-studio" | "vertex" | "cloud-code-assist" },
-): "ai-studio" | "vertex" | "cloud-code-assist" | null {
+  prov: { adapter?: string; googleMode?: GoogleAdapterMode },
+): GoogleAdapterMode | null {
   if (prov.adapter !== "google") return null;
   return prov.googleMode ?? getProviderRegistryEntry(providerId)?.googleMode ?? "ai-studio";
 }

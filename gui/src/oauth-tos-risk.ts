@@ -8,7 +8,11 @@
 export type OAuthTosRiskLevel = "high" | "elevated";
 
 const HIGH_RISK = new Set(["anthropic", "google-antigravity"]);
-const ELEVATED_RISK = new Set(["github-copilot", "cursor"]);
+// gemini-cli reuses Google's first-party Gemini CLI client id from a proxy rather than from the
+// CLI itself — an unofficial bridge, same class as the two below. gemini-ai-studio is deliberately
+// NOT listed: that subtype authorizes the operator's OWN registered OAuth client, so it carries no
+// first-party-impersonation risk.
+const ELEVATED_RISK = new Set(["github-copilot", "cursor", "gemini-cli"]);
 
 export function oauthTosRisk(providerId: string): OAuthTosRiskLevel | null {
   const id = providerId.trim().toLowerCase();

@@ -1571,6 +1571,8 @@ export const ko: Record<TKey, string> = {
   "modal.accountCodexPool": "ChatGPT 계정 풀",
   "modal.accountLoggedIn": "로그인됨",
   "modal.accountLoggedOut": "로그인 안 됨",
+  "modal.accountGeminiCodeAssist": "Google 계정 · Code Assist 하위 유형",
+  "modal.accountGeminiAiStudio": "Google 계정 · AI Studio 하위 유형(자체 OAuth 클라이언트 필요)",
   "quota.fiveHourLimit": "5시간 한도",
   "quota.weeklyLimit": "주간 한도",
   "quota.monthlyLimit": "30일 한도",
