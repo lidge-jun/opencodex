@@ -915,6 +915,12 @@ export function addFinalRequestLog(
   const loggedUsage = aggregate?.usage ?? existing.usage;
   const usageStatus = aggregate?.status ?? existing.status;
   const totalTokens = aggregate?.totalTokens ?? existing.totalTokens;
+  // Sanitize at the logging layer, not only at the one call site that populates this today.
+  // The value originates in an upstream-supplied model id, so an unsanitized newline would
+  // let a single field forge a record boundary in any line-oriented log viewer. Doing it here
+  // means a future caller cannot reintroduce the hole by forgetting to sanitize first, and
+  // the in-memory /api/logs row matches what usage.jsonl already stores.
+  const shadowCallRewrittenFrom = sanitizeLogMetadataString(logCtx.shadowCallRewrittenFrom);
   addLog({
     requestId,
     timestamp: start,
@@ -929,9 +935,7 @@ export function addFinalRequestLog(
       : {}),
     ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
-    ...(logCtx.shadowCallRewrittenFrom
-      ? { shadowCallRewrittenFrom: logCtx.shadowCallRewrittenFrom }
-      : {}),
+    ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
     ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),

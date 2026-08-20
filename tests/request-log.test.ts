@@ -284,6 +284,40 @@ describe("request log metadata", () => {
     }
   });
 
+  // The value is caller-controlled, so proving it lands is only half the contract: the
+  // persistence path must also be the SANITIZED one. A test that only ever writes a safe
+  // short slug passes identically whether `sanitizeLogMetadataString` is applied or not.
+  test("the shadow marker reaches usage.jsonl through the sanitizer, not raw", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-shadow-unsafe-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      addFinalRequestLog("ocx-shadow-unsafe", 1, {
+        model: "grok-4.5",
+        provider: "xai",
+        // A newline would let one field forge a record boundary in a line-oriented log
+        // viewer, and the trailing run is long enough to be over the 64-character bound.
+        shadowCallRewrittenFrom: `gpt-5.6-luna\nInjected: yes ${"x".repeat(80)}`,
+      }, 200);
+
+      const [persisted] = readUsageEntries();
+      const marker = persisted?.shadowCallRewrittenFrom;
+      expect(marker).toBeDefined();
+      expect(marker).not.toContain("\n");
+      expect(marker!.length).toBeLessThanOrEqual(64);
+      expect(marker!.startsWith("gpt-5.6-luna")).toBe(true);
+      expect(getRequestLogEntries()[0]?.shadowCallRewrittenFrom).not.toContain("\n");
+    } finally {
+      clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
     const a = beginRequestAttempt(1, "provisional-a", "model-a", "openai-chat");
     noteAttemptSend(a, 100);

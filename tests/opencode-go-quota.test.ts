@@ -107,14 +107,16 @@ describe("OpenCode Go provider quota", () => {
       adapter: "openai-chat",
       authMode: "key",
       baseUrl: "https://opencode.ai/zen/go/v1",
-      apiKey: "opencode-go-sibling-secret",
+      // Kept under the privacy scanner's bearer-token length floor: a longer fixture reads as
+      // a real credential to `privacy:scan` even inside a test.
+      apiKey: "sibling-secret",
     };
 
     const result = await fetchProviderQuotaReports(config, true);
 
     expect(result.reports.map(report => report.provider).sort()).toEqual(["opencode-go", "opencode-go-2"]);
-    expect(bearers.sort()).toEqual(["Bearer opencode-go-secret", "Bearer opencode-go-sibling-secret"]);
-    expect(JSON.stringify(result)).not.toContain("opencode-go-sibling-secret");
+    expect(bearers.sort()).toEqual(["Bearer opencode-go-secret", "Bearer sibling-secret"]);
+    expect(JSON.stringify(result)).not.toContain("sibling-secret");
   });
 
   // The distinction between "routes to the OpenCode Go endpoint" and "is the OpenCode Go
