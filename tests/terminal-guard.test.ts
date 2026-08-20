@@ -3,6 +3,7 @@ import {
   analyzeTerminalTurn,
   buildContinuationRequest,
   guardTerminalEventStream,
+  isTerminalGuardPassthroughOnly,
 } from "../src/server/responses/terminal-guard";
 import { buildResponseJSON } from "../src/bridge";
 import type { AdapterEvent, OcxParsedRequest } from "../src/types";
@@ -234,6 +235,16 @@ describe("terminal guard", () => {
 
     expect(actual.filter(event => event.type === "heartbeat")).toHaveLength(50);
     expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+  });
+
+  test("does not retain passthrough-only liveness or tool argument fragments", () => {
+    expect(isTerminalGuardPassthroughOnly({ type: "heartbeat" })).toBe(true);
+    expect(isTerminalGuardPassthroughOnly({
+      type: "tool_call_delta",
+      arguments: "x".repeat(1024 * 1024),
+    })).toBe(true);
+    expect(isTerminalGuardPassthroughOnly({ type: "tool_call_start", id: "call_1", name: "exec_command" })).toBe(false);
+    expect(isTerminalGuardPassthroughOnly({ type: "text_delta", text: "working" })).toBe(false);
   });
 
   test("stops after the configured continuation bound", async () => {
