@@ -10,6 +10,7 @@ import {
   opencodeGlobalConfigPath,
   type DshGeneratedConfig,
   type ExportModel,
+  type McodeGeneratedConfig,
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
@@ -67,6 +68,7 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
         liveModels: false,
         models: ["m1", "m2"],
         modelContextWindows: { m1: 128_000 },
+        modelReasoningEfforts: { m1: ["none", "minimal", "low", "high"] },
       },
       b: {
         adapter: "openai-chat",
@@ -203,6 +205,22 @@ describe("GET /api/client-config", () => {
       xhigh: "xhigh",
       max: "max",
     });
+  }, 15_000);
+
+  test("MCode response carries catalog context and its usable reasoning ladder", async () => {
+    const response = await clientConfigApi(baseConfig(), "?client=mcode");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+    const provider = (body.config as McodeGeneratedConfig).custom_provider[OPENCODE_PROVIDER_ID]!;
+
+    expect(body.format).toBe("yaml");
+    expect(Bun.YAML.parse(body.text)).toEqual(body.config as Record<string, unknown>);
+    expect(provider.models["a/m1"]).toEqual({
+      limit: { context: 128_000 },
+      thinking: { effortOptions: ["minimal", "low", "high"] },
+    });
+    expect(provider.models["b/no-context"]).toEqual({});
+    expect(body.modelsWithoutLimits).toBeGreaterThan(0);
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {

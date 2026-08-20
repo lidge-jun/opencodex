@@ -763,7 +763,11 @@ traffic cannot be sent off-machine, owns the temporary bridge lifecycle, and ref
 destination, region and credential overrides. It is
 loopback-only because MMX cannot carry the dedicated remote-admission header. MiniMax Code uses
 the separate reversible `custom_provider.opencodex` file integration and is likewise
-loopback-only; its generated block never changes `defaultModel`.
+loopback-only; its generated block never changes `defaultModel`. Each generated MCode model
+copies an authoritative catalog context window into `limit.context` and a nonempty canonical
+reasoning ladder into `thinking.effortOptions`. Missing capabilities stay absent instead of
+falling back to OpenCodex guesses, and the integration does not write the removed
+`thinking.effort` / `defaultEffort` fields because MCode owns the active effort per session.
 
 ## Anthropic structured-output compatibility
 

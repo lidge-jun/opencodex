@@ -37,12 +37,20 @@ custom_provider:
       baseURL: http://127.0.0.1:10100
       authMode: api-key
     models:
-      anthropic/claude-opus-5: {}
+      anthropic/claude-opus-5:
+        limit:
+          context: 1000000
+        thinking:
+          effortOptions: [low, medium, high, xhigh, max]
 ```
 
-The real generated model list comes from the running OpenCodex catalog. The block does
-not write a real key, does not replace `defaultModel`, and does not change your MiniMax
-login. In MCode, choose a model under `custom_provider:opencodex/...`.
+The real generated model list and its known context windows and reasoning-effort ladders
+come from the running OpenCodex catalog. A model with no authoritative context window or
+effort ladder omits that field instead of receiving a guessed value. MCode keeps the
+currently selected effort in the session, so OpenCodex exports `effortOptions` without
+overwriting that selection. The block does not write a real key, does not replace
+`defaultModel`, and does not change your MiniMax login. In MCode, choose a model under
+`custom_provider:opencodex/...`.
 
 `ocx mcode` verifies that this provider points at the currently running proxy before it
 launches the client. If the port changed, refresh the managed block by running the enable

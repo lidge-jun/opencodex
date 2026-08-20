@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import {
   ClientPathError,
+  EXPORT_CLIENTS,
   LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCODE_PROVIDER_ID,
   buildClientConfig,
@@ -39,14 +40,21 @@ function context(): ExportContext {
     baseUrl: "http://127.0.0.1:10100/v1",
     config: CONFIG,
     models: [
-      { namespaced: "openai/gpt-5.6-sol", provider: "openai", id: "gpt-5.6-sol" },
+      {
+        namespaced: "openai/gpt-5.6-sol",
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        contextWindow: 272_000,
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "xhigh",
+      },
       { namespaced: "anthropic/claude-opus-5", provider: "anthropic", id: "claude-opus-5" },
     ],
   };
 }
 
 describe("MiniMax Code client config", () => {
-  test("adds only custom_provider.opencodex and never changes the selected model", () => {
+  test("adds only custom_provider.opencodex, syncs model capabilities, and never changes the selected model", () => {
     const document = buildClientConfig("mcode", context()) as McodeGeneratedConfig;
     expect(Object.keys(document)).toEqual(["custom_provider"]);
     expect(document).not.toHaveProperty("defaultModel");
@@ -63,9 +71,60 @@ describe("MiniMax Code client config", () => {
       },
       models: {
         "anthropic/claude-opus-5": {},
-        "openai/gpt-5.6-sol": {},
+        "openai/gpt-5.6-sol": {
+          limit: { context: 272_000 },
+          thinking: { effortOptions: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+        },
       },
     });
+    expect(provider.models["openai/gpt-5.6-sol"]?.thinking).not.toHaveProperty("effort");
+    expect(provider.models["openai/gpt-5.6-sol"]?.thinking).not.toHaveProperty("defaultEffort");
+    expect(EXPORT_CLIENTS.mcode.summarize(document)).toEqual({ modelCount: 2, modelsWithoutLimits: 1 });
+  });
+
+  test("omits invalid context windows and empty effort ladders instead of guessing", () => {
+    const document = buildClientConfig("mcode", {
+      ...context(),
+      models: [
+        { namespaced: "mock/zero", provider: "mock", id: "zero", contextWindow: 0, reasoningEfforts: [] },
+        { namespaced: "mock/nan", provider: "mock", id: "nan", contextWindow: Number.NaN },
+      ],
+    }) as McodeGeneratedConfig;
+
+    expect(document.custom_provider[OPENCODE_PROVIDER_ID]!.models).toEqual({
+      "mock/nan": {},
+      "mock/zero": {},
+    });
+  });
+
+  test("canonicalizes declared effort options and drops unsupported values and Codex's none sentinel", () => {
+    const document = buildClientConfig("mcode", {
+      ...context(),
+      models: [{
+        namespaced: "mock/reasoning",
+        provider: "mock",
+        id: "reasoning",
+        reasoningEfforts: ["max", "none", "unsupported", "minimal", "low", "high", "low"],
+      }],
+    }) as McodeGeneratedConfig;
+
+    expect(document.custom_provider[OPENCODE_PROVIDER_ID]!.models["mock/reasoning"]).toEqual({
+      thinking: { effortOptions: ["minimal", "low", "high", "max"] },
+    });
+  });
+
+  test("omits thinking when none is the only declared effort", () => {
+    const document = buildClientConfig("mcode", {
+      ...context(),
+      models: [{
+        namespaced: "mock/no-reasoning",
+        provider: "mock",
+        id: "no-reasoning",
+        reasoningEfforts: ["none"],
+      }],
+    }) as McodeGeneratedConfig;
+
+    expect(document.custom_provider[OPENCODE_PROVIDER_ID]!.models["mock/no-reasoning"]).toEqual({});
   });
 
   test("native YAML round-trips and contains no credential-shaped value", () => {

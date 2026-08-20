@@ -26,7 +26,9 @@ loopback，而且絕不會寫入真實憑證。
 MiniMax Code 依序遵循 `MINIMAX_DATA_DIR`、`MAVIS_DATA_DIR`，最後才回退到
 `~/.minimax`。其受管理區塊只擁有 `custom_provider.opencodex`，不會變更
 `defaultModel`、MiniMax 憑證來源或使用者的 MiniMax 登入。連接後請在 MCode
-中選擇 `custom_provider:opencodex/<provider/model>`。
+中選擇 `custom_provider:opencodex/<provider/model>`。重新整理整合也會更新有可靠來源的
+逐模型 context window 與 reasoning-effort 選項；未知能力會省略，而 MCode session
+目前選取的 effort 不會被覆寫。
 
 路徑遵循客戶端自己的環境覆寫（environment override）。對 OMP 而言，`OMP_PROFILE` 以存在與否優先於 `PI_PROFILE`，即使明確為空也一樣。具名 profile 會把 `PI_CONFIG_DIR` 當作相對於使用者家目錄的目錄名稱，並忽略 `PI_CODING_AGENT_DIR`；沒有具名 profile 時，`PI_CODING_AGENT_DIR` 勝出。OMP 支援 provider 層級的 headers，但這個最初的整合刻意只支援 loopback；遠端 `x-opencodex-api-key` 的連線設定被延後。搬移過的 `HERMES_HOME`、`KIMI_CODE_HOME` 與 `XDG_CONFIG_HOME` 路徑同樣會被遵循，而非猜測。表格列出每個客戶端的預設值。
 
