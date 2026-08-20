@@ -74,4 +74,19 @@ describe("bindAntigravityProject", () => {
       initialSelection.indexOf('setActiveAccount("google-antigravity"'),
     );
   });
+
+  test("threads Antigravity accountId into image and web-search sidecar fetches", () => {
+    const source = readFileSync(new URL("../src/server/responses/core.ts", import.meta.url), "utf8");
+    const imageCall = source.slice(
+      source.indexOf("const imgResponse = await runWithImageBridge({"),
+      source.indexOf("const wsResponse = await runWithWebSearch({"),
+    );
+    const webSearchCall = source.slice(
+      source.indexOf("const wsResponse = await runWithWebSearch({"),
+      source.indexOf("if (wsResponse.body)"),
+    );
+
+    expect(imageCall).toContain("accountId: antigravityAccountId");
+    expect(webSearchCall).toContain("accountId: antigravityAccountId");
+  });
 });

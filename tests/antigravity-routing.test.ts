@@ -188,6 +188,25 @@ describe("Antigravity HTTP cooldown fail-fast", () => {
     expect(getAntigravityAccountCooldown("account-http-retry")?.reason).toBe("quota_exhausted");
   });
 
+  test("selects the next eligible account after the first cools on 429", async () => {
+    mockFetch([
+      new Response(googleError(429, "RESOURCE_EXHAUSTED", "rate limit, try again"), {
+        status: 429,
+        headers: { "Retry-After": "0" },
+      }),
+    ]);
+
+    const res = await fetchAntigravityWithRetry(antigravityRequest, {
+      timeoutMs: 5_000,
+      accountId: "account-a",
+    });
+
+    expect(res.status).toBe(429);
+    expect(getAntigravityAccountCooldown("account-a")?.reason).toBe("rate_limited");
+    expect(nextAntigravityAccount(ACCOUNT_IDS, undefined)).toBe("account-b");
+    expect(nextAntigravityAccount(ACCOUNT_IDS, "account-a")).toBe("account-b");
+  });
+
   test("does not retry a geo-blocked 403 after recording cooldown", async () => {
     const mock = mockFetch([
       new Response(
