@@ -234,6 +234,96 @@ test("POST /v1/images/edits with no image URL does not call xAI generation", asy
   }
 });
 
+test("POST /v1/images/generations rejects xAI batches that exceed the aggregate output budget", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("api.x.ai")) {
+      return Response.json({
+        data: [
+          { b64_json: "dHJhaW4=" },
+          { url: "https://cdn.example.test/huge.png" },
+        ],
+      });
+    }
+    if (url.includes("cdn.example.test/huge.png")) {
+      // Declared size exceeds the remaining decoded/encoded budget; the reader
+      // rejects from Content-Length without buffering a 100 MiB body.
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.close(); },
+      }), {
+        status: 200,
+        headers: { "content-length": String(IMAGES_RESPONSE_MAX_BYTES) },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2", n: 2 }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toContain("xAI image generation output too large");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations returns multiple xAI URL images under the aggregate budget", async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("api.x.ai")) {
+      return Response.json({
+        data: [
+          { url: "https://cdn.example.test/one.png" },
+          { url: "https://cdn.example.test/two.png" },
+        ],
+      });
+    }
+    if (url.includes("cdn.example.test/")) {
+      return new Response(png, { status: 200, headers: { "content-length": String(png.byteLength) } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "two trains", model: "gpt-image-2", n: 2 }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data?: Array<{ b64_json?: string }> };
+    expect(json.data).toHaveLength(2);
+    expect(json.data?.[0]?.b64_json).toBe(Buffer.from(png).toString("base64"));
+    expect(json.data?.[1]?.b64_json).toBe(Buffer.from(png).toString("base64"));
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);

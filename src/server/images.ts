@@ -51,7 +51,8 @@ const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
 /**
  * Cap for the buffered upstream response body (100 MiB). Images responses are JSON documents
  * containing base64-encoded images — typically a few MB. This prevents an oversized or malicious
- * response from exhausting process memory.
+ * response from exhausting process memory. The xAI `/v1/images` relay also uses this as the
+ * combined decoded-byte and base64-encoded output budget across the whole batch.
  */
 export const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 
@@ -119,6 +120,37 @@ const CCA_BLOCKING_FINISH_REASONS: ReadonlySet<string> = new Set([
   "SPII",
   "RECITATION",
 ]);
+
+function decodedBytesFromBase64(encoded: string): number {
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((encoded.length * 3) / 4) - padding);
+}
+
+/** Largest decoded payload whose base64 form still fits in `remainingEncoded`. */
+function remainingRelayDecodedBytes(spentDecoded: number, spentEncoded: number): number {
+  const remainingDecoded = IMAGES_RESPONSE_MAX_BYTES - spentDecoded;
+  const remainingEncoded = IMAGES_RESPONSE_MAX_BYTES - spentEncoded;
+  if (remainingDecoded <= 0 || remainingEncoded < 4) return 0;
+  return Math.max(0, Math.min(remainingDecoded, 3 * Math.floor(remainingEncoded / 4)));
+}
+
+function wouldExceedRelayBudget(
+  spentDecoded: number,
+  spentEncoded: number,
+  decodedBytes: number,
+  encodedBytes: number,
+): boolean {
+  return spentDecoded + decodedBytes > IMAGES_RESPONSE_MAX_BYTES
+    || spentEncoded + encodedBytes > IMAGES_RESPONSE_MAX_BYTES;
+}
+
+function xaiImageOutputTooLarge(): Response {
+  return formatErrorResponse(
+    502,
+    "upstream_error",
+    `xAI image generation output too large (exceeded ${IMAGES_RESPONSE_MAX_BYTES} bytes)`,
+  );
+}
 
 /**
  * Race a promise against an abort signal. If the signal aborts first, reject
@@ -450,20 +482,39 @@ async function tryXaiImageRelay(
       timeoutMs,
     );
     const data: Array<{ b64_json: string }> = [];
+    let spentDecoded = 0;
+    let spentEncoded = 0;
     for (const img of result.images) {
       if (typeof img.b64_json === "string" && img.b64_json) {
+        const encodedBytes = img.b64_json.length;
+        const decodedBytes = decodedBytesFromBase64(img.b64_json);
+        if (wouldExceedRelayBudget(spentDecoded, spentEncoded, decodedBytes, encodedBytes)) {
+          return xaiImageOutputTooLarge();
+        }
         data.push({ b64_json: img.b64_json });
+        spentDecoded += decodedBytes;
+        spentEncoded += encodedBytes;
         continue;
       }
       if (typeof img.url !== "string" || !img.url) continue;
+      const remaining = remainingRelayDecodedBytes(spentDecoded, spentEncoded);
+      if (remaining <= 0) return xaiImageOutputTooLarge();
       const fetched = await fetch(img.url, { signal: linkedSignal.signal, redirect: "follow" });
       if (!fetched.ok) continue;
       const observed = await readImageResponseBytes(fetched, {
-        maxBytes: IMAGES_RESPONSE_MAX_BYTES,
+        maxBytes: remaining,
         signal: linkedSignal.signal,
       });
-      if (observed.oversized || observed.bytes.byteLength === 0) continue;
-      data.push({ b64_json: Buffer.from(observed.bytes).toString("base64") });
+      if (observed.oversized) return xaiImageOutputTooLarge();
+      if (observed.bytes.byteLength === 0) continue;
+      const decodedBytes = observed.bytes.byteLength;
+      const b64 = Buffer.from(observed.bytes).toString("base64");
+      if (wouldExceedRelayBudget(spentDecoded, spentEncoded, decodedBytes, b64.length)) {
+        return xaiImageOutputTooLarge();
+      }
+      data.push({ b64_json: b64 });
+      spentDecoded += decodedBytes;
+      spentEncoded += b64.length;
     }
     if (data.length === 0) {
       return formatErrorResponse(502, "upstream_error", "xAI image generation returned no usable images");
