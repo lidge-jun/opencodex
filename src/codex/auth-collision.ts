@@ -11,6 +11,7 @@ export interface CodexTokens {
   access_token: string;
   account_id: string;
   id_token?: string;
+  refresh_token?: string;
 }
 
 /**
@@ -42,7 +43,7 @@ export function readCodexTokensResult(): CodexTokenReadResult {
   }
   try {
     const j = JSON.parse(raw) as {
-      tokens?: { access_token?: string; account_id?: string; id_token?: string };
+      tokens?: { access_token?: string; account_id?: string; id_token?: string; refresh_token?: string };
     };
     if (!j?.tokens?.access_token) return { status: "invalid" };
     return {
@@ -51,6 +52,7 @@ export function readCodexTokensResult(): CodexTokenReadResult {
         access_token: j.tokens.access_token,
         account_id: j.tokens.account_id ?? "",
         id_token: j.tokens.id_token,
+        refresh_token: j.tokens.refresh_token,
       },
     };
   } catch {

@@ -1,6 +1,6 @@
 import { getCodexAccountCredential } from "./account-store";
 import { isAccountNeedsReauth } from "./account-runtime-state";
-import { MAIN_CODEX_ACCOUNT_ID, isMainAccountTokenLive } from "./main-account";
+import { MAIN_CODEX_ACCOUNT_ID, isMainAccountCredentialUsable, isMainAccountTokenLive } from "./main-account";
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
@@ -32,8 +32,8 @@ export function isCodexAccountUsable(
     // before reservation or token materialization. Treat cached main as a routing
     // candidate without touching the credential file so affinity is not rebound.
     if (options.nativeMainSelectionOnly) return true;
-    // Main account: credential is the read-only ~/.codex/auth.json token (Option A).
-    return (options.isMainAccountTokenLive ?? isMainAccountTokenLive)();
+    // Main account: credential is ~/.codex/auth.json and may be refreshed from its native refresh token.
+    return (options.isMainAccountTokenLive ?? isMainAccountCredentialUsable)();
   }
   const exists = (config.codexAccounts ?? [])
     .some(account => isSelectableCodexPoolAccount(account) && account.id === accountId);

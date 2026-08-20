@@ -51,7 +51,7 @@ import {
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
-  materializeCodexUpstreamAuth,
+  materializeCodexUpstreamAuthAsync,
   CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
@@ -60,6 +60,7 @@ import {
   releaseCodexAuthContextProbeLease,
   type CodexAuthContext,
 } from "../../codex/auth-context";
+import type { NativeMainRefreshDependencies } from "../../codex/main-account";
 import {
   formatCodexProviderForLog,
   recordCodexUpstreamOutcome,
@@ -129,13 +130,31 @@ import {
   codexAccountGatedCanonicalWireModel,
   decodeRequestErrorResponse,
   handleResponses,
+  nativeMainRefreshFailureResponse,
   preAuthUpstreamHostCircuitKey,
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
+import {
+  CodexCredentialRefreshBusyError,
+  CodexCredentialRefreshLockTimeoutError,
+  CodexCredentialRefreshStaleError,
+  TokenRefreshError,
+} from "../../codex/account-store";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+
+export type HandleResponsesCompactOptions = {
+  admission?: DataPlaneAdmission;
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+};
+
+function compactOptions(admissionOrOptions?: DataPlaneAdmission | HandleResponsesCompactOptions): HandleResponsesCompactOptions {
+  if (!admissionOrOptions) return {};
+  if ("kind" in admissionOrOptions && "source" in admissionOrOptions) return { admission: admissionOrOptions };
+  return admissionOrOptions;
+}
 
 export function compactResponseTooLargeError(): Response {
   return new Response(JSON.stringify({
@@ -165,14 +184,16 @@ async function resolveAlternateCompactContext(args: {
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
   turnAdmissionLease?: AdmissionLease;
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
 }): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
-  const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
+  const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease, nativeMainRefreshDependencies } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
   try {
     const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+      nativeMainRefreshDependencies,
     });
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
@@ -273,8 +294,10 @@ export async function handleResponsesCompact(
   config: OcxConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
-  admission?: DataPlaneAdmission,
+  admissionOrOptions?: DataPlaneAdmission | HandleResponsesCompactOptions,
 ): Promise<Response> {
+  const options = compactOptions(admissionOrOptions);
+  const admission = options.admission;
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
@@ -380,9 +403,17 @@ export async function handleResponsesCompact(
           modelId: selectedModelId,
           substituteMainCredentialForDirect: substituteMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+          nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
-        const selected = materializeCodexUpstreamAuth(req.headers, authCtx, { substituteMainCredential });
+        const selected = await materializeCodexUpstreamAuthAsync({
+          headers: req.headers,
+          ctx: authCtx,
+          options: {
+            substituteMainCredential,
+            nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+          },
+        });
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
           const value = selected.get(name);
@@ -395,6 +426,12 @@ export async function handleResponsesCompact(
         }
       }
     } catch (err) {
+      if (
+        err instanceof TokenRefreshError
+        || err instanceof CodexCredentialRefreshLockTimeoutError
+        || err instanceof CodexCredentialRefreshBusyError
+        || err instanceof CodexCredentialRefreshStaleError
+      ) return nativeMainRefreshFailureResponse(err, req.signal);
       if (err instanceof CodexAccountCooldownError) {
         return cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace);
       }
@@ -585,6 +622,7 @@ export async function handleResponsesCompact(
         selectedModelId,
         excludeAccountId: authCtx.accountId,
         turnAdmissionLease,
+        nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
       });
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
@@ -692,7 +730,12 @@ export async function handleResponsesCompact(
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
+  const response = await handleResponses(internalReq, config, logCtx, {
+    abortSignal: req.signal,
+    turnAdmissionLease,
+    ...(admission ? { admission } : {}),
+    nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+  });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {

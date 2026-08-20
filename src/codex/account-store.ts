@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { closeSync, existsSync, readFileSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, existsSync, readFileSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ConfigMutationLockError,
@@ -17,7 +17,7 @@ type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
 type RawCodexAccountStore = Record<string, CodexAccountCredentials | CodexAccountCredentialRecord>;
 
-const REFRESH_SKEW_MS = 60_000;
+export const CODEX_REFRESH_SKEW_MS = 60_000;
 const REFRESH_LOCK_STALE_MS = 60_000;
 const REFRESH_LOCK_WAIT_MS = REFRESH_LOCK_STALE_MS + 5_000;
 const REFRESH_LOCK_POLL_MS = 50;
@@ -203,9 +203,8 @@ export function saveCodexAccountCredentialIfGeneration(
     if (!current || current.generation !== generation || current.deletedAt != null || !current.credential) {
       return false;
     }
-    const refreshGrantFingerprint = current.credential.refreshToken === cred.refreshToken
-      ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
-      : refreshGrantFingerprintForToken(cred.refreshToken);
+    const refreshGrantFingerprint = current.refreshGrantFingerprint
+      ?? refreshGrantFingerprintForToken(current.credential.refreshToken);
     store[id] = {
       credential: cred,
       generation: generation + 1,
@@ -287,6 +286,9 @@ function withCredentialMutationLockSync<T>(fn: () => T): T {
 
 type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
 type CodexRefreshResult = CodexTokenResult & { credential?: CodexAccountCredentials };
+export interface CodexAccountStoreRefreshDependencies {
+  readonly fetch?: typeof fetch;
+}
 const MAX_CODEX_REFRESH_FLIGHTS = 32;
 const CODEX_REFRESH_FLIGHT_STALE_MS = 120_000;
 interface RefreshFlight {
@@ -295,10 +297,11 @@ interface RefreshFlight {
   abort: AbortController;
 }
 const refreshLocks = new Map<string, RefreshFlight>();
+const abandonedRefreshLockOwners = new Set<string>();
 
-function codexRefreshLockPath(lockKey: string): string {
+function codexRefreshLockPath(lockKey: string, directory = getConfigDir()): string {
   const digest = createHash("sha256").update(lockKey).digest("hex").slice(0, 32);
-  return join(getConfigDir(), `codex-refresh-${digest}.lock`);
+  return join(directory, `codex-refresh-${digest}.lock`);
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -321,58 +324,202 @@ function errCode(err: unknown): string | undefined {
   return err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : undefined;
 }
 
-function isRefreshLockStale(path: string): boolean {
+interface RefreshLockOwner {
+  readonly owner: string;
+  readonly pid: number;
+  readonly acquiredAt: number;
+  readonly abandonedAt?: number;
+}
+
+function refreshLockOwner(path: string): RefreshLockOwner | undefined {
   try {
     hardenExistingSecret(path);
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as { acquiredAt?: unknown };
-    return typeof parsed.acquiredAt !== "number" || Date.now() - parsed.acquiredAt > REFRESH_LOCK_STALE_MS;
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Partial<RefreshLockOwner>;
+    if (typeof parsed.owner !== "string" || typeof parsed.pid !== "number" || typeof parsed.acquiredAt !== "number") {
+      return undefined;
+    }
+    return {
+      owner: parsed.owner,
+      pid: parsed.pid,
+      acquiredAt: parsed.acquiredAt,
+      ...(typeof parsed.abandonedAt === "number" ? { abandonedAt: parsed.abandonedAt } : {}),
+    };
   } catch {
-    return true;
+    return undefined;
   }
 }
 
-async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
-  hardenConfigDir();
-  const dir = getConfigDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+function refreshLockOwnerIsLive(owner: RefreshLockOwner): boolean {
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (error) {
+    return errCode(error) === "EPERM";
+  }
+}
 
-  const path = codexRefreshLockPath(lockKey);
-  const deadline = Date.now() + REFRESH_LOCK_WAIT_MS;
-  let fd: number | null = null;
-  while (fd == null) {
-    if (signal.aborted) throw signal.reason;
+function refreshLockIsStale(path: string): boolean {
+  const owner = refreshLockOwner(path);
+  if (owner?.abandonedAt !== undefined || (owner && abandonedRefreshLockOwners.has(owner.owner))) return true;
+  if (!owner) {
     try {
-      fd = openSync(path, "wx", 0o600);
-      writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
-      break;
-    } catch (err) {
-      if (errCode(err) !== "EEXIST") throw err;
-      if (isRefreshLockStale(path)) {
-        try {
-          unlinkSync(path);
-        } catch (unlinkErr) {
-          if (errCode(unlinkErr) !== "ENOENT") throw unlinkErr;
-        }
-        continue;
-      }
+      const parsed = JSON.parse(readFileSync(path, "utf-8")) as { acquiredAt?: unknown };
+      // Pre-owner lock records remain live for their bounded lease. This preserves
+      // rolling-upgrade compatibility; malformed records without a timestamp are reclaimable.
+      return typeof parsed.acquiredAt !== "number" || Date.now() - parsed.acquiredAt > REFRESH_LOCK_STALE_MS;
+    } catch {
+      return true;
+    }
+  }
+  return Date.now() - owner.acquiredAt > REFRESH_LOCK_STALE_MS && !refreshLockOwnerIsLive(owner);
+}
+
+function abandonRefreshLock(path: string, owner: string): void {
+  abandonedRefreshLockOwners.add(owner);
+  const current = refreshLockOwner(path);
+  if (!current || current.owner !== owner) return;
+  writeFileSync(path, JSON.stringify({ ...current, abandonedAt: Date.now() }) + "\n");
+}
+
+function quarantineStaleRefreshLock(path: string): void {
+  const retiredPath = `${path}.stale-${randomUUID()}`;
+  const owner = refreshLockOwner(path);
+  try {
+    if (!refreshLockIsStale(path)) return;
+    // Acquirers hold the reclaim lock while creating the lock file, so this
+    // rename can only retire the stale entry that was just inspected.
+    renameSync(path, retiredPath);
+  } catch (error) {
+    if (errCode(error) !== "ENOENT") throw error;
+  } finally {
+    try {
+      unlinkSync(retiredPath);
+    } catch (error) {
+      if (errCode(error) !== "ENOENT") throw error;
+    }
+    if (owner) abandonedRefreshLockOwners.delete(owner.owner);
+  }
+}
+
+async function acquireRefreshReclaimLock(path: string, signal?: AbortSignal): Promise<{ fd: number; owner: RefreshLockOwner }> {
+  const reclaimPath = `${path}.reclaim`;
+  const deadline = Date.now() + REFRESH_LOCK_WAIT_MS;
+  const reclaimOwner: RefreshLockOwner = { owner: randomUUID(), pid: process.pid, acquiredAt: Date.now() };
+  while (true) {
+    if (signal?.aborted) throw signal.reason;
+    if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
+    try {
+      const fd = openSync(reclaimPath, "wx", 0o600);
+      writeFileSync(fd, JSON.stringify(reclaimOwner) + "\n");
+      return { fd, owner: reclaimOwner };
+    } catch (error) {
+      if (errCode(error) !== "EEXIST") throw error;
       if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
       await sleep(REFRESH_LOCK_POLL_MS, signal);
     }
   }
+}
 
+function tryAcquireRefreshReclaimLock(path: string): { fd: number; owner: RefreshLockOwner } | null {
+  const reclaimPath = `${path}.reclaim`;
+  const reclaimOwner: RefreshLockOwner = { owner: randomUUID(), pid: process.pid, acquiredAt: Date.now() };
   try {
-    return await fn();
-  } finally {
-    if (fd != null) closeSync(fd);
-    try {
-      unlinkSync(path);
-    } catch (err) {
-      if (errCode(err) !== "ENOENT") throw err;
-    }
+    const fd = openSync(reclaimPath, "wx", 0o600);
+    writeFileSync(fd, JSON.stringify(reclaimOwner) + "\n");
+    return { fd, owner: reclaimOwner };
+  } catch (error) {
+    if (errCode(error) === "EEXIST") return null;
+    throw error;
   }
 }
 
-function findFreshCredentialForGrant(
+function releaseRefreshReclaimLock(path: string, reclaim: { fd: number; owner: RefreshLockOwner }): void {
+  closeSync(reclaim.fd);
+  const reclaimPath = `${path}.reclaim`;
+  try {
+    if (refreshLockOwner(reclaimPath)?.owner !== reclaim.owner.owner) return;
+    unlinkSync(reclaimPath);
+  } catch (error) {
+    if (errCode(error) !== "ENOENT") throw error;
+  }
+}
+
+async function releaseRefreshLockOnce(path: string, owner: string, signal: AbortSignal): Promise<boolean> {
+  const reclaim = await acquireRefreshReclaimLock(path, signal);
+  try {
+    if (refreshLockOwner(path)?.owner !== owner) return true;
+    unlinkSync(path);
+    abandonedRefreshLockOwners.delete(owner);
+    return true;
+  } catch (error) {
+    if (errCode(error) !== "ENOENT") throw error;
+    return true;
+  } finally {
+    releaseRefreshReclaimLock(path, reclaim);
+  }
+}
+
+async function releaseRefreshLock(path: string, owner: string, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    const reclaim = tryAcquireRefreshReclaimLock(path);
+    if (!reclaim) {
+      abandonRefreshLock(path, owner);
+      throw signal.reason;
+    }
+    try {
+      if (refreshLockOwner(path)?.owner !== owner) return;
+      unlinkSync(path);
+    } catch (error) {
+      if (errCode(error) !== "ENOENT") throw error;
+    } finally {
+      releaseRefreshReclaimLock(path, reclaim);
+    }
+    return;
+  }
+  await releaseRefreshLockOnce(path, owner, AbortSignal.any([signal, AbortSignal.timeout(1_000)]));
+}
+
+export async function withCodexRefreshFileLock<T>(args: {
+  lockKey: string;
+  signal: AbortSignal;
+  run: () => Promise<T>;
+  directory?: string;
+}): Promise<T> {
+  const dir = args.directory ?? getConfigDir();
+  if (!args.directory) hardenConfigDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  const path = codexRefreshLockPath(args.lockKey, dir);
+  const deadline = Date.now() + REFRESH_LOCK_WAIT_MS;
+  const owner = randomUUID();
+  let fd: number | null = null;
+  while (fd == null) {
+    if (args.signal.aborted) throw args.signal.reason;
+    const reclaim = await acquireRefreshReclaimLock(path, args.signal);
+    try {
+      try {
+        fd = openSync(path, "wx", 0o600);
+        writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid, owner }) + "\n");
+      } catch (err) {
+        if (errCode(err) !== "EEXIST") throw err;
+        quarantineStaleRefreshLock(path);
+      }
+    } finally {
+      releaseRefreshReclaimLock(path, reclaim);
+    }
+    if (fd == null && Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
+    if (fd == null) await sleep(REFRESH_LOCK_POLL_MS, args.signal);
+  }
+
+  try {
+    return await args.run();
+  } finally {
+    if (fd != null) closeSync(fd);
+    await releaseRefreshLock(path, owner, args.signal);
+  }
+}
+
+export function findFreshCredentialForGrant(
   refreshGrantFingerprint: string,
   excludeId: string,
 ): CodexAccountCredentials | null {
@@ -381,9 +528,42 @@ function findFreshCredentialForGrant(
   for (const [candidateId, candidate] of Object.entries(records)) {
     if (candidateId === excludeId || candidate.deletedAt != null || !candidate.credential) continue;
     if (recordGrantFingerprint(candidate) !== refreshGrantFingerprint) continue;
-    if (candidate.credential.expiresAt > now + REFRESH_SKEW_MS) return candidate.credential;
+    if (candidate.credential.expiresAt > now + CODEX_REFRESH_SKEW_MS) return candidate.credential;
   }
   return null;
+}
+
+export function publishFreshCredentialForGrant(
+  args: {
+    refreshGrantFingerprint: string;
+    credential: CodexAccountCredentials;
+    excludeId: string;
+    replaceAccessToken?: string;
+  },
+): void {
+  withCredentialMutationLockSync(() => {
+    const now = Date.now();
+    const store = loadCodexAccountRecordStore();
+    let changed = false;
+    for (const [candidateId, candidate] of Object.entries(store)) {
+      if (candidateId === args.excludeId || candidate.deletedAt != null || !candidate.credential) continue;
+      if (recordGrantFingerprint(candidate) !== args.refreshGrantFingerprint) continue;
+      if (
+        candidate.credential.expiresAt > now + CODEX_REFRESH_SKEW_MS
+        && candidate.credential.accessToken !== args.replaceAccessToken
+      ) continue;
+      store[candidateId] = {
+        ...candidate,
+        credential: args.credential,
+        generation: candidate.generation + 1,
+        refreshGrantFingerprint: args.refreshGrantFingerprint,
+        replacedAt: Date.now(),
+        ...preservedValidationMetadata(candidate),
+      };
+      changed = true;
+    }
+    if (changed) persist(store);
+  });
 }
 
 async function notePlanFromRefreshedAccessToken(
@@ -399,14 +579,17 @@ async function notePlanFromRefreshedAccessToken(
   }
 }
 
-export async function getValidCodexToken(id: string): Promise<CodexTokenResult> {
+export async function getValidCodexToken(
+  id: string,
+  dependencies: CodexAccountStoreRefreshDependencies = {},
+): Promise<CodexTokenResult> {
   const record = readCodexAccountRecord(id);
   const cred = record?.deletedAt == null ? record?.credential : undefined;
   if (!record || !cred) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
   const refreshGrantFingerprint = recordGrantFingerprint(record);
   if (!refreshGrantFingerprint) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
 
-  if (cred.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+  if (cred.expiresAt > Date.now() + CODEX_REFRESH_SKEW_MS) {
     return { accessToken: cred.accessToken, chatgptAccountId: cred.chatgptAccountId, generation: record.generation };
   }
 
@@ -436,7 +619,7 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
           generation,
         };
       }
-      return getValidCodexToken(id);
+      return getValidCodexToken(id, dependencies);
     }
   }
 
@@ -445,15 +628,28 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
   const abort = new AbortController();
   const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]);
   let flight!: RefreshFlight;
-  const refreshPromise = withCodexRefreshFileLock(refreshGrantFingerprint, signal, async (): Promise<CodexRefreshResult> => {
-    const current = readCodexAccountRecord(id);
-    const lockedRecord = readCodexAccountRecord(id);
-    const lockedCred = lockedRecord?.deletedAt == null ? lockedRecord?.credential : undefined;
-    if (!lockedRecord || !lockedCred) throw new CodexCredentialGenerationConflictError();
-    const startGeneration = lockedRecord.generation;
-    const lockedRefreshGrantFingerprint = recordGrantFingerprint(lockedRecord);
-    if (lockedRefreshGrantFingerprint !== refreshGrantFingerprint) {
-      if (lockedCred.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+  const refreshPromise = withCodexRefreshFileLock({
+    lockKey: refreshGrantFingerprint,
+    signal,
+    run: async (): Promise<CodexRefreshResult> => {
+      const current = readCodexAccountRecord(id);
+      const lockedRecord = readCodexAccountRecord(id);
+      const lockedCred = lockedRecord?.deletedAt == null ? lockedRecord?.credential : undefined;
+      if (!lockedRecord || !lockedCred) throw new CodexCredentialGenerationConflictError();
+      const startGeneration = lockedRecord.generation;
+      const lockedRefreshGrantFingerprint = recordGrantFingerprint(lockedRecord);
+      if (lockedRefreshGrantFingerprint !== refreshGrantFingerprint) {
+        if (lockedCred.expiresAt > Date.now() + CODEX_REFRESH_SKEW_MS) {
+          return {
+            accessToken: lockedCred.accessToken,
+            chatgptAccountId: lockedCred.chatgptAccountId,
+            generation: startGeneration,
+            credential: lockedCred,
+          };
+        }
+        throw new CodexCredentialGenerationConflictError();
+      }
+      if (lockedCred.expiresAt > Date.now() + CODEX_REFRESH_SKEW_MS) {
         return {
           accessToken: lockedCred.accessToken,
           chatgptAccountId: lockedCred.chatgptAccountId,
@@ -461,73 +657,64 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
           credential: lockedCred,
         };
       }
-      throw new CodexCredentialGenerationConflictError();
-    }
-    if (lockedCred.expiresAt > Date.now() + REFRESH_SKEW_MS) {
-      return {
-        accessToken: lockedCred.accessToken,
+      const sameGrantFreshCredential = findFreshCredentialForGrant(refreshGrantFingerprint, id);
+      if (sameGrantFreshCredential) {
+        if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, sameGrantFreshCredential)) {
+          throw new CodexCredentialGenerationConflictError();
+        }
+        return {
+          accessToken: sameGrantFreshCredential.accessToken,
+          chatgptAccountId: sameGrantFreshCredential.chatgptAccountId,
+          generation: startGeneration + 1,
+          credential: sameGrantFreshCredential,
+        };
+      }
+    const res = await (dependencies.fetch ?? fetch)(CHATGPT_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: CHATGPT_CLIENT_ID,
+          refresh_token: lockedCred.refreshToken,
+        }).toString(),
+        signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        let errDesc: string;
+        try {
+          const parsed = JSON.parse(errText) as { error?: string; error_description?: string };
+          errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
+        } catch { errDesc = `HTTP ${res.status}`; }
+        const reason = errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
+          : errDesc.includes("expired") ? "expired" as const
+          : "unknown" as const;
+        throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
+      }
+      const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+      // Guard against a missing/non-finite/negative expires_in (malformed upstream
+      // response): a NaN expiry would never compare as expired, and a negative
+      // duration would stamp an already-past expiry — both block refresh semantics.
+      const expiresIn =
+        typeof data.expires_in === "number" && Number.isFinite(data.expires_in) && data.expires_in >= 0
+          ? data.expires_in
+          : 3600;
+      // The computed timestamp itself must stay finite: Number.MAX_VALUE passes
+      // Number.isFinite but overflows to Infinity once multiplied by 1000.
+      const expiresAt = Date.now() + expiresIn * 1000;
+      const safeExpiresAt = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 3600 * 1000;
+
+      const updated: CodexAccountCredentials = {
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token ?? lockedCred.refreshToken,
+        expiresAt: safeExpiresAt,
         chatgptAccountId: lockedCred.chatgptAccountId,
-        generation: startGeneration,
-        credential: lockedCred,
       };
-    }
-    const sameGrantFreshCredential = findFreshCredentialForGrant(refreshGrantFingerprint, id);
-    if (sameGrantFreshCredential) {
-      if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, sameGrantFreshCredential)) {
+      if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, updated)) {
         throw new CodexCredentialGenerationConflictError();
       }
-      return {
-        accessToken: sameGrantFreshCredential.accessToken,
-        chatgptAccountId: sameGrantFreshCredential.chatgptAccountId,
-        generation: startGeneration + 1,
-        credential: sameGrantFreshCredential,
-      };
-    }
-    const res = await fetch(CHATGPT_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: CHATGPT_CLIENT_ID,
-        refresh_token: lockedCred.refreshToken,
-      }).toString(),
-      signal,
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      let errDesc: string;
-      try {
-        const parsed = JSON.parse(errText) as { error?: string; error_description?: string };
-        errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
-      } catch { errDesc = `HTTP ${res.status}`; }
-      const reason = errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
-        : errDesc.includes("expired") ? "expired" as const
-        : "unknown" as const;
-      throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
-    }
-    const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
-    // Guard against a missing/non-finite/negative expires_in (malformed upstream
-    // response): a NaN expiry would never compare as expired, and a negative
-    // duration would stamp an already-past expiry — both block refresh semantics.
-    const expiresIn =
-      typeof data.expires_in === "number" && Number.isFinite(data.expires_in) && data.expires_in >= 0
-        ? data.expires_in
-        : 3600;
-    // The computed timestamp itself must stay finite: Number.MAX_VALUE passes
-    // Number.isFinite but overflows to Infinity once multiplied by 1000.
-    const expiresAt = Date.now() + expiresIn * 1000;
-    const safeExpiresAt = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 3600 * 1000;
-
-    const updated: CodexAccountCredentials = {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token ?? lockedCred.refreshToken,
-      expiresAt: safeExpiresAt,
-      chatgptAccountId: lockedCred.chatgptAccountId,
-    };
-    if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, updated)) {
-      throw new CodexCredentialGenerationConflictError();
-    }
-    return { accessToken: updated.accessToken, chatgptAccountId: updated.chatgptAccountId, generation: startGeneration + 1, credential: updated };
+      return { accessToken: updated.accessToken, chatgptAccountId: updated.chatgptAccountId, generation: startGeneration + 1, credential: updated };
+    },
   }).finally(() => {
     if (refreshLocks.get(refreshGrantFingerprint) === flight) refreshLocks.delete(refreshGrantFingerprint);
   });

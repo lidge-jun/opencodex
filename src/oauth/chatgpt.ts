@@ -2,9 +2,9 @@ import { OAuthCallbackFlow } from "./callback-server";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { generatePKCE } from "./pkce";
 
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+export const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_URL = "https://auth.openai.com/oauth/authorize";
-const TOKEN_URL = "https://auth.openai.com/oauth/token";
+export const CHATGPT_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
@@ -46,9 +46,19 @@ export function extractEmail(idToken?: string, accessToken?: string): string | u
   return undefined;
 }
 
-function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
+export interface ChatGPTTokenResponse {
+  access: string;
+  refresh: string;
+  expires: number;
+  accountId?: string;
+  email?: string;
+  idToken?: string;
+}
+
+function tokenResponseFromData(data: Record<string, unknown>): ChatGPTTokenResponse {
   const idToken = typeof data.id_token === "string" ? data.id_token : undefined;
-  const accessToken = data.access_token as string;
+  const accessToken = typeof data.access_token === "string" ? data.access_token : undefined;
+  if (!accessToken) throw new Error("ChatGPT token response is missing a string access_token");
   // ?? only guards null/undefined; NaN or a string expires_in would otherwise
   // produce a NaN expiry that never compares as expired, and a negative duration
   // would stamp an already-past expiry — both block refresh semantics.
@@ -62,10 +72,22 @@ function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
   const expires = Number.isFinite(computedExpires) ? computedExpires : Date.now() + 3600 * 1000;
   return {
     access: accessToken,
-    refresh: (data.refresh_token as string) ?? "",
+    refresh: typeof data.refresh_token === "string" ? data.refresh_token : "",
     expires,
     accountId: extractAccountId(idToken, accessToken),
     email: extractEmail(idToken, accessToken),
+    idToken,
+  };
+}
+
+function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
+  const token = tokenResponseFromData(data);
+  return {
+    access: token.access,
+    refresh: token.refresh,
+    expires: token.expires,
+    accountId: token.accountId,
+    email: token.email,
   };
 }
 
@@ -88,7 +110,7 @@ export class ChatGPTOAuthFlow extends OAuthCallbackFlow {
     this.#verifier = pkce.verifier;
     const params = new URLSearchParams({
       response_type: "code",
-      client_id: CLIENT_ID,
+      client_id: CHATGPT_CLIENT_ID,
       redirect_uri: redirectUri,
       scope: SCOPE,
       code_challenge: pkce.challenge,
@@ -107,12 +129,12 @@ export class ChatGPTOAuthFlow extends OAuthCallbackFlow {
 
   async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
     if (!this.#verifier) throw new Error("ChatGPT PKCE verifier not initialized");
-    const resp = await fetch(TOKEN_URL, {
+    const resp = await fetch(CHATGPT_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "authorization_code",
-        client_id: CLIENT_ID,
+        client_id: CHATGPT_CLIENT_ID,
         code,
         redirect_uri: redirectUri,
         code_verifier: this.#verifier,
@@ -143,19 +165,34 @@ export async function loginChatGPT(ctrl: OAuthController, opts?: { forceLogin?: 
 
 // Note: uses form-urlencoded per OAuth 2.0 spec (RFC 6749 §6).
 // Codex-rs uses JSON for refresh — intentional divergence; both accepted by auth.openai.com.
-export async function refreshChatGPTToken(refreshToken: string): Promise<OAuthCredentials> {
-  const resp = await fetch(TOKEN_URL, {
+export async function refreshChatGPTTokenRaw(
+  refreshToken: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ChatGPTTokenResponse> {
+  const resp = await fetch(CHATGPT_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      client_id: CLIENT_ID,
+      client_id: CHATGPT_CLIENT_ID,
       refresh_token: refreshToken,
     }).toString(),
+    signal: options.signal,
   });
   if (!resp.ok) {
     const errDesc = await safeErrorDescription(resp);
     throw new Error(`ChatGPT refresh failed: ${resp.status} ${errDesc}`);
   }
-  return credsFromToken((await resp.json()) as Record<string, unknown>);
+  return tokenResponseFromData((await resp.json()) as Record<string, unknown>);
+}
+
+export async function refreshChatGPTToken(refreshToken: string): Promise<OAuthCredentials> {
+  const token = await refreshChatGPTTokenRaw(refreshToken);
+  return {
+    access: token.access,
+    refresh: token.refresh,
+    expires: token.expires,
+    accountId: token.accountId,
+    email: token.email,
+  };
 }

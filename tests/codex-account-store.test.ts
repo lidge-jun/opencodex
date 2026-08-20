@@ -232,7 +232,7 @@ describe("codex-account-store CRUD", () => {
     expect(JSON.stringify(record)).not.toContain("sensitive-access revoked");
   });
 
-  test("successful refresh returns bumped generation and persists rotated refresh token", async () => {
+  test("successful refresh returns bumped generation and preserves the logical refresh grant", async () => {
     const {
       getCodexAccountCredential,
       getValidCodexToken,
@@ -254,8 +254,8 @@ describe("codex-account-store CRUD", () => {
       const result = await getValidCodexToken("refresh-success");
       expect(result).toEqual({ accessToken: "new", chatgptAccountId: "acc", generation: startGeneration + 1 });
       expect(getCodexAccountCredential("refresh-success")).toMatchObject({ accessToken: "new", refreshToken: "new-r" });
-      expect(readCodexAccountRecord("refresh-success")!.refreshGrantFingerprint).not.toBe(startFingerprint);
-      expect(readCodexAccountRecord("refresh-success")!.refreshGrantFingerprint).toBe(refreshGrantFingerprintForToken("new-r"));
+      expect(readCodexAccountRecord("refresh-success")!.refreshGrantFingerprint).toBe(startFingerprint);
+      expect(readCodexAccountRecord("refresh-success")!.refreshGrantFingerprint).toBe(refreshGrantFingerprintForToken("old-r"));
     } finally {
       globalThis.fetch = originalFetch;
     }

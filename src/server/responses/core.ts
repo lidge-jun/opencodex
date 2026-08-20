@@ -121,6 +121,7 @@ import {
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
   materializeCodexUpstreamAuth,
+  materializeCodexUpstreamAuthAsync,
   CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
@@ -130,6 +131,14 @@ import {
   stripCodexRuntimeProviderFields,
   type CodexAuthContext,
 } from "../../codex/auth-context";
+import { forceRefreshMainAccountToken } from "../../codex/main-account";
+import type { NativeMainRefreshDependencies } from "../../codex/main-account";
+import {
+  CodexCredentialRefreshBusyError,
+  CodexCredentialRefreshLockTimeoutError,
+  CodexCredentialRefreshStaleError,
+  TokenRefreshError,
+} from "../../codex/account-store";
 import {
   entitledCodexAccountIdsForModel,
   invalidateCodexModelEntitlementsForAccount,
@@ -1227,6 +1236,8 @@ export interface HandleResponsesOptions {
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
   /** Caller-owned for Chat/Claude replay; omitted only at genuine Responses ingress. */
   translatorBudget?: TranslatorBudget;
+  /** Internal immutable refresh transport seam for native-main credential tests. */
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
 }
 
 
@@ -1237,6 +1248,23 @@ export interface HandleResponsesOptions {
  */
 export function clientCancelledResponse(): Response {
   return formatErrorResponse(499, "client_cancelled", "Client cancelled request");
+}
+
+export function nativeMainRefreshFailureResponse(error: unknown, signal?: AbortSignal): Response {
+  if (signal?.aborted) {
+    return clientCancelledResponse();
+  }
+  if (error instanceof TokenRefreshError && (error.reason === "revoked" || error.reason === "expired")) {
+    return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
+  }
+  if (
+    error instanceof CodexCredentialRefreshLockTimeoutError
+    || error instanceof CodexCredentialRefreshBusyError
+    || error instanceof CodexCredentialRefreshStaleError
+  ) {
+    return formatErrorResponse(503, "upstream_error", "Native Codex credential refresh is temporarily unavailable");
+  }
+  return formatErrorResponse(503, "upstream_error", "Native Codex credential refresh failed temporarily");
 }
 
 
@@ -1466,6 +1494,7 @@ async function resolveResponsesCodexAuth(
         modelId: route.modelId,
         substituteMainCredentialForDirect: substituteMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
       });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
@@ -1482,10 +1511,25 @@ async function resolveResponsesCodexAuth(
     return {
       ok: true,
       authCtx,
-      headers: materializeCodexUpstreamAuth(req.headers, authCtx, { substituteMainCredential }),
+      headers: await materializeCodexUpstreamAuthAsync({
+        headers: req.headers,
+        ctx: authCtx,
+        options: {
+          substituteMainCredential,
+          nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+        },
+      }),
       substituteMainCredential,
     };
   } catch (err) {
+    if (
+      err instanceof TokenRefreshError
+      || err instanceof CodexCredentialRefreshLockTimeoutError
+      || err instanceof CodexCredentialRefreshBusyError
+      || err instanceof CodexCredentialRefreshStaleError
+    ) {
+      return { ok: false, response: nativeMainRefreshFailureResponse(err, options.abortSignal) };
+    }
     if (err instanceof CodexAccountCooldownError) {
       return { ok: false, response: cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace) };
     }
@@ -3051,6 +3095,7 @@ async function handleResponsesInner(
     }
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
+    let codexMain401ReplayAttempted = false;
     let oauth401ReplayAttempted = false;
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
     let rateLimitRetries = 0;
@@ -3350,6 +3395,90 @@ async function handleResponsesInner(
           subagentFallbackAccountId = retry.authCtx.accountId;
         }
       }
+    }
+    // Intentional duplication with the recovery-loop branch below: consolidating these paths
+    // would introduce connascence to two distant request builders and weaken each branch's
+    // contract stability; their distance keeps pre-stream and continuation cleanup explicit.
+    if (
+      upstreamResponse.status === 401
+      && authCtx.kind === "main-pool"
+      && usesCodexForwardPoolAuth(authCtx, route.provider)
+      && !codexMain401ReplayAttempted
+    ) {
+      codexMain401ReplayAttempted = true;
+      try { await upstreamResponse.body?.cancel(); } catch { /* already consumed/closed */ }
+      let refreshed: { accessToken: string; chatgptAccountId: string } | null;
+      try {
+        refreshed = await forceRefreshMainAccountToken(authCtx.accessToken, {
+          signal: options.abortSignal,
+          dependencies: options.nativeMainRefreshDependencies,
+        });
+      } catch (error) {
+        upstream.abort();
+        return nativeMainRefreshFailureResponse(error, options.abortSignal);
+      }
+      if (!refreshed) {
+        upstream.abort();
+        return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
+      }
+      authCtx = {
+        ...authCtx,
+        accessToken: refreshed.accessToken,
+        chatgptAccountId: refreshed.chatgptAccountId,
+      };
+      selectedForwardHeaders = headersForCodexAuthContext(req.headers, authCtx);
+      const retryProvider = applyCodexAuthContextToProvider(
+        stripCodexRuntimeProviderFields(route.provider),
+        authCtx,
+        route.codexAccountMode,
+      );
+      route.provider = retryProvider;
+      const retryAdapter = resolveAdapter(
+        resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
+        config.cacheRetention,
+      );
+      bindRouteReasoningReplayScope({
+        parsed,
+        providerName: route.providerName,
+        provider: retryProvider,
+        adapterName: retryAdapter.name,
+        codexAuthContext: authCtx,
+        forwardHeaders: selectedForwardHeaders,
+      });
+      request = await retryAdapter.buildRequest(parsed, {
+        headers: selectedForwardHeaders,
+        translatorBudget,
+      });
+      recordAdapterReasoning(logCtx, request);
+      recordAdapterTier(logCtx, request);
+      const retryEstimate = typeof request.usageLog?.inputTokens === "number"
+        ? request.usageLog.inputTokens
+        : passthroughEstimate;
+      if (retryEstimate !== undefined) logCtx.usageLogInputTokens = retryEstimate;
+      logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
+      sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, retryAdapter.name, logCtx.accountLogLabel);
+      noteAttemptSend(logCtx.activeAttempt, retryEstimate, "codex-main-401");
+      try {
+        upstreamResponse = await fetchWithHeaderTimeout(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        }, upstream.signal, connectMs, parsed.stream,
+          providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+            providerName: route.providerName,
+            modelId: route.modelId,
+          }),
+          route.provider.authMode === "forward")
+          .then(res => {
+            settleObservedHostResponse();
+            return res;
+          });
+      } catch (err) {
+        return transportFailureResponse(err);
+      } finally {
+        request.releaseBodyObservation?.();
+      }
+      continue passthroughRecovery;
     }
     // The deterministic route record cannot classify history it never observed (restart, expiry,
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
@@ -4457,6 +4586,7 @@ async function handleResponsesInner(
     // 413→429 rotation cannot silently undo the tightening.
     let imageRetryAttempted = false;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
+    let codexMain401ReplayAttempted = false;
     let oauth401ReplayAttempted = false;
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
@@ -4537,6 +4667,62 @@ async function handleResponsesInner(
     };
     // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
+      // See the pre-stream branch above: this continuation owns different cleanup and replay
+      // state, so preserving distance avoids connascence and protects contract stability.
+      if (
+        upstreamResponse.status === 401
+        && authCtx.kind === "main-pool"
+        && usesCodexForwardPoolAuth(authCtx, route.provider)
+        && !codexMain401ReplayAttempted
+      ) {
+        codexMain401ReplayAttempted = true;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        let refreshed: { accessToken: string; chatgptAccountId: string } | null;
+        try {
+          refreshed = await forceRefreshMainAccountToken(authCtx.accessToken, {
+            signal: options.abortSignal,
+            dependencies: options.nativeMainRefreshDependencies,
+          });
+        } catch (error) {
+          cleanupUpstreamAbort();
+          return nativeMainRefreshFailureResponse(error, options.abortSignal);
+        }
+        if (!refreshed) {
+          cleanupUpstreamAbort();
+          return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
+        }
+        authCtx = {
+          ...authCtx,
+          accessToken: refreshed.accessToken,
+          chatgptAccountId: refreshed.chatgptAccountId,
+        };
+        selectedForwardHeaders = headersForCodexAuthContext(req.headers, authCtx);
+        const refreshedProvider = applyCodexAuthContextToProvider(
+          stripCodexRuntimeProviderFields(route.provider),
+          authCtx,
+          route.codexAccountMode,
+        );
+        route.provider = refreshedProvider;
+        logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
+        invalidateSameTargetRequest();
+        activeAdapter = resolveAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+          config.cacheRetention,
+        );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: refreshedProvider,
+          adapterName: activeAdapter.name,
+          codexAuthContext: authCtx,
+          forwardHeaders: selectedForwardHeaders,
+        });
+        const result = await rebuildAndRefetch("codex-main-401");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue recovery;
+      }
+
       if (
         upstreamResponse.status === 401
         && isOAuth401ReplayProvider

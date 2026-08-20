@@ -24,6 +24,7 @@ export function isCodexUsageAccountLogLabel(value: unknown): value is CodexUsage
 export type AttemptRecoveryKind =
   | "transient-5xx"
   | "connection-reset"
+  | "codex-main-401"
   | "oauth-401"
   | "key-429"
   | "rate-limit-429"
@@ -214,6 +215,7 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
 const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "transient-5xx",
   "connection-reset",
+  "codex-main-401",
   "oauth-401",
   "key-429",
   "rate-limit-429",
