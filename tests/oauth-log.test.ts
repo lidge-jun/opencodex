@@ -41,6 +41,7 @@ describe("logOAuthEvent", () => {
         id_token: "secret-id_token-value",
         client_secret: "secret-client_secret-value",
         oauth_code: "secret-oauth_code-value",
+        code_verifier: "secret-code_verifier-value",
         "client-secret": "secret-client-secret-value",
         safe: "visible",
       });
@@ -64,10 +65,31 @@ describe("logOAuthEvent", () => {
       "id_token",
       "client_secret",
       "oauth_code",
+      "code_verifier",
       "client-secret",
     ]) {
       expect(line).not.toContain(`${key}=`);
     }
     expect(line).not.toContain("secret-");
+  });
+
+  test("redacts token-shaped values inside otherwise safe cleanup fields", () => {
+    const lines: string[] = [];
+    const original = console.info;
+    console.info = (msg?: unknown) => { lines.push(String(msg)); };
+    try {
+      logOAuthEvent("OAuth account cleanup failed", {
+        provider: "xai",
+        cause: "upstream returned Bearer credentialvalue123456",
+        request: "sk-fixturecredential",
+        status: 500,
+      });
+    } finally {
+      console.info = original;
+    }
+
+    expect(lines).toEqual([
+      "[opencodex] OAuth account cleanup failed provider=xai cause=upstream returned Bearer [REDACTED] request=[REDACTED] status=500",
+    ]);
   });
 });
