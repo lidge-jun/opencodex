@@ -75,7 +75,10 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         && tool.type !== "namespace"
         && typeof tool.name === "string"
         && tool.name.length > 0
-      ) directNames.add(tool.name);
+      ) {
+        directNames.add(tool.name);
+        addSelector(selectors, tool.name, tool.name);
+      }
     }
   }
 

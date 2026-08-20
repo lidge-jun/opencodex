@@ -89,6 +89,19 @@ describe("Responses namespace tool compatibility", () => {
       tool_choice: { type: "function", name: "read" },
     }).body as { tool_choice: { name: string } };
     expect(ambiguous.tool_choice.name).toBe("read");
+
+    const directCollision = rewriteRoutedNamespaceToolsForUpstream({
+      tools: [
+        { type: "function", name: "read" },
+        { type: "namespace", name: "workspace", tools: [{ type: "function", name: "read" }] },
+      ],
+      tool_choice: { type: "function", name: "read" },
+    }).body as {
+      tools: Array<{ name: string }>;
+      tool_choice: { name: string };
+    };
+    expect(directCollision.tools.map(tool => tool.name)).toEqual(["read", "workspace__read"]);
+    expect(directCollision.tool_choice.name).toBe("read");
   });
 
   test("fails closed when flattening would collide with a declared wire name", () => {

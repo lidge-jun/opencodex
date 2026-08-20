@@ -342,4 +342,66 @@ describe("xAI OAuth Responses streaming", () => {
       await server.stop(true);
     }
   }, 10_000);
+
+  test("restores routed namespace calls in a non-streaming xAI JSON response", async () => {
+    let outboundBody: Record<string, unknown> | undefined;
+    const call = {
+      id: "fc_spawn_json",
+      type: "function_call",
+      status: "completed",
+      name: "collaboration__spawn_agent",
+      call_id: "call_spawn_json",
+      arguments: "{}",
+    };
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== RESPONSES_ENDPOINT) return originalFetch(input, init);
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        id: "resp_namespace_json",
+        object: "response",
+        status: "completed",
+        model: "grok-4.6",
+        output: [call],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          stream: false,
+          store: false,
+          tools: [{
+            type: "namespace",
+            name: "collaboration",
+            tools: [{ type: "function", name: "spawn_agent", description: "spawn", parameters: {} }],
+          }],
+          input: "delegate",
+        }),
+      });
+      expect(response.status).toBe(200);
+
+      const outboundTools = outboundBody?.tools as Array<{ type: string; name?: string }> | undefined;
+      expect(outboundTools).toEqual([expect.objectContaining({
+        type: "function",
+        name: "collaboration__spawn_agent",
+      })]);
+      const clientBody = await response.json() as { output?: Array<Record<string, unknown>> };
+      expect(clientBody.output?.[0]).toMatchObject({
+        type: "function_call",
+        namespace: "collaboration",
+        name: "spawn_agent",
+        call_id: "call_spawn_json",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  }, 10_000);
 });
