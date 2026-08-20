@@ -266,11 +266,38 @@ name.
 
 ### External provider managers
 
-If `config.toml` already selects a provider other than `openai` or `opencodex`, OpenCodex leaves the
-file unchanged and skips profile writes, catalog/cache refresh, and both immediate and background
-Codex history migration. Tools that manage a custom provider often tag existing sessions with that
-provider id; replacing the active id can make those intact sessions disappear from Codex's history
-view. The same protection applies to an external provider selected by a legacy root profile.
+In the default `full` integration mode, if `config.toml` already selects a provider other than
+`openai` or `opencodex`, OpenCodex leaves the file unchanged and skips profile writes, catalog/cache
+refresh, and both immediate and background Codex history migration. Tools that manage a custom
+provider often tag existing sessions with that provider id; replacing the active id can make those
+intact sessions disappear from Codex's history view. The same protection applies to an external
+provider selected by a legacy root profile.
+
+Use `catalog-only` when the external provider id must remain stable but OpenCodex should populate the
+standard Codex model picker:
+
+```bash
+ocx config set clientIntegrations.codex catalog-only
+ocx sync
+```
+
+```toml
+model = "gpt-5.6-sol"
+model_provider = "global-infra"
+model_catalog_json = "/absolute/path/to/.codex/opencodex-catalog.json"
+
+[model_providers.global-infra]
+name = "global-infra"
+base_url = "http://127.0.0.1:10100/v1"
+wire_api = "responses"
+```
+
+In this mode OpenCodex updates the catalog selected by `model_catalog_json` and
+`$CODEX_HOME/models_cache.json`, then returns before config injection. It does not change
+`config.toml`, `opencodex.config.toml`, the OpenCodex journal, history databases, or session JSONL
+files. After configuring a provider such as DeepSeek, run `ocx sync`; generated routes such as
+`deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro` then enter the picker without changing
+`model_provider = "global-infra"`.
 
 Keep one tool as the owner of Codex provider configuration. To use OpenCodex behind an existing
 provider manager, point that provider at `http://127.0.0.1:10100/v1` with Responses passthrough

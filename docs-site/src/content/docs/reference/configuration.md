@@ -37,6 +37,28 @@ resolve that variable at request time. For outbound proxying, an already-set `HT
 
 Routing has its own ordered resolution rules; see [Routing](/reference/configuration/routing/).
 
+## Codex integration mode
+
+`clientIntegrations.codex` controls how much Codex state OpenCodex owns:
+
+| Value | Mode | Behavior |
+| --- | --- | --- |
+| missing or `true` | `full` | Manage routing, catalog, cache, and compatibility artifacts. |
+| `"catalog-only"` | `catalog-only` | Refresh catalog/cache while preserving provider routing and Codex history. |
+| `false` | `off` | Disable Codex integration. |
+
+```json
+{
+  "clientIntegrations": {
+    "codex": "catalog-only"
+  }
+}
+```
+
+The dashboard exposes the same three modes under **Integrations → Codex CLI**. See
+[Codex Integration](/guides/codex-integration/#external-provider-managers) for the external-provider
+ownership boundary.
+
 ## Configuration domains
 
 - [Providers](/reference/configuration/providers/) — provider entries, authentication, endpoints,

@@ -26,6 +26,7 @@ export const FORWARD_HEADERS = [
   "session_id",
   "session-id",
   "thread-id",
+  "user-agent",
   "x-client-request-id",
   "x-codex-beta-features",
   "x-codex-installation-id",
@@ -1464,6 +1465,19 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
+        // Forward client identity headers to the upstream so providers that
+        // enforce client validation (e.g. codex_only User-Agent checks) can
+        // inspect the original caller metadata. Authorization and
+        // chatgpt-account-id are deliberately excluded — API key mode uses
+        // the configured apiKey and has no ChatGPT account binding.
+        // The defensive name-based guard also blocks any future FORWARD_HEADERS
+        // entry whose name contains "key", "token", or "secret".
+        for (const h of FORWARD_HEADERS) {
+          if (h === "authorization" || h === "chatgpt-account-id") continue;
+          if (/key|token|secret/i.test(h)) continue;
+          const v = incoming?.headers.get(h);
+          if (v) headers[h] = v;
+        }
       }
 
       const forward = provider.authMode === "forward";

@@ -234,10 +234,35 @@ display name 是 **仅用于显示且在重新生成时保持稳定的**。每�
 
 ### 外部 provider 管理器
 
-如果 `config.toml` 已经选择了 `openai` 或 `opencodex` 之外的 provider，OpenCodex 会保持文件不变，
-并跳过 profile 写入、catalog/cache 刷新，以及立即和后台两种 Codex 历史迁移。管理自定义 provider 的工具
+在默认的 `full` 集成模式下，如果 `config.toml` 已经选择了 `openai` 或 `opencodex` 之外的 provider，
+OpenCodex 会保持文件不变，并跳过 profile 写入、catalog/cache 刷新，以及立即和后台两种 Codex 历史迁移。管理自定义 provider 的工具
 通常会把现有会话标记为那个 provider id；如果替换活动 id，Codex 历史视图里那些完整会话可能会消失。
 同样的保护也适用于由旧版 root profile 选择的外部 provider。
+
+如果必须保持外部 provider id 不变，同时希望 OpenCodex 填充标准 Codex 模型选择器，请使用
+`catalog-only`：
+
+```bash
+ocx config set clientIntegrations.codex catalog-only
+ocx sync
+```
+
+```toml
+model = "gpt-5.6-sol"
+model_provider = "global-infra"
+model_catalog_json = "/absolute/path/to/.codex/opencodex-catalog.json"
+
+[model_providers.global-infra]
+name = "global-infra"
+base_url = "http://127.0.0.1:10100/v1"
+wire_api = "responses"
+```
+
+在此模式下，OpenCodex 会更新 `model_catalog_json` 指向的目录和
+`$CODEX_HOME/models_cache.json`，随后在配置注入前返回。它不会修改 `config.toml`、
+`opencodex.config.toml`、OpenCodex journal、历史数据库或 session JSONL 文件。配置 DeepSeek
+等 provider 后运行 `ocx sync`，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro`
+等生成路由就会进入模型选择器，同时保持 `model_provider = "global-infra"` 不变。
 
 只保留一个工具作为 Codex provider 配置的 owner。若要在现有 provider 管理器之后使用 OpenCodex，
 请把那个 provider 指向 `http://127.0.0.1:10100/v1`，并使用 Responses passthrough（Codex TOML 中的

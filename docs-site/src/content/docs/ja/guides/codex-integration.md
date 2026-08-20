@@ -182,7 +182,9 @@ ocx sync-cache
 
 ### 外部プロバイダーマネージャー
 
-`config.toml` がすでに `openai` または `opencodex` 以外のプロバイダーを選択している場合、OpenCodex はファイルを変更しないままにし、プロファイルの書き込み、カタログ/キャッシュの更新、および即時およびバックグラウンドの両方の Codex 履歴の移行をスキップします。カスタム プロバイダーを管理するツールは、多くの場合、既存のセッションにそのプロバイダー ID をタグ付けします。アクティブな ID を置き換えると、それらの無傷のセッションが Codex の履歴ビューから消える可能性があります。同じ保護が、レガシー ルート プロファイルによって選択された外部プロバイダーにも適用されます。
+デフォルトの `full` モードで `config.toml` がすでに `openai` または `opencodex` 以外のプロバイダーを選択している場合、OpenCodex はファイルを変更しないままにし、プロファイルの書き込み、カタログ/キャッシュの更新、および即時およびバックグラウンドの両方の Codex 履歴の移行をスキップします。カスタム プロバイダーを管理するツールは、多くの場合、既存のセッションにそのプロバイダー ID をタグ付けします。アクティブな ID を置き換えると、それらの無傷のセッションが Codex の履歴ビューから消える可能性があります。同じ保護が、レガシー ルート プロファイルによって選択された外部プロバイダーにも適用されます。
+
+外部 provider id を維持しながら標準モデル選択を更新するには、`ocx config set clientIntegrations.codex catalog-only` を実行してから `ocx sync` を実行します。このモードは `model_catalog_json` のカタログと `models_cache.json` だけを更新し、`config.toml`、`opencodex.config.toml`、journal、履歴データベース、session JSONL を変更しません。外部 provider は Responses passthrough (`wire_api = "responses"`) でローカルプロキシを参照させてください。
 
 1 つのツールを Codex プロバイダー設定の所有者として保持します。既存のプロバイダー マネージャーの背後で OpenCodex を使用するには、チャット完了変換ではなく、応答パススルー (Codex TOML では `wire_api = "responses"`) を使用して、そのプロバイダーを `http://127.0.0.1:10100/v1` に指定します。プロキシ API 認証が有効な場合は、上記の非ループバック プロバイダー フォームと一致して、`OPENCODEX_API_AUTH_TOKEN` から `x-opencodex-api-key` も渡します。 OpenCodex にルーティングを直接挿入させるには、まず Codex を組み込みの `openai` プロバイダーに戻し、ユーザー所有のルート `openai_base_url` を削除してから、`ocx start` を再実行します。
 

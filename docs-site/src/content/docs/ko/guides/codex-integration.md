@@ -172,7 +172,9 @@ ocx sync-cache
 
 ### 외부 provider manager
 
-`config.toml`이 이미 `openai`나 `opencodex`가 아닌 provider를 선택하고 있으면, OpenCodex는 그 파일을 그대로 두고 profile write, catalog/cache refresh, 즉시 및 background Codex history migration을 건너뜁니다. custom provider를 관리하는 도구는 기존 session에 그 provider id를 붙이는 경우가 많고, 활성 id를 바꾸면 그 온전한 session이 Codex의 history view에서 사라질 수 있습니다. 이 보호는 legacy root profile이 선택한 외부 provider에도 동일하게 적용됩니다.
+기본 `full` 모드에서 `config.toml`이 이미 `openai`나 `opencodex`가 아닌 provider를 선택하고 있으면, OpenCodex는 그 파일을 그대로 두고 profile write, catalog/cache refresh, 즉시 및 background Codex history migration을 건너뜁니다. custom provider를 관리하는 도구는 기존 session에 그 provider id를 붙이는 경우가 많고, 활성 id를 바꾸면 그 온전한 session이 Codex의 history view에서 사라질 수 있습니다. 이 보호는 legacy root profile이 선택한 외부 provider에도 동일하게 적용됩니다.
+
+외부 provider id를 유지하면서 표준 모델 선택기를 갱신하려면 `ocx config set clientIntegrations.codex catalog-only`를 실행한 다음 `ocx sync`를 실행하세요. 이 모드는 `model_catalog_json`의 catalog와 `models_cache.json`만 갱신하며 `config.toml`, `opencodex.config.toml`, journal, history database 또는 session JSONL을 변경하지 않습니다. 외부 provider는 Responses passthrough(`wire_api = "responses"`)로 로컬 proxy를 가리켜야 합니다.
 
 Codex provider configuration의 소유자는 한 도구만 맡게 하세요. 기존 provider manager 뒤에서 OpenCodex를 쓰려면, 그 provider를 `http://127.0.0.1:10100/v1`로 향하게 하고 Responses passthrough를 쓰세요(`wire_api = "responses"` in Codex TOML). Chat Completions translation은 쓰지 않습니다. proxy API auth가 켜져 있으면, 위의 non-loopback provider 형식과 맞추어 `OPENCODEX_API_AUTH_TOKEN`에서 `x-opencodex-api-key`도 함께 전달하세요. OpenCodex가 routing을 직접 주입하게 하려면 먼저 Codex를 built-in `openai` provider로 되돌리고, 사용자가 소유한 root `openai_base_url`을 지운 다음, `ocx start`를 다시 실행하세요.
 
