@@ -571,6 +571,33 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("CCA HTTPS rewrite drops an explicit source port", async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: "ok" }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]);
+    }) as typeof fetch;
+    try {
+      const request = {
+        url: "http://daily-cloudcode-pa.googleapis.com:8080/v1internal:streamGenerateContent?alt=sse",
+        method: "POST",
+        headers: { Authorization: "Bearer secret-token" },
+        body: "{}",
+      };
+      const response = await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+      expect(response.ok).toBe(true);
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("CCA geoblock maps to 403 without account carousel", async () => {
     const realFetch = globalThis.fetch;
     let calls = 0;

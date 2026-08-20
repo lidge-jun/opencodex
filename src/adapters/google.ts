@@ -404,8 +404,8 @@ function scanSseLineBytes(incompleteLineBytes: number, incoming: Uint8Array): {
 } {
   let lineBytes = incompleteLineBytes;
   let maximum = lineBytes;
-  for (const byte of incoming) {
-    if (byte === 0x0a) {
+  for (let index = 0; index < incoming.length; index++) {
+    if (incoming[index] === 0x0a) {
       lineBytes = 0;
       continue;
     }

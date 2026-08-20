@@ -32,20 +32,18 @@ function isAntigravitySseRequest(request: AdapterRequest): boolean {
 
 function requestForHost(request: AdapterRequest, host: string): AdapterRequest {
   const current = new URL(request.url);
-  const replacement = new URL(host);
-  current.protocol = replacement.protocol;
-  current.host = replacement.host;
-  return { ...request, url: current.toString() };
+  const target = new URL(host);
+  target.pathname = current.pathname;
+  target.search = current.search;
+  return { ...request, url: target.toString() };
 }
 
 type CcaSseProbe = "empty" | "candidate" | "unavailable" | "quota_exhausted" | "geo_blocked" | "terminal";
 
 function probeCcaSseEvent(bytes: Uint8Array): CcaSseProbe {
   const text = new TextDecoder().decode(bytes);
-  let sawData = false;
   for (const line of text.split(/\r?\n/)) {
     if (!line.startsWith("data:")) continue;
-    sawData = true;
     const payload = line.slice(5).trim();
     if (!payload) continue;
     let frame: unknown;
@@ -76,7 +74,7 @@ function probeCcaSseEvent(bytes: Uint8Array): CcaSseProbe {
     const root = response as Record<string, unknown>;
     if (Array.isArray(root.candidates) && root.candidates.length > 0) return "candidate";
   }
-  return sawData ? "empty" : "empty";
+  return "empty";
 }
 
 export class CcaProbeBuffer {
