@@ -30,6 +30,21 @@ export function isShadowSourceModel(modelId: string, configured?: unknown): bool
 }
 
 /**
+ * The configured source prefix this model matched, or undefined.
+ *
+ * Callers that RECORD the intercepted model must record this rather than the caller's raw
+ * `modelId`. Matching is by prefix, so `gpt-5.6-luna` plus arbitrary trailing text still
+ * intercepts — and the raw string is caller-controlled, reaches `usage.jsonl` and `/api/logs`,
+ * and only passes a pattern-based redactor on the way. A credential family that redactor does
+ * not recognize survives verbatim. Returning the operator-configured prefix keeps the log
+ * field inside a set the operator chose, so no caller string is ever persisted.
+ */
+export function shadowSourceModelPrefix(modelId: string, configured?: unknown): string | undefined {
+  if (modelId.includes("/")) return undefined;
+  return shadowSourceModels(configured).find(prefix => modelId.startsWith(prefix));
+}
+
+/**
  * Decide whether a matching source model should use the opt-in intercept.
  *
  * Before Codex 0.147.0 this checked x-codex-turn-metadata and exempted

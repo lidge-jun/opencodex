@@ -315,7 +315,7 @@ export function sidecarOutcomeRecorder(
 
 
 
-import { isShadowSourceModel, shouldInterceptShadowCall } from "../../lib/shadow-call";
+import { isShadowSourceModel, shadowSourceModelPrefix, shouldInterceptShadowCall } from "../../lib/shadow-call";
 
 export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";
 
@@ -1931,7 +1931,14 @@ async function handleResponsesInner(
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
     }
-    logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(_sciOriginal);
+    // Record the operator-configured prefix that matched, NOT the caller's raw model string.
+    // Matching is by prefix, so a caller can append arbitrary text and still intercept; that
+    // raw value would then land in usage.jsonl and /api/logs behind a pattern-based redactor
+    // that does not recognize every credential family. The prefix is a value the operator
+    // configured, so no caller-controlled string is persisted.
+    logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(
+      shadowSourceModelPrefix(_sciOriginal, _sci.sourceModels),
+    );
     // Helpers must not resume/append into the parent thread's Cursor conversation.
     parsed._cursorIsolateConversation = true;
   }
