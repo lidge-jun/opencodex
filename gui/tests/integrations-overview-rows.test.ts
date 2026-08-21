@@ -109,6 +109,20 @@ test("Claude Desktop: applied but not the served profile reads as stale", () => 
     sources({ native: desktopNative, claudeDesktop: { desiredEnabled: true, installed: true, applied: true, stale: false, activeProfile: null } }),
   );
   expect(rowById(unknownProfile, "claudeDesktop").state).toBe("current");
+
+  // Desired OFF wins: leftover applied/stale bytes must not look like "needs update".
+  const desiredOff = buildOverviewRows(
+    sources({
+      native: [{ ...desktopNative[0]!, desiredEnabled: false, state: "absent" }],
+      claudeDesktop: { desiredEnabled: false, installed: true, applied: true, stale: true, activeProfile: true },
+    }),
+  );
+  expect(rowById(desiredOff, "claudeDesktop")).toMatchObject({
+    state: "absent",
+    applied: false,
+    toggleOn: false,
+    detailKey: "integrations.detail.desktopDesiredOff",
+  });
 });
 
 test("file clients keep their existing badge and applied semantics", () => {

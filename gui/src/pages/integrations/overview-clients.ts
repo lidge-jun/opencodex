@@ -305,6 +305,18 @@ function claudeDesktopRow(
     return { ...base, toggle: null, state: "unknown", installed: false, applied: false, detailKey: null };
   }
   const toggleOn = payload.desiredEnabled;
+  // Desired OFF wins the card: leftover gateway bytes must not render as
+  // "applied / needs update" while the switch is off.
+  if (!toggleOn) {
+    return {
+      ...base,
+      state: "absent",
+      installed: payload.installed === true,
+      applied: false,
+      toggleOn: false,
+      detailKey: "integrations.detail.desktopDesiredOff",
+    };
+  }
   if (payload.applied !== true) {
     return {
       ...base,
@@ -312,7 +324,7 @@ function claudeDesktopRow(
       installed: payload.installed === true,
       applied: false,
       toggleOn,
-      detailKey: toggleOn ? "integrations.detail.desktopDesiredOnNotApplied" : "integrations.detail.desktopDesiredOff",
+      detailKey: "integrations.detail.desktopDesiredOnNotApplied",
     };
   }
   const drifted = payload.stale === true || payload.activeProfile === false;

@@ -945,7 +945,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const observed = inspectDesktop3pConfigLibrary({ appliedFingerprint: savedFingerprint });
       const desiredEnabled = claudeDesktopIntegrationEnabled(persisted);
       const applied = observed.kind === "gateway_ours" || observed.kind === "gateway_drifted";
-      const stale = observed.kind === "gateway_drifted";
+      // "Needs update" is only meaningful while the integration is wanted. When the
+      // durable switch is OFF, a leftover drifted profile is residue to clear — not
+      // a stale apply the operator should refresh.
+      const stale = desiredEnabled && observed.kind === "gateway_drifted";
       const { getDesktopHealth } = await import("../../claude/desktop-health");
       const health = getDesktopHealth();
       return jsonResponse({

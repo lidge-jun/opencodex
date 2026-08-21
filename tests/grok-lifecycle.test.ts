@@ -42,6 +42,35 @@ describe("Grok fence lifecycle wiring", () => {
     expect(spawnBranch).toContain("config.hostname ? { hostname: config.hostname }");
   });
 
+  test("ensure gates Grok fence writes on the durable switch like start", () => {
+    const helper = sliceFn(
+      CLI_SOURCE,
+      "async function ensureGrokFenceMatchesDesired(",
+      "function ensureClaudeDesktopMatchesDesired(",
+    );
+    const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
+
+    // The defect: ensure called syncGrokConfig unconditionally, so OFF lasted until
+    // the next dashboard update/restart path that landed in ensure.
+    expect(helper).toContain("shouldSyncGrokOnStart(config)");
+    expect(helper).toContain("stripGrokConfig()");
+    expect(helper).toContain('await import("../grok/sync")');
+    expect(ensureFn).toContain("ensureGrokFenceMatchesDesired(");
+    expect(ensureFn).not.toMatch(/await import\("\.\.\/grok\/sync"\)/);
+  });
+
+  test("ensure clears Claude Desktop residue when the durable switch is OFF", () => {
+    const helper = sliceFn(
+      CLI_SOURCE,
+      "function ensureClaudeDesktopMatchesDesired(",
+      "/** Argv for detached `start`, optionally hard-pinning the listen port. */",
+    );
+    const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
+    expect(helper).toContain("claudeDesktopIntegrationEnabled(config)");
+    expect(helper).toContain("removeDesktop3pStandardPivot(");
+    expect(ensureFn).toContain("ensureClaudeDesktopMatchesDesired(config)");
+  });
+
   test("handleStop gates shared teardown on ownership but still reverts system env", () => {
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
