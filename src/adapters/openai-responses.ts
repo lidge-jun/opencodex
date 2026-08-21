@@ -6,7 +6,7 @@ import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompac
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { CODEX_FORWARD_BASE_URL, destinationDecodesNativeCompactionBlob, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, destinationDecodesNativeCompactionBlob, isCanonicalOpenAiForwardProvider, isOpenAiOperatedResponsesDestination } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -42,7 +42,7 @@ export const FORWARD_HEADERS = [
 
 export function sanitizeReasoningInputContent(
   body: unknown,
-  opts?: { preserveRawReasoningContent?: boolean },
+  opts?: { preserveRawReasoningContent?: boolean; dropNullContentChannel?: boolean },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -57,6 +57,22 @@ export function sanitizeReasoningInputContent(
     // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
+    // Codex serializes an absent reasoning content channel as `"content": null`. The field is
+    // optional and null carries nothing, but a strict gateway rejects the item on its declared type
+    // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
+    // rather than the field it actually refused, which is why this reads as a blob failure. Drop the
+    // key so the item matches the shape the upstream issued.
+    //
+    // Gated to routed destinations. An OpenAI-operated backend binds the blob to the item's exact
+    // shape, so deleting a field there invalidates it (`The encrypted content ... could not be
+    // verified`); the two requirements are exactly opposed, and a live regression proved it.
+    if (opts?.dropNullContentChannel === true && "content" in rec && !Array.isArray(rec.content)) {
+      changed = true;
+      const next: Record<string, unknown> = { ...rec };
+      delete next.content;
+      if (hasOcxEnvelope) delete next.encrypted_content;
+      return next;
+    }
     if (!hasRawContent && !hasOcxEnvelope) return item;
     if (hasOcxEnvelope) {
       changed = true;
@@ -1652,7 +1668,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody, destinationDecodesNativeCompactionBlob(provider)), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody, destinationDecodesNativeCompactionBlob(provider)), {
+        preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+        dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
+      })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

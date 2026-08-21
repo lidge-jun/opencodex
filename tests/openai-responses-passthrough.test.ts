@@ -2525,3 +2525,95 @@ describe("openaiResponsesUrl", () => {
     );
   });
 });
+
+describe("reasoning input content channel", () => {
+  const routed = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "key" as const,
+    apiKey: "xai-test",
+  };
+
+  function forwarded(item: Record<string, unknown>): Record<string, unknown> {
+    const request = createResponsesPassthroughAdapter(routed).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input: [item] },
+    }, { headers: new Headers() });
+    return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+  }
+
+  // Codex serializes an absent reasoning content channel as `"content": null`. xAI rejects the item
+  // and blames the sibling blob (`Could not decode the compaction blob`), so this reads as an
+  // encrypted_content failure; dropping the null key is what actually fixes it. Verified against a
+  // captured failing request: removing only this key turned the 400 into a 200.
+  test("drops a null content channel while keeping the replayable blob", () => {
+    const out = forwarded({
+      type: "reasoning",
+      content: null,
+      summary: [{ type: "summary_text", text: "thinking" }],
+      encrypted_content: "upstream-issued-blob",
+    });
+    expect(out).not.toHaveProperty("content");
+    expect(out.encrypted_content).toBe("upstream-issued-blob");
+    expect(out.summary).toEqual([{ type: "summary_text", text: "thinking" }]);
+  });
+
+  // An OpenAI-operated backend binds the blob to the item's exact shape, so deleting a field there
+  // invalidates it: `The encrypted content ... could not be verified`. Caught in live traffic after
+  // an ungated first version of this fix shipped locally — the two backends want opposite things.
+  test("keeps a null content channel on OpenAI-operated destinations", () => {
+    const item = {
+      type: "reasoning",
+      content: null,
+      summary: [],
+      encrypted_content: "openai-issued-blob",
+    };
+    for (const target of [
+      { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
+      { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key" as const, apiKey: "sk-t" },
+    ]) {
+      const request = createResponsesPassthroughAdapter(target).buildRequest({
+        modelId: "gpt-5.6-sol",
+        context: { messages: [] },
+        stream: true,
+        options: {},
+        _rawBody: { model: "gpt-5.6-sol", store: false, input: [item] },
+      }, { headers: new Headers({ authorization: "Bearer token" }) });
+      const out = (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+      expect(out).toHaveProperty("content");
+      expect(out.content).toBeNull();
+      expect(out.encrypted_content).toBe("openai-issued-blob");
+    }
+  });
+
+  // A noncanonical forward gateway does not receive the caller's credentials, so forward auth says
+  // nothing about which backend answers; it is routed and must get the strip.
+  test("strips a null content channel on a noncanonical forward relay", () => {
+    const request = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example/backend-api/codex",
+      authMode: "forward",
+    }).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input: [{ type: "reasoning", content: null, encrypted_content: "b" }] },
+    }, { headers: new Headers() });
+    const out = (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+    expect(out).not.toHaveProperty("content");
+  });
+
+  test("leaves an array content channel to the existing sanitizer", () => {
+    const out = forwarded({
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "raw" }],
+      encrypted_content: "upstream-issued-blob",
+    });
+    expect(out.content).toEqual([]);
+    expect(out.encrypted_content).toBe("upstream-issued-blob");
+  });
+});
