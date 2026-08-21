@@ -74,6 +74,7 @@ import {
   resolveCodexModelEntitlements,
   type CodexModelEntitlementSnapshot,
 } from "./model-entitlements";
+import { applyOperatorDisplayLabels } from "./catalog/display-labels";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
@@ -237,7 +238,11 @@ function prepareCatalog(
   const template = findNativeTemplate(catalog);
   const enabled = filterCatalogVisibleModels(routedModels, config);
   const featured = config.subagentModels ?? [];
-  const ordered = orderForSubagents(enabled, featured);
+  // #2201: resolve operator display labels before ordering. Display-only — the
+  // routed slug, provider id and native model id are all unchanged, so ordering,
+  // featuring and spawn-candidate derivation below see the same identities.
+  const labeled = applyOperatorDisplayLabels(enabled, config);
+  const ordered = orderForSubagents(labeled, featured);
   const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode : "default";

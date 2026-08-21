@@ -194,6 +194,20 @@ export interface OcxProviderConfig {
    * An explicit config value always wins over the registry default.
    */
   supportsServiceTier?: boolean;
+  /**
+   * Display-only labels for live-discovered models, keyed by the upstream native
+   * model id — the same key space as `modelAdapters`.
+   *
+   * A discovered row otherwise shows its routed slug, so an NVIDIA NIM row reads
+   * `nvidia/deepseek-ai-deepseek-v4-flash-0731`. This relabels the row only: the
+   * provider id, native model id, and routed slug are untouched, exactly as with
+   * `customModels[].displayName`. Labels are single-line, at most 128 characters,
+   * and may not contain `/` — a label with a slash would read as a routed slug.
+   *
+   * A model label is deliberately not a provider label; naming the provider is a
+   * separate field so the two never end up concatenated into one string.
+   */
+  modelDisplayNames?: Record<string, string>;
   /** Exact upstream model ids that override the provider-level service-tier capability. */
   modelSupportsServiceTier?: Record<string, boolean>;
   /**
