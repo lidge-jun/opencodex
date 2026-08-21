@@ -44,6 +44,7 @@ import {
   mergeCatalogEntriesFromObservedState,
   mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
+  syntheticMaxSuppressedCatalogSlugs,
   } from "./catalog/sync";
   import { multiAgentV2EnabledFromConfigText } from "./features";
   import { exactComboCatalogSlugs } from "./catalog/aggregation";
@@ -352,6 +353,7 @@ function prepareCatalog(
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
+    syntheticMaxSuppressedSlugs: syntheticMaxSuppressedCatalogSlugs(config),
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],

@@ -206,6 +206,7 @@ export function applyReasoningLevels(
   effortsOverride?: string[],
   defaultOverride?: string,
   preserveExact = false,
+  suppressSyntheticMax = false,
 ): void {
   let efforts = sanitizeCodexReasoningEfforts(effortsOverride) ?? ROUTED_REASONING_LEVELS.map(l => l.effort);
   // Mock top tiers (user decision 260709): every reasoning-capable model advertises `max`
@@ -214,10 +215,12 @@ export function applyReasoningLevels(
   // so a missing max rung hard-fails spawn_agent effort overrides. The wire stays honest:
   // routed adapters clamp via clampToSupportedCodexEffort and natives via
   // nativeEffortClamp (max -> the model's real top rung). A `none`-only ladder is NOT
-  // reasoning-capable, so it must not grow synthetic top rungs.
+  // reasoning-capable, so it must not grow synthetic top rungs. Providers may suppress
+  // only the invented max rung for models whose upstream rejects it; ultra remains a
+  // Codex-side delegation control, and a real configured max is never removed.
   if (!preserveExact && efforts.length > 0 && efforts.some(effort => effort !== "none" && effort !== "minimal")) {
     const additions: string[] = [];
-    if (!efforts.includes("max")) additions.push("max");
+    if (!suppressSyntheticMax && !efforts.includes("max")) additions.push("max");
     if (!efforts.includes("ultra")) additions.push("ultra");
     if (additions.length > 0) efforts = sanitizeCodexReasoningEfforts([...efforts, ...additions]) ?? efforts;
   }

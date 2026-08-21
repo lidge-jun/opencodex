@@ -574,6 +574,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     inMod: prov.modelInputModalities ?? null,
     re: prov.modelReasoningEfforts ?? null,
     defRe: prov.modelDefaultReasoningEfforts ?? null,
+    suppressMax: prov.modelSuppressSyntheticMax ?? null,
     rsSum: prov.modelSupportsReasoningSummaries ?? null,
     rsDel: prov.modelReasoningSummaryDelivery ?? null,
     serviceTier: prov.modelSupportsServiceTier ?? null,
@@ -647,13 +648,15 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
+  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id) === true;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
   const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
     supportsServiceTier: _staleServiceTier,
     fastTierDescription: _staleFastTierDescription,
-    ...modelWithoutServiceTier
+    suppressSyntheticMax: _staleSuppressSyntheticMax,
+    ...modelWithoutDerivedHints
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
@@ -663,7 +666,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ? (configuredCap !== undefined ? Math.min(discoveredWindow, configuredCap) : discoveredWindow)
     : (configuredCap ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined));
   const hinted = {
-    ...modelWithoutServiceTier,
+    ...modelWithoutDerivedHints,
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
@@ -675,6 +678,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       }
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(suppressSyntheticMax ? { suppressSyntheticMax: true } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
@@ -1854,6 +1858,9 @@ async function gatherRoutedModelsUncached(
       ? nativeDefaultReasoningEffort(cm.modelId)
       : undefined;
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
+    const suppressSyntheticMax = effectiveProvider
+      ? modelRecordValue(effectiveProvider.modelSuppressSyntheticMax, cm.modelId) === true
+      : false;
     const fastPolicy = effectiveProvider
       ? fastPolicyForModel(effectiveProvider, cm.modelId, cm.provider)
       : undefined;
@@ -1874,6 +1881,7 @@ async function gatherRoutedModelsUncached(
         ? { inputModalities: cm.inputModalities }
         : codexForwardNativeCapabilityAlias ? { inputModalities: nativeInputModalities(cm.modelId) } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
+      ...(suppressSyntheticMax ? { suppressSyntheticMax: true } : {}),
       // Native-alias defaults apply only where the custom row declares nothing: the explicit
       // spreads below must win (later in object order), so a stored `[]` stays empty and a
       // declared ladder is never replaced by the alias's native ladder.

@@ -1246,6 +1246,37 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("modelSuppressSyntheticMax accepts only plain boolean records", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelSuppressSyntheticMax: { "gemini-3.7-flash": true, legacy: false },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    for (const invalid of [[], { model: "true" }, { "": true }]) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.test/v1",
+            modelSuppressSyntheticMax: invalid,
+          },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelSuppressSyntheticMax");
+    }
+  });
+
   test("modelReasoningSummaryDelivery validates known values and rejects summary opt-out conflicts (#538)", () => {
     writeConfig({
       port: 12345,

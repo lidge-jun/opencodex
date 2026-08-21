@@ -331,6 +331,8 @@ export interface OcxProviderConfig {
   modelReasoningEfforts?: Record<string, string[]>;
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
+  /** Suppress only Codex's invented `max` tier for model-keyed upstream ids. */
+  modelSuppressSyntheticMax?: Record<string, boolean>;
   /**
    * Model-specific Codex reasoning-summary capability. Set false when an OpenAI-compatible
    * Responses backend rejects Codex summary-delivery fields for that model.

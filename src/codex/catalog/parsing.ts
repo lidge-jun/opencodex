@@ -109,6 +109,8 @@ export interface CatalogModel {
   owned_by?: string;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
+  /** Transient catalog policy derived from provider configuration. */
+  suppressSyntheticMax?: boolean;
   contextWindow?: number;
   maxInputTokens?: number;
   contextCap?: number;

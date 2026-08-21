@@ -1865,6 +1865,7 @@ describe("3-state multi-agent mode", () => {
         hasPhysicalComboProvider: false,
         includeNativeOpenAi: true,
         accountBoundEntries,
+        syntheticMaxSuppressedSlugs: new Set(),
         policy: {
           nativeBackfillSlugs: ["gpt-5.5"],
           unsupportedNativeEntries: "preserve",

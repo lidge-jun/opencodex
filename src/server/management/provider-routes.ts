@@ -537,6 +537,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
+    const submittedSuppressSyntheticMax = Object.hasOwn(prov, "modelSuppressSyntheticMax");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -558,6 +559,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     if (!submittedContextWindow && existing?.contextWindow !== undefined) {
       prov.contextWindow = existing.contextWindow;
+    }
+    if (!submittedSuppressSyntheticMax && existing?.modelSuppressSyntheticMax) {
+      prov.modelSuppressSyntheticMax = { ...existing.modelSuppressSyntheticMax };
     }
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When

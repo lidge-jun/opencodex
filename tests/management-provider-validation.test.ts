@@ -304,6 +304,21 @@ describe("provider management validation", () => {
     expect(dto.providers.relay?.noStructuredOutputModels).toEqual(["deepseek-v4-flash"]);
   });
 
+  test("validates model-scoped synthetic-max suppression", () => {
+    const provider = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example/v1",
+      modelSuppressSyntheticMax: { "gemini-3.7-flash": true, legacy: false },
+    };
+    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    for (const modelSuppressSyntheticMax of [[], { model: "true" }, { "": true }]) {
+      expect(providerManagementConfigError("relay", {
+        ...provider,
+        modelSuppressSyntheticMax,
+      })).toContain("modelSuppressSyntheticMax");
+    }
+  });
+
   test("normalizes hand-edited structured-output model opt-outs at load", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
@@ -637,6 +652,44 @@ describe("provider management validation", () => {
       });
       expect(overwrite.status).toBe(200);
       expect(loadConfig().providers["custom-costs"]?.modelCosts).toEqual(costs);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider POST overwrite preserves modelSuppressSyntheticMax when the payload omits it", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const suppression = { "gemini-3.7-flash": true };
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-synthetic-max",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "https://api.example.test/v1",
+            modelSuppressSyntheticMax: suppression,
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-synthetic-max",
+          provider: { adapter: "openai-responses", baseUrl: "https://api.example.test/v1" },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers["custom-synthetic-max"]?.modelSuppressSyntheticMax).toEqual(suppression);
     } finally {
       await server.stop(true);
     }

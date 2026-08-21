@@ -40,6 +40,7 @@ import {
 import {
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   mergeCatalogEntriesFromObservedState,
+  syntheticMaxSuppressedCatalogSlugs,
   type ObservedCatalogMergeInput,
 } from "../src/codex/catalog/sync";
 
@@ -2312,6 +2313,7 @@ test("a custom row inherits provider reasoning metadata from the provider-derive
           selectedModels: ["qwen-coder-3b"],
           noReasoningModels: ["qwen-coder-3b"],
           modelReasoningEfforts: { "qwen-coder-3b": [] },
+          modelSuppressSyntheticMax: { "qwen-coder-3b": true },
         },
       },
       customModels: [
@@ -2335,6 +2337,7 @@ test("a custom row inherits provider reasoning metadata from the provider-derive
     expect(custom?.contextWindow).toBe(32768);
     expect(custom?.inputModalities).toEqual(["text"]);
     expect(custom?.reasoningEfforts).toEqual([]);
+    expect(custom?.suppressSyntheticMax).toBe(true);
     expect(custom?.parallelToolCalls).toBe(true);
 
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
@@ -2348,6 +2351,35 @@ test("a custom row inherits provider reasoning metadata from the provider-derive
     globalThis.fetch = originalFetch;
     clearModelCache("ollama");
   }
+});
+
+test("a custom-only row receives model-scoped synthetic-max policy", async () => {
+  const models = await gatherRoutedModels({
+    port: 10100,
+    defaultProvider: "custom-only",
+    providers: {
+      "custom-only": {
+        adapter: "openai-responses",
+        baseUrl: "https://example.invalid/v1",
+        liveModels: false,
+        models: [],
+        modelSuppressSyntheticMax: { "gemini-3.7-flash": true },
+      },
+    },
+    customModels: [{
+      id: "custom-gemini",
+      provider: "custom-only",
+      modelId: "gemini-3.7-flash",
+      reasoningEfforts: ["low", "medium", "high"],
+      addedAt: "2026-01-01T00:00:00.000Z",
+    }],
+  });
+
+  expect(models).toHaveLength(1);
+  expect(models[0]?.suppressSyntheticMax).toBe(true);
+  const row = buildCatalogEntries(null, [], models)[0];
+  expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+    .toEqual(["low", "medium", "high", "ultra"]);
 });
 
 function openAiApiCatalogConfig(overrides: Record<string, unknown> = {}): OcxConfig {
@@ -2416,6 +2448,7 @@ function mergeObservedForTest(
     hasPhysicalComboProvider: false,
     includeNativeOpenAi: true,
     accountBoundEntries: [],
+    syntheticMaxSuppressedSlugs: new Set(),
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "emit",
@@ -2425,6 +2458,131 @@ function mergeObservedForTest(
 }
 
 describe("Codex catalog routed normalization", () => {
+  test("model-scoped policy suppresses only invented max in template and fallback rows", () => {
+    const model = {
+      provider: "google",
+      id: "gemini-3.7-flash",
+      reasoningEfforts: ["low", "medium", "high"],
+      suppressSyntheticMax: true,
+    };
+
+    for (const template of [nativeTemplate(), null]) {
+      const row = buildCatalogEntries(template, [], [model])
+        .find(entry => entry.slug === "google/gemini-3.7-flash");
+      expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+        .toEqual(["low", "medium", "high", "ultra"]);
+    }
+
+    const realMax = buildCatalogEntries(null, [], [{
+      ...model,
+      reasoningEfforts: ["low", "high", "max"],
+    }]).find(entry => entry.slug === "google/gemini-3.7-flash");
+    expect((realMax?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
+  });
+
+  test("unflagged, empty, none-only, and exact-combo ladders keep their existing behavior", () => {
+    const rows = buildCatalogEntries(null, [], [
+      { provider: "google", id: "legacy", reasoningEfforts: ["low", "medium", "high"] },
+      { provider: "google", id: "no-max", reasoningEfforts: ["low", "high"], suppressSyntheticMax: true },
+      { provider: "google", id: "empty", reasoningEfforts: [], suppressSyntheticMax: true },
+      { provider: "google", id: "none", reasoningEfforts: ["none"], suppressSyntheticMax: true },
+      { provider: COMBO_NAMESPACE, id: "exact", reasoningEfforts: ["low", "high"], suppressSyntheticMax: true },
+    ], undefined, false, "default", new Set(["combo/exact"]));
+    const efforts = (slug: string) => (
+      rows.find(entry => entry.slug === slug)?.supported_reasoning_levels as Array<{ effort: string }>
+    ).map(level => level.effort);
+
+    expect(efforts("google/legacy")).toEqual(["low", "medium", "high", "max", "ultra"]);
+    expect(efforts("google/no-max")).toEqual(["low", "high", "ultra"]);
+    expect(efforts("google/empty")).toEqual([]);
+    expect(efforts("google/none")).toEqual(["none"]);
+    expect(efforts("combo/exact")).toEqual(["low", "high"]);
+  });
+
+  test("final sync keeps suppression stable and restores legacy max after opt-out", () => {
+    const slug = "google/gemini-3.7-flash";
+    const routed = buildCatalogEntries(null, [], [{
+      provider: "google",
+      id: "gemini-3.7-flash",
+      reasoningEfforts: ["low", "medium", "high"],
+      suppressSyntheticMax: true,
+    }]).find(entry => entry.slug === slug)!;
+    const legacyRouted = buildCatalogEntries(null, [], [{
+      provider: "google",
+      id: "gemini-3.7-flash",
+      reasoningEfforts: ["low", "medium", "high"],
+    }]).find(entry => entry.slug === slug)!;
+    const policy = new Set([slug]);
+    const merge = (
+      catalogModels: Record<string, unknown>[],
+      syntheticMaxSuppressedSlugs = policy,
+      routedEntries = [routed],
+    ) =>
+      mergeObservedForTest({
+        catalogModels,
+        routedEntries,
+        gatheredProviderNames: new Set(["google"]),
+        syntheticMaxSuppressedSlugs,
+      });
+
+    const first = merge([]);
+    const second = merge(first);
+    for (const rows of [first, second]) {
+      expect((rows.find(entry => entry.slug === slug)?.supported_reasoning_levels as Array<{ effort: string }>)
+        .map(level => level.effort)).toEqual(["low", "medium", "high", "ultra"]);
+    }
+    expect((merge(second, new Set(), [legacyRouted]).find(entry => entry.slug === slug)
+      ?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "max", "ultra"]);
+  });
+
+  test("degraded preservation still applies current synthetic-max policy", () => {
+    const slug = "google/gemini-3.7-flash";
+    const existing = {
+      slug,
+      owned_by: "google",
+      input_modalities: ["text"],
+      supported_reasoning_levels: ["low", "high", "ultra"].map(effort => ({ effort })),
+    };
+    const preserved = mergeObservedForTest({
+      catalogModels: [existing],
+      routedEntries: [],
+      template: null,
+      gatheredProviderNames: new Set(["google"]),
+      degradedProviderNames: new Set(["google"]),
+      syntheticMaxSuppressedSlugs: new Set([slug]),
+    }).find(entry => entry.slug === slug);
+
+    expect((preserved?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "ultra"]);
+  });
+
+  test("synthetic-max policy slugs come only from enabled true config entries", () => {
+    expect(syntheticMaxSuppressedCatalogSlugs({
+      providers: {
+        google: {
+          adapter: "google",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          modelSuppressSyntheticMax: {
+            "gemini-3.7-flash": true,
+            "vendor/model": true,
+            legacy: false,
+          },
+        },
+        disabled: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          disabled: true,
+          modelSuppressSyntheticMax: { hidden: true },
+        },
+      },
+    })).toEqual(new Set([
+      "google/gemini-3.7-flash",
+      "google/vendor-model",
+    ]));
+  });
+
   test("does not reuse a routed native alias as the native catalog template", () => {
     const routedAlias = {
       ...nativeTemplate(),
@@ -5022,6 +5180,30 @@ describe("Codex catalog routed normalization", () => {
     });
 
     expect(models.find(m => m.id === "cached-model")?.contextWindow).toBe(80_000);
+  });
+
+  test("current config clears stale synthetic-max suppression from cached models", async () => {
+    const provider = "synthetic-max-cache";
+    setCached(provider, [{
+      provider,
+      id: "gemini-3.7-flash",
+      suppressSyntheticMax: true,
+    }]);
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      modelCacheTtlMs: 0,
+      providers: {
+        [provider]: {
+          adapter: "openai-responses",
+          baseUrl: "https://synthetic-max-cache.test/v1",
+          modelSuppressSyntheticMax: { "gemini-3.7-flash": false },
+        },
+      },
+    });
+
+    expect(models.find(model => model.id === "gemini-3.7-flash")?.suppressSyntheticMax)
+      .toBeUndefined();
   });
 
   test("provider context-cap toggle applies to stale cached metadata", async () => {

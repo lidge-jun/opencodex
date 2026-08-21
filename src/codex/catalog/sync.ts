@@ -336,6 +336,7 @@ export function deriveEntry(
         model?.reasoningEfforts,
         model?.defaultReasoningEffort,
         preserveExact || codexForwardNativeCapabilityAlias !== null,
+        model?.suppressSyntheticMax === true,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -385,7 +386,13 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(
+      entry,
+      model?.reasoningEfforts,
+      model?.defaultReasoningEffort,
+      preserveExact,
+      model?.suppressSyntheticMax === true,
+    );
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
@@ -770,6 +777,7 @@ export interface ObservedCatalogMergeInput {
   readonly includeNativeOpenAi: boolean;
   readonly accountBoundEntries: readonly RawEntry[];
   readonly suppressedBareNativeSlugs?: ReadonlySet<string>;
+  readonly syntheticMaxSuppressedSlugs: ReadonlySet<string>;
   readonly policy: ObservedCatalogMergePolicy;
   readonly openaiContextCap?: NativeContextLimitsInput;
 }
@@ -801,6 +809,7 @@ export function mergeCatalogEntriesFromObservedState({
   includeNativeOpenAi,
   accountBoundEntries,
   suppressedBareNativeSlugs = new Set(),
+  syntheticMaxSuppressedSlugs,
   policy,
   openaiContextCap,
 }: ObservedCatalogMergeInput): RawEntry[] {
@@ -813,6 +822,9 @@ export function mergeCatalogEntriesFromObservedState({
   const detachedAccountBoundEntries = accountBoundEntries
     .map(entry => structuredClone(entry) as RawEntry);
   const disabledModelKeys = new Set([...disabledModels].map(slugEquivalenceKey));
+  const syntheticMaxSuppressedKeys = new Set(
+    [...syntheticMaxSuppressedSlugs].map(slugEquivalenceKey),
+  );
   const legacyCustomModelKeys = new Set(
     [...legacyCustomModelSlugs].map(slugEquivalenceKey),
   );
@@ -1096,7 +1108,9 @@ export function mergeCatalogEntriesFromObservedState({
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo) {
+    const suppressSyntheticMax = typeof e.slug === "string"
+      && syntheticMaxSuppressedKeys.has(slugEquivalenceKey(e.slug));
+    if (!exactCombo && !suppressSyntheticMax) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
@@ -1160,6 +1174,7 @@ export function mergeCatalogEntriesForSync(
   ),
   openaiContextCap?: number,
   keepNativeChatGptOnV1 = false,
+  syntheticMaxSuppressedSlugs: ReadonlySet<string> = new Set(),
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must
   // not suppress same-named native rows; actual admitted combo entries own that decision now.
@@ -1195,12 +1210,27 @@ export function mergeCatalogEntriesForSync(
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
+    syntheticMaxSuppressedSlugs,
     openaiContextCap,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "emit",
     },
   });
+}
+
+/** Current config policy, kept explicit so degraded discovery cannot resurrect synthetic max. */
+export function syntheticMaxSuppressedCatalogSlugs(
+  config: Pick<OcxConfig, "providers">,
+): Set<string> {
+  const slugs = new Set<string>();
+  for (const [provider, entry] of Object.entries(config.providers)) {
+    if (entry.disabled === true) continue;
+    for (const [model, suppress] of Object.entries(entry.modelSuppressSyntheticMax ?? {})) {
+      if (suppress === true) slugs.add(routedSlug(provider, model));
+    }
+  }
+  return slugs;
 }
 
 interface RetainedCatalogSyncRead {
@@ -1588,6 +1618,7 @@ function writeRetainedCatalogSync({
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
+    syntheticMaxSuppressedSlugs: syntheticMaxSuppressedCatalogSlugs(config),
     openaiContextCap,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,

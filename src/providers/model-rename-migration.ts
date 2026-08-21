@@ -88,6 +88,7 @@ const MODEL_KEYED_RECORDS = [
   "modelReasoningEfforts",
   "modelDefaultReasoningEfforts",
   "modelReasoningEffortMap",
+  "modelSuppressSyntheticMax",
 ] as const;
 
 /** Provider fields that are flat lists of model ids. */

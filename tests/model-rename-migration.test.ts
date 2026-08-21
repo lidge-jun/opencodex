@@ -32,6 +32,7 @@ function staleConfig(): OcxConfig {
         modelInputModalities: { "qwen3.8-max-preview": ["text", "image"] },
         modelReasoningEfforts: { "qwen3.8-max-preview": ["low", "high", "xhigh"] },
         modelDefaultReasoningEfforts: { "qwen3.8-max-preview": "xhigh" },
+        modelSuppressSyntheticMax: { "qwen3.8-max-preview": true },
         preserveReasoningContentModels: ["glm-5.2", "qwen3.8-max-preview", "qwen3.7-max"],
         thinkingBudgetModels: ["qwen3.8-max-preview", "qwen3.7-max"],
       },
@@ -54,6 +55,7 @@ describe("registry model rename migration (#1610)", () => {
     expect(prov.modelInputModalities?.["qwen3.8-max"]).toEqual(["text", "image"]);
     expect(prov.modelReasoningEfforts?.["qwen3.8-max"]).toEqual(["low", "high", "xhigh"]);
     expect(prov.modelDefaultReasoningEfforts?.["qwen3.8-max"]).toBe("xhigh");
+    expect(prov.modelSuppressSyntheticMax?.["qwen3.8-max"]).toBe(true);
     expect(prov.preserveReasoningContentModels).toEqual(["glm-5.2", "qwen3.8-max", "qwen3.7-max"]);
     expect(prov.thinkingBudgetModels).toEqual(["qwen3.8-max", "qwen3.7-max"]);
     expect(warnings.some(w => w.includes("qwen3.8-max"))).toBe(true);
@@ -80,6 +82,7 @@ describe("registry model rename migration (#1610)", () => {
     prov.modelInputModalities = {};
     prov.modelReasoningEfforts = {};
     prov.modelDefaultReasoningEfforts = {};
+    prov.modelSuppressSyntheticMax = {};
     prov.preserveReasoningContentModels = ["qwen3.8-max"];
     prov.thinkingBudgetModels = ["qwen3.7-max"];
     clean.disabledModels = ["other/model"];
