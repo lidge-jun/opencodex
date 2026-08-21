@@ -5,6 +5,12 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
+## 在仪表板中按模型配置 OpenRouter 路由
+
+对于规范 OpenRouter 提供者，请打开**提供者 → OpenRouter → 模型 → 按模型的提供者路由**。输入精确的 OpenRouter 模型 ID，加载 endpoint，然后选择继承 `openRouterRouting`、使用 `order` 排序或使用 `only` 限制。保存继承模式会删除对应的 `modelOpenRouterRouting` 条目。发现结果中已不存在的已配置 tag 仍会显示，并可明确移除。
+
+发现功能使用已配置的 OpenRouter API 密钥。授权失败不会更改已保存的路由。成功结果会缓存五分钟；即使结果为空，也可通过**刷新**绕过缓存。
+
 ## 提供者相关顶级字段
 
 | 字段 | 类型 | 默认值 | 含义 |

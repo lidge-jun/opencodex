@@ -6,6 +6,12 @@ description: Entrées du fournisseur, authentification, points de terminaison, c
 Un fournisseur indique à opencodex où se trouve un modèle, quel adaptateur de protocole il utilise et comment les requêtes sont
 authentifiées.
 
+## Routage OpenRouter par modèle dans le tableau de bord
+
+Pour un fournisseur OpenRouter canonique, ouvrez **Fournisseurs → OpenRouter → Modèles → Routage du fournisseur par modèle**. Saisissez l’identifiant OpenRouter exact, chargez les endpoints, puis choisissez l’héritage de `openRouterRouting`, un ordre `order` ou une liste exclusive `only`. Le mode héritage supprime l’entrée correspondante de `modelOpenRouterRouting`. Les tags configurés mais absents d’une découverte restent visibles et peuvent être supprimés explicitement.
+
+La découverte utilise la clé API OpenRouter configurée. Un refus d’autorisation ne modifie pas le routage enregistré. Les résultats valides sont mis en cache pendant cinq minutes ; **Actualiser** contourne ce cache, même après une liste vide.
+
 ## Champs de premier niveau liés aux fournisseurs
 
 | Champ | Type | Par défaut | Signification |

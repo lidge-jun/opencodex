@@ -124,6 +124,24 @@ function persistDesktopProfileField(
   return { ok: true };
 }
 
+function persistAgentTaskRecoveryEnabled(
+  config: OcxConfig,
+  enabled: boolean,
+): { ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" } {
+  const outcome = mutatePersistedConfig(persisted => {
+    const changed = persisted.agentTaskRecovery?.enabled !== enabled;
+    const next = { ...(persisted.agentTaskRecovery ?? {}), enabled };
+    persisted.agentTaskRecovery = next;
+    return {
+      changed,
+      value: next,
+    };
+  });
+  if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
+  config.agentTaskRecovery = outcome.value;
+  return { ok: true };
+}
+
 export function grokApplyFlightSnapshot(): { currentBytes: number; highWaterBytes: number; active: number } {
   return {
     currentBytes: grokApplyFlight?.bytes ?? 0,
@@ -219,6 +237,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         saveConfigPreservingClaudeCode(current);
       }
     } catch { /* best-effort */ }
+  }
+
+  // Explicit control for the experimental native-ChatGPT compatibility recovery used
+  // when a V2 NEW_TASK reaches a routed child as backend-only ciphertext. Keep this
+  // separate from injection/delegation preferences: enabling it may consume additional
+  // ChatGPT quota and briefly retain recovered plaintext in the bounded process cache.
+  if (url.pathname === "/api/agent-task-recovery" && req.method === "GET") {
+    return jsonResponse({ enabled: config.agentTaskRecovery?.enabled === true });
+  }
+  if (url.pathname === "/api/agent-task-recovery" && req.method === "PUT") {
+    let body: unknown;
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(body) || Object.keys(body).some(key => key !== "enabled")) {
+      return jsonResponse({ error: "body must contain only enabled" }, 400);
+    }
+    if (typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
+    }
+    const persisted = persistAgentTaskRecoveryEnabled(config, body.enabled);
+    if (!persisted.ok) {
+      return jsonResponse({ error: "configuration update unavailable", code: "config_update_unavailable" }, 409);
+    }
+    return jsonResponse({ ok: true, enabled: body.enabled });
   }
 
   // multi_agent_v2 surface toggle. GET reports the flag + the agents.max_threads

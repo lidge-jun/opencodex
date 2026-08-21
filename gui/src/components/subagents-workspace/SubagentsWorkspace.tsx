@@ -50,6 +50,13 @@ export interface SubagentsWorkspaceProps {
     onUltraModeSave: (patch: UltraModePatch) => void;
     ultraLoadFailed: boolean;
     onUltraModeRetry: () => void;
+    taskRecovery: {
+      enabled: boolean;
+      saving: boolean;
+      loadFailed: boolean;
+      onSave: (enabled: boolean) => void;
+      onRetry: () => void;
+    };
   };
 }
 
@@ -234,6 +241,7 @@ export default function SubagentsWorkspace({
             onUltraModeSave={delegation.onUltraModeSave}
             ultraLoadFailed={delegation.ultraLoadFailed}
             onUltraModeRetry={delegation.onUltraModeRetry}
+            taskRecovery={delegation.taskRecovery}
           />
         </section>
       </div>

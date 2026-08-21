@@ -25,6 +25,7 @@ const USAGE = `Usage:
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
       [--prompt <text|->] [--guidance <on|off>] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
+  ocx agent recovery <status|on|off> [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->]
@@ -38,16 +39,38 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   rejectArgs(args, USAGE);
-  const [v2, injection, caps, subagents, fallback, sidecars] = await Promise.all([
+  const [v2, injection, recovery, caps, subagents, fallback, sidecars] = await Promise.all([
     runtimeRequest("/api/v2", {}, deps),
     runtimeRequest("/api/injection-model", {}, deps),
+    runtimeRequest("/api/agent-task-recovery", {}, deps),
     runtimeRequest("/api/effort-caps", {}, deps),
     runtimeRequest("/api/subagent-models", {}, deps),
     runtimeRequest("/api/subagent-model-fallback", {}, deps),
     runtimeRequest("/api/sidecar-settings", {}, deps),
   ]);
-  const result = { v2, injection, caps, subagents, fallback, sidecars };
+  const result = { v2, injection, recovery, caps, subagents, fallback, sidecars };
   printData(result, wantsJson, summaryLines(result));
+}
+
+async function recovery(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const action = (args.shift() ?? "status").toLowerCase();
+  const wantsJson = takeFlag(args, "--json");
+  rejectArgs(args, USAGE);
+  if (action === "status") {
+    const result = await runtimeRequest("/api/agent-task-recovery", {}, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action !== "on" && action !== "off") throw new CliUsageError(`unknown recovery action ${action}`, USAGE);
+  const enabled = action === "on";
+  const result = await runtimeRequest("/api/agent-task-recovery", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  }, deps);
+  printData(result, wantsJson, [enabled
+    ? "Encrypted V2 task recovery enabled. This may consume additional ChatGPT quota and add latency."
+    : "Encrypted V2 task recovery disabled."]);
 }
 
 async function injection(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -217,6 +240,7 @@ export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = 
     if (sub === "status") await status(rest, deps);
     else if (sub === "injection" || sub === "guidance") await injection(rest, deps);
     else if (sub === "effort") await effort(rest, deps);
+    else if (sub === "recovery") await recovery(rest, deps);
     else if (sub === "subagents" || sub === "roster") await subagents(rest, deps);
     else if (sub === "fallback") await fallback(rest, deps);
     else if (sub === "sidecar") await sidecar(rest, deps);

@@ -586,6 +586,16 @@ lookalike hosts, and custom proxy paths fail validation. A model override replac
 merges the provider-wide default, keeping precedence deterministic. With no preference configured,
 the request body is byte-for-byte unchanged in this area and OpenRouter retains its default routing.
 
+Provider discovery for this editor is a separate, management-only path. It calls the fixed canonical
+`/api/v1/models/{author}/{slug}/endpoints` URL with the configured OpenRouter credential, accepts only
+an exact matching model envelope and bounded endpoint rows with nonblank `tag` values, and caches the
+sanitized result in memory for five minutes under a process-keyed credential scope. Credentials and
+upstream error bodies never enter the management response. A 401/403 is surfaced as the static
+`openrouter_authorization_failed` class; discovery uses the configured OpenRouter API key. No more
+than eight distinct discovery flights may be active at once, while
+same-key callers continue joining the existing flight. The dashboard writes one exact-model override
+through the normal provider PATCH path; null removes that override and restores inheritance.
+
 ## Kimi Coding Plan prompt-cache affinity
 
 The canonical `kimi` OAuth and `kimi-code` API-key presets opt into forwarding the internal

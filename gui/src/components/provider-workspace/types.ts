@@ -102,4 +102,5 @@ export type ProviderUpdatePatch = {
   requestPacing?: WorkspaceItem["requestPacing"] | null;
   /** Dedicated field: the API PATCHes it alone for the canonical `openai` provider. */
   codexAccountMode?: "direct" | "pool";
+  modelOpenRouterRouting?: Record<string, WorkspaceItem["openRouterRouting"] | null> | null;
 };

@@ -187,6 +187,20 @@ Enable this only when the additional authenticated request, quota use, plaintext
 and private-backend dependency are acceptable. Prefer a native ChatGPT child or v1 heterogeneous
 delegation when they are not.
 
+The dashboard exposes the same explicit opt-in under **Subagents → Settings → Recover encrypted V2
+tasks** and shows the quota/latency warning before enabling it. Headless users can use:
+
+```bash
+ocx agent recovery status
+ocx agent recovery on
+ocx agent recovery off
+```
+
+The management API equivalent is `GET/PUT /api/agent-task-recovery`; `PUT` accepts only
+`{"enabled": boolean}` and preserves advanced `model`, `timeoutMs`, and `cacheEntries` values that
+were configured manually. The route commits this field-scoped change to disk before mirroring it into
+the running proxy, so a persistence failure cannot enable or disable live recovery by itself.
+
 This recovery path applies to direct-routed children. At most 32 recovery requests can be active at
 once; additional misses fail closed. Combo routing keeps its existing native-only filter for
 encrypted tasks and does not invoke recovery.

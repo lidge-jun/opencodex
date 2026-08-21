@@ -5,6 +5,10 @@ description: Surfaces multi-agents, consignes de délégation, modèles privilé
 
 Les paramètres des agents déterminent la surface de collaboration Codex annoncée, ainsi que la manière dont opencodex guide, route et limite les tâches déléguées.
 
+## Contrôle de récupération des tâches v2 chiffrées
+
+La récupération expérimentale est désactivée par défaut. Activez-la sous **Sous-agents → Paramètres → Récupérer les tâches v2 chiffrées** uniquement après avoir accepté l’avertissement de quota et de latence, ou utilisez `ocx agent recovery status`, `ocx agent recovery on` ou `ocx agent recovery off`. L’API équivalente est `GET/PUT /api/agent-task-recovery` ; `PUT` accepte seulement `{"enabled": boolean}`, écrit d’abord la configuration durable, puis met à jour l’état actif, tout en préservant les options avancées configurées manuellement.
+
 ## Champs de configuration des agents
 
 | Champ | Type | Valeur par défaut | Signification |
