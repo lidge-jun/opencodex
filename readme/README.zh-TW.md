@@ -120,7 +120,7 @@ npm 警告給的縮寫指令少了套件名，會把目前目錄重裝進去，
 - **Codex 在哪裡能用，它就在哪裡能用。** 自動注入 Codex CLI、TUI、App 和 SDK。路由模型像原生模型一樣出現在 Codex 的模型選擇器裡。
 - **委派給合適的模型。** 在儀表板或 config 中把最多 5 個路由/原生模型放進 Codex 的 subagent 選擇器 —— 複雜任務交給 reasoning 模型，快速任務交給便宜模型。在 v2 多智慧體表面（GPT-5.6 Sol/Terra）上，代理會注入精簡的委派指引：首選子智慧體模型與 effort（`injectionModel` / `injectionEffort`）、featured 模型清單及各自支援的 effort 階梯，以及讓跨模型 `spawn_agent` 覆蓋得以應用的 `fork_turns` 規則。已知限制：原生父代理 spawn 路由子代理時，任務本文可能以後端加密形式到達而丟失（[#92](https://github.com/lidge-jun/opencodex/issues/92)）—— 需要可靠的跨 provider 委派請使用 v1 表面。想自訂文案，可在 `injectionPrompt` 中使用 `{{model}}` / `{{effort}}` / `{{roster}}` 預留位置。
 - **為 preview-gated OpenAI rollout 做好準備。** GPT-5.6 Sol/Terra/Luna 保留 upstream effort 階梯。Direct/Multi 使用 372k Codex 契約，OpenAI API 與 OpenRouter 使用 1.05M 後設資料。
-- **給任意模型超能力。** 非 OpenAI 模型可透過 `gpt-5.4-mini` sidecar（使用你的 ChatGPT 登入）獲得真正的網頁搜尋與圖片理解。
+- **Web Search 與 Vision sidecar。** Web Search 仍使用 OpenAI/Anthropic；Vision 也支援透過已設定 provider 的明確 Chat backend（`provider/model`）。詳見 [sidecar 文件](https://opencodex.me/guides/sidecars/)。
 - **原生生成圖片。** Codex 的獨立 `image_gen` 工具透過 `POST /v1/images/generations` 生成圖片、透過 `POST /v1/images/edits` 編輯圖片；它獨立於 hosted Responses 的 `image_generation` 工具。
 - **看清正在發生什麼。** Web 儀表板展示 provider、OAuth 狀態、模型選擇和即時請求日誌；當上遊回傳時，也會包含 cached/cache-write token 計數 —— 不用再猜請求為何失敗。
 - **背景執行。** 安裝為系統服務（launchd / systemd / Task Scheduler）後開機自啟，無需操心。

@@ -312,6 +312,7 @@ export const tr: Record<TKey, string> = {
   "dash.backendAuto": "Otomatik",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",
+  "dash.backendChat": "Sohbet API",
   "dash.sidecarSaved": "Yan araç ayarları kaydedildi. Sonraki istekte uygulanacak.",
   "dash.sidecarSaveFailed": "Yan araç ayarları kaydedilemedi.",
   "dash.injectionLabel": "Alt ajan devri",

@@ -255,6 +255,35 @@ describe("vision description cache and per-turn cap", () => {
     expect(textParts(request, 1).join("\n")).toContain("caption-a");
   });
 
+  test("separates cache keys by selected provider identity", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_url, init) => {
+      calls += 1;
+      const body = JSON.parse(String(init?.body));
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: `provider-${body.model}-${calls}` } }] })}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const headers = new Headers({ authorization: "Bearer test" });
+    const sameImage = () => parsed([{ type: "input_text", text: "same context" }, { type: "input_image", image_url: DATA_A }]);
+    const providerA: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://provider-a.test/v1", apiKey: "key-a" };
+    const providerB: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://provider-b.test/v1", apiKey: "key-b" };
+    const chatPlan = (provider: OcxProviderConfig, providerName: string): VisionPlan => ({
+      backend: "chat",
+      chatSidecar: { providerName, provider, model: "same-model" },
+      settings: { model: "same-model", timeoutMs: 5000 },
+      maxDescriptionsPerTurn: 8,
+    });
+
+    const first = sameImage();
+    await describeImagesInPlace(first, chatPlan(providerA, "provider-a"), headers);
+    const second = sameImage();
+    await describeImagesInPlace(second, chatPlan(providerB, "provider-b"), headers);
+
+    expect(calls).toBe(2);
+    expect(textParts(second).join("\n")).toContain("provider-same-model-2");
+  });
+
   test("separates cache keys by backend, model, detail, and normalized context", async () => {
     let calls = 0;
     globalThis.fetch = (async (url, init) => {

@@ -1,13 +1,14 @@
 ---
 title: "Sidecars: Web Search & Vision"
-description: Give routed models real web search and text-only models image understanding through native ChatGPT sidecars.
+description: Give routed models real web search and text-only models image understanding through explicit, provider-backed sidecars.
 ---
 
 Routed models do not all expose hosted **web search** or native **image input**. opencodex backfills
 those capabilities with two sidecars. Both support a ChatGPT-login (`forward`) provider or stored
 Anthropic OAuth provider; web search can additionally use stored Grok OAuth through the explicit
-`xai` backend. Sidecar errors become bounded tool results or image markers instead of failing the
-whole turn.
+`xai` backend. Vision can additionally use the `chat` backend, which sends the image to a configured
+chat-compatible provider. Sidecar errors become bounded tool results or image markers instead of
+failing the whole turn.
 
 :::note[Automatic backend selection]
 Explicit `backend` config wins. The two sidecars default differently when `backend` is unset:
@@ -15,7 +16,10 @@ Explicit `backend` config wins. The two sidecars default differently when `backe
 **Vision** defaults to `anthropic` if an enabled Anthropic OAuth provider has an active account not
 marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
 closed. Explicit `xai` requires a usable stored Grok OAuth account and does not fall back. `openai`
-requires both ChatGPT login auth and an enabled `forward` provider.
+requires both ChatGPT login auth and an enabled `forward` provider. The `chat` backend is vision-only:
+its model should be written as `provider/model` and must resolve to an enabled `openai-chat` or
+`google` provider with usable credentials. Keyless operation is allowed only for local/key-optional
+`openai-chat` providers; Google is never keyless.
 :::
 
 ### Additional web-search backends (explicit-only)
@@ -124,20 +128,41 @@ failures after response headers have started are delivered as `response.failed` 
 ## Vision sidecar
 
 When the routed model is listed in its provider's `noVisionModels` and a request carries an image,
-opencodex describes each image **before** the main call and replaces it with text. When
-`visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
-use the `gpt-5.4-mini` fallback. Startup still migrates an explicitly persisted legacy
-`gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
-model field.
+opencodex describes each image **before** the main call and replaces it with text. Vision is explicit:
+choose a model and backend, or select **Off**. The `chat` backend is vision-only and uses the configured
+provider-qualified `provider/model` target; it does not run web search.
+
+For `openai`/`anthropic`, when `visionSidecar.model` is absent or blank, the OpenAI execution path,
+Dashboard, and management API use the `gpt-5.4-mini` fallback. Startup still migrates an explicitly
+persisted legacy `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not
+to an absent model field.
+
+For `chat`, the model is resolved as follows:
+
+- `provider/model` selects exactly that configured provider. The provider must be enabled, use
+  `openai-chat` or `google`, and have a usable API key/key pool or supported active OAuth account.
+- A bare model id is accepted only when exactly one usable provider's configured `defaultModel` or
+  `models` list matches it. Bare matches are not inferred from live-only discovery, and ambiguous
+  matches fail closed rather than choosing an arbitrary provider.
+- The selected provider's published model id is sent upstream. Keyless operation is limited to
+  `openai-chat` providers marked `authMode: "local"` or `keyOptional: true`; Google requires usable
+  credentials, either an API key/key pool or supported OAuth with a healthy active account.
+
+The provider-qualified form is recommended whenever more than one chat-compatible provider could
+serve the same model id.
 
 - Images can come from user, developer, and tool-result messages, including Codex's `view_image`.
 - On the OpenAI path (ChatGPT-login passthrough), each image is sent to the configured vision model
   over the Responses endpoint with the selected `reasoning.effort` (`low` by default), and its
   description replaces the image part inline. The Anthropic path uses the Messages endpoint with its
-  own thinking-budget mapping and ignores this OpenAI-specific setting.
+  own thinking-budget mapping and ignores this OpenAI-specific setting. The chat path uses the
+  selected provider's wire: `openai-chat` sends OpenAI-compatible `POST /chat/completions`, while
+  `google` uses the native Gemini `streamGenerateContent` adapter (AI Studio, Vertex, or Cloud Code
+  Assist as configured).
 - For native models with known capability metadata, unsupported reasoning is normalized to the
   highest supported rung at or below the requested level; if none exists, the lowest supported rung
   is used. Unknown or custom models remain permissive when reliable capability metadata is absent.
+  The chat backend uses the selected provider/model's effective reasoning ladder.
 - Descriptions run with bounded concurrency (3 at a time, input order preserved). User context sent
   to the describer is capped at 800 characters, and each injected description is capped at 2,000
   characters. The request does not send `max_output_tokens`, which the ChatGPT backend rejects.
@@ -156,8 +181,11 @@ model field.
 
 The management API and Dashboard picker now list models that can actually accept image input.
 When the matching backend is available, `gpt-5.6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic)
-are always offered as baseline options. `PUT /api/sidecar-settings` rejects a model known to be
-text-only, but still accepts an unknown id so custom or ahead-of-catalog names keep working.
+are always offered as baseline options. Chat options come from usable configured `openai-chat` or
+`google` providers and are displayed as provider-qualified values such as `google/gemini-flash`.
+`PUT /api/sidecar-settings` rejects a model known to be text-only, but still accepts an unknown id so
+custom or ahead-of-catalog names keep working; a chat target that cannot resolve to a usable provider
+is not executed.
 
 ```json
 {
@@ -188,11 +216,16 @@ A model is marked text-only per provider:
 
 ## Dashboard controls and disabling
 
-The Dashboard Vision sidecar card can enable or disable the sidecar, set
-`maxDescriptionsPerTurn`, and set `timeoutMs`, along with the existing model,
-backend, and reasoning controls. Disabling the sidecar does not delete those
-settings; turning it back on keeps the previous model, backend, reasoning,
-timeout, and limit.
+The Dashboard Vision sidecar card uses the model picker as the activation control: choose a listed
+OpenAI, Anthropic, or provider-qualified Chat model, or choose **Off**. The backend is inferred from
+an eligible model; the advanced settings popover contains reasoning, `maxDescriptionsPerTurn`, and
+`timeoutMs`. Web Search has its own model/backend controls and does not offer Chat, because Chat is
+vision-only. Changes apply on the next request.
+
+Disabling the Vision sidecar does not delete its settings; turning it back on keeps the previous model,
+backend, reasoning, timeout, and limit. The Claude Code page has separate per-surface overrides: **Use
+main setting** inherits the global setting, **Auto** leaves backend selection unset, and an explicit
+backend/model override is saved only for Claude-originated requests.
 
 `PUT /api/sidecar-settings` accepts the same fields. Partial updates leave
 omitted keys unchanged. `timeoutMs` uses the runtime integer bounds

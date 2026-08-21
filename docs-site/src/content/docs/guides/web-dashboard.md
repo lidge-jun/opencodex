@@ -40,7 +40,7 @@ the browser or password manager's decision.
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
-| **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
+| **Sidecars** | Choose the web-search backend/model and effort plus the vision backend/model. Web search offers OpenAI or Anthropic; vision also offers provider-backed Chat, and **Off** disables vision without deleting its settings. Advanced vision controls include reasoning, description limit, and timeout. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
@@ -203,7 +203,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |
 | `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache. |
 | `GET /api/update/check` · `POST /api/update/run` · `GET /api/update/status` | Check, run, and monitor self-update jobs. Worker PIDs are persisted so a crashed job recovers automatically; legacy no-PID jobs recover after ten minutes. |
-| `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
+| `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar backend, model, and vision advanced settings. Web search accepts only OpenAI/Anthropic; vision may use provider-qualified Chat. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, set the default, or remove providers. `PATCH` uses standalone `{ "setDefault": true }` on an enabled provider; `POST` may include `setDefault` when creating/replacing (also enabled-only). Deleting the current default reassigns to the first remaining enabled provider when one exists; otherwise the API returns `409` with `code: "last_provider"` and keeps the current default. |

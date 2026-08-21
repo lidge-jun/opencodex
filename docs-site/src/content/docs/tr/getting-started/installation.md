@@ -6,8 +6,8 @@ description: opencodex (ocx) proxy'sini ve ön koşullarını kurun, çalıştı
 opencodex, `ocx` ve `opencodex` olmak üzere iki eşdeğer komut adı kurar. Her
 ikisi de aynı küçük yerel HTTP sunucusunu (Bun üzerinde oluşturulmuştur)
 başlatır. Model istekleri yönlendirme tarafından seçilen sağlayıcıya gider;
-isteğe bağlı vizyon ve web araması sidecar'ları, yönlendirilen bir model ihtiyaç
-duyduğunda ChatGPT oturumunuzu da kullanabilir.
+isteğe bağlı sidecar'lar yönlendirilen bir modelin ihtiyaç duyduğu yetenekleri sağlar. Vizyon; ChatGPT oturumuyla
+OpenAI'yi, OAuth ile Anthropic'i veya açık bir `provider/model` hedefi kullanan yalnızca vision için Chat backend'ini destekler.
 
 ## Ön Koşullar
 

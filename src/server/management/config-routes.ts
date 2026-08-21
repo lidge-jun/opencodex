@@ -592,8 +592,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
     }
     if (body.vision && body.vision.backend !== undefined
-      && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic") {
-      return jsonResponse({ error: "vision.backend must be openai, anthropic, or null" }, 400);
+      && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic" && body.vision.backend !== "chat") {
+      return jsonResponse({ error: "vision.backend must be openai, anthropic, chat, or null" }, 400);
     }
     if (body.vision && body.vision.maxDescriptionsPerTurn !== undefined
       && (typeof body.vision.maxDescriptionsPerTurn !== "number"
@@ -736,7 +736,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else config.visionSidecar.model = body.vision.model;
       }
       if (body.vision.backend === null) delete config.visionSidecar.backend;
-      else if (body.vision.backend === "openai" || body.vision.backend === "anthropic") {
+      else if (body.vision.backend === "openai" || body.vision.backend === "anthropic" || body.vision.backend === "chat") {
         config.visionSidecar.backend = body.vision.backend;
       }
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {

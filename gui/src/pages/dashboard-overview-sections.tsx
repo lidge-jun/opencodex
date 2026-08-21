@@ -557,7 +557,14 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
                   }
                   const ladder = visionReasoningLadder(models, model);
                   const reasoning = clampVisionReasoningToLadder(ladder, visionReasoning);
-                  const patch: SidecarPatch = { vision: { model, backend: visionSidecarBackendForModel(models, visionModels, model), reasoning } };
+                  const backend = visionSidecarBackendForModel(models, visionModels, model);
+                  const patch: SidecarPatch = {
+                    vision: {
+                      model,
+                      ...(backend === "unresolved" ? { backend: null } : { backend }),
+                      reasoning,
+                    },
+                  };
                   // Choosing a model is the activation control: turning Vision back on from Off.
                   if (!visionEnabled) patch.vision = { ...patch.vision, enabled: true };
                   void saveSidecar(patch);

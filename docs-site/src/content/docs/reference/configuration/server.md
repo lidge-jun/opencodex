@@ -205,7 +205,7 @@ Images API paths and response shape expected by Codex.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master switch. |
-| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Explicit wins; unset always resolves to `openai`. `anthropic` and `xai` run only when explicitly configured; `gemini` and `exa` remain reserved until their executors ship. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Explicit wins; unset always resolves to `openai`. `anthropic`, `xai`, `gemini`, and `exa` run only when explicitly configured. `chat` is not a web-search backend. |
 | `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI, `claude-sonnet-5` for Anthropic, or `grok-4.6` for xAI. Legacy explicit `gpt-5.4-mini` migrates on start. |
 | `exaApiKey?` | `string` | none | Operator key for the `exa` backend. Write-only: management reads never return the stored value. |
 | `xSearch?` | `object` | omitted | xAI-only opt-in for hosted `x_search`: `enabled`, mutually exclusive `allowedXHandles` / `excludedXHandles` arrays (maximum 20), and ISO `fromDate` / `toDate` (`YYYY-MM-DD`). |
@@ -223,6 +223,7 @@ hosted `web_search`, and adds hosted `x_search` when `xSearch.enabled` is true. 
 management input returns `400`; a malformed persisted block fails closed during planning. The
 `gemini` and `exa` lanes never activate from credential discovery or fallback; the operator must
 select them explicitly. `exaApiKey` is accepted on writes but omitted from management responses.
+The `chat` backend belongs to the vision sidecar only.
 
 Four clocks govern search: base `stallTimeoutSec`, `connectTimeoutMs`, routed-model inactivity, and
 hosted-search timeout. The effective bridge watchdog is the maximum plus 30 seconds. Routed stall is
@@ -233,16 +234,22 @@ an inactivity guard, not a total generation deadline.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master image-description switch. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; unset prefers a usable stored Anthropic OAuth credential, else `openai`. |
-| `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI or `claude-sonnet-5` for Anthropic. |
+| `backend?` | `"openai" \| "anthropic" \| "chat"` | auto | Explicit wins; unset prefers a usable stored Anthropic OAuth credential, else `openai`. `chat` is vision-only and uses a configured `openai-chat` or `google` provider. |
+| `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI, `claude-sonnet-5` for Anthropic, or provider-qualified `provider/model` for Chat. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
 | `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. Integer 1–2147483647. |
 
 Vision activates only for images sent to a model in its provider's `noVisionModels`. OpenAI has the
 same login/forward requirements as search; explicitly selected Anthropic fails closed without a usable
-credential. Successful `data:` descriptions use a bounded cache keyed by backend, model, detail,
-image bytes, and normalized message context. Hits and same-turn duplicates do not consume the limit.
-Remote `https:` images and failed or empty descriptions are not cached.
+credential. For `chat`, the selected provider must be enabled and use `openai-chat` or `google`; it
+must have an API key/key pool or a supported OAuth account. Keyless operation is allowed only for
+`openai-chat` with `authMode: "local"` or `keyOptional: true`, never for Google. A provider-qualified
+`provider/model` target selects exactly that provider. Bare Chat ids resolve only through one unique
+configured `defaultModel`/`models` match; ambiguous or live-only matches fail closed.
+
+Successful `data:` descriptions use a bounded cache keyed by backend, model, detail, image bytes, and
+normalized message context. Hits and same-turn duplicates do not consume the limit. Remote `https:`
+images and failed or empty descriptions are not cached.
 
 Anthropic OAuth sidecars reuse opencodex's existing Claude Code OAuth fingerprint. Soak-test the
 intended account and workload.

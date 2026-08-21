@@ -5,9 +5,11 @@ import { modelRecordValue } from "../reasoning-effort";
 import type { VisionReasoningEffort } from "../reasoning-effort";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
+import { describeImageChat } from "./describe-chat";
 import { normalizeVisionReasoningForModel } from "./reasoning";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { resolveSidecarAuth } from "../sidecar/auth";
+import { isChatVisionProviderUsable } from "./eligibility";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
@@ -38,6 +40,7 @@ export function isModelTextOnly(
 export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-describe";
 export {
   BASELINE_VISION_MODELS,
+  isChatVisionProviderUsable,
   isVisionEligibleModel,
   isVisionSidecarConsumer,
   modelAcceptsImageInput,
@@ -225,11 +228,80 @@ export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionP
   return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
 }
 
+/** Chat-adapter or google-adapter provider selected to run the chat vision sidecar. */
+export interface ChatVisionProvider {
+  providerName: string;
+  provider: OcxProviderConfig;
+  model: string;
+}
+
+/**
+ * Resolve the provider that runs the chat vision sidecar for `model`.
+ *
+ * A provider-qualified `provider/model` selects exactly that provider when it is
+ * enabled, chat-like, and has usable auth. A bare model resolves ONLY through a
+ * unique configured match (defaultModel or the provider's model list): an
+ * ambiguous match (two providers listing the same model) and a provider that only
+ * has live-discovered models (no configured list) both produce NO provider —
+ * routing a user's image to an arbitrary first authenticated provider is exactly
+ * the mis-send the qualified form exists to prevent.
+ */
+export function findChatVisionProvider(config: OcxConfig, model: string): ChatVisionProvider | undefined {
+  let providerName = "";
+  let bareModel = model;
+  let qualified = false;
+  if (model.includes("/")) {
+    const sep = model.indexOf("/");
+    const prefix = model.slice(0, sep);
+    bareModel = model.slice(sep + 1);
+    // The prefix is a provider qualifier ONLY when such a provider actually
+    // exists. A namespaced catalog id like "anthropic/claude-3-haiku" where
+    // "anthropic" is a model namespace (not a configured provider) must fall
+    // through to bare resolution against the published namespaced ids.
+    if (config.providers[prefix]) {
+      providerName = prefix;
+      qualified = true;
+    }
+  }
+  const isChatLike = (p: OcxProviderConfig) => p.adapter === "openai-chat" || p.adapter === "google";
+  if (qualified) {
+    const provider = config.providers[providerName];
+    if (provider && isChatLike(provider) && isChatVisionProviderUsable(providerName, provider)) {
+      return { provider, providerName, model: bareModel };
+    }
+    return undefined;
+  }
+  const matches: Array<{ provider: OcxProviderConfig; providerName: string; model: string }> = [];
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (!isChatLike(provider)) continue;
+    if (!isChatVisionProviderUsable(name, provider)) continue;
+    const models = provider.models ?? [];
+    const defaultModel = provider.defaultModel;
+    if (bareModel === defaultModel) {
+      matches.push({ provider, providerName: name, model: bareModel });
+      continue;
+    }
+    if (models.includes(bareModel)) {
+      matches.push({ provider, providerName: name, model: bareModel });
+      continue;
+    }
+    // A bare id that is the suffix of a namespaced published id ("gemini-flash"
+    // matching "google/gemini-flash") resolves to the PUBLISHED id, not the
+    // bare one — the bare id is not routable upstream.
+    const published = models.find(m => m.endsWith("/" + bareModel));
+    if (published) {
+      matches.push({ provider, providerName: name, model: published });
+    }
+  }
+  if (matches.length === 1) return { ...matches[0]! };
+  return undefined;
+}
+
 export function resolveVisionBackend(
-  explicit: "openai" | "anthropic" | undefined,
+  explicit: "openai" | "anthropic" | "chat" | undefined,
   anthropicSidecar: AnthropicVisionProvider | undefined,
-): "openai" | "anthropic" {
-  if (explicit === "openai" || explicit === "anthropic") return explicit;
+): "openai" | "anthropic" | "chat" {
+  if (explicit === "openai" || explicit === "anthropic" || explicit === "chat") return explicit;
   return anthropicSidecar ? "anthropic" : "openai";
 }
 
@@ -241,8 +313,11 @@ export function resolveOpenAiVisionModel(config: Pick<OcxConfig, "visionSidecar"
 /** Effective describer model for the backend `planVisionSidecar` selected. */
 export function resolveEffectiveVisionModel(
   config: Pick<OcxConfig, "visionSidecar">,
-  backend: "openai" | "anthropic",
+  backend: "openai" | "anthropic" | "chat",
 ): string {
+  // The chat sidecar's model is provider-qualified and resolved separately via
+  // findChatVisionProvider; the generic default only applies to the forward sides.
+  if (backend === "chat") return resolveOpenAiVisionModel(config);
   return backend === "anthropic"
     ? config.visionSidecar?.model || DEFAULT_ANTHROPIC_VISION_MODEL
     : resolveOpenAiVisionModel(config);
@@ -261,19 +336,20 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
 export function shouldResolveOpenAiVisionSidecar(
   config: OcxConfig,
   provider: OcxProviderConfig,
- modelId: string,
- parsed: OcxParsedRequest,
+  modelId: string,
+  parsed: OcxParsedRequest,
 ): boolean {
-  if (!isModelTextOnly(provider, modelId) || !messagesHaveImage(parsed)) return false;
+  if (!modelInList(provider.noVisionModels, modelId) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
   return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
 }
 
 export interface VisionPlan {
-  backend: "openai" | "anthropic";
+  backend: "openai" | "anthropic" | "chat";
   forwardSidecar?: ResolvedOpenAiForwardSidecar;
   anthropicSidecar?: AnthropicVisionProvider;
+  chatSidecar?: ChatVisionProvider;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
 }
@@ -291,7 +367,7 @@ export function planVisionSidecar(
   parsed: OcxParsedRequest,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): VisionPlan | undefined {
-  if (!isModelTextOnly(provider, modelId)) return undefined;
+  if (!modelInList(provider.noVisionModels, modelId)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;
@@ -299,6 +375,21 @@ export function planVisionSidecar(
   const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);
   const model = resolveEffectiveVisionModel(config, backend);
   const maxDescriptionsPerTurn = resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn);
+
+  if (backend === "chat") {
+    const chatProvider = findChatVisionProvider(config, cfg.model ?? "");
+    if (!chatProvider) return undefined;
+    return {
+      backend,
+      chatSidecar: chatProvider,
+      settings: {
+        model: chatProvider.model,
+        reasoning: normalizeVisionReasoningForModel(chatProvider.model, cfg.reasoning) ?? DEFAULT_REASONING,
+        timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
+      },
+      maxDescriptionsPerTurn,
+    };
+  }
 
   if (backend === "anthropic") {
     if (!anthropicSidecar) return undefined;
@@ -417,6 +508,35 @@ function normalizedContext(contextText: string): string {
   return contextText.trim().replace(/\s+/g, " ");
 }
 
+function normalizedProviderBaseUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return url.toString();
+  } catch {
+    return baseUrl.trim().replace(/\/+$/, "");
+  }
+}
+
+function selectedProviderIdentity(plan: VisionPlan): Record<string, string> {
+  const selected = plan.backend === "openai"
+    ? plan.forwardSidecar
+    : plan.backend === "anthropic"
+      ? plan.anthropicSidecar
+      : plan.chatSidecar;
+  const provider = selected?.provider;
+  return {
+    providerName: selected?.providerName ?? "",
+    adapter: provider?.adapter ?? "",
+    baseUrl: provider ? normalizedProviderBaseUrl(provider.baseUrl) : "",
+    ...(provider?.googleMode ? { googleMode: provider.googleMode } : {}),
+    ...(provider?.project ? { project: provider.project } : {}),
+    ...(provider?.location ? { location: provider.location } : {}),
+  };
+}
+
 function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; persistent: boolean } {
   let imageHash: string;
   let persistent = false;
@@ -430,6 +550,7 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
   return {
     key: JSON.stringify([
       plan.backend,
+      selectedProviderIdentity(plan),
       plan.settings.model,
       ...(plan.backend === "openai" ? [plan.settings.reasoning] : []),
       job.detail ?? "high",
@@ -446,6 +567,7 @@ async function executeDescription(
   selectedForwardHeaders: Headers,
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
+  providerFetch?: typeof globalThis.fetch,
 ): Promise<DescribeOutcome> {
   if (plan.backend === "anthropic") {
     const sidecar = plan.anthropicSidecar;
@@ -458,6 +580,26 @@ async function executeDescription(
       sidecar.provider,
       plan.settings,
       abortSignal,
+    );
+  }
+  if (plan.backend === "chat") {
+    const sidecar = plan.chatSidecar;
+    if (!sidecar) return { text: "", error: "chat vision sidecar is unavailable" };
+    return describeImageChat(
+      job.imageUrl,
+      job.detail,
+      job.contextText,
+      sidecar.provider,
+      sidecar.providerName,
+      {
+        model: sidecar.model,
+        timeoutMs: plan.settings.timeoutMs,
+        detail: job.detail,
+        reasoning: plan.settings.reasoning,
+      },
+      abortSignal,
+      recordSidecarOutcome,
+      providerFetch,
     );
   }
   if (!plan.forwardSidecar) return { text: "", error: "OpenAI vision sidecar is unavailable" };
@@ -486,6 +628,7 @@ export async function describeImagesInPlace(
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
   translatorBudget?: TranslatorBudget,
+  providerFetch?: typeof globalThis.fetch,
 ): Promise<void> {
   const jobs: ImageJob[] = [];
   const targets: { msg: OcxMessage; parts: OcxContentPart[] }[] = [];
@@ -542,7 +685,7 @@ export async function describeImagesInPlace(
     executions.push(async () => {
       let outcome: DescribeOutcome;
       try {
-        outcome = await executeDescription(job, plan, selectedForwardHeaders, abortSignal, recordSidecarOutcome);
+          outcome = await executeDescription(job, plan, selectedForwardHeaders, abortSignal, recordSidecarOutcome, providerFetch);
       } catch (error) {
         outcome = { text: "", error: error instanceof Error ? error.message : String(error) };
       }

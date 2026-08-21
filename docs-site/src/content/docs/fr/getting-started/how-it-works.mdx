@@ -71,8 +71,9 @@ le modèle et l’effort de raisonnement à utiliser. Les requêtes v2 conserven
    de transfert direct refuse de poursuivre si les informations d’identification requises sont indisponibles.
 
 4. **Service auxiliaire de vision (facultatif)** — si le modèle routé figure dans `provider.noVisionModels` et que
-   la requête contient une image, opencodex fait décrire chaque image par le service auxiliaire de vision ChatGPT
-   configuré, puis la remplace par du texte afin qu’un modèle textuel puisse tout de même la traiter.
+   la requête contient une image, opencodex utilise le backend de vision configuré — OpenAI via la connexion
+   ChatGPT, Anthropic via OAuth ou le backend Chat réservé à la vision avec une cible explicite `provider/model` —
+   puis remplace chaque image par du texte afin qu’un modèle textuel puisse tout de même la traiter.
    Voir [Services auxiliaires](/fr/guides/sidecars/).
 
 5. **Transfert direct rapide** — si l’adaptateur transfère directement les Responses (`openai-responses` ou

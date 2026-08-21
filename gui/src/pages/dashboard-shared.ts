@@ -59,10 +59,12 @@ export interface SettingsData {
     diagnosticStale: boolean;
   };
 }
-export type SidecarBackend = "openai" | "anthropic";
+export type SidecarBackend = "openai" | "anthropic" | "chat";
+/** Web-search sidecars accept only OpenAI/Anthropic — `chat` is vision-only. */
+export type WebSearchBackend = "openai" | "anthropic";
 export type VisionReasoning = "low" | "medium" | "high" | "xhigh" | "max";
-export interface SidecarSetting {
-  backend?: SidecarBackend;
+export interface SidecarSetting<B extends SidecarBackend = SidecarBackend> {
+  backend?: B;
   model: string;
   reasoning?: VisionReasoning;
   streamRoutedModelOutput?: boolean;
@@ -85,7 +87,7 @@ export interface WebSearchPickerOption {
   model?: string;
 }
 export interface SidecarData {
-  webSearch: SidecarSetting;
+  webSearch: SidecarSetting<WebSearchBackend>;
   vision: SidecarSetting;
   /** Server-computed eligible describers. Optional: an older server omits it and
    *  the client falls back to the legacy provider-name list rather than showing
@@ -97,7 +99,7 @@ export interface SidecarData {
   webSearchModels?: WebSearchModelOption[];
 }
 export interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
+  webSearch?: { backend?: WebSearchBackend | null; model?: string; streamRoutedModelOutput?: boolean };
   vision?: {
     backend?: SidecarBackend | null;
     model?: string;
@@ -186,10 +188,10 @@ export function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string
   }
 }
 
-export function mergeSidecarSetting(
-  current: SidecarSetting,
+export function mergeSidecarSetting<B extends SidecarBackend = SidecarBackend>(
+  current: SidecarSetting<B>,
   update?: {
-    backend?: SidecarBackend | null;
+    backend?: B | null;
     model?: string;
     reasoning?: VisionReasoning;
     streamRoutedModelOutput?: boolean;
@@ -197,7 +199,7 @@ export function mergeSidecarSetting(
     maxDescriptionsPerTurn?: number;
     timeoutMs?: number;
   },
-): SidecarSetting {
+): SidecarSetting<B> {
   const merged = { ...current };
   if (update?.model !== undefined) merged.model = update.model;
   if (update?.backend === null) delete merged.backend;
@@ -359,11 +361,23 @@ export function visionModelOptions(
   current: string | undefined,
   currentBackend?: SidecarBackend,
 ): Array<{ value: string; label: string; backend?: SidecarBackend }> {
-  const options = serverOptions
+  const options: Array<{ value: string; label: string; backend?: SidecarBackend }> = serverOptions
     ? serverOptions.map(option => ({ value: option.value, label: option.label, backend: option.backend }))
     : sidecarModelOptions(models);
-  if (current && !options.some(option => option.value === current)) {
-    options.unshift({ value: current, label: current, ...(currentBackend ? { backend: currentBackend } : {}) });
+  if (current) {
+    const currentOption = options.find(option => option.value === current);
+    if (currentOption) {
+      // On the legacy path, the persisted backend is stronger evidence than a
+      // catalog provider match. A chat-backed model can share an id with a
+      // catalog OpenAI row, and saving that row must not silently switch it.
+      if (serverOptions === undefined && currentBackend && currentOption.backend === undefined) {
+        currentOption.backend = currentBackend;
+      }
+    } else {
+      // A legacy server has no authoritative option/backend to provide, so keep
+      // the configured backend on a grandfathered model rather than guessing.
+      options.unshift({ value: current, label: current, ...(currentBackend ? { backend: currentBackend } : {}) });
+    }
   }
   return options;
 }
@@ -375,8 +389,21 @@ export function shadowCallModelOptions(models: ModelInfo[], current: string | un
   return out;
 }
 
-export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
-  return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+export type SidecarBackendResolution = SidecarBackend | "unresolved";
+
+/** Resolve a catalog model without guessing across namespaces or providers. */
+export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackendResolution {
+  // Exact namespaced matches win; otherwise a bare id must match exactly one row.
+  // Ambiguous and unknown ids stay unresolved instead of persisting a guessed backend.
+  const namespacedMatches = models.filter(model => model.namespaced === modelId);
+  const matches = namespacedMatches.length > 0
+    ? namespacedMatches
+    : models.filter(model => model.id === modelId);
+  if (matches.length !== 1) return "unresolved";
+  const provider = matches[0]!.provider;
+  if (provider === "openai") return "openai";
+  if (provider === "anthropic") return "anthropic";
+  return "chat";
 }
 
 /** Server provenance wins; catalog inference supports only legacy option rows. */
@@ -397,7 +424,7 @@ export function visionSidecarBackendForModel(
   models: ModelInfo[],
   options: Array<{ value: string; backend?: SidecarBackend }>,
   modelId: string,
-): SidecarBackend {
+): SidecarBackendResolution {
   return options.find(option => option.value === modelId)?.backend ?? sidecarBackendForModel(models, modelId);
 }
 

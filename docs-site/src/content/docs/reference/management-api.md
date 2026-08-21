@@ -111,7 +111,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET /api/update/check` | Check the `latest` or `preview` update channel | 400 invalid tag |
 | `POST /api/update/run` | Start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
-| `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
+| `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar backend/model settings; vision also accepts `enabled`, `reasoning`, `maxDescriptionsPerTurn`, and `timeoutMs` | 400 invalid shape, backend, model, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
 
 ### Logs, usage, and storage

@@ -5,7 +5,8 @@ description: 安裝 opencodex(ocx)代理及其前置條件,並驗證它能夠執
 
 安裝 opencodex 後會得到 `ocx` 和 `opencodex` 兩個等價命令，它們都指向同一個基於 Bun 的
 小型本機 HTTP 伺服器。模型請求會發往路由所選的 provider；當已路由模型需要時，可選的
-vision 和網路搜尋 sidecar 也可以使用你的 ChatGPT 登入憑證。
+Vision sidecar 支援透過 ChatGPT 登入使用 OpenAI、透過 OAuth 使用 Anthropic，或使用帶有明確
+`provider/model` 目標、僅用於 Vision 的 Chat backend。
 
 ## 前置條件
 

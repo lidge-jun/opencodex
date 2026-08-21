@@ -65,8 +65,9 @@ Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已�
 
 4. **Vision sidecar（可選）** —— 如果已路由的模型被列在 `provider.noVisionModels` 中，且
    請求攜帶了圖像，opencodex 會透過已設定的 vision sidecar 描述每張圖像並替換為文字，讓純文字
-   模型仍可對圖像進行推理。後端可選 `openai`（ChatGPT 登入）或 `anthropic`（OAuth）；未設定時
-   會自動選擇，顯式 `anthropic` 但無可用憑證時會關閉失敗。
+   模型仍可對圖像進行推理。後端可選 OpenAI（ChatGPT 登入）、Anthropic（OAuth），或使用明確
+   `provider/model` 目標、僅用於 Vision 的 Chat backend。未設定時會自動選擇，顯式 `anthropic` 但無可用
+   憑證時會關閉失敗。
    參見 [Sidecar](/zh-tw/guides/sidecars/)。
 
 5. **直通快速路徑** —— 對於 Responses 直通 adapter（`openai-responses` 或 `azure-openai`），

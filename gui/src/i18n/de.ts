@@ -302,6 +302,7 @@ export const de: Record<TKey, string> = {
   "dash.backendAuto": "Automatisch",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",
+  "dash.backendChat": "Chat API",
   "dash.sidecarSaved": "Sidecar-Einstellungen gespeichert. Angewendet bei der nächsten Anfrage.",
   "dash.sidecarSaveFailed": "Sidecar-Einstellungen konnten nicht gespeichert werden.",
   "dash.injectionLabel": "Sub-Agent-Delegation",

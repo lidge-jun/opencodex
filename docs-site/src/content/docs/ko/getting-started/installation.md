@@ -5,7 +5,8 @@ description: opencodex(ocx) 프록시와 사전 요구 사항을 설치하고, �
 
 opencodex를 설치하면 같은 실행 파일을 가리키는 `ocx`와 `opencodex` 명령이 함께 제공됩니다.
 둘 다 Bun 기반의 작은 로컬 HTTP 서버를 실행합니다. 모델 요청은 라우팅으로 선택된 프로바이더에
-전달되며, 필요할 때 vision 및 웹 검색 sidecar가 ChatGPT 로그인을 사용할 수도 있습니다.
+전달됩니다. Vision sidecar는 ChatGPT 로그인 기반 OpenAI, OAuth 기반 Anthropic, 또는 명시적
+`provider/model`을 사용하는 vision 전용 Chat backend를 지원합니다.
 
 ## 사전 요구 사항
 

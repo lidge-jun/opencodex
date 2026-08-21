@@ -326,12 +326,19 @@ before the main model answers:
 - The **vision sidecar** describes an attached image before calling a model listed in
   `noVisionModels`, then replaces the image with that description.
 
-Both sidecars can use either backend:
+The web-search sidecar accepts only `openai` and `anthropic`; the vision sidecar also accepts
+`chat`. Chat is vision-only and never runs web search.
 
 | Backend | How it runs | What it requires |
 | --- | --- | --- |
 | `openai` | A small GPT model through the ChatGPT `forward` provider | A ChatGPT login and an enabled `authMode: "forward"` provider |
 | `anthropic` | Claude through stored Anthropic OAuth; web search uses `web_search_20250305` and vision sends the image to Claude for description | An enabled `adapter: "anthropic"`, `authMode: "oauth"` provider whose active stored account is not marked `needsReauth` |
+| `chat` (vision only) | An OpenAI-compatible Chat Completions request through the selected configured provider | An enabled `openai-chat` or `google` provider with an API key/key pool or supported active OAuth account; keyless is limited to `openai-chat` local/key-optional providers |
+
+For `chat`, set `visionSidecar.model` to a provider-qualified `provider/model` value to select
+exactly one provider. A bare model is accepted only when one usable provider's configured
+`defaultModel`/`models` list matches it; ambiguous and live-only matches fail closed. Google is never
+keyless.
 
 An explicit `backend` always wins. When it is omitted, the **web-search** sidecar always selects
 `openai` (`anthropic` runs only when explicitly configured), while the **vision** sidecar selects
@@ -365,12 +372,12 @@ images are cached by backend, model, detail, image bytes, and request context, s
 image-and-context pair is not described again on every replay. Remote `https:` images are never
 cached because their contents can change.
 
-See the [configuration reference](/reference/configuration/#sidecars) for every key.
+See the [configuration reference](/reference/configuration/#sidecars) for every key. The Dashboard
+sidecar card exposes the same vision backend/model selection, **Off**, and advanced settings; Claude's
+page adds separate overrides with **Use main setting** and **Auto** inheritance controls.
 Anthropic-OAuth web search and image description reuse the repository's existing Claude Code OAuth
 fingerprint precedent, but should still be soak-tested with your account and workload before you
 depend on them for long unattended runs.
-
-<!-- TODO(WP5 GUI): Add the sidecar settings-screen walkthrough after the GUI controls ship. -->
 
 ## Reasoning effort
 
@@ -484,8 +491,11 @@ the search but Claude Code still counted zero.
 
 **A sidecar does not activate** — For `backend: "openai"`, confirm you are logged into ChatGPT and
 have an enabled `authMode: "forward"` provider. For `backend: "anthropic"`, confirm the active stored
-Anthropic OAuth account is not marked `needsReauth`. An explicit Anthropic selection without that
-credential intentionally fails closed.
+Anthropic OAuth account is not marked `needsReauth`. For vision `backend: "chat"`, use a provider-qualified
+`provider/model` and confirm that the selected enabled `openai-chat` or `google` provider has a key,
+key pool, or supported active OAuth account (keyless is only for local/key-optional `openai-chat`).
+Ambiguous bare models and live-only bare matches intentionally fail closed. An explicit Anthropic
+selection without its credential also fails closed.
 
 **"claude.ai connectors are disabled"** — An `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set
 in your shell. `ocx claude` deliberately does NOT set `ANTHROPIC_API_KEY`; if you have it exported,

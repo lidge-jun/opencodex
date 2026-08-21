@@ -71,8 +71,9 @@ effort to use; v2 requests keep Codex's native multi-agent guidance.
    to continue if the required pool credential is unavailable.
 
 4. **Vision sidecar (optional)** — if the routed model is listed in `provider.noVisionModels` and the
-   request carries an image, opencodex describes each image with the configured ChatGPT vision
-   sidecar and replaces it with text, so a text-only model can still reason about it.
+   request carries an image, opencodex uses the configured vision backend — OpenAI via ChatGPT login,
+   Anthropic via OAuth, or the vision-only Chat backend with an explicit `provider/model` target —
+   then replaces each image with text so a text-only model can still reason about it.
    See [Sidecars](/guides/sidecars/).
 
 5. **Passthrough fast path** — if the adapter is a Responses passthrough (`openai-responses` or

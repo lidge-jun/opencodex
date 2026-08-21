@@ -145,9 +145,9 @@ bloqué les scripts d'installation de l'environnement inclus, consultez la
   [guide des sous-agents](https://opencodex.me/fr/guides/sub-agent-surface/).
 - **Connectez-vous une fois, oubliez la clé API** — OAuth pour xAI, Anthropic et Kimi ; ou transmettez
   `codex login`, collez une clé ou utilisez des références `${ENV_VAR}`.
-- **Modules complémentaires de recherche web et de vision** — les modèles non-OpenAI bénéficient d'une
-  véritable recherche web et de la compréhension d'images grâce à un module complémentaire utilisant
-  votre connexion ChatGPT.
+- **Modules complémentaires de recherche web et de vision** — la recherche web reste OpenAI/Anthropic ;
+  la vision peut aussi utiliser un backend Chat explicite via un fournisseur configuré (`provider/model`).
+  Consultez le [guide canonique des sidecars](https://opencodex.me/guides/sidecars/).
 - **Voyez ce qui se passe** — le tableau de bord affiche les fournisseurs, l'état OAuth, la sélection des
   modèles et un journal des requêtes en direct avec le nombre de jetons de cache.
 - **Arrêt propre, aucun résidu** — `ocx stop` restaure la configuration d'origine de Codex.
