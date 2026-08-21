@@ -482,25 +482,47 @@ function setRootModelProvider(content: string): string {
 }
 
 function readRootModelCatalogPath(content: string): string | null {
-  return readRootTomlString(content, "model_catalog_json");
+  const lines = content.split("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
+  let ownedCatalogPath: string | null = null;
+  for (let index = 0; index < rootEnd; index += 1) {
+    const match = modelCatalogAssignment.exec(lines[index]);
+    if (!match) continue;
+    const catalogPath = parseTomlString(match[1]);
+    if (!isOpencodexCatalogPath(catalogPath)) return catalogPath;
+    ownedCatalogPath ??= catalogPath;
+  }
+  return ownedCatalogPath;
 }
 
 function setRootModelCatalogPath(content: string, catalogPath: string): string {
   const lines = content.split("\n");
   const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
   const key = `model_catalog_json = ${tomlString(catalogPath)}`;
+  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const ownedAssignments: number[] = [];
+  let hasUserAssignment = false;
   for (let i = 0; i < rootEnd; i++) {
-    const m = lines[i].match(
-      /^\s*model_catalog_json\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')\s*$/,
-    );
+    const m = modelCatalogAssignment.exec(lines[i]);
     if (!m) continue;
     const existing = parseTomlString(m[1]);
     if (isOpencodexCatalogPath(existing)) {
-      lines[i] = key;
-      return lines.join("\n");
+      ownedAssignments.push(i);
+    } else {
+      hasUserAssignment = true;
     }
-    return content;
+  }
+  if (hasUserAssignment) {
+    const owned = new Set(ownedAssignments);
+    return lines.filter((_, index) => !owned.has(index)).join("\n");
+  }
+  if (ownedAssignments.length > 0) {
+    lines[ownedAssignments[0]] = key;
+    const duplicates = new Set(ownedAssignments.slice(1));
+    return lines.filter((_, index) => !duplicates.has(index)).join("\n");
   }
   if (firstTable === -1) {
     return content.replace(/\n+$/, "") + "\n" + key + "\n";
@@ -583,12 +605,14 @@ function isOpencodexCatalogPath(path: string): boolean {
 }
 
 function stripOpencodexCatalogPath(content: string): string {
-  return content
-    .split("\n")
-    .filter((line) => {
-      const m = line.match(
-        /^\s*model_catalog_json\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')\s*$/,
-      );
+  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
+  const lines = content.split("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  return lines
+    .filter((line, index) => {
+      if (index >= rootEnd) return true;
+      const m = modelCatalogAssignment.exec(line);
       return !m || !isOpencodexCatalogPath(parseTomlString(m[1]));
     })
     .join("\n");
