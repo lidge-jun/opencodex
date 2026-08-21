@@ -1571,3 +1571,53 @@ test("count_tokens is CJK-aware: Korean body counts more tokens than equal-lengt
     await server.stop(true);
   }
 });
+
+test("first /v1/messages after a restart self-heals an empty Desktop-3P registry (cached hashed id)", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+  saveConfig({
+    port: 0,
+    defaultProvider: "mock",
+    providers: {
+      mock: {
+        adapter: "openai-chat",
+        baseUrl,
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        liveModels: false,
+        models: ["test-model"],
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const { buildDesktop3pRegistry, desktop3pAlias } = await import("../src/claude/desktop-3p");
+    // Post-restart state: no discovery GET has run in this process, so the
+    // in-memory registry is empty while the client replays the hashed id it
+    // cached from the previous process.
+    buildDesktop3pRegistry([], []);
+    const alias = desktop3pAlias("mock", "test-model");
+    const response = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "placeholder",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: alias,
+        max_tokens: 128,
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("Hello");
+    // The upstream must see the decoded route, not the raw hashed alias.
+    expect(captured[0]?.model).toBe("test-model");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+}, { timeout: SERVER_BUDGET_MS });

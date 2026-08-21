@@ -312,6 +312,11 @@ export function generateDesktop3pModels(
   return models;
 }
 
+/** True while no Desktop registry has been generated in this process (fresh boot). */
+export function desktop3pRegistryIsEmpty(): boolean {
+  return desktop3pRegistry.size === 0;
+}
+
 /** Resolve an alias using the most recently generated Desktop model registry. */
 export function resolveDesktop3pAlias(alias: string): string | null {
   return desktop3pRegistry.get(alias) ?? null;

@@ -1283,6 +1283,25 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         });
       }
 
+      // Desktop-3P alias self-heal: the registry that decodes hashed discovery ids
+      // (claude-opus-4-8-<code>) is in-memory and only rebuilt by an anthropic-flavor
+      // GET /v1/models. A client that cached such an id from a previous process can
+      // replay it as the FIRST request after a restart; with an empty registry the
+      // alias cannot decode and the request misroutes (classifier affinity or raw
+      // passthrough → upstream "Invalid model name"). Warm the registry once via
+      // loopback discovery — semantically the same as the client refreshing models.
+      if ((url.pathname === "/v1/messages" || url.pathname === "/v1/messages/count_tokens") && req.method === "POST") {
+        const { desktop3pRegistryIsEmpty } = await import("../claude/desktop-3p");
+        if (desktop3pRegistryIsEmpty()) {
+          const warmHeaders = new Headers({ "anthropic-version": "2023-06-01" });
+          const warmAuth = req.headers.get("authorization");
+          const warmKey = req.headers.get("x-api-key");
+          if (warmAuth) warmHeaders.set("authorization", warmAuth);
+          if (warmKey) warmHeaders.set("x-api-key", warmKey);
+          try { await fetch(new URL("/v1/models", url.origin), { headers: warmHeaders }); } catch { /* fall through to existing resolution */ }
+        }
+      }
+
       // Anthropic Messages inbound (Claude Code). count_tokens FIRST (longer path).
       // Claude Code posts `/v1/messages?beta=true` — pathname match ignores the query (003 G9).
       if (url.pathname === "/v1/messages/count_tokens" && req.method === "POST") {
