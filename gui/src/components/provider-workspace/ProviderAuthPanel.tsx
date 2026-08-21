@@ -197,6 +197,12 @@ export default function ProviderAuthPanel({
   const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
   const deviceCodeCopy = useCopyFeedback<string>();
+  const manualFlowKey = loginHint?.provider === item.name
+    ? `${loginHint.provider}\0${loginHint.url ?? ""}\0${loginHint.deviceCode ?? ""}`
+    : "";
+  const [seenManualFlowKey, setSeenManualFlowKey] = useState(manualFlowKey);
+  const manualFlowKeyRef = useRef(manualFlowKey);
+  const mountedRef = useRef(false);
 
   const resetManualCode = () => {
     setManualCode("");
@@ -204,14 +210,21 @@ export default function ProviderAuthPanel({
     setManualCodeOk(true);
   };
 
-  // Login hints are removed when a flow ends and change when a new flow starts.
-  // Do not retain credential-bearing input or feedback across either boundary.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
+  if (manualFlowKey !== seenManualFlowKey) {
+    setSeenManualFlowKey(manualFlowKey);
     setManualCode("");
+    setManualCodeBusy(false);
     setManualCodeMsg("");
     setManualCodeOk(true);
-  }, [item.name, loginHint?.provider, loginHint?.url, loginHint?.deviceCode]);
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    manualFlowKeyRef.current = manualFlowKey;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [manualFlowKey]);
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -239,6 +252,7 @@ export default function ProviderAuthPanel({
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
   const isOauth = surface === "oauth-accounts";
   const isKeyAuth = surface === "api-keys";
+  const isCommandCodeAuth = item.adapter === "command-code" && item.authMode === "oauth";
 
   if (surface === "codex-accounts") {
     return (
@@ -285,19 +299,24 @@ export default function ProviderAuthPanel({
   const submitManualCode = async () => {
     const input = manualCode.trim();
     if (!input || manualCodeBusy || !authHandlers.onSubmitManualCode) return;
+    const submittedFlowKey = manualFlowKeyRef.current;
     setManualCodeBusy(true);
     setManualCodeMsg("");
     try {
       await authHandlers.onSubmitManualCode(item.name, input);
+      if (!mountedRef.current || manualFlowKeyRef.current !== submittedFlowKey) return;
       setManualCode("");
       setManualCodeOk(true);
       setManualCodeMsg(t("prov.pasteOk"));
     } catch (error) {
+      if (!mountedRef.current || manualFlowKeyRef.current !== submittedFlowKey) return;
       setManualCodeOk(false);
       const message = error instanceof Error && error.message.trim() ? error.message : t("prov.networkError");
       setManualCodeMsg(t("prov.pasteFail", { error: message }));
     } finally {
-      setManualCodeBusy(false);
+      if (mountedRef.current && manualFlowKeyRef.current === submittedFlowKey) {
+        setManualCodeBusy(false);
+      }
     }
   };
 
@@ -441,15 +460,16 @@ export default function ProviderAuthPanel({
                   {authHandlers.onSubmitManualCode && (
                     <div className="pwi-auth-paste">
                       <div className="muted text-label">
-                        {item.name === "command-code"
+                        {isCommandCodeAuth
                           ? t("prov.pasteCommandCodeHint")
                           : t("prov.pasteRedirectHint")}
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <input
-                          type={item.name === "command-code" ? "password" : "text"}
+                          type={isCommandCodeAuth ? "password" : "text"}
                           autoComplete="off"
                           spellCheck={false}
+                          maxLength={4096}
                           value={manualCode}
                           onChange={e => { setManualCode(e.target.value); setManualCodeMsg(""); }}
                           onKeyDown={e => {
@@ -458,8 +478,8 @@ export default function ProviderAuthPanel({
                               void submitManualCode();
                             }
                           }}
-                          placeholder={item.name === "command-code" ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
-                          aria-label={item.name === "command-code" ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
+                          placeholder={isCommandCodeAuth ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
+                          aria-label={isCommandCodeAuth ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
                           disabled={manualCodeBusy}
                           className="input text-label"
                           style={{ flex: 1 }}

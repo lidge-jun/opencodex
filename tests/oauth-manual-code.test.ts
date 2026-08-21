@@ -149,12 +149,12 @@ describe("OAuth manual login code fallback", () => {
         mismatch = submitManualLoginCode("xai", `${redirectUri}?code=evil&state=WRONG`);
       }
       expect(mismatch.ok).toBe(false);
-      if (!mismatch.ok) expect(mismatch.error).toContain("state mismatch");
+      if (!mismatch.ok) expect(mismatch.error).toBe("state mismatch — paste the redirect URL from THIS login attempt");
 
       // URL-shaped input with NO state is rejected, not downgraded to a raw code.
       const missingState = submitManualLoginCode("xai", `${redirectUri}?code=abc`);
       expect(missingState.ok).toBe(false);
-      if (!missingState.ok) expect(missingState.error).toContain("missing the state");
+      if (!missingState.ok) expect(missingState.error).toBe("redirect URL is missing the state parameter");
 
       // Correct paste: matching state completes the login via the original verifier.
       const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-auth-code&state=${state}`);
@@ -248,11 +248,11 @@ describe("OAuth manual login code fallback", () => {
 
       const oversized = await post({ provider: "xai", input: "x".repeat(5000) });
       expect(oversized.status).toBe(400);
-      expect(((await oversized.json()) as { error?: string }).error).toContain("too long");
+      expect(((await oversized.json()) as { error?: string }).error).toBe("input too long");
 
       const noLogin = await post({ provider: "xai", input: "some-code" });
       expect(noLogin.status).toBe(409);
-      expect(((await noLogin.json()) as { error?: string }).error).toContain("no login in progress");
+      expect(((await noLogin.json()) as { error?: string }).error).toBe("no login in progress");
     } finally {
       await server.stop(true);
     }

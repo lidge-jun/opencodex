@@ -70,6 +70,7 @@ test("masks pasted Command Code credentials and preserves rejection feedback", a
   const input = host.querySelector('input[type="password"]') as HTMLInputElement;
   expect(input).toBeTruthy();
   expect(input.type).toBe("password");
+  expect(input.maxLength).toBe(4096);
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
     setter.call(input, "user_secret");
@@ -139,4 +140,88 @@ test("masks pasted Command Code credentials and preserves rejection feedback", a
   });
   expect((host.querySelector('input[type="password"]') as HTMLInputElement).value).toBe("");
   expect(host.querySelector('[role="status"]')).toBeNull();
+});
+
+test("identifies Command Code manual auth from the provider contract", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const aliasedItem: WorkspaceItem = { ...item, name: "command-code-work" };
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <ProviderAuthPanel
+          item={aliasedItem}
+          apiBase=""
+          busy
+          loginHint={{ provider: aliasedItem.name, url: "https://example.test/login" }}
+          authHandlers={{
+            onLogin: () => {}, onLogout: () => {}, onReauth: () => {}, onSwitchAccount: () => {}, onRemoveAccount: () => {},
+            onAddApiKey: async () => true, onSwitchApiKey: () => {}, onRemoveApiKey: () => {}, onEditAlias: () => {},
+            onSubmitManualCode: submit,
+          }}
+        />
+      </LanguageProvider>,
+    );
+  });
+
+  const input = host.querySelector('input[type="password"]') as HTMLInputElement;
+  expect(input).toBeTruthy();
+  expect(input.getAttribute("aria-label")).toContain("Command Code API key");
+});
+
+test("ignores completion from a stale manual-auth flow", async () => {
+  const { createRoot } = await import("react-dom/client");
+  let resolveSubmit!: () => void;
+  const deferredSubmit = mock(() => new Promise<void>(resolve => { resolveSubmit = resolve; }));
+  const handlers: ProviderAuthHandlers = {
+    onLogin: () => {}, onLogout: () => {}, onReauth: () => {}, onSwitchAccount: () => {}, onRemoveAccount: () => {},
+    onAddApiKey: async () => true, onSwitchApiKey: () => {}, onRemoveApiKey: () => {}, onEditAlias: () => {},
+    onSubmitManualCode: deferredSubmit,
+  };
+
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <ProviderAuthPanel
+          item={item}
+          apiBase=""
+          busy
+          loginHint={{ provider: item.name, url: "https://example.test/login-a" }}
+          authHandlers={handlers}
+        />
+      </LanguageProvider>,
+    );
+  });
+  const input = host.querySelector('input[type="password"]') as HTMLInputElement;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, "user_secret");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+    (host.querySelector(".pwi-auth-paste button") as HTMLButtonElement).click();
+  });
+  expect(deferredSubmit).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    root!.render(
+      <LanguageProvider>
+        <ProviderAuthPanel
+          item={item}
+          apiBase=""
+          busy
+          loginHint={{ provider: item.name, url: "https://example.test/login-b" }}
+          authHandlers={handlers}
+        />
+      </LanguageProvider>,
+    );
+  });
+  expect((host.querySelector('input[type="password"]') as HTMLInputElement).value).toBe("");
+
+  await act(async () => {
+    resolveSubmit();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect((host.querySelector(".pwi-auth-paste button") as HTMLButtonElement).disabled).toBe(true);
 });
