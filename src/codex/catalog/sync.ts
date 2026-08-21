@@ -50,7 +50,7 @@ import {
   resetBundledCatalogCacheForTests,
 } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
-import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
+import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug, MAX_REASONING_PROVENANCE_FIELD, stampMaxReasoningProvenance } from "./effort";
 import {
   clearGatherRoutedModelsInflight,
   filterCatalogVisibleModels,
@@ -338,6 +338,7 @@ export function deriveEntry(
         preserveExact || codexForwardNativeCapabilityAlias !== null,
         model?.suppressSyntheticMax === true,
       );
+      stampMaxReasoningProvenance(e, model?.reasoningEfforts);
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
       if (!codexForwardNativeCapabilityAlias) {
@@ -393,6 +394,7 @@ export function deriveEntry(
       preserveExact,
       model?.suppressSyntheticMax === true,
     );
+    stampMaxReasoningProvenance(entry, model?.reasoningEfforts);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
@@ -1110,14 +1112,22 @@ export function mergeCatalogEntriesFromObservedState({
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
     const suppressSyntheticMax = typeof e.slug === "string"
       && syntheticMaxSuppressedKeys.has(slugEquivalenceKey(e.slug));
-    if (!exactCombo && !suppressSyntheticMax) {
-      const levels = Array.isArray(e.supported_reasoning_levels)
+    if (!exactCombo) {
+      let levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
-      if (levels.length > 0 && !levels.some(level => level.effort === "max")) {
-        levels.push(CODEX_REASONING_LEVELS.find(level => level.effort === "max")
-          ?? { effort: "max", description: "Maximum reasoning depth for the hardest problems" });
+      if (suppressSyntheticMax && e[MAX_REASONING_PROVENANCE_FIELD] === "synthetic") {
+        levels = levels.filter(level => level.effort !== "max");
         e.supported_reasoning_levels = levels;
+        delete e[MAX_REASONING_PROVENANCE_FIELD];
+      }
+      if (levels.length > 0 && !levels.some(level => level.effort === "max")) {
+        if (!suppressSyntheticMax) {
+          levels.push(CODEX_REASONING_LEVELS.find(level => level.effort === "max")
+            ?? { effort: "max", description: "Maximum reasoning depth for the hardest problems" });
+          e.supported_reasoning_levels = levels;
+          e[MAX_REASONING_PROVENANCE_FIELD] = "synthetic";
+        }
       }
     }
     if (wsEnabled) e.supports_websockets = true;

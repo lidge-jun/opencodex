@@ -2479,6 +2479,14 @@ describe("Codex catalog routed normalization", () => {
     }]).find(entry => entry.slug === "google/gemini-3.7-flash");
     expect((realMax?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
       .toEqual(["low", "high", "max", "ultra"]);
+
+    const defaultLadder = buildCatalogEntries(null, [], [{
+      provider: "google",
+      id: "gemini-default",
+      suppressSyntheticMax: true,
+    }]).find(entry => entry.slug === "google/gemini-default");
+    expect((defaultLadder?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "ultra"]);
   });
 
   test("unflagged, empty, none-only, and exact-combo ladders keep their existing behavior", () => {
@@ -2537,25 +2545,49 @@ describe("Codex catalog routed normalization", () => {
       .toEqual(["low", "medium", "high", "max", "ultra"]);
   });
 
-  test("degraded preservation still applies current synthetic-max policy", () => {
+  test("degraded preservation removes only a previously synthesized max", () => {
     const slug = "google/gemini-3.7-flash";
-    const existing = {
-      slug,
-      owned_by: "google",
-      input_modalities: ["text"],
-      supported_reasoning_levels: ["low", "high", "ultra"].map(effort => ({ effort })),
-    };
-    const preserved = mergeObservedForTest({
-      catalogModels: [existing],
+    const preserve = (entry: Record<string, unknown>, suppress: boolean) => mergeObservedForTest({
+      catalogModels: [entry],
       routedEntries: [],
       template: null,
       gatheredProviderNames: new Set(["google"]),
       degradedProviderNames: new Set(["google"]),
-      syntheticMaxSuppressedSlugs: new Set([slug]),
-    }).find(entry => entry.slug === slug);
+      syntheticMaxSuppressedSlugs: suppress ? new Set([slug]) : new Set(),
+    }).find(row => row.slug === slug);
+    const priorWithoutMax = buildCatalogEntries(null, [], [{
+      provider: "google",
+      id: "gemini-3.7-flash",
+      reasoningEfforts: ["low", "high"],
+      suppressSyntheticMax: true,
+    }]).find(entry => entry.slug === slug)!;
+    const priorSynthetic = preserve(priorWithoutMax, false)!;
+    expect((priorSynthetic.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "ultra", "max"]);
+    expect(priorSynthetic.opencodex_max_provenance).toBe("synthetic");
 
-    expect((preserved?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+    const suppressed = preserve(priorSynthetic, true);
+    expect((suppressed?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
       .toEqual(["low", "high", "ultra"]);
+    expect(suppressed?.opencodex_max_provenance).toBeUndefined();
+
+    const priorProviderMax = buildCatalogEntries(null, [], [{
+      provider: "google",
+      id: "gemini-3.7-flash",
+      reasoningEfforts: ["low", "high", "max"],
+    }]).find(entry => entry.slug === slug)!;
+    expect(priorProviderMax.opencodex_max_provenance).toBe("provider");
+
+    const preserved = preserve(priorProviderMax, true);
+    expect((preserved?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
+    expect(preserved?.opencodex_max_provenance).toBe("provider");
+
+    const unknownMax = structuredClone(priorProviderMax);
+    delete unknownMax.opencodex_max_provenance;
+    const preservedUnknown = preserve(unknownMax, true);
+    expect((preservedUnknown?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
   });
 
   test("synthetic-max policy slugs come only from enabled true config entries", () => {

@@ -109,6 +109,16 @@ export function catalogEntryEfforts(entry: RawEntry): string[] {
 }
 
 export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
+export const MAX_REASONING_PROVENANCE_FIELD = "opencodex_max_provenance";
+
+export function stampMaxReasoningProvenance(entry: RawEntry, providerEfforts?: string[]): void {
+  if (!catalogEntryEfforts(entry).includes("max")) {
+    delete entry[MAX_REASONING_PROVENANCE_FIELD];
+    return;
+  }
+  const declared = sanitizeCodexReasoningEfforts(providerEfforts);
+  entry[MAX_REASONING_PROVENANCE_FIELD] = declared?.includes("max") === true ? "provider" : "synthetic";
+}
 
 export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
   if (!model) return;
@@ -208,7 +218,8 @@ export function applyReasoningLevels(
   preserveExact = false,
   suppressSyntheticMax = false,
 ): void {
-  let efforts = sanitizeCodexReasoningEfforts(effortsOverride) ?? ROUTED_REASONING_LEVELS.map(l => l.effort);
+  const declaredEfforts = sanitizeCodexReasoningEfforts(effortsOverride);
+  let efforts = declaredEfforts ?? ROUTED_REASONING_LEVELS.map(l => l.effort);
   // Mock top tiers (user decision 260709): every reasoning-capable model advertises `max`
   // even when the provider ladder stops lower — subagent spawns pass `max` DIRECTLY
   // (no ultra->max client conversion) and codex-rs validates it by catalog membership,
@@ -218,6 +229,9 @@ export function applyReasoningLevels(
   // reasoning-capable, so it must not grow synthetic top rungs. Providers may suppress
   // only the invented max rung for models whose upstream rejects it; ultra remains a
   // Codex-side delegation control, and a real configured max is never removed.
+  if (suppressSyntheticMax && declaredEfforts?.includes("max") !== true) {
+    efforts = efforts.filter(effort => effort !== "max");
+  }
   if (!preserveExact && efforts.length > 0 && efforts.some(effort => effort !== "none" && effort !== "minimal")) {
     const additions: string[] = [];
     if (!suppressSyntheticMax && !efforts.includes("max")) additions.push("max");

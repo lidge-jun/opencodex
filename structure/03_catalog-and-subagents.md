@@ -260,7 +260,9 @@ explicit `spawn_agent` effort overrides against catalog membership before the re
 proxy. `providers.<name>.modelSuppressSyntheticMax[model] = true` is the narrow exception: it keeps a
 missing `max` absent while preserving a provider-declared `max` and Codex's `ultra`. Both catalog
 construction and the final observed-state merge apply the current enabled-provider policy, including
-second syncs and degraded-discovery preservation. The catalog has no hidden spawn-only rung, so an
+second syncs and degraded-discovery preservation. Generated rows record whether `max` came from the
+provider ladder or OpenCodex synthesis; degraded preservation removes only the latter and keeps an
+unmarked legacy `max` fail-safe. The catalog has no hidden spawn-only rung, so an
 explicit `spawn_agent` request for `max` may fail client-side for an opted-in model; request clamping
 cannot repair a request Codex never sends.
 
