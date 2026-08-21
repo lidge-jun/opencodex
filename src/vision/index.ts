@@ -7,7 +7,7 @@ import { describeImage, type DescribeOutcome, type VisionSettings } from "./desc
 import { describeImageAnthropic } from "./anthropic-describe";
 import { normalizeVisionReasoningForModel } from "./reasoning";
 import type { CodexAuthContext } from "../codex/auth-context";
-import { getAccountSet } from "../oauth/store";
+import { resolveSidecarAuth } from "../sidecar/auth";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
@@ -215,15 +215,14 @@ export interface AnthropicVisionProvider {
   provider: OcxProviderConfig;
 }
 
-/** First enabled Anthropic OAuth provider whose active stored account is not marked for reauth. */
+/**
+ * First enabled Anthropic OAuth provider whose active stored account is not marked for reauth.
+ * Delegates to the shared sidecar auth module (#2188) — same predicate as web-search.
+ */
 export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionProvider | undefined {
-  for (const [providerName, provider] of Object.entries(config.providers)) {
-    if (provider.disabled === true || provider.adapter !== "anthropic" || provider.authMode !== "oauth") continue;
-    const accountSet = getAccountSet(providerName);
-    const active = accountSet?.accounts.find(account => account.id === accountSet.activeAccountId);
-    if (active && active.needsReauth !== true) return { providerName, provider };
-  }
-  return undefined;
+  const auth = resolveSidecarAuth(config);
+  if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
 }
 
 export function resolveVisionBackend(

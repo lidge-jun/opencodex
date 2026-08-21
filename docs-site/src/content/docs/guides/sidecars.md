@@ -9,10 +9,11 @@ stored Anthropic OAuth provider. Sidecar errors become bounded tool results or i
 of failing the whole turn.
 
 :::note[Automatic backend selection]
-Explicit `backend` config wins. When unset, opencodex uses `anthropic` if an enabled Anthropic OAuth
-provider has an active account not marked `needsReauth`; otherwise it uses `openai`. Explicit
-`anthropic` without that credential fails closed. `openai` requires both ChatGPT login auth and an
-enabled `forward` provider.
+Explicit `backend` config wins. The two sidecars default differently when `backend` is unset:
+**web search** always defaults to `openai` — `anthropic` runs only when explicitly configured.
+**Vision** defaults to `anthropic` if an enabled Anthropic OAuth provider has an active account not
+marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
+closed. `openai` requires both ChatGPT login auth and an enabled `forward` provider.
 :::
 
 ## Web-search sidecar

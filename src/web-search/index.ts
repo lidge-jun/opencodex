@@ -3,7 +3,7 @@ import { modelInList, toolChoiceToolPredicate } from "../types";
 import { isModelTextOnly } from "../vision";
 import type { SidecarSettings } from "./executor";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
-import { getAccountSet } from "../oauth/store";
+import { resolveSidecarAuth } from "../sidecar/auth";
 import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
 import { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
@@ -83,16 +83,13 @@ export interface AnthropicSidecarProvider {
  * only path that can run web_search_20250305 without a ChatGPT forward provider. Presence is decided by
  * getAccountSet + the active account's `needsReauth` marker (audit F1: getCredential alone can pick a
  * terminally-invalid account); token refresh happens later at executor time.
+ * Delegates to the shared sidecar auth module (#2188) so web-search and vision
+ * cannot drift on what "Anthropic auth present" means.
  */
 export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSidecarProvider | undefined {
-  for (const [name, prov] of Object.entries(config.providers)) {
-    if (prov.disabled === true) continue;
-    if (prov.adapter !== "anthropic" || prov.authMode !== "oauth") continue;
-    const set = getAccountSet(name);
-    const active = set?.accounts.find(a => a.id === set.activeAccountId);
-    if (active && active.needsReauth !== true) return { providerName: name, provider: prov };
-  }
-  return undefined;
+  const auth = resolveSidecarAuth(config);
+  if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
 }
 
 /**
@@ -157,7 +154,12 @@ export function planWebSearch(
   const routedModelStallTimeoutMs = resolveRoutedModelStallTimeoutMs(cfg.routedModelStallTimeoutMs);
   // Same `?? 200_000` default the server applies when threading connectTimeoutMs into the loop.
   const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
-  const anthropicSidecar = findAnthropicSidecarProvider(config);
+  // Shared auth state (#2188): presence only — backend PREFERENCE stays with
+  // resolveSidecarBackend's explicit-or-openai contract.
+  const auth = resolveSidecarAuth(config);
+  const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider }
+    : undefined;
   const backend = resolveSidecarBackend(cfg.backend);
   const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
   const stallTimeoutSec = webSearchStallTimeoutSec(

@@ -205,7 +205,7 @@ Images API paths and response shape expected by Codex.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master switch. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; otherwise usable stored Anthropic OAuth selects `anthropic`, then `openai`. |
+| `backend?` | `"openai" \| "anthropic"` | `openai` | Explicit wins; unset always resolves to `openai`. `anthropic` runs only when explicitly configured. |
 | `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI or `claude-sonnet-5` for Anthropic. Legacy explicit `gpt-5.4-mini` migrates on start. |
 | `reasoning?` | `string` | `low` | Sidecar effort. `minimal` is rejected with web search. |
 | `maxSearchesPerTurn?` | `number` | `3` | Real searches allowed per main-model turn. |
@@ -227,7 +227,7 @@ an inactivity guard, not a total generation deadline.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master image-description switch. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Same explicit-first, Anthropic-credential-aware selection as web search. |
+| `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; unset prefers a usable stored Anthropic OAuth credential, else `openai`. |
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI or `claude-sonnet-5` for Anthropic. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
 | `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. Integer 1–2147483647. |

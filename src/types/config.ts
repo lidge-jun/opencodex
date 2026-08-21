@@ -790,8 +790,9 @@ export interface OcxWebSearchSidecarConfig {
   /**
    * Which backend actually runs the server-side search. "openai" replays the hosted web_search via
    * the ChatGPT forward provider (gpt-mini sidecar); "anthropic" runs web_search_20250305 on a Claude
-   * model authenticated by the STORED anthropic OAuth credential. Unset resolves to "anthropic" when a
-   * usable anthropic OAuth credential exists, else "openai".
+   * model authenticated by the STORED anthropic OAuth credential. Unset resolves to "openai";
+   * "anthropic" runs only when explicitly configured (auto-selecting it from credential availability
+   * once sent incompatible models to the Anthropic API — see resolveSidecarBackend).
    */
   backend?: "openai" | "anthropic";
   /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */

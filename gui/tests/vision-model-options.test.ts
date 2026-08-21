@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   sidecarBackendForModel,
+  webSearchModelOptionsForPicker,
+  webSearchSidecarSelectionForModel,
   visionModelOptions,
   visionSidecarBackendForModel,
   type ModelInfo,
@@ -94,4 +96,16 @@ test("an authoritative empty list still keeps the configured model and its backe
   // backend it was saved with, so opening the picker cannot silently rewrite it.
   expect(options.map(option => option.value)).toEqual([model]);
   expect(visionSidecarBackendForModel([], options, model)).toBe("anthropic");
+});
+
+test("a server web-search auth-slot option keeps its backend without a catalog row", () => {
+  const model = "claude-haiku-4-5";
+  const options = webSearchModelOptionsForPicker([
+    { value: model, label: model, backend: "anthropic", model, authSlot: true },
+  ], [], undefined);
+
+  expect(webSearchSidecarSelectionForModel([], options, model)).toEqual({
+    backend: "anthropic",
+    model,
+  });
 });

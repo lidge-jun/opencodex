@@ -164,7 +164,7 @@ Gérez et appliquez la clôture du modèle Grok Build.
 
 ## Exportation de la configuration client
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime>`
 
 Imprimez une configuration client connectée au proxy en cours d'exécution. La commande sérialise le
 bloc fournisseur `opencodex` — URL de base, liste de modèles et référence d’identifiant du client
@@ -175,7 +175,7 @@ les modèles Codex peuvent actuellement voir.
 
 | Option | Actions |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh>` | Requis. Sélectionne le dialecte de configuration client. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime>` | Requis. Sélectionne le dialecte de configuration client. |
 | `--json` | Imprimez le document généré en tant que JSON sur la sortie standard pour les scripts. Il s'agit de JSON même lorsque le format natif du client sélectionné est YAML, TOML ou JSON5. |
 | `--out <path>` | Écrivez le format de configuration natif du client dans `<path>`. Refuse de remplacer un fichier existant. |
 | `--force` | Autoriser `--out` à remplacer un fichier existant. |
@@ -202,6 +202,9 @@ propres valeurs par défaut à ces lignes.
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | aucun — espace réservé de bouclage |
 | `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 | `dsh` | `$DSH_HOME/settings.yaml` (`~/.dsh/settings.yaml` par défaut) | `settings.yaml` | none — espace réservé pour le porteur de bouclage non secret |
+| `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, puis l'ancien `MAVIS_DATA_DIR`, l'emportent une fois définis ; une valeur relative est refusée) | `mcode-config.yaml` | aucun — espace réservé de bouclage |
+| `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` l'emporte une fois défini ; une valeur relative est refusée) | `config.json` | aucun — espace réservé de bouclage |
+| `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` l'emporte une fois défini ; une valeur relative est refusée) | `prime-models.json` | aucun — espace réservé de bouclage |
 
 L'exportation DSH gérée nécessite DSH 0.1.0-rc.6 ou plus récent et ne possède que
 `llm-pi-ai.providers.opencodex`. DSH recharge à chaud ce fournisseur ; le modèle par défaut de l'utilisateur et

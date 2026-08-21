@@ -58,11 +58,11 @@ function ctx(config: OcxConfig = LOOPBACK): ExportContext {
 
 describe("no secret reaches a client config", () => {
   test("the generated client support policy identifies every loopback-only integration", () => {
-    // Pi, Kimi and Gajae cannot emit the dedicated admission header. OMP can
-    // carry provider headers, but remote credential wiring is deliberately
-    // deferred from this initial generated integration.
+    // Pi, Kimi and Gajae cannot emit the dedicated admission header. OMP and
+    // Prime can carry provider headers, but remote credential wiring is
+    // deliberately deferred from those initial generated integrations.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "prime"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {

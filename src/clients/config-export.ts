@@ -433,6 +433,26 @@ export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 }
 
 /**
+ * Prime Agent resolves its agent directory from `PRIME_AGENT_CODING_AGENT_DIR`
+ * — the brand-derived spelling of the `PI_CODING_AGENT_DIR` that `ompAgentDir`
+ * already honors, because the agent builds that variable name from its own
+ * `piConfig.name` — and otherwise falls back to `~/.prime/agent`. Relative
+ * overrides are refused for the same reason as MCode's and ZCode's: a
+ * background proxy and a foreground client can have different working
+ * directories.
+ */
+export function primeAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.PRIME_AGENT_CODING_AGENT_DIR?.trim();
+  if (override) return absoluteClientPath(override, home, "PRIME_AGENT_CODING_AGENT_DIR");
+  return join(home, ".prime", "agent");
+}
+
+/** Prime Agent's canonical custom-provider catalog. */
+export function primeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(primeAgentDir(env, home), "models.json");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -473,7 +493,8 @@ export type ExportClientId =
   | "gajae"
   | "dsh"
   | "mcode"
-  | "zcode";
+  | "zcode"
+  | "prime";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -1428,6 +1449,24 @@ function buildZcodeContribution(ctx: ExportContext): ManagedContribution {
   return singleFragment("zcode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
 }
 
+/**
+ * Prime Agent (PrimeIntellect) is the pi coding agent shipped under a different
+ * brand rather than a lookalike: its package declares a `piConfig` block, and
+ * the agent derives its config directory (`.prime/agent`) and env prefix from
+ * that block alone. `models.json` is therefore the SAME contract Pi reads, so
+ * this client reuses Pi's builder and summarizer verbatim. Restating the shape
+ * here would create a second copy of one fact, which is exactly how the
+ * "anything that is not OpenCode must be Pi" summarizer bug happened.
+ *
+ * The one thing that could still differ is the path we own, and it does not:
+ * Prime keeps our entries under the same `providers.<id>` key. So the only new
+ * code is stamping the right client id on the ownership record.
+ */
+function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildPiClientConfig(ctx);
+  return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   opencode: {
     id: "opencode",
@@ -1564,6 +1603,21 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // ZCode persists the credential in its own file and has no dedicated
     // proxy-admission header field, so real keys are never serialized and
     // remote binds refuse — same reasoning as MCode.
+    loopbackOnly: true,
+  },
+  prime: {
+    id: "prime",
+    filename: "prime-models.json",
+    destination: env => primeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Prime Agent reads a non-secret placeholder from models.json; loopback needs no key.",
+    build: buildPiClientConfig,
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: buildPrimeContribution,
+    // Prime's provider block does accept `headers`, so a dedicated admission
+    // header has somewhere to live, but remote credential wiring is deferred
+    // from this initial loopback-only integration — same stance as OMP's.
     loopbackOnly: true,
   },
 };

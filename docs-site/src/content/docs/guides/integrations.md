@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness and MiniMax Code from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code and Prime Agent from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Nine clients work this way, each with a switch:
+file, and removes it again. Ten clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -17,6 +17,7 @@ file, and removes it again. Nine clients work this way, each with a switch:
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`) | YAML | hot reload | non-secret loopback bearer placeholder |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | new sessions, or after opening the model picker | loopback placeholder |
+| Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
 
 Managed DSH support has a compatibility floor of **DSH 0.1.0-rc.6**. OpenCodex owns only
 `llm-pi-ai.providers.opencodex`; Apply and Refresh replace that fragment, Disable removes only that
@@ -29,6 +30,13 @@ back to `~/.minimax`. Its managed block owns only `custom_provider.opencodex`.
 It does not change `defaultModel`, the selected MiniMax credential source, or
 the user's MiniMax login. Choose a `custom_provider:opencodex/<provider/model>`
 entry in MCode after connecting it.
+
+Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
+`~/.prime/agent`; a relative value is refused so the proxy and the agent cannot
+disagree about which file is meant. Its managed block owns only
+`providers.opencodex`, so other providers and any `modelOverrides` you have set
+stay untouched. Prime Agent reads `models.json` when a session starts, so start
+a new session after connecting it.
 
 Paths honor each client's own environment override where it has one. For OMP,
 `OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile
@@ -113,11 +121,12 @@ changed value and calling it success. You will see the file named and nothing on
 disk will have moved. Editing that file by hand still works; it is only our
 automatic rewrite that declines.
 
-**Pi, Kimi Code, Gajae Code, MiniMax Code and the managed DSH integration only work against a loopback bind.**
+**Pi, Kimi Code, Gajae Code, MiniMax Code, Prime Agent and the managed DSH integration only work against a loopback bind.**
 The first four have no config field for the `x-opencodex-api-key` header a non-loopback bind
 requires. DSH has a generic headers map, but rc.6 does not document that dedicated admission
 header as a supported integration contract, so the managed writer fails closed instead of
-guessing. Give them loopback access through an SSH tunnel or a local forwarder that adds the header.
+guessing. Prime Agent's provider block does accept headers, but remote credential wiring is
+deferred from its initial integration. Give them loopback access through an SSH tunnel or a local forwarder that adds the header.
 
 **The generated OMP integration is also deliberately loopback-only.** OMP does support
 provider-level headers, but this initial integration does not emit remote

@@ -70,6 +70,12 @@ import {
   visionDescriberRejection,
   visionModelOptionsFor,
 } from "./vision-sidecar-options";
+import {
+  webSearchCandidateRows,
+  webSearchModelIsRejected,
+  webSearchModelOptionsFrom,
+  webSearchModelRejection,
+} from "./web-search-sidecar-options";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
@@ -511,6 +517,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
+    const webSearchCandidates = await webSearchCandidateRows(config);
     return jsonResponse({
       webSearch: {
         model: ws.model ?? "gpt-5.6-luna",
@@ -519,6 +526,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       },
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
+      // ALWAYS present: the dashboard treats an omitted list as "no filter" and
+      // falls back to the full model union, so empty must be [] (review B3).
+      webSearchModels: webSearchModelOptionsFrom(config, webSearchCandidates),
     });
   }
 
@@ -544,6 +554,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, or null" }, 400);
+    }
+    if (body.webSearch?.model !== undefined && typeof body.webSearch.model !== "string") {
+      return jsonResponse({ error: "webSearch.model must be a string" }, 400);
     }
     if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
       && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
@@ -600,6 +613,21 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
 
     if (body.webSearch) {
+      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
+      const effectiveBackend = body.webSearch.backend === "anthropic"
+        ? "anthropic"
+        : body.webSearch.backend === "openai" || body.webSearch.backend === null
+          ? "openai"
+          : config.webSearchSidecar?.backend ?? "openai";
+      const effectiveModel = typeof body.webSearch.model === "string"
+        ? body.webSearch.model || undefined
+        : config.webSearchSidecar?.model;
+      if (pairTouched && effectiveModel) {
+        const candidates = await webSearchCandidateRows(config);
+        if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
+          return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
+        }
+      }
       config.webSearchSidecar = { ...config.webSearchSidecar };
       if (typeof body.webSearch.model === "string") {
         if (body.webSearch.model === "") delete config.webSearchSidecar.model;
@@ -645,6 +673,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     saveConfigPreservingClaudeCode(config);
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
+    const savedWebSearchCandidates = await webSearchCandidateRows(config);
     return jsonResponse({
       ok: true,
       webSearch: {
@@ -654,6 +683,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       },
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
+      // Echoed for the same reason GET always carries it: the dashboard rebuilds
+      // its sidecar state from this body, and an omitted key reads as "old
+      // server" and falls back to the full union (review F1).
+      webSearchModels: webSearchModelOptionsFrom(config, savedWebSearchCandidates),
     });
   }
 
