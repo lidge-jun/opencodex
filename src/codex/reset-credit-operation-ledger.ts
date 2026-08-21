@@ -19,6 +19,8 @@ const MANUAL_RESET_CREDIT_HISTORY_HIGH_WATER_MARK = Math.ceil(
   MAX_MANUAL_RESET_CREDIT_OPERATION_IDS * 0.9,
 );
 let reportedManualHistoryLevel = 0;
+type ResetCreditOperationMigrationFaultForTests = "after_first_write" | null;
+let migrationFaultForTests: ResetCreditOperationMigrationFaultForTests = null;
 const ACCOUNT_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const TERMINAL_STATE_BY_CODE: Readonly<Record<
   CodexResetCreditConsumeCode,
@@ -473,6 +475,22 @@ function assertNoLedgerTriggers(database: Database, tableName: string): void {
   if (mainTrigger || tempTrigger) throw new Error("reset-credit operation ledger triggers are forbidden");
 }
 
+function failMigrationAfterFirstWriteForTests(): void {
+  if (migrationFaultForTests === "after_first_write") {
+    throw new Error("synthetic reset-credit operation migration failure");
+  }
+}
+
+/** @internal Test-only fault injection after the first transactional migration write. */
+export function setResetCreditOperationMigrationFaultForTests(
+  fault: ResetCreditOperationMigrationFaultForTests,
+): void {
+  if (process.env.OCX_TEST_HOME_GUARD !== "1") {
+    throw new Error("reset-credit operation migration faults require the repository test preload");
+  }
+  migrationFaultForTests = fault;
+}
+
 function migrateLegacyTable(database: Database): void {
   assertColumnLayout(database, TABLE_NAME, LEGACY_COLUMNS);
   assertNoLedgerTriggers(database, TABLE_NAME);
@@ -510,6 +528,7 @@ function migrateLegacyTable(database: Database): void {
     operations.add(record.operationId);
   }
   database.exec(`ALTER TABLE main.${TABLE_NAME} RENAME TO ${LEGACY_TABLE_NAME}`);
+  failMigrationAfterFirstWriteForTests();
   database.exec(CREATE_TABLE);
   database.exec(`
     INSERT INTO main.${TABLE_NAME} (
@@ -547,6 +566,7 @@ function migratePriorTable(database: Database): void {
     operations.add(record.operationId);
   }
   database.exec(`ALTER TABLE main.${TABLE_NAME} RENAME TO ${PRIOR_TABLE_NAME}`);
+  failMigrationAfterFirstWriteForTests();
   database.exec(CREATE_TABLE);
   database.exec(`
     INSERT INTO main.${TABLE_NAME} (
@@ -937,7 +957,7 @@ function reportManualHistoryCapacity(count: number): void {
     console.warn(
       `[opencodex] Reset-credit manual operation history is at ${count}/${MAX_MANUAL_RESET_CREDIT_OPERATION_IDS} entries${
         level === MAX_MANUAL_RESET_CREDIT_OPERATION_IDS
-          ? "; new manual redemptions are disabled until a maintainer expands capacity or applies an approved retirement policy."
+          ? "; new manual operation IDs, including aliases, are disabled until a maintainer expands capacity or applies an approved retirement policy."
           : "."
       }`,
     );
