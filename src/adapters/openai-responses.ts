@@ -6,7 +6,7 @@ import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../resp
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, isOpenAiOperatedResponsesDestination } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -41,7 +41,7 @@ export const FORWARD_HEADERS = [
 
 export function sanitizeReasoningInputContent(
   body: unknown,
-  opts?: { preserveRawReasoningContent?: boolean },
+  opts?: { preserveRawReasoningContent?: boolean; dropNullContentChannel?: boolean },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -61,7 +61,11 @@ export function sanitizeReasoningInputContent(
     // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
     // rather than the field it actually refused, which is why this reads as a blob failure. Drop the
     // key so the item matches the shape the upstream issued.
-    if ("content" in rec && !Array.isArray(rec.content)) {
+    //
+    // Gated to routed destinations. An OpenAI-operated backend binds the blob to the item's exact
+    // shape, so deleting a field there invalidates it (`The encrypted content ... could not be
+    // verified`); the two requirements are exactly opposed, and a live regression proved it.
+    if (opts?.dropNullContentChannel === true && "content" in rec && !Array.isArray(rec.content)) {
       changed = true;
       const next: Record<string, unknown> = { ...rec };
       delete next.content;
@@ -1584,7 +1588,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), {
+        preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+        dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
+      })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

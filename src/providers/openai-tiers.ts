@@ -54,6 +54,20 @@ export function supportsNativeResponsesCompactEndpoint(
     && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
 }
 
+/**
+ * Whether this destination is an OpenAI-operated Responses backend — the canonical ChatGPT Codex
+ * surface or the official OpenAI API.
+ *
+ * Deliberately not keyed on `authMode === "forward"`: a noncanonical forward provider does not
+ * receive the caller's credentials (see the forward-header gate in the Responses adapter), so
+ * forward auth says nothing about which backend is on the other end.
+ */
+export function isOpenAiOperatedResponsesDestination(provider: OcxProviderConfig): boolean {
+  if (isCanonicalOpenAiForwardProvider(provider)) return true;
+  return provider.adapter === "openai-responses"
+    && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
+}
+
 export interface OpenAiTierMigrationProjection {
   config: OcxConfig;
   changed: boolean;
