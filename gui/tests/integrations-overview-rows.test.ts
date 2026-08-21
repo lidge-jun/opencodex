@@ -110,11 +110,11 @@ test("Claude Desktop: applied but not the served profile reads as stale", () => 
   );
   expect(rowById(unknownProfile, "claudeDesktop").state).toBe("current");
 
-  // Desired OFF wins: leftover applied/stale bytes must not look like "needs update".
+  // Desired OFF with the gateway gone is absent.
   const desiredOff = buildOverviewRows(
     sources({
       native: [{ ...desktopNative[0]!, desiredEnabled: false, state: "absent" }],
-      claudeDesktop: { desiredEnabled: false, installed: true, applied: true, stale: true, activeProfile: true },
+      claudeDesktop: { desiredEnabled: false, installed: true, applied: false, stale: false, activeProfile: false },
     }),
   );
   expect(rowById(desiredOff, "claudeDesktop")).toMatchObject({
@@ -122,6 +122,37 @@ test("Claude Desktop: applied but not the served profile reads as stale", () => 
     applied: false,
     toggleOn: false,
     detailKey: "integrations.detail.desktopDesiredOff",
+  });
+});
+
+test("Claude Desktop: desired-off with a still-selected gateway is stale cleanup-pending", () => {
+  const desktopNative = [{
+    clientId: "claude-desktop" as const,
+    state: "current" as const,
+    installed: true,
+    configPath: "/tmp/desktop",
+    desiredEnabled: false,
+    disableBlocked: null,
+  }];
+  const leftoverGateway = buildOverviewRows(
+    sources({
+      native: desktopNative,
+      claudeDesktop: {
+        desiredEnabled: false,
+        installed: true,
+        applied: true,
+        stale: false,
+        drift: true,
+        driftReason: "desired_off_gateway_selected",
+        activeProfile: true,
+      },
+    }),
+  );
+  expect(rowById(leftoverGateway, "claudeDesktop")).toMatchObject({
+    state: "stale",
+    applied: true,
+    toggleOn: false,
+    detailKey: "integrations.detail.desktopDesiredOffCleanupPending",
   });
 });
 

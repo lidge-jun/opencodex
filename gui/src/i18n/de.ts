@@ -873,6 +873,7 @@ export const de: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "Das Profil ist da, Desktop nutzt aber ein anderes",
   "integrations.detail.desktopAbsent": "Kein Profil angewendet",
   "integrations.detail.desktopDesiredOff": "Die Claude-Desktop-Integration ist deaktiviert",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop verwendet das Gateway noch; die Bereinigung steht aus",
   "integrations.detail.desktopDesiredOnNotApplied": "Die Integration ist aktiviert, aber Desktop verwendet nicht das Gateway-Profil",
   "integrations.detail.desktopSelectedElsewhere": "Desktop verwendet ein anderes Profil",
   "integrations.detail.desktopProfileDrift": "Das ausgewählte Desktop-Profil wurde geändert",

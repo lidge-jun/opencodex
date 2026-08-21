@@ -1335,6 +1335,7 @@ export const fr: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "Le profil existe, mais Desktop en utilise un autre",
   "integrations.detail.desktopAbsent": "Aucun profil appliqué",
   "integrations.detail.desktopDesiredOff": "L’intégration Claude Desktop est désactivée",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop utilise encore la passerelle ; le nettoyage est en attente",
   "integrations.detail.desktopDesiredOnNotApplied": "L’intégration est activée, mais Desktop n’utilise pas le profil de passerelle",
   "integrations.detail.desktopSelectedElsewhere": "Desktop utilise un autre profil",
   "integrations.detail.desktopProfileDrift": "Le profil Desktop sélectionné a changé",

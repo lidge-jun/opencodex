@@ -1362,6 +1362,7 @@ export const en = {
   "integrations.detail.desktopNotServed": "The profile exists, but Desktop serves another one",
   "integrations.detail.desktopAbsent": "No profile applied",
   "integrations.detail.desktopDesiredOff": "Claude Desktop integration is off",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop is still using the gateway; cleanup is pending",
   "integrations.detail.desktopDesiredOnNotApplied": "Integration is on, but Desktop is not using the gateway profile",
   "integrations.detail.desktopSelectedElsewhere": "Desktop is using another profile",
   "integrations.detail.desktopProfileDrift": "The selected Desktop profile changed",

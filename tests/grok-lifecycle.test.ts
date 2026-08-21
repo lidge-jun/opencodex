@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const ENSURE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "ensure-desired-integrations.ts"), "utf8");
 const DISPATCH_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "dispatch.ts"), "utf8");
 const SERVICE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
@@ -32,43 +33,66 @@ describe("Grok fence lifecycle wiring", () => {
     expect(grokSyncAt).toBeGreaterThan(registryCatchAt);
   });
 
-  test("ensure passes the observed bind host on the live branch and the configured host after spawning", () => {
+  test("ensure passes the observed bind host on the live branch and the current host after spawning", () => {
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
     const liveBranch = ensureFn.slice(0, ensureFn.indexOf("const pinPort"));
     const spawnBranch = ensureFn.slice(ensureFn.indexOf("const pinPort"));
 
     // live.hostname is what the proxy ACTUALLY bound; config.hostname may have drifted.
     expect(liveBranch).toContain("live.hostname ? { hostname: live.hostname }");
-    expect(spawnBranch).toContain("config.hostname ? { hostname: config.hostname }");
+    // Spawn must not reuse the pre-waitForProxy snapshot for hostname / desired state.
+    expect(spawnBranch).toContain("const current = loadConfig()");
+    expect(spawnBranch).toContain("current.hostname ? { hostname: current.hostname }");
+    expect(spawnBranch).not.toContain("config.hostname ? { hostname: config.hostname }");
   });
 
   test("ensure gates Grok fence writes on the durable switch like start", () => {
     const helper = sliceFn(
-      CLI_SOURCE,
-      "async function ensureGrokFenceMatchesDesired(",
-      "function ensureClaudeDesktopMatchesDesired(",
+      ENSURE_SOURCE,
+      "export async function ensureGrokFenceMatchesDesired(",
+      "export function ensureClaudeDesktopMatchesDesired(",
     );
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
 
     // The defect: ensure called syncGrokConfig unconditionally, so OFF lasted until
     // the next dashboard update/restart path that landed in ensure.
     expect(helper).toContain("shouldSyncGrokOnStart(config)");
-    expect(helper).toContain("stripGrokConfig()");
-    expect(helper).toContain('await import("../grok/sync")');
+    expect(helper).toContain("deps.stripGrokConfig()");
+    expect(helper).toContain("deps.syncGrokConfig(");
+    expect(ENSURE_SOURCE).toContain('await import("../grok/sync")');
+    expect(helper.indexOf("deps.loadConfig()")).toBeLessThan(helper.indexOf("shouldSyncGrokOnStart(config)"));
     expect(ensureFn).toContain("ensureGrokFenceMatchesDesired(");
     expect(ensureFn).not.toMatch(/await import\("\.\.\/grok\/sync"\)/);
   });
 
   test("ensure clears Claude Desktop residue when the durable switch is OFF", () => {
     const helper = sliceFn(
-      CLI_SOURCE,
-      "function ensureClaudeDesktopMatchesDesired(",
-      "/** Argv for detached `start`, optionally hard-pinning the listen port. */",
+      ENSURE_SOURCE,
+      "export function ensureClaudeDesktopMatchesDesired(",
+      "Claude Desktop cleanup failed",
     );
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
     expect(helper).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(helper).toContain("removeDesktop3pStandardPivot(");
-    expect(ensureFn).toContain("ensureClaudeDesktopMatchesDesired(config)");
+    expect(helper).toContain("deps.removeDesktop3pStandardPivot(");
+    expect(helper.indexOf("deps.loadConfig()")).toBeLessThan(helper.indexOf("claudeDesktopIntegrationEnabled(config)"));
+    expect(ensureFn).toContain("ensureClaudeDesktopMatchesDesired()");
+    expect(ensureFn).not.toContain("ensureClaudeDesktopMatchesDesired(config)");
+  });
+
+  test("both ensure branches re-read persisted config after the in-flight await window", () => {
+    const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
+    const liveBranch = ensureFn.slice(0, ensureFn.indexOf("const pinPort"));
+    const spawnBranch = ensureFn.slice(ensureFn.indexOf("const pinPort"));
+    const liveAfterAwait = liveBranch.slice(liveBranch.indexOf("injectSystemEnv"));
+    const spawnAfterAwait = spawnBranch.slice(spawnBranch.indexOf("waitForProxy"));
+    expect(liveAfterAwait).toContain("const current = loadConfig()");
+    expect(liveAfterAwait.indexOf("const current = loadConfig()")).toBeLessThan(
+      liveAfterAwait.indexOf("ensureGrokFenceMatchesDesired("),
+    );
+    expect(spawnAfterAwait).toContain("const current = loadConfig()");
+    expect(spawnAfterAwait.indexOf("const current = loadConfig()")).toBeLessThan(
+      spawnAfterAwait.indexOf("ensureGrokFenceMatchesDesired("),
+    );
   });
 
   test("handleStop gates shared teardown on ownership but still reverts system env", () => {

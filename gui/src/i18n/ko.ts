@@ -897,6 +897,7 @@ export const ko: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "프로필은 있지만 Desktop이 다른 것을 씁니다",
   "integrations.detail.desktopAbsent": "적용된 프로필이 없습니다",
   "integrations.detail.desktopDesiredOff": "Claude Desktop 통합이 꺼져 있습니다",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop이 여전히 게이트웨이를 사용 중입니다. 정리 대기 중",
   "integrations.detail.desktopDesiredOnNotApplied": "통합은 켜져 있지만 Desktop이 게이트웨이 프로필을 사용하지 않습니다",
   "integrations.detail.desktopSelectedElsewhere": "Desktop이 다른 프로필을 사용 중입니다",
   "integrations.detail.desktopProfileDrift": "선택된 Desktop 프로필이 변경되었습니다",

@@ -1295,6 +1295,7 @@ export const ja: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "プロファイルはありますが Desktop は別のものを使用中です",
   "integrations.detail.desktopAbsent": "適用されたプロファイルはありません",
   "integrations.detail.desktopDesiredOff": "Claude Desktop 連携はオフです",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop はまだゲートウェイを使用しています。クリーンアップ待ちです",
   "integrations.detail.desktopDesiredOnNotApplied": "連携はオンですが、Desktop はゲートウェイプロファイルを使用していません",
   "integrations.detail.desktopSelectedElsewhere": "Desktop は別のプロファイルを使用しています",
   "integrations.detail.desktopProfileDrift": "選択された Desktop プロファイルが変更されました",

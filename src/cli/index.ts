@@ -47,7 +47,7 @@ import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnviro
 import { startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
-import { buildDesktop3pRegistry, removeDesktop3pStandardPivot } from "../claude/desktop-3p";
+import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -55,12 +55,14 @@ import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import {
-  claudeDesktopIntegrationEnabled,
-  setIntegrationEnabled,
-  shouldSyncCodexOnStart,
   shouldSyncGrokOnStart,
   syncCodexOnStartIfEnabled,
 } from "../codex/desired-state";
+import {
+  ensureClaudeDesktopMatchesDesired,
+  ensureGrokFenceMatchesDesired,
+  grokSyncFailureMessage,
+} from "./ensure-desired-integrations";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -120,82 +122,6 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   return null;
-}
-
-/**
- * A Grok fence sync that throws is best-effort by design — it must never block startup.
- * Reporting nothing, however, is what lets a STALE fence survive: `~/.grok/config.toml`
- * keeps naming whatever port the last successful sync wrote, and once that listener is
- * gone every grok turn retries against a refused connection while our own log stays
- * silent (2026-07-27 field report: 8 entries pinned to a dead 127.0.0.1:4179).
- * So say what failed and name the single command that repairs it.
- */
-function grokSyncFailureMessage(err: unknown): string {
-  const detail = err instanceof Error ? err.message : String(err);
-  return `Grok Build config sync failed: ${detail}. `
-    + "~/.grok/config.toml may still point at a previous proxy port — "
-    + "run 'ocx ensure' (or apply from the dashboard's Grok page) to repoint it.";
-}
-
-/**
- * Keep `~/.grok/config.toml` aligned with the durable Grok switch.
- *
- * `handleStart` already gates inject on `shouldSyncGrokOnStart`. `ocx ensure`
- * used to call `syncGrokConfig` unconditionally, so a dashboard/update/restart
- * path that lands in ensure rewrote the fence while the switch stayed OFF.
- * When the switch is OFF, strip any leftover managed block instead of injecting.
- */
-async function ensureGrokFenceMatchesDesired(
-  port: number,
-  config: ReturnType<typeof loadConfig>,
-  opts: { hostname?: string } = {},
-): Promise<void> {
-  if (!shouldSyncGrokOnStart(config)) {
-    try {
-      const grok = stripGrokConfig();
-      if (grok.changed) console.log(`   ↩️  ${grok.message}`);
-      else if (!grok.ok) console.error(`⚠️  ${grok.message}`);
-    } catch (err) {
-      console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
-    }
-    return;
-  }
-  try {
-    const { syncGrokConfig } = await import("../grok/sync");
-    const g = await syncGrokConfig(
-      port,
-      config,
-      opts.hostname !== undefined ? { hostname: opts.hostname } : {},
-    );
-    if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-    else if (!g.ok) console.error(`⚠️  ${g.message}`);
-  } catch (err) {
-    console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
-  }
-}
-
-/**
- * When Claude Desktop is durably OFF, clear any leftover owned gateway profile.
- * ensure/update used to leave Claude-3p residue in place after a failed disable
- * (drifted fingerprint), so the Integrations card kept looking applied/stale.
- */
-function ensureClaudeDesktopMatchesDesired(config: ReturnType<typeof loadConfig>): void {
-  if (claudeDesktopIntegrationEnabled(config)) return;
-  try {
-    const removed = removeDesktop3pStandardPivot({
-      appliedFingerprint: config.claudeCode?.desktopProfile?.appliedFingerprint ?? null,
-    });
-    if (removed.ok && removed.changed) {
-      console.log("   ↩️  Claude Desktop integration residue removed.");
-    } else if (!removed.ok) {
-      console.error(
-        `⚠️  Claude Desktop cleanup skipped: ${removed.reason ?? removed.kind}.`,
-      );
-    }
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    console.error(`⚠️  Claude Desktop cleanup failed: ${detail}.`);
-  }
 }
 
 /** Argv for detached `start`, optionally hard-pinning the listen port. */
@@ -538,13 +464,14 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
       reportShellHookFailure(reconcileShellHook(systemEnv.injected));
       // Refresh the Grok Build fence too (same contract as start). live.hostname is the
       // hostname the running proxy actually bound — config.hostname may have drifted.
-      // Gated on the durable switch: unconditional sync made OFF last only until ensure.
+      // Re-read immediately before mutating client files: the snapshot above predates
+      // model sync and env reconcile, so a toggle during that window must win.
+      const current = loadConfig();
       await ensureGrokFenceMatchesDesired(
         live.port,
-        config,
-        live.hostname ? { hostname: live.hostname } : {},
+        live.hostname ? { hostname: live.hostname } : current.hostname ? { hostname: current.hostname } : {},
       );
-      ensureClaudeDesktopMatchesDesired(config);
+      ensureClaudeDesktopMatchesDesired();
       console.log(`✅ Proxy running on port ${live.port}`);
       return true;
     }
@@ -567,12 +494,14 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
   // Deterministic fence guarantee when the durable switch is ON: the spawned child
   // injects late in its own startup, but this parent returns as soon as /healthz
   // responds — align here too so `ocx ensure` never returns with a stale ON/OFF mismatch.
+  // Re-read after waitForProxy: the snapshot taken before spawn is stale if the
+  // user flipped Grok or Claude Desktop while the child was coming up.
+  const current = loadConfig();
   await ensureGrokFenceMatchesDesired(
     port,
-    config,
-    config.hostname ? { hostname: config.hostname } : {},
+    current.hostname ? { hostname: current.hostname } : {},
   );
-  ensureClaudeDesktopMatchesDesired(config);
+  ensureClaudeDesktopMatchesDesired();
   // Always sync the LIVE port: after a fallback-port start, config.port still names the
   // busy preferred port — syncing that would point Codex at a dead listener.
   const synced = await syncModelsToCodex(port).catch(e => {

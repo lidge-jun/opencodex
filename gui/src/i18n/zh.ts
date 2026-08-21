@@ -890,6 +890,7 @@ export const zh: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "配置存在，但 Desktop 使用的是另一个",
   "integrations.detail.desktopAbsent": "未应用任何配置",
   "integrations.detail.desktopDesiredOff": "Claude Desktop 集成已关闭",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop 仍在使用网关，清理尚未完成",
   "integrations.detail.desktopDesiredOnNotApplied": "集成已开启，但 Desktop 未使用网关配置",
   "integrations.detail.desktopSelectedElsewhere": "Desktop 正在使用其他配置",
   "integrations.detail.desktopProfileDrift": "选中的 Desktop 配置已更改",

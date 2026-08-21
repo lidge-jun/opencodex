@@ -1346,6 +1346,7 @@ export const ru: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "Профиль есть, но Desktop использует другой",
   "integrations.detail.desktopAbsent": "Профиль не применён",
   "integrations.detail.desktopDesiredOff": "Интеграция Claude Desktop отключена",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop всё ещё использует шлюз; очистка не завершена",
   "integrations.detail.desktopDesiredOnNotApplied": "Интеграция включена, но Desktop не использует профиль шлюза",
   "integrations.detail.desktopSelectedElsewhere": "Desktop использует другой профиль",
   "integrations.detail.desktopProfileDrift": "Выбранный профиль Desktop был изменён",

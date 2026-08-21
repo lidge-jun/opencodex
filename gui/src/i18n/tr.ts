@@ -1353,6 +1353,7 @@ export const tr: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "Profil mevcut ancak Desktop başkasını kullanıyor",
   "integrations.detail.desktopAbsent": "Uygulanan profil yok",
   "integrations.detail.desktopDesiredOff": "Claude Desktop entegrasyonu kapalı",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop hâlâ ağ geçidini kullanıyor; temizlik bekleniyor",
   "integrations.detail.desktopDesiredOnNotApplied": "Entegrasyon açık ancak Desktop kullanmıyor",
   "integrations.detail.desktopSelectedElsewhere": "Desktop başka bir profil kullanıyor",
   "integrations.detail.desktopProfileDrift": "Seçilen Desktop profili değişti",

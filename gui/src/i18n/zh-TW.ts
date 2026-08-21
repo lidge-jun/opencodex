@@ -1871,6 +1871,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.detail.desktopNotServed": "設定檔存在，但 Desktop 使用的是另一個",
   "integrations.detail.desktopAbsent": "未套用任何設定檔",
   "integrations.detail.desktopDesiredOff": "Claude Desktop 整合已關閉",
+  "integrations.detail.desktopDesiredOffCleanupPending": "Claude Desktop 仍在使用閘道，清理尚未完成",
   "integrations.detail.desktopDesiredOnNotApplied": "整合已開啟，但 Desktop 未使用閘道設定檔",
   "integrations.detail.desktopSelectedElsewhere": "Desktop 正在使用其他設定檔",
   "integrations.detail.desktopProfileDrift": "選取的 Desktop 設定檔已變更",
