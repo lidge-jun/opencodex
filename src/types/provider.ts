@@ -205,6 +205,11 @@ export interface OcxProviderConfig {
    */
   preserveResponsesReasoningContent?: boolean;
   /**
+   * Explicit opt-in for a relay that genuinely fronts OpenAI and can decode native
+   * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
+   */
+  decodesNativeCompactionBlobs?: boolean;
+  /**
    * Explicit opt-in for non-registry private-network destinations such as localhost, RFC1918,
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
    */

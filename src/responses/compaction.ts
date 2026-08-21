@@ -33,6 +33,24 @@ export const SUMMARY_PREFIX = "Another language model started to solve this prob
 
 export const OPAQUE_COMPACTION_NOTE = "[earlier conversation was compacted; the summary is stored in a format this model cannot read]";
 
+/**
+ * Item types in the compact wire family. Each carries an `encrypted_content` blob the client
+ * replays verbatim on every later turn, and the minting backend verifies it is unmodified.
+ *
+ * Keep this the only enumeration: a copy that listed just `compaction` let the response-side
+ * field backfill synthesize ids into the other two, which the client then replayed as "modified
+ * from the compact response".
+ */
+const COMPACTION_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "compaction",
+  "compaction_summary",
+  "context_compaction",
+]);
+
+export function isCompactionItemType(type: unknown): boolean {
+  return typeof type === "string" && COMPACTION_ITEM_TYPES.has(type);
+}
+
 export function encodeCompactionSummary(summary: string): string {
   return OCX_COMPACTION_PREFIX + Buffer.from(summary, "utf-8").toString("base64");
 }

@@ -54,6 +54,24 @@ export function supportsNativeResponsesCompactEndpoint(
     && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
 }
 
+/**
+ * Whether this destination can decode a native (non-`ocx1:`) compaction blob.
+ *
+ * Only the backend that minted a blob can decode it. `authMode: "forward"` alone is not a signal:
+ * the adapter forwards caller credentials only to the canonical ChatGPT Codex surface, while a
+ * noncanonical forward provider receives no caller credentials and may point at any backend.
+ *
+ * Relay only to that canonical surface, the official OpenAI API, or a destination whose operator
+ * explicitly opts in. Keyed by destination rather than provider id: a blob's issuer is the URL that
+ * produced it, not the local config key a replay travels under.
+ */
+export function destinationDecodesNativeCompactionBlob(provider: OcxProviderConfig): boolean {
+  return isCanonicalOpenAiForwardProvider(provider)
+    || (provider.adapter === "openai-responses"
+      && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL)
+    || provider.decodesNativeCompactionBlobs === true;
+}
+
 export interface OpenAiTierMigrationProjection {
   config: OcxConfig;
   changed: boolean;

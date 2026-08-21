@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
-import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
+import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, destinationDecodesNativeCompactionBlob, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -204,25 +204,33 @@ function stripItemIdsWhenUnstored(body: unknown): unknown {
 }
 
 /**
- * Replace proxy-minted compaction items (`encrypted_content` starting with `ocx1:`) with plain
- * user messages before forwarding to the ChatGPT backend. Our envelope is transparent base64, not
- * OpenAI encryption — the native backend cannot decrypt it and would reject the request. Real
- * OpenAI-encrypted compaction items are forwarded untouched.
+ * Normalize replayed compaction items for the destination backend.
+ *
+ * A compaction item carries an `encrypted_content` blob the client replays verbatim on every later
+ * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` envelopes are
+ * transparent base64 rather than encryption, so no upstream can read them and they always become
+ * plain user messages. A foreign blob was minted by an OpenAI-operated backend: forwarding it to a
+ * different destination makes that upstream reject the turn ("Could not decode the compaction
+ * blob"), and because the item lives in the client transcript the rejection repeats on every later
+ * turn — including the compaction turn the proxy itself drives — leaving the session unable to
+ * recover. Off those destinations it degrades to the same note the bridged parser uses.
+ *
+ * A bare `context_compaction` marker carries no blob and is forwarded untouched.
  */
-function scrubOcxCompactionItems(body: unknown): unknown {
+function scrubOcxCompactionItems(body: unknown, destinationDecodesNativeBlob: boolean): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   let changed = false;
   const input = body.input.map(item => {
-    if (!isPlainObject(item)) return item;
-    if (item.type !== "compaction" && item.type !== "compaction_summary" && item.type !== "context_compaction") return item;
-    const decoded = typeof item.encrypted_content === "string" ? decodeCompactionSummary(item.encrypted_content) : null;
-    if (decoded === null) return item;
+    if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
+    const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
+    if (encrypted === undefined) return item;
+    if (decodeCompactionSummary(encrypted) === null && destinationDecodesNativeBlob) return item;
     changed = true;
     return {
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\n${decoded}` }],
+      content: [{ type: "input_text", text: compactionItemToText(encrypted) }],
     };
   });
 
@@ -1644,7 +1652,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody, destinationDecodesNativeCompactionBlob(provider)), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

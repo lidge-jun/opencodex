@@ -433,21 +433,25 @@ describe("responses-field-backfill", () => {
     expect(new Set(ids).size).toBe(2);
   });
 
-  // `compaction` is the /v1/responses/compact wire format, not a Responses output item: it
-  // carries no id in that contract, and clients compare the body exactly. Synthesizing an id
-  // here changed a response that had nothing to do with strict Responses decoding — a defect
-  // that only appeared once this backfill and the compact endpoint were on the same tree.
-  test("a compaction item is returned byte-for-byte", () => {
-    const response = {
-      id: "resp_1",
-      object: "response",
-      status: "completed",
-      output: [{ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" }],
-    };
-    const result = JSON.parse(backfillResponsesFieldsJson(JSON.stringify(response))) as {
-      output: Record<string, unknown>[];
-    };
-    expect(result.output[0]).toEqual({ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" });
-    expect(result.output[0]).not.toHaveProperty("id");
+  // The compact wire family is the /v1/responses/compact format, not Responses output items: they
+  // carry no id in that contract, clients compare the body exactly, and the client replays the item
+  // on every later turn where the minting backend rejects a modified one. Synthesizing an id here
+  // changed a response that had nothing to do with strict Responses decoding — a defect that only
+  // appeared once this backfill and the compact endpoint were on the same tree. It originally
+  // covered `compaction` alone, so the sibling types kept receiving synthesized ids.
+  test("every compact wire item type is returned byte-for-byte", () => {
+    for (const type of ["compaction", "compaction_summary", "context_compaction"]) {
+      const item = { type, encrypted_content: "gAAAAAB-test-opaque" };
+      const response = { id: "resp_1", object: "response", status: "completed", output: [item] };
+      const result = JSON.parse(backfillResponsesFieldsJson(JSON.stringify(response))) as {
+        output: Record<string, unknown>[];
+      };
+      expect(result.output[0]).toEqual(item);
+      expect(result.output[0]).not.toHaveProperty("id");
+
+      const streamed = parseData(apply(sseBlock({ type: "response.output_item.done", output_index: 0, item })));
+      expect(streamed[0].item).toEqual(item);
+      expect(streamed[0].item).not.toHaveProperty("id");
+    }
   });
 });
