@@ -184,6 +184,14 @@ describe("opaque blob recovery through /v1/responses", () => {
 
     expect(outbound).toHaveLength(2);
     expect(hasBlob(outbound[0]!)).toBe(true);
+    const initialInput = outbound[0]!.input as Array<Record<string, unknown>>;
+    // Guard the regression where status made upstream reject before checking the blob, so recovery never ran.
+    expect(initialInput[1]).toEqual({
+      type: "reasoning",
+      content: [],
+      summary: [{ type: "summary_text", text: "prior reasoning" }],
+      encrypted_content: BLOB,
+    });
     expect(hasBlob(outbound[1]!)).toBe(false);
     const retriedInput = outbound[1]!.input as Array<Record<string, unknown>>;
     expect(retriedInput[0]).toEqual(reasoningReplayInput()[0]);
