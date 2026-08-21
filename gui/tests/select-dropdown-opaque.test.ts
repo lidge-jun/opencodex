@@ -12,9 +12,9 @@ async function styles(): Promise<string> {
   return Bun.file(new URL("../src/styles.css", import.meta.url)).text();
 }
 
-/** Declaration body of the first top-level `.select-dropdown { … }` rule. */
-function baseSelectDropdownBody(css: string): string {
-  const match = css.match(/(?:^|\n)\.select-dropdown\s*\{([^}]*)\}/);
+/** Declaration body of the first unscoped `.select-dropdown { … }` rule. */
+function selectDropdownBody(css: string): string {
+  const match = css.match(/(?:^|\n)\s*\.select-dropdown\s*\{([^}]*)\}/);
   expect(match).toBeTruthy();
   return match![1]!;
 }
@@ -52,7 +52,7 @@ function reducedTransparencyBlock(css: string): string {
 }
 
 test("select-dropdown fill is opaque surface, not a translucent canvas mix", async () => {
-  const body = baseSelectDropdownBody(await styles());
+  const body = selectDropdownBody(await styles());
   expect(body).toMatch(/background:\s*var\(--surface\)/);
   expect(body).not.toMatch(/color-mix\s*\(/);
   expect(body).not.toMatch(/transparent/);
@@ -60,12 +60,13 @@ test("select-dropdown fill is opaque surface, not a translucent canvas mix", asy
 
 test("select-dropdown keeps solid fallbacks when blur is missing or unwanted", async () => {
   const css = await styles();
-  const noBlur = supportsNoBlurBlock(css);
-  // Unscoped `.select-dropdown`, not only the lang-toggle override.
-  expect(noBlur).toMatch(/(?:^|\n)\s*\.select-dropdown\s*\{[^}]*background:\s*var\(--surface\)/);
+  const noBlur = selectDropdownBody(supportsNoBlurBlock(css));
+  expect(noBlur).toMatch(/background:\s*var\(--surface\)/);
+  expect(noBlur).not.toMatch(/(?:background|background-color):[^;}]*(transparent|color-mix\s*\()/);
 
-  const reduced = reducedTransparencyBlock(css);
-  expect(reduced).toMatch(
-    /(?:^|\n)\s*\.select-dropdown\s*\{[^}]*background:\s*var\(--surface\)[^}]*backdrop-filter:\s*none/,
-  );
+  const reduced = selectDropdownBody(reducedTransparencyBlock(css));
+  expect(reduced).toMatch(/background:\s*var\(--surface\)/);
+  expect(reduced).not.toMatch(/(?:background|background-color):[^;}]*(transparent|color-mix\s*\()/);
+  // Declaration boundary so `-webkit-backdrop-filter` cannot satisfy this.
+  expect(reduced).toMatch(/(?:^|;)\s*backdrop-filter:\s*none\s*;/);
 });
