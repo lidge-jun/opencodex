@@ -127,21 +127,22 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
 
 /** One client's outcome from a fan-out sync. Absent from the list means "left alone". */
 interface ClientIntegrationSyncOutcome {
-  readonly client: "grok" | "claude-desktop";
+  readonly client: "grok" | "claude-desktop" | "mcode";
   readonly ok: boolean;
   readonly changed?: boolean;
   readonly reason?: string;
 }
 
 /**
- * Re-inject every client integration the operator has switched ON.
+ * Re-inject native clients that are switched ON and file integrations whose
+ * OpenCodex ownership record is the operator's durable opt-in.
  *
  * Only Codex used to run here, so a catalog change reached Codex and nothing else: a Grok
  * fence or a written Desktop profile kept the context windows it was created with until the
  * next `ocx start`. The startup path already gates each client on its own toggle
  * (`src/cli/index.ts`), and this is that same fan-out for the on-demand command.
  *
- * A client that is OFF is omitted from the result rather than reported as skipped — the
+ * A client that is OFF or never connected is omitted from the result rather than reported as skipped — the
  * caller has to be able to tell "not touched" from "tried and failed". A client that fails
  * does not fail the sync: Codex is the one that matters for routing, and a broken Grok file
  * should surface as a warning, not as a 500 on a command that did its main job.
@@ -188,6 +189,31 @@ async function syncEnabledClientIntegrations(
     } catch (error) {
       out.push({ client: "claude-desktop", ok: false, reason: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  try {
+    const { refreshOwnedIntegration } = await import("../../integrations/owned-refresh");
+    const result = await refreshOwnedIntegration({
+      clientId: "mcode",
+      models: async () => {
+        const { loadExportModels } = await import("./model-rows");
+        return loadExportModels(config);
+      },
+      config,
+      port,
+    });
+    if (result) {
+      out.push(result.ok
+        ? {
+            client: "mcode",
+            ok: true,
+            changed: result.changed === true,
+            ...(result.reason ? { reason: result.reason } : {}),
+          }
+        : { client: "mcode", ok: false, reason: result.reason });
+    }
+  } catch (error) {
+    out.push({ client: "mcode", ok: false, reason: error instanceof Error ? error.message : String(error) });
   }
 
   return out;

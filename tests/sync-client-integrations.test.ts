@@ -1,5 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import type { ExportModel } from "../src/clients/config-export";
 import { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } from "../src/codex/desired-state";
+import { INTEGRATION_CLIENTS } from "../src/integrations/registry";
+import { IntegrationMutationBusyError, runIntegrationMutationFlight } from "../src/integrations/mutation-flight";
+import { refreshOwnedIntegration } from "../src/integrations/owned-refresh";
+import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
+import { applyIntegration } from "../src/integrations/writer";
 import type { OcxConfig } from "../src/types";
 
 /**
@@ -9,7 +18,7 @@ import type { OcxConfig } from "../src/types";
  *
  * These pin the gate the fan-out asks and the ordering the route depends on.
  */
-describe("ocx sync fans out to the client integrations that are switched on", () => {
+describe("ocx sync fans out to enabled native clients and owned file integrations", () => {
   const base = { port: 10100, defaultProvider: "x", providers: {} } as OcxConfig;
 
   test("an absent toggle means ON — that is the shipped default, not an opt-in", () => {
@@ -48,9 +57,11 @@ describe("ocx sync fans out to the client integrations that are switched on", ()
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    // One catch per client: a broken Grok file is a warning, not a 500 on a command whose
+    expect(fn).toContain('clientId: "mcode"');
+    expect(fn).toContain("refreshOwnedIntegration");
+    // One catch per client: a broken client file is a warning, not a 500 on a command whose
     // main job (the Codex catalog) succeeded.
-    expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
+    expect(fn.match(/catch \(error\)/g)?.length).toBe(3);
     // The Desktop write gets the native context limits, same as every other Desktop
     // call site. 8b672205e threaded `nativeContextLimits` through those writers and
     // left this assertion naming the retired `providerContextCap` spelling, so the
@@ -60,4 +71,188 @@ describe("ocx sync fans out to the client integrations that are switched on", ()
     // tell "left alone" from "tried and failed", so there is no skipped state to emit.
     expect(fn).not.toContain('"skipped"');
   });
+});
+
+describe("ocx sync refreshes an already-owned MCode integration", () => {
+  const env = {} as NodeJS.ProcessEnv;
+  const config = {
+    port: 10100,
+    hostname: "127.0.0.1",
+    defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as OcxConfig;
+  const oldModels: ExportModel[] = [{
+    namespaced: "openai/gpt-5.6-sol",
+    provider: "openai",
+    id: "gpt-5.6-sol",
+    contextWindow: 272_000,
+    reasoningEfforts: ["low", "medium", "high", "xhigh"],
+  }];
+  const newModels: ExportModel[] = [{
+    namespaced: "openai/gpt-5.6-sol",
+    provider: "openai",
+    id: "gpt-5.6-sol",
+    contextWindow: 922_000,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  }];
+
+  let root: string;
+  let home: string;
+  let store: IntegrationStateStore;
+  let configPath: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ocx-mcode-auto-sync-"));
+    home = join(root, "home");
+    store = createIntegrationStateStore(join(root, "state", "integrations"));
+    const spec = INTEGRATION_CLIENTS.mcode;
+    mkdirSync(spec.detectDir(env, home), { recursive: true });
+    configPath = spec.configPath(env, home);
+    mkdirSync(dirname(configPath), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function input(models: readonly ExportModel[] | (() => Promise<readonly ExportModel[]>)) {
+    return { clientId: "mcode" as const, models, config, port: 10100, env, home, store };
+  }
+
+  test("updates context and the full max/ultra effort ladder through the real writer", async () => {
+    writeFileSync(configPath, "theme: dark\n");
+    const applied = applyIntegration(input(oldModels));
+    expect(applied.ok).toBe(true);
+
+    const refreshed = await refreshOwnedIntegration(input(newModels));
+    expect(refreshed).toEqual({ client: "mcode", ok: true, changed: true });
+
+    const document = Bun.YAML.parse(readFileSync(configPath, "utf8")) as {
+      custom_provider: { opencodex: { models: Record<string, unknown> } };
+    };
+    expect(document.custom_provider.opencodex.models["openai/gpt-5.6-sol"]).toEqual({
+      limit: { context: 922_000 },
+      thinking: { effortOptions: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    });
+    expect(document).toMatchObject({ theme: "dark" });
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["refresh", "apply"]);
+  });
+
+  test("does nothing and never loads the catalog when no ownership record exists", async () => {
+    const before = [
+      "custom_provider:",
+      "  opencodex:",
+      "    name: User-owned OpenCodex block",
+      "    models: {}",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, before);
+
+    let catalogLoads = 0;
+    expect(await refreshOwnedIntegration(input(async () => {
+      catalogLoads += 1;
+      return newModels;
+    }))).toBeNull();
+    expect(catalogLoads).toBe(0);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    expect(store.listOperations("mcode")).toHaveLength(0);
+  });
+
+  test("refuses a foreign edit without changing bytes or appending a journal row", async () => {
+    expect(applyIntegration(input(oldModels)).ok).toBe(true);
+    const recordBefore = JSON.stringify(store.readRecords().mcode);
+    const edited = readFileSync(configPath, "utf8").replace("context: 272000", "context: 123456");
+    expect(edited).not.toBe(readFileSync(configPath, "utf8"));
+    writeFileSync(configPath, edited);
+
+    const outcome = await refreshOwnedIntegration(input(newModels));
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.reason).toContain("changed after opencodex wrote it");
+    expect(readFileSync(configPath, "utf8")).toBe(edited);
+    expect(JSON.stringify(store.readRecords().mcode)).toBe(recordBefore);
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("refuses whole-file YAML drift even when the owned block itself is intact", async () => {
+    expect(applyIntegration(input(oldModels)).ok).toBe(true);
+    const recordBefore = JSON.stringify(store.readRecords().mcode);
+    const edited = `# user comment\n${readFileSync(configPath, "utf8")}`;
+    writeFileSync(configPath, edited);
+
+    const outcome = await refreshOwnedIntegration(input(newModels));
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.reason).toContain("changed after opencodex wrote it");
+    expect(readFileSync(configPath, "utf8")).toBe(edited);
+    expect(JSON.stringify(store.readRecords().mcode)).toBe(recordBefore);
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("does not recreate a managed block the user removed", async () => {
+    expect(applyIntegration(input(oldModels)).ok).toBe(true);
+    writeFileSync(configPath, "theme: dark\n");
+
+    const outcome = await refreshOwnedIntegration(input(newModels));
+    expect(outcome).toEqual({
+      client: "mcode",
+      ok: true,
+      changed: false,
+      reason: "managed block is absent; refresh did not reconnect it",
+    });
+    expect(readFileSync(configPath, "utf8")).toBe("theme: dark\n");
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("is a no-op when the owned block already matches the catalog", async () => {
+    expect(applyIntegration(input(newModels)).ok).toBe(true);
+
+    expect(await refreshOwnedIntegration(input(newModels)))
+      .toEqual({ client: "mcode", ok: true, changed: false });
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("does not recreate the client home or config when MCode was removed", async () => {
+    expect(applyIntegration(input(oldModels)).ok).toBe(true);
+    rmSync(INTEGRATION_CLIENTS.mcode.detectDir(env, home), { recursive: true, force: true });
+
+    const outcome = await refreshOwnedIntegration(input(newModels));
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.reason).toContain("mcode is not installed");
+    expect(existsSync(INTEGRATION_CLIENTS.mcode.detectDir(env, home))).toBe(false);
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+  });
+});
+
+test("the direct ocx sync command refreshes MCode instead of relying on /api/sync", async () => {
+  const src = await Bun.file(new URL("../src/cli/dispatch.ts", import.meta.url)).text();
+  const start = src.indexOf("sync: async deps =>");
+  const command = src.slice(start, src.indexOf("v2: async deps =>", start));
+  expect(command).toContain("refreshOwnedIntegration");
+  expect(command).toContain('clientId: "mcode"');
+  expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedIntegration"));
+  expect(command).toContain('synced.status !== "refused"');
+});
+
+test("refresh joins refresh but cannot swallow an explicit apply or disable", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let refreshRuns = 0;
+  const first = runIntegrationMutationFlight("mcode", "refresh", () => 1_000, async () => {
+    refreshRuns += 1;
+    await gate;
+    return "refreshed";
+  });
+  const joined = runIntegrationMutationFlight("mcode", "refresh", () => 1_001, async () => {
+    refreshRuns += 1;
+    return "should-not-run";
+  });
+
+  await expect(runIntegrationMutationFlight("mcode", "apply", () => 1_002, async () => "applied"))
+    .rejects.toBeInstanceOf(IntegrationMutationBusyError);
+  await expect(runIntegrationMutationFlight("mcode", "disable", () => 1_003, async () => "disabled"))
+    .rejects.toBeInstanceOf(IntegrationMutationBusyError);
+
+  release();
+  expect(await first).toBe("refreshed");
+  expect(await joined).toBe("refreshed");
+  expect(refreshRuns).toBe(1);
 });
