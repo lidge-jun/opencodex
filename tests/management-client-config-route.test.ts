@@ -220,7 +220,7 @@ describe("GET /api/client-config", () => {
       thinking: { effortOptions: ["minimal", "low", "high"] },
     });
     expect(provider.models["b/no-context"]).toEqual({});
-    expect(body.modelsWithoutLimits).toBeGreaterThan(0);
+    expect(body.modelsWithoutLimits).toBe(2);
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {

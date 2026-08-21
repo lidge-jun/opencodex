@@ -40,8 +40,6 @@ custom_provider:
       anthropic/claude-opus-5:
         limit:
           context: 1000000
-        thinking:
-          effortOptions: [low, medium, high, xhigh, max]
 ```
 
 The real generated model list and its known context windows and reasoning-effort ladders
