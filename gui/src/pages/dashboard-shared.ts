@@ -76,14 +76,14 @@ export interface VisionModelOption { value: string; label: string; backend: Side
 export interface WebSearchModelOption {
   value: string;
   label: string;
-  backend: SidecarBackend;
+  backend: WebSearchBackend;
   model: string;
   authSlot?: boolean;
 }
 export interface WebSearchPickerOption {
   value: string;
   label: string;
-  backend?: SidecarBackend;
+  backend?: WebSearchBackend;
   model?: string;
 }
 export interface SidecarData {
@@ -309,7 +309,7 @@ export function webSearchModelOptionsForPicker(
   serverOptions: WebSearchModelOption[] | undefined,
   models: ModelInfo[],
   current: string | undefined,
-  currentBackend?: SidecarBackend,
+  currentBackend?: WebSearchBackend,
 ): WebSearchPickerOption[] {
   if (serverOptions === undefined) {
     const legacy: WebSearchPickerOption[] = sidecarModelOptions(models);
@@ -411,10 +411,11 @@ export function webSearchSidecarSelectionForModel(
   models: ModelInfo[],
   options: WebSearchPickerOption[],
   modelId: string,
-): { backend: SidecarBackend; model: string } {
+): { backend: WebSearchBackend; model: string } {
   const option = options.find(entry => entry.value === modelId);
+  const inferred = sidecarBackendForModel(models, modelId);
   return {
-    backend: option?.backend ?? sidecarBackendForModel(models, modelId),
+    backend: option?.backend ?? (inferred === "anthropic" ? "anthropic" : "openai"),
     model: option?.model ?? modelId,
   };
 }
