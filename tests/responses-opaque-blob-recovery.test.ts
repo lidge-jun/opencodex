@@ -202,6 +202,43 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["opaque-blob-rejection"]);
   });
 
+  test("degrades a compaction blob through the generic routed-compaction recovery resend", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return outbound.length === 1 ? rejection(XAI_DECODE_ERROR) : success("resp-compact-recovered");
+    }) as typeof fetch;
+    const body = {
+      model: "first/model-a",
+      stream: false,
+      store: false,
+      input: [...reasoningReplayInput(), { type: "compaction_trigger" }],
+    };
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "thread-routed-compaction-recovery",
+      },
+      body: JSON.stringify(body),
+    }), config(), logCtx);
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(outbound).toHaveLength(2);
+    expect(hasBlob(outbound[0]!)).toBe(true);
+    expect(hasBlob(outbound[1]!)).toBe(false);
+    expect(outbound[1]!.input).toContainEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+    });
+    expect(logCtx.activeAttempt?.sendCount).toBe(2);
+    expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["opaque-blob-rejection"]);
+  });
+
   test("surfaces the second rejection after exactly one recovery attempt", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
