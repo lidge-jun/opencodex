@@ -4,16 +4,31 @@ description: Give routed models real web search and text-only models image under
 ---
 
 Routed models do not all expose hosted **web search** or native **image input**. opencodex backfills
-those capabilities with two sidecars. Each can run through a ChatGPT-login (`forward`) provider or a
-stored Anthropic OAuth provider. Sidecar errors become bounded tool results or image markers instead
-of failing the whole turn.
+those capabilities with two sidecars. Both support a ChatGPT-login (`forward`) provider or stored
+Anthropic OAuth provider; web search can additionally use stored Grok OAuth through the explicit
+`xai` backend. Sidecar errors become bounded tool results or image markers instead of failing the
+whole turn.
 
 :::note[Automatic backend selection]
-Explicit `backend` config wins. When unset, opencodex uses `anthropic` if an enabled Anthropic OAuth
-provider has an active account not marked `needsReauth`; otherwise it uses `openai`. Explicit
-`anthropic` without that credential fails closed. `openai` requires both ChatGPT login auth and an
-enabled `forward` provider.
+Explicit `backend` config wins. The two sidecars default differently when `backend` is unset:
+**web search** always defaults to `openai` — `anthropic` runs only when explicitly configured.
+**Vision** defaults to `anthropic` if an enabled Anthropic OAuth provider has an active account not
+marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
+closed. Explicit `xai` requires a usable stored Grok OAuth account and does not fall back. `openai`
+requires both ChatGPT login auth and an enabled `forward` provider.
 :::
+
+### Additional web-search backends (explicit-only)
+
+Three more web-search backends exist beyond the ChatGPT and Claude paths. Each is
+**explicit-only** — it never activates from credential presence — and **fails closed**:
+a missing credential produces no sidecar plan and the request takes the normal routed path.
+
+| Backend | Runs | Credential | Notes |
+| --- | --- | --- | --- |
+| `xai` | Grok hosted `web_search` (+ opt-in `x_search`) on `api.x.ai` Responses | Stored Grok OAuth (`ocx login xai`) | `webSearchSidecar.xSearch` enables X search with `allowedXHandles`/`excludedXHandles` (max 20, mutually exclusive) and ISO `fromDate`/`toDate`. Default model `grok-4.6`. |
+| `gemini` | `google_search` grounding on the Antigravity transport | Stored Antigravity OAuth with a discovered project (`ocx login google-antigravity`) | Default model `gemini-3.7-flash`; reasoning maps to the tiered thinking level. |
+| `exa` | Exa Search API (non-LLM result digest) | `webSearchSidecar.exaApiKey` | The key is write-only through the management API (never echoed, redacted from logs). No sidecar model applies. |
 
 ## Web-search sidecar
 
@@ -24,7 +39,8 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
 2. Runs the routed model in a small **agentic loop**. When it calls `web_search`, opencodex uses the
    selected sidecar backend: OpenAI runs hosted `web_search` with `gpt-5.6-luna` by default;
    Anthropic runs `web_search_20250305` with `claude-sonnet-5` by default. The streamed answer and
-   citations become a tool result.
+   citations become a tool result. xAI runs Grok hosted `web_search` with `grok-4.6` by default and,
+   when enabled, adds hosted `x_search` to the same request.
 3. **Loops** until the model answers or the total real-query budget reaches `maxSearchesPerTurn`
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
@@ -68,6 +84,28 @@ relevant images in words and include their source URLs.
   }
 }
 ```
+
+The explicit xAI backend uses the stored credential created by `ocx login xai`. Its optional
+`xSearch` block enables X search and may restrict it to one handle list and an ISO date range:
+
+```json
+{
+  "webSearchSidecar": {
+    "backend": "xai",
+    "model": "grok-4.6",
+    "xSearch": {
+      "enabled": true,
+      "allowedXHandles": ["xai"],
+      "fromDate": "2026-08-01",
+      "toDate": "2026-08-21"
+    }
+  }
+}
+```
+
+`allowedXHandles` and `excludedXHandles` are mutually exclusive and each accepts at most 20
+strings. Dates use `YYYY-MM-DD`. Malformed management writes return `400`; persisted malformed
+blocks fail closed at planning time instead of silently broadening the search.
 
 `minimal` reasoning is not used because the hosted backend rejects tools at that effort. A failed
 search is returned to the routed model as a bounded error result, allowing it to answer from the

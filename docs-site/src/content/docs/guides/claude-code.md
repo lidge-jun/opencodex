@@ -332,8 +332,9 @@ Both sidecars can use either backend:
 | `openai` | A small GPT model through the ChatGPT `forward` provider | A ChatGPT login and an enabled `authMode: "forward"` provider |
 | `anthropic` | Claude through stored Anthropic OAuth; web search uses `web_search_20250305` and vision sends the image to Claude for description | An enabled `adapter: "anthropic"`, `authMode: "oauth"` provider whose active stored account is not marked `needsReauth` |
 
-An explicit `backend` always wins. When it is omitted, opencodex selects `anthropic` if a usable
-stored Anthropic OAuth account exists; otherwise it selects `openai`. Explicitly selecting
+An explicit `backend` always wins. When it is omitted, the **web-search** sidecar always selects
+`openai` (`anthropic` runs only when explicitly configured), while the **vision** sidecar selects
+`anthropic` if a usable stored Anthropic OAuth account exists, otherwise `openai`. Explicitly selecting
 `anthropic` without a usable credential **fails closed**: opencodex does not silently borrow
 ChatGPT credentials or switch backends. The OpenAI backend likewise stays off without both login
 auth and a forward provider.

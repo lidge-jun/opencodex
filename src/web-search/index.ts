@@ -3,17 +3,27 @@ import { modelInList, toolChoiceToolPredicate } from "../types";
 import { isModelTextOnly } from "../vision";
 import type { SidecarSettings } from "./executor";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
+import { resolveSidecarAuth } from "../sidecar/auth";
 import { getAccountSet } from "../oauth/store";
+import { validateXaiSearchOptions, type XaiSearchOptions } from "./xai-executor";
+import type { OcxWebSearchSidecarConfig } from "../types";
 import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
 import { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
 export { runWithWebSearch } from "./loop";
 export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME };
 export { runAnthropicWebSearch, parseAnthropicSidecarSSE } from "./anthropic-executor";
+export { runXaiWebSearch, parseXaiResponsesSSE, validateXaiSearchOptions, type XaiSearchOptions } from "./xai-executor";
+export { runGeminiWebSearch, mapCcaGroundedResponse } from "./gemini-executor";
+export { runExaWebSearch, mapExaSearchResponse } from "./exa-executor";
 
 const DEFAULT_SIDECAR_MODEL = "gpt-5.6-luna";
 // Default Claude model for the anthropic-backed sidecar (used when cfg.model is unset).
 const DEFAULT_ANTHROPIC_SIDECAR_MODEL = "claude-sonnet-5";
+// Default Grok model for the xai-backed sidecar (probe-verified with hosted tools, devlog 003).
+const DEFAULT_XAI_SIDECAR_MODEL = "grok-4.6";
+// Default Gemini model for the gemini-backed sidecar (CCA grounding probe, devlog 002).
+const DEFAULT_GEMINI_SIDECAR_MODEL = "gemini-3.7-flash";
 // "low" is the lightest effort the ChatGPT backend allows with web_search ("minimal" is rejected:
 // "tools cannot be used with reasoning.effort 'minimal'") — keeps the sidecar fast/cheap.
 const DEFAULT_SIDECAR_REASONING = "low";
@@ -83,37 +93,94 @@ export interface AnthropicSidecarProvider {
  * only path that can run web_search_20250305 without a ChatGPT forward provider. Presence is decided by
  * getAccountSet + the active account's `needsReauth` marker (audit F1: getCredential alone can pick a
  * terminally-invalid account); token refresh happens later at executor time.
+ * Delegates to the shared sidecar auth module (#2188) so web-search and vision
+ * cannot drift on what "Anthropic auth present" means.
  */
 export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSidecarProvider | undefined {
-  for (const [name, prov] of Object.entries(config.providers)) {
-    if (prov.disabled === true) continue;
-    if (prov.adapter !== "anthropic" || prov.authMode !== "oauth") continue;
-    const set = getAccountSet(name);
-    const active = set?.accounts.find(a => a.id === set.activeAccountId);
-    if (active && active.needsReauth !== true) return { providerName: name, provider: prov };
-  }
+  const auth = resolveSidecarAuth(config);
+  if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
+}
+
+/**
+ * First enabled provider whose stored Grok OAuth account is active and not marked for
+ * reauth — the only credential the xai web-search executor may spend. Same account-set
+ * predicate the shared sidecar auth module applies to Anthropic.
+ */
+export function findXaiSidecarProvider(config: OcxConfig): { providerName: string; provider: OcxProviderConfig } | undefined {
+  // The stored Grok credential lives under the provider named "xai" (registry id);
+  // OAuth account sets are keyed by provider name, so the name IS the credential key.
+  const provider = config.providers["xai"];
+  if (!provider || provider.disabled === true || provider.authMode !== "oauth") return undefined;
+  const set = getAccountSet("xai");
+  const active = set?.accounts.find(account => account.id === set.activeAccountId);
+  if (active && active.needsReauth !== true) return { providerName: "xai", provider };
   return undefined;
 }
+
+/**
+ * First usable Antigravity credential holder: the "google-antigravity" provider
+ * (registry id = OAuth store key, same narrowing as findXaiSidecarProvider) whose
+ * active stored account is healthy AND carries a discovered CCA projectId — the
+ * executor cannot form the envelope without it.
+ */
+export function findGeminiSidecarProvider(config: OcxConfig): { providerName: string; provider: OcxProviderConfig } | undefined {
+  const provider = config.providers["google-antigravity"];
+  if (!provider || provider.disabled === true || provider.authMode !== "oauth") return undefined;
+  const set = getAccountSet("google-antigravity");
+  const active = set?.accounts.find(account => account.id === set.activeAccountId);
+  if (!active || active.needsReauth === true) return undefined;
+  const projectId = (active.credential as { projectId?: string } | undefined)?.projectId;
+  if (!projectId) return undefined;
+  return { providerName: "google-antigravity", provider };
+}
+
+/** Lift the persisted xSearch config block into executor options (absent block = web_search only). */
+export function xaiSearchOptionsFromConfig(cfg: Pick<OcxWebSearchSidecarConfig, "xSearch">): XaiSearchOptions {
+  const x = cfg.xSearch;
+  if (!x || x.enabled !== true) return {};
+  return {
+    xSearch: true,
+    ...(x.allowedXHandles ? { allowedXHandles: x.allowedXHandles } : {}),
+    ...(x.excludedXHandles ? { excludedXHandles: x.excludedXHandles } : {}),
+    ...(x.fromDate ? { fromDate: x.fromDate } : {}),
+    ...(x.toDate ? { toDate: x.toDate } : {}),
+  };
+}
+
+/** Every backend id the config union admits. New ids are explicit-only and inert until their executor ships. */
+export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa";
 
 /**
  * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
  * anthropic backend (web_search_20250305) is only used when explicitly configured — auto-selecting
  * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-5.6-luna)
  * to the Anthropic API.
+ * The 2188 follow-up ids (xai/gemini/exa) resolve to themselves the same explicit-only way; their
+ * planWebSearch arms stay fail-closed until each executor layer lands.
  */
 export function resolveSidecarBackend(
-  explicit: "openai" | "anthropic" | undefined,
-): "openai" | "anthropic" {
-  return explicit === "anthropic" ? "anthropic" : "openai";
+  explicit: WebSearchBackendId | undefined,
+): WebSearchBackendId {
+  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa") return explicit;
+  return "openai";
 }
 
 export interface SidecarPlan {
   /** Which executor runs the search. Anthropic does not require a forward provider. */
-  backend: "openai" | "anthropic";
+  backend: WebSearchBackendId;
   /** Present for the openai backend (ChatGPT forward path); undefined for anthropic. */
   forwardSidecar?: ResolvedOpenAiForwardSidecar;
   /** Present for the anthropic backend (stored-OAuth /v1/messages path); undefined for openai. */
   anthropicSidecar?: AnthropicSidecarProvider;
+  /** Present for the xai backend (stored Grok OAuth /v1/responses path). */
+  xaiSidecar?: { providerName: string; provider: OcxProviderConfig };
+  /** Present for the gemini backend (Antigravity CCA grounding path). */
+  geminiSidecar?: { providerName: string; provider: OcxProviderConfig };
+  /** Opt-in x_search options for the xai backend (validated at the management layer and again in the executor). */
+  xaiSearchOptions?: XaiSearchOptions;
+  /** Presence marker for the exa backend — the API key itself never rides the plan. */
+  exaConfigured?: true;
   hostedTool: Record<string, unknown>;
   settings: SidecarSettings;
   maxSearches: number;
@@ -157,7 +224,12 @@ export function planWebSearch(
   const routedModelStallTimeoutMs = resolveRoutedModelStallTimeoutMs(cfg.routedModelStallTimeoutMs);
   // Same `?? 200_000` default the server applies when threading connectTimeoutMs into the loop.
   const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
-  const anthropicSidecar = findAnthropicSidecarProvider(config);
+  // Shared auth state (#2188): presence only — backend PREFERENCE stays with
+  // resolveSidecarBackend's explicit-or-openai contract.
+  const auth = resolveSidecarAuth(config);
+  const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider }
+    : undefined;
   const backend = resolveSidecarBackend(cfg.backend);
   const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
   const stallTimeoutSec = webSearchStallTimeoutSec(
@@ -182,6 +254,61 @@ export function planWebSearch(
       anthropicSidecar,
       hostedTool: parsed._webSearch,
       settings: { model: cfg.model ?? DEFAULT_ANTHROPIC_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
+  // xAI backend (L7): explicit-only, authenticated by the STORED Grok OAuth credential.
+  // Same fail-closed stance as anthropic — an explicit choice with no usable credential
+  // produces no plan instead of borrowing another login.
+  if (backend === "xai") {
+    const xaiSidecar = findXaiSidecarProvider(config);
+    if (!xaiSidecar) return undefined;
+    const xaiOptions = xaiSearchOptionsFromConfig(cfg);
+    if (validateXaiSearchOptions(xaiOptions)) return undefined;
+    return {
+      backend: "xai",
+      xaiSidecar,
+      xaiSearchOptions: xaiOptions,
+      hostedTool: parsed._webSearch,
+      settings: { model: cfg.model ?? DEFAULT_XAI_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
+  // Gemini backend (L8): explicit-only, authenticated by the stored Antigravity CCA
+  // OAuth credential; requires the discovered projectId. Fail-closed like the others.
+  if (backend === "gemini") {
+    const geminiSidecar = findGeminiSidecarProvider(config);
+    if (!geminiSidecar) return undefined;
+    return {
+      backend: "gemini",
+      geminiSidecar,
+      hostedTool: parsed._webSearch,
+      settings: { model: cfg.model ?? DEFAULT_GEMINI_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
+  // exa (L9): explicit-only, keyed by the operator-supplied exaApiKey. The KEY never
+  // rides the plan object — core.ts reads it from config at unpack time; the plan
+  // carries only a presence marker. Fail-closed without a key.
+  if (backend === "exa") {
+    if (!cfg.exaApiKey) return undefined;
+    return {
+      backend: "exa",
+      exaConfigured: true,
+      hostedTool: parsed._webSearch,
+      settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
       maxSearches,
       routedModelStallTimeoutMs,
       stallTimeoutSec,

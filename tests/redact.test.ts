@@ -276,6 +276,18 @@ describe("redactSecretString", () => {
     expect(multipart).not.toContain("dXNlcjpwYXNz");
   });
 
+  test("exaApiKey is masked in JSON, colon, and query framings", () => {
+    for (const input of [
+      '{"exaApiKey":"exa-canary-1234567890"}',
+      "exaApiKey: exa-canary-1234567890",
+      "exaApiKey=exa-canary-1234567890&model=x",
+    ]) {
+      const redacted = redactSecretString(input);
+      expect(redacted).toContain(REDACTED_SECRET);
+      expect(redacted).not.toContain("exa-canary-1234567890");
+    }
+  });
+
   test("XML credentials are covered by tag name, identifying attribute, and attribute value", () => {
     // A qualifying tag keeps only its NAME and masks to end of line. Using the
     // closing tag as the stopping point was the same early-termination mistake

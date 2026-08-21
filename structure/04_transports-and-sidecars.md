@@ -899,11 +899,13 @@ surface is listed here so a maintainer can find the owner without grepping:
 ## Sidecars
 
 Web search and vision sidecars run only when the main request needs that capability and a usable
-sidecar authority exists. Both have two possible backends, but they select differently:
+sidecar authority exists. Vision has two possible backends; web search's config union additionally
+admits `xai`, `gemini`, and `exa`. xAI is a live explicit-only backend through stored Grok OAuth;
+Gemini and Exa remain inert until their executors ship. Selection differs per sidecar:
 
 | Sidecar | Backend selection | Default model | Activation |
 | --- | --- | --- | --- |
-| `web-search/` | Explicit configuration only: unset always resolves to the OpenAI forward path. Anthropic is never auto-selected from credential availability — doing so once sent OpenAI model ids to the Anthropic API. | `gpt-5.6-luna` (OpenAI), `claude-sonnet-5` (Anthropic) | Hosted `web_search` requested by a non-passthrough routed model. |
+| `web-search/` | Explicit configuration only: unset always resolves to the OpenAI forward path. No backend — Anthropic or otherwise — is auto-selected from credential availability (doing so once sent OpenAI model ids to the Anthropic API). Explicit xAI requires usable stored Grok OAuth and may add hosted `x_search`; explicit Gemini/Exa remain fail-closed until their executors land. | `gpt-5.6-luna` (OpenAI), `claude-sonnet-5` (Anthropic), `grok-4.6` (xAI) | Hosted `web_search` requested by a non-passthrough routed model. |
 | `vision/` | Explicit configuration wins for both backends. Only an unset backend auto-selects: Anthropic when a usable Anthropic OAuth provider exists, otherwise the OpenAI forward authority. An explicitly selected backend whose authority is unavailable produces no plan rather than falling back. | `claude-sonnet-5` (Anthropic), `gpt-5.4-mini` (OpenAI) | Input contains images for a model listed in `noVisionModels`. |
 
 The asymmetry is in the unset case only: vision may describe an image with whichever model can see

@@ -5,13 +5,13 @@ description: 通过原生 ChatGPT sidecar，让路由模型获得真实 web sear
 
 不同路由模型对托管 **Web Search** 和原生**图像输入**的支持并不相同。opencodex 通过两个
 sidecar 补齐这些能力；它们可以使用 ChatGPT 登录（`forward`）provider，也可以使用已存储的
-Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果或图像提示，不会让整个 turn
+Anthropic OAuth provider；web search 还可通过显式 `xai` 后端使用已存储的 Grok OAuth。Sidecar 错误会转换成长度受限的工具结果或图像提示，不会让整个 turn
 失败。
 
 :::note[自动选择后端]
-显式 `backend` 配置优先。省略时，如果已启用 Anthropic OAuth provider 的活动账户未标记
-`needsReauth`，则使用 `anthropic`；否则使用 `openai`。显式选择 `anthropic` 但没有可用凭据时
-会关闭失败。`openai` 同时需要 ChatGPT 登录和已启用的 `forward` provider。
+显式 `backend` 配置优先。Web search 省略时始终使用 `openai`；Vision 在存在可用 Anthropic
+OAuth 账户时使用 `anthropic`，否则使用 `openai`。显式选择 `anthropic` 或 `xai` 但没有可用凭据时
+会关闭失败且不会回退。`openai` 同时需要 ChatGPT 登录和已启用的 `forward` provider。
 :::
 
 ## Web-search sidecar
@@ -22,7 +22,8 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
    `web_search(query)` function 工具。原托管工具的选项会保留并用于 sidecar 调用。
 2. 让路由模型在一个小型 **agentic 循环**中运行。模型调用 `web_search` 时，opencodex 使用所选
    后端：OpenAI 默认以 `gpt-5.6-luna` 运行托管 `web_search`；Anthropic 默认以
-   `claude-sonnet-5` 运行 `web_search_20250305`。Streaming 答案及引用会解析为工具结果。
+   `claude-sonnet-5` 运行 `web_search_20250305`。xAI 默认以 `grok-4.6` 运行托管 `web_search`，
+   并在 `xSearch.enabled` 为 true 时把 `x_search` 加入同一请求。Streaming 答案及引用会解析为工具结果。
 3. **循环**直到模型回答，或真实查询总数达到 `maxSearchesPerTurn`（默认 3）。达到上限后会移除
    search 工具并强制生成最终答案。如果模型调用 `apply_patch` 或 shell 等真实客户端工具，当前
    turn 会结束，以便这些调用到达 Codex。

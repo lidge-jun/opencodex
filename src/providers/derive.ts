@@ -474,6 +474,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     prov.fastWire = cloneFastWire(entry.fastWire);
   }
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
+  if (prov.supportsOpenAiWebSearchToolFields === undefined && entry.supportsOpenAiWebSearchToolFields !== undefined) {
+    prov.supportsOpenAiWebSearchToolFields = entry.supportsOpenAiWebSearchToolFields;
+  }
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
   applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(entry, prov));

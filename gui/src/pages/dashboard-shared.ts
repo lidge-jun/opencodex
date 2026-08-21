@@ -71,6 +71,19 @@ export interface SidecarSetting {
   timeoutMs?: number;
 }
 export interface VisionModelOption { value: string; label: string; backend: SidecarBackend; baseline?: boolean }
+export interface WebSearchModelOption {
+  value: string;
+  label: string;
+  backend: SidecarBackend;
+  model: string;
+  authSlot?: boolean;
+}
+export interface WebSearchPickerOption {
+  value: string;
+  label: string;
+  backend?: SidecarBackend;
+  model?: string;
+}
 export interface SidecarData {
   webSearch: SidecarSetting;
   vision: SidecarSetting;
@@ -78,6 +91,10 @@ export interface SidecarData {
    *  the client falls back to the legacy provider-name list rather than showing
    *  an empty picker. */
   visionModels?: VisionModelOption[];
+  /** Server-computed runnable web-search models (#2188). Same undefined-vs-[]
+   *  contract as visionModels: an older server omits the key and the client
+   *  falls back to the legacy list; a current server's [] means none. */
+  webSearchModels?: WebSearchModelOption[];
 }
 export interface SidecarPatch {
   webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
@@ -281,6 +298,47 @@ export function sidecarModelOptions(models: ModelInfo[]) {
 }
 
 /**
+ * Server list when present, else the legacy openai+anthropic list — the same
+ * undefined-vs-[] contract visionModelOptions documents. The persisted model is
+ * grandfathered into the list so the picker can DISPLAY a now-illegal setting;
+ * the server still rejects new writes of it.
+ */
+export function webSearchModelOptionsForPicker(
+  serverOptions: WebSearchModelOption[] | undefined,
+  models: ModelInfo[],
+  current: string | undefined,
+  currentBackend?: SidecarBackend,
+): WebSearchPickerOption[] {
+  if (serverOptions === undefined) {
+    const legacy: WebSearchPickerOption[] = sidecarModelOptions(models);
+    if (current && !legacy.some(option => option.value === current)) {
+      legacy.unshift({
+        value: current,
+        label: current,
+        ...(currentBackend ? { backend: currentBackend } : {}),
+        model: current,
+      });
+    }
+    return legacy;
+  }
+  const out: WebSearchPickerOption[] = serverOptions.map(option => ({
+    value: option.value,
+    label: option.label,
+    backend: option.backend,
+    model: option.model,
+  }));
+  if (current && !out.some(option => option.value === current)) {
+    out.unshift({
+      value: current,
+      label: current,
+      ...(currentBackend ? { backend: currentBackend } : {}),
+      model: current,
+    });
+  }
+  return out;
+}
+
+/**
  * Server list when present, else the legacy openai+anthropic list.
  *
  * `undefined` and `[]` mean different things and must not be collapsed. A server that
@@ -319,6 +377,19 @@ export function shadowCallModelOptions(models: ModelInfo[], current: string | un
 
 export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
   return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+}
+
+/** Server provenance wins; catalog inference supports only legacy option rows. */
+export function webSearchSidecarSelectionForModel(
+  models: ModelInfo[],
+  options: WebSearchPickerOption[],
+  modelId: string,
+): { backend: SidecarBackend; model: string } {
+  const option = options.find(entry => entry.value === modelId);
+  return {
+    backend: option?.backend ?? sidecarBackendForModel(models, modelId),
+    model: option?.model ?? modelId,
+  };
 }
 
 /** Server eligibility is authoritative; catalog inference only supports legacy picker entries. */

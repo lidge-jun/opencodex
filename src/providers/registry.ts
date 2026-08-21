@@ -222,6 +222,8 @@ export interface ProviderRegistryEntry {
    * (and the canonical openai seed comparison keeps its exact key set).
    */
   supportsServiceTier?: boolean;
+  /** Registry default for OpenAI extended hosted web_search field support. */
+  supportsOpenAiWebSearchToolFields?: boolean;
   /** Registry default for exact model service-tier capability; explicit config keys win. */
   modelSupportsServiceTier?: Record<string, boolean>;
   /**
@@ -1006,6 +1008,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: true,
     oauthId: "xai",
     jawcodeBundle: "xai",
+    supportsOpenAiWebSearchToolFields: false,
     note: "Log in with your Grok account",
     // Parallel tool calls: officially supported and default-on per docs.x.ai function-calling
     // (verified 260709, devlog/_plan/260709_parallel_tool_calls). Streamed calls arrive whole

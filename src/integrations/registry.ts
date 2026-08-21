@@ -27,6 +27,8 @@ import {
   opencodeGlobalConfigPath,
   openclawConfigPath,
   openclawHomeDir,
+  piAgentDir,
+  piConfigPath,
   primeAgentDir,
   primeConfigPath,
   zcodeConfigPath,
@@ -79,8 +81,18 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
   },
   pi: {
     id: "pi",
-    configPath: (_env = process.env, home = homedir()) => join(home, ".pi", "agent", "models.json"),
-    detectDir: (_env = process.env, home = homedir()) => join(home, ".pi"),
+    configPath: (env = process.env, home = homedir()) => piConfigPath(env, home),
+    /*
+     * Deliberately not `piAgentDir` unconditionally. Without an override the
+     * install signal stays `~/.pi`, which is what it has always been: narrowing
+     * it to `~/.pi/agent` would flip a user who has the former without the
+     * latter from installed to absent, and this change is about honoring the
+     * override, not about redefining detection. With an override there is no
+     * parent worth testing — the variable names the agent directory itself — so
+     * that directory becomes the signal.
+     */
+    detectDir: (env = process.env, home = homedir()) =>
+      env.PI_CODING_AGENT_DIR?.trim() ? piAgentDir(env, home) : join(home, ".pi"),
   },
   omp: {
     id: "omp",

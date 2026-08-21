@@ -17,6 +17,22 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
+`ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
+server currently offers for each sidecar — the exact filtered set the dashboard picker shows
+(picker-visible rows plus the login-entitled Luna/Haiku auth slots, intersected with executor
+availability for web search, minus provably text-only models for vision). Human-readable lists
+show each model's backend in brackets. A web-search `--model` write resolves that server-offered
+row and persists its backend and model together, so switching to an Anthropic option cannot keep
+an OpenAI backend (or vice versa). Writes go to the same management route as the GUI and are
+subject to the same per-sidecar gate: web search refuses a backend/model pair outside the listed
+set (closed membership), while vision refuses only a model provably unable to see (unknown ids
+stay writable).
+
+```bash
+ocx agent sidecar web --list
+ocx agent sidecar web --model gpt-5.6-luna
+```
+
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
@@ -199,7 +215,7 @@ client applies its own defaults for those).
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
+| `pi` | `~/.pi/agent/models.json` (`PI_CODING_AGENT_DIR` wins when set; a relative value is refused) | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
 | `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE` wins over `PI_PROFILE`, even when empty; named profiles use the home-relative `PI_CONFIG_DIR` directory name and ignore `PI_CODING_AGENT_DIR`, while the default profile lets `PI_CODING_AGENT_DIR` win) | `omp-models.yaml` | none — loopback placeholder |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |

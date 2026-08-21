@@ -205,8 +205,10 @@ Images API paths and response shape expected by Codex.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master switch. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; otherwise usable stored Anthropic OAuth selects `anthropic`, then `openai`. |
-| `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI or `claude-sonnet-5` for Anthropic. Legacy explicit `gpt-5.4-mini` migrates on start. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Explicit wins; unset always resolves to `openai`. `anthropic` and `xai` run only when explicitly configured; `gemini` and `exa` remain reserved until their executors ship. |
+| `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI, `claude-sonnet-5` for Anthropic, or `grok-4.6` for xAI. Legacy explicit `gpt-5.4-mini` migrates on start. |
+| `exaApiKey?` | `string` | none | Operator key for the `exa` backend. Write-only: management reads never return the stored value. |
+| `xSearch?` | `object` | omitted | xAI-only opt-in for hosted `x_search`: `enabled`, mutually exclusive `allowedXHandles` / `excludedXHandles` arrays (maximum 20), and ISO `fromDate` / `toDate` (`YYYY-MM-DD`). |
 | `reasoning?` | `string` | `low` | Sidecar effort. `minimal` is rejected with web search. |
 | `maxSearchesPerTurn?` | `number` | `3` | Real searches allowed per main-model turn. |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only routed-model raw-body inactivity deadline. Integer 1–2147483647; every non-empty chunk resets it. |
@@ -216,7 +218,11 @@ The OpenAI backend requires a ChatGPT login and enabled ChatGPT `forward` provid
 routed replays inject main ChatGPT auth into the internal request. The Anthropic backend uses the
 active stored credential from an enabled Anthropic OAuth provider. An explicitly selected Anthropic
 backend with no usable account fails closed instead of falling back. The Anthropic executor uses its
-native `web_search_20250305` tool.
+native `web_search_20250305` tool. The xAI backend requires a usable stored Grok OAuth account, uses
+hosted `web_search`, and adds hosted `x_search` when `xSearch.enabled` is true. Malformed `xSearch`
+management input returns `400`; a malformed persisted block fails closed during planning. The
+`gemini` and `exa` lanes never activate from credential discovery or fallback; the operator must
+select them explicitly. `exaApiKey` is accepted on writes but omitted from management responses.
 
 Four clocks govern search: base `stallTimeoutSec`, `connectTimeoutMs`, routed-model inactivity, and
 hosted-search timeout. The effective bridge watchdog is the maximum plus 30 seconds. Routed stall is
@@ -227,7 +233,7 @@ an inactivity guard, not a total generation deadline.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master image-description switch. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Same explicit-first, Anthropic-credential-aware selection as web search. |
+| `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; unset prefers a usable stored Anthropic OAuth credential, else `openai`. |
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI or `claude-sonnet-5` for Anthropic. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
 | `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. Integer 1–2147483647. |

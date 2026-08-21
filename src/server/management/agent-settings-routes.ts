@@ -56,6 +56,11 @@ import {
   visionDescriberIsProvablyBlind,
   visionDescriberRejection,
 } from "./vision-sidecar-options";
+import {
+  webSearchCandidateRows,
+  webSearchModelIsRejected,
+  webSearchModelRejection,
+} from "./web-search-sidecar-options";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -1065,16 +1070,23 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const section = body[field];
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
+      // The widened union applies to the WEB-SEARCH override only (roadmap 060).
+      // Vision keeps its two-backend contract — accepting a wider id there would
+      // persist a backend the vision resolver reads as unset, silently activating
+      // a backend the operator never chose (review F1).
+      const allowedBackends = field === "webSearchSidecar"
+        ? ["openai", "anthropic", "xai", "gemini", "exa"]
+        : ["openai", "anthropic"];
       if (section.backend !== undefined && section.backend !== null
-        && section.backend !== "openai" && section.backend !== "anthropic") {
-        return jsonResponse({ error: `${field}.backend must be openai, anthropic, or null` }, 400);
+        && !allowedBackends.includes(section.backend as string)) {
+        return jsonResponse({ error: `${field}.backend must be ${allowedBackends.join(", ")}, or null` }, 400);
       }
       if (section.model !== undefined && typeof section.model !== "string") {
         return jsonResponse({ error: `${field}.model must be a string` }, 400);
       }
       // Vision override only: reject a model we can prove is blind. Unknown ids stay
-      // allowed; webSearchSidecar has no vision requirement and is left alone. Shares
-      // one policy module with /api/sidecar-settings so the two gates cannot drift.
+      // allowed. Shares one policy module with /api/sidecar-settings so the two
+      // gates cannot drift.
       if (field === "visionSidecar" && typeof section.model === "string" && section.model !== "") {
         const requested = section.model;
         const candidates = await visionCandidateRows(config);
@@ -1083,6 +1095,35 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           : config.claudeCode?.visionSidecar?.backend;
         if (visionDescriberIsProvablyBlind(config, requested, candidates, hint)) {
           return jsonResponse(visionDescriberRejection("visionSidecar.model", requested, config, candidates), 400);
+        }
+      }
+      // Web-search override: membership gate (#2188). The executor set is closed,
+      // so an id outside (runnable candidates ∪ auth slots) can never run. Same
+      // module as /api/sidecar-settings — a gate on one route and a stale copy on
+      // the other is no gate at all.
+      if (field === "webSearchSidecar"
+        && (section.model !== undefined || section.backend !== undefined)) {
+        const stored = config.claudeCode?.webSearchSidecar;
+        const effectiveBackend = section.backend === "anthropic"
+          ? "anthropic"
+          : section.backend === "openai"
+            ? "openai"
+            : section.backend === null
+              ? config.webSearchSidecar?.backend ?? "openai"
+              : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
+        const effectiveModel = section.model === ""
+          ? config.webSearchSidecar?.model
+          : typeof section.model === "string"
+            ? section.model
+            : stored?.model ?? config.webSearchSidecar?.model;
+        const candidates = await webSearchCandidateRows(config);
+        if (effectiveModel && webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
+          return jsonResponse(webSearchModelRejection(
+            "webSearchSidecar.model",
+            effectiveBackend,
+            effectiveModel,
+            candidates,
+          ), 400);
         }
       }
     }
@@ -1094,13 +1135,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         delete next[field];
         continue;
       }
-      const requested = section as { backend?: "openai" | "anthropic" | null; model?: string };
-      const override: NonNullable<OcxClaudeCodeConfig[typeof field]> = { ...next[field] };
+      // The per-field validation above guarantees vision only ever carries the two-member
+      // union; the cast is the loop's shared-shape compromise, not a wider write path.
+      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string };
+      const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
       if (requested.backend === null) delete override.backend;
-      else if (requested.backend !== undefined) override.backend = requested.backend;
+      else if (requested.backend !== undefined) override.backend = requested.backend as never;
       if (requested.model === "") delete override.model;
       else if (requested.model !== undefined) override.model = requested.model;
-      if (Object.keys(override).length > 0) next[field] = override;
+      // Indexed write across the field union collapses to an intersection; runtime
+      // validation above already guarantees the per-field shape.
+      if (Object.keys(override).length > 0) next[field] = override as never;
       else delete next[field];
     }
     if (body.enabled !== undefined) {

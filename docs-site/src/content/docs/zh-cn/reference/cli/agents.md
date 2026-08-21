@@ -157,7 +157,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | 客户端 | 规范目标路径 | 下载文件名 | 环境变量 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json`（设置了 `XDG_CONFIG_HOME` 时以其为准） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 无 - 块中携带字面值 `opencodex-loopback` |
+| `pi` | `~/.pi/agent/models.json` (设置后 `PI_CODING_AGENT_DIR` 优先；相对路径会被拒绝) | `pi-models.json` | 无 - 块中携带字面值 `opencodex-loopback` |
 | `omp` | `~/.omp/agent/models.yml`（默认路径；即使为空，`OMP_PROFILE` 也优先于 `PI_PROFILE`） | `omp-models.yaml` | 无 - 字面值 `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |

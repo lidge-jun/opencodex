@@ -18,7 +18,7 @@ const CLAUDE_USAGE = `Usage:
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
       [--compact-window <tokens|default>] [--inject-agents <on|off>]
       [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
-      [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|->]
+      [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
       [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]`;
 
 const GROK_USAGE = `Usage:

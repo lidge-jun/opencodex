@@ -128,7 +128,7 @@ export interface OcxClaudeCodeConfig {
    */
   subagentEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic"; model?: string };
+  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
   visionSidecar?: { backend?: "openai" | "anthropic"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
@@ -790,12 +790,33 @@ export interface OcxWebSearchSidecarConfig {
   /**
    * Which backend actually runs the server-side search. "openai" replays the hosted web_search via
    * the ChatGPT forward provider (gpt-mini sidecar); "anthropic" runs web_search_20250305 on a Claude
-   * model authenticated by the STORED anthropic OAuth credential. Unset resolves to "anthropic" when a
-   * usable anthropic OAuth credential exists, else "openai".
+   * model authenticated by the STORED anthropic OAuth credential. "xai" runs Grok hosted web_search
+   * and optional x_search through stored Grok OAuth. "gemini" (google_search grounding via the
+   * Antigravity CCA transport) and "exa" (non-LLM search JSON via an operator key) are explicit-only
+   * and stay inactive until their executors ship. Unset ALWAYS resolves to "openai"; no backend is ever
+   * auto-selected from credential availability (that once sent incompatible models to the
+   * Anthropic API — see resolveSidecarBackend).
    */
-  backend?: "openai" | "anthropic";
+  backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa";
   /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */
   model?: string;
+  /**
+   * Operator-supplied Exa API key for the "exa" backend. Management GET responses never echo it,
+   * and src/lib/redact.ts strips it from any logged structure or error string.
+   */
+  exaApiKey?: string;
+  /**
+   * Opt-in X (Twitter) search for the xai backend: adds the hosted x_search tool next to
+   * web_search. Limits are doc-validated at the management layer AND in the executor:
+   * handles <=20 per list, allow XOR exclude, ISO-8601 dates.
+   */
+  xSearch?: {
+    enabled?: boolean;
+    allowedXHandles?: string[];
+    excludedXHandles?: string[];
+    fromDate?: string;
+    toDate?: string;
+  };
   /** Reasoning effort for the sidecar — "minimal" (non-thinking) keeps it fast/cheap. */
   reasoning?: string;
   /** Max searches executed per main-model turn (loop guard). */
