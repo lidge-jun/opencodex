@@ -91,6 +91,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientDsh",
   "api.clientConfig.clientMcode",
   "api.clientConfig.clientZcode",
+  "integrations.tab.prime",
+  "api.clientConfig.clientPrime",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "pws.pacingRpmUnit",

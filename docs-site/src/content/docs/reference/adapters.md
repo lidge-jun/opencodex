@@ -116,6 +116,15 @@ of the HTTP retry loop.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
+  `content.parts` that is not the documented container terminates the turn with a
+  `google response contained invalid …` error naming the structural reason and the offending
+  value's type — never its contents. Absence is handled separately from corruption: an absent,
+  `null` or empty `content` or `parts` still completes the turn normally, a streaming chunk whose
+  `candidates` is absent, `null` or empty is skipped so the turn completes on a later terminal
+  frame, and a buffered response that carries no candidate at all returns
+  `google response contained no candidates`. A root `data: null` keepalive frame is still skipped as
+  padding.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.

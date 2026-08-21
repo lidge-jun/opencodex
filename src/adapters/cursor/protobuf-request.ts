@@ -4,7 +4,7 @@ import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { OcxAssistantContentPart, OcxMessage, OcxToolResultMessage } from "../../types";
 import { namespacedToolName } from "../../types";
 import type { CursorRunRequest } from "./types";
-import { isCursorExternalWireModel } from "./discovery";
+import { cursorNeedsExternalToolContinuation, isCursorExternalWireModel } from "./discovery";
 import { normalizeCursorToolResultText } from "./tool-result-normalize";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import {
@@ -793,8 +793,11 @@ function buildPreparedCursorRunRequest(
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
   // Native models resume the remembered Cursor conversation. External wire
   // models continue as userMessageAction so history-blob tool results stay
-  // visible without a ResumeAction.
-  const externalToolContinuation = lastRawIsToolResult && isCursorExternalWireModel(request.modelId);
+  // visible without a ResumeAction. Some native composer ids are also routed
+  // through the external continuation path (cursorNeedsExternalToolContinuation)
+  // because a bare resumeAction makes them continue exploring with native tools
+  // instead of answering (observed on composer-2.5; see discovery.ts).
+  const externalToolContinuation = lastRawIsToolResult && cursorNeedsExternalToolContinuation(request.modelId);
   const actionCase = (externalToolContinuation || (!lastRawIsToolResult && text.trim().length > 0))
     ? "userMessageAction"
     : "resumeAction";

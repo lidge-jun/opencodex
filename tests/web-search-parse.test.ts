@@ -164,6 +164,54 @@ describe("parseSidecarSSE trailing Sources block", () => {
     ]);
   });
 
+  test("sanitizes structured and trailing sources before returning them", async () => {
+    const text = "Answer.\n\nSources:\n" +
+      "- Credential URL: https://user:pass@private.test/path\n" +
+      "- Safe trailing URL: https://safe.test/trailing";
+    const res = sse([
+      { type: "response.completed", response: { output: [{ type: "message", content: [{
+        type: "output_text",
+        annotations: [
+          { type: "url_citation", url: "javascript:alert(1)", title: "unsafe" },
+          { type: "url_citation", url: "https://safe.test/structured", title: "bad\u0001title" },
+        ],
+        text,
+      }] }] } },
+    ]);
+
+    const out = await parseSidecarSSE(res);
+    expect(out.sources).toEqual([
+      { url: "https://safe.test/structured" },
+      { url: "https://safe.test/trailing", title: "Safe trailing URL" },
+    ]);
+    expect(out.text).toBe("Answer.");
+  });
+
+  test("strips a recognized Sources block even when every citation is rejected", async () => {
+    const out = await parseCompletedText(
+      "Answer.\n\nSources:\n- Credential URL: https://user:pass@private.test/path",
+    );
+    expect(out).toEqual({ text: "Answer.", sources: [] });
+  });
+
+  test("strips a trailing non-HTTP URI citation after rejecting it", async () => {
+    const out = await parseCompletedText(
+      "Answer.\n\nSources:\n- Unsafe: javascript:alert(1)",
+    );
+    expect(out).toEqual({ text: "Answer.", sources: [] });
+  });
+
+  test("preserves prose after a blank line following a rejected citation", async () => {
+    const out = await parseCompletedText(
+      "Answer.\n\nSources:\n- Credential URL: https://user:pass@private.test/path\n\n" +
+      "For details visit https://good.test/guide",
+    );
+    expect(out).toEqual({
+      text: "Answer.\n\nFor details visit https://good.test/guide",
+      sources: [],
+    });
+  });
+
   test("no Sources block leaves text and sources untouched", async () => {
     const text = "Just an answer mentioning https://example.com inline, no sources section.";
     const res = sse([

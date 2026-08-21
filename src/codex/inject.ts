@@ -894,7 +894,15 @@ export async function injectCodexConfig(
     });
     atomicWriteFile(CODEX_CONFIG_PATH, content);
     atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
-    markJournalInjectedState(content, profileContent);
+    markJournalInjectedState(content, profileContent, {
+      // A root override is ours only in loopback Design B when no user-owned value won.
+      injectedOpenaiBaseUrl: legacyMode || keptUserBaseUrl
+        ? null
+        : rootTomlString(content, "openai_base_url"),
+      // This is the catalog artifact selected for this injection, even when config.toml
+      // already points at that path and therefore needs no textual rewrite.
+      injectedCatalogPath: catalogPath,
+    });
   };
 
   /*
