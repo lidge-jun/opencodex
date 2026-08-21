@@ -12,6 +12,7 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { readFileSync } from "node:fs";
 
 interface WebSearchModelOption {
   value: string;
@@ -26,6 +27,7 @@ const USAGE = `Usage:
       [--prompt <text|->] [--guidance <on|off>] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
+  ocx agent roles <status|set|remove> [--file <path>] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]`;
@@ -38,15 +40,16 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   rejectArgs(args, USAGE);
-  const [v2, injection, caps, subagents, fallback, sidecars] = await Promise.all([
+  const [v2, injection, caps, subagents, roles, fallback, sidecars] = await Promise.all([
     runtimeRequest("/api/v2", {}, deps),
     runtimeRequest("/api/injection-model", {}, deps),
     runtimeRequest("/api/effort-caps", {}, deps),
     runtimeRequest("/api/subagent-models", {}, deps),
+    runtimeRequest("/api/subagent-roles", {}, deps),
     runtimeRequest("/api/subagent-model-fallback", {}, deps),
     runtimeRequest("/api/sidecar-settings", {}, deps),
   ]);
-  const result = { v2, injection, caps, subagents, fallback, sidecars };
+  const result = { v2, injection, caps, subagents, roles, fallback, sidecars };
   printData(result, wantsJson, summaryLines(result));
 }
 
@@ -119,6 +122,63 @@ async function subagents(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (models.length > 5) throw new CliUsageError("at most 5 subagent models are allowed", USAGE);
   const result = await runtimeRequest("/api/subagent-models", { method: "PUT", body: JSON.stringify({ models }) }, deps);
   printData(result, wantsJson, [`Subagent roster: ${models.join(", ") || "cleared"}`]);
+}
+
+async function readRolesDocument(deps: RuntimeApiDeps, file: string | undefined): Promise<unknown> {
+  const raw = file
+    ? readFileSync(file, "utf8")
+    : await readStdinDocument(deps);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new CliUsageError("roles JSON is invalid", USAGE);
+  }
+  if (Array.isArray(parsed)) return { roles: parsed };
+  return parsed;
+}
+
+async function readStdinDocument(deps: RuntimeApiDeps): Promise<string> {
+  const input = deps.stdinImpl ?? process.stdin;
+  if (input.isTTY) throw new CliUsageError("roles set requires --file <path> or JSON on stdin", USAGE);
+  const chunks: Buffer[] = [];
+  for await (const chunk of input) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) throw new CliUsageError("roles JSON was empty", USAGE);
+  return text;
+}
+
+async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const action = (args.shift() ?? "status").toLowerCase();
+  const wantsJson = takeFlag(args, "--json");
+  if (action === "status") {
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest("/api/subagent-roles", {}, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action === "set") {
+    const file = takeOption(args, "--file");
+    rejectArgs(args, USAGE);
+    const body = await readRolesDocument(deps, file);
+    if (!body || typeof body !== "object" || Array.isArray(body) || !("roles" in body)) {
+      throw new CliUsageError("roles JSON must be { roles: [...] } or an array", USAGE);
+    }
+    const result = await runtimeRequest("/api/subagent-roles", { method: "PUT", body: JSON.stringify(body) }, deps);
+    printData(result, wantsJson, ["Agent roles updated."]);
+    return;
+  }
+  if (action !== "remove") throw new CliUsageError(`unknown roles action ${action}`, USAGE);
+  const id = args.shift();
+  if (!id) throw new CliUsageError("role id is required", USAGE);
+  rejectArgs(args, USAGE);
+  const current = await runtimeRequest("/api/subagent-roles", {}, deps) as { roles?: Array<{ id?: string }> };
+  const next = (current.roles ?? []).filter(role => role.id !== id);
+  const result = await runtimeRequest("/api/subagent-roles", { method: "PUT", body: JSON.stringify({ roles: next }) }, deps);
+  printData(result, wantsJson, [`Removed role ${id}.`]);
 }
 
 async function fallback(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -218,6 +278,7 @@ export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = 
     else if (sub === "injection" || sub === "guidance") await injection(rest, deps);
     else if (sub === "effort") await effort(rest, deps);
     else if (sub === "subagents" || sub === "roster") await subagents(rest, deps);
+    else if (sub === "roles") await roles(rest, deps);
     else if (sub === "fallback") await fallback(rest, deps);
     else if (sub === "sidecar") await sidecar(rest, deps);
     else throw new CliUsageError(`unknown agent command ${sub}`, USAGE);

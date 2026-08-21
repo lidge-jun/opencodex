@@ -69,6 +69,11 @@ import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, pu
 import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels, fetchGrokCandidateModels, buildClaudeDesktopState } from "./shared";
+import {
+  parseSubagentRoles,
+  routedOnV2Warnings,
+  unionRoleModelsIntoRoster,
+} from "../../codex/agent-roles";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { readManagementJsonBody, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
@@ -653,6 +658,63 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
     return jsonResponse({ ok: true, applied: chosen, catalogRefresh });
+  }
+
+  if (url.pathname === "/api/subagent-roles" && req.method === "GET") {
+    const models = await fetchAllModels(config);
+    const disabled = new Set(config.disabledModels ?? []);
+    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+    const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
+    const nativeModels = listCatalogNativeSlugs()
+      .filter(slug => !disabled.has(slug))
+      .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
+    const routedModels = uniqueCatalogModelsForPublicList(models)
+      .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
+      .filter(m => ![...disabled].some(stored => (
+        stored === m.namespaced || slugEquals(stored, m.provider, m.model)
+      )));
+    return jsonResponse({
+      roles: config.subagentRoles ?? [],
+      efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
+      available: [...nativeModels, ...routedModels],
+    });
+  }
+  if (url.pathname === "/api/subagent-roles" && req.method === "PUT") {
+    let parsedBody: unknown;
+    try {
+      parsedBody = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+      return jsonResponse({ error: "body must be a JSON object" }, 400);
+    }
+    const body = parsedBody as { roles?: unknown };
+    if (!("roles" in body)) return jsonResponse({ error: "body.roles is required" }, 400);
+    const parsed = parseSubagentRoles(body.roles);
+    if (!parsed.ok) return jsonResponse({ error: parsed.error, index: parsed.index }, 400);
+
+    const warnings: string[] = [];
+    const union = unionRoleModelsIntoRoster(config.subagentModels, parsed.roles);
+    if (union.droppedRoleIds.length > 0) {
+      warnings.push(`Featured roster truncated to 5 models; dropped role id(s): ${union.droppedRoleIds.join(", ")}`);
+    }
+    warnings.push(...routedOnV2Warnings(parsed.roles, config));
+
+    config.subagentRoles = parsed.roles;
+    config.subagentModels = union.models;
+    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+    save(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    await syncClaudeAgentDefsBestEffort();
+    await autoApplyDesktopBestEffort();
+    return jsonResponse({
+      ok: true,
+      roles: config.subagentRoles,
+      warnings,
+      catalogRefresh,
+    });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.

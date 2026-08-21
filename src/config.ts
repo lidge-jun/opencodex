@@ -80,6 +80,7 @@ import {
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
+import { parseSubagentRoles, salvageSubagentRoles } from "./codex/agent-roles";
 import {
   COST4_RATE_KEYS,
   isValidCost4Rate,
@@ -1277,6 +1278,8 @@ const configSchema = z.object({
   injectionModel: z.string().optional().catch(undefined),
   injectionEffort: z.string().optional().catch(undefined),
   syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
+  // Salvage element by element. A malformed neighbour must not wipe the catalog.
+  subagentRoles: z.unknown().optional(),
   // Per-primary-model fallback chains. Values must be non-empty string arrays;
   // malformed entries degrade to undefined rather than rejecting the whole config.
   subagentModelFallbackByModel: z.record(
@@ -2024,6 +2027,36 @@ function warnDegradedClaudeSubagentEffort(rawParsed: unknown): void {
   }
 }
 
+function normalizeSubagentRoles(config: OcxConfig, rawParsed: unknown): OcxConfig {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "subagentRoles")) return config;
+  const salvaged = salvageSubagentRoles(raw.subagentRoles);
+  const normalized = { ...config };
+  if (salvaged.roles === undefined) delete normalized.subagentRoles;
+  else normalized.subagentRoles = salvaged.roles;
+  return normalized;
+}
+
+function subagentRolesLoadWarnings(rawParsed: unknown): string[] {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "subagentRoles")) return [];
+  return salvageSubagentRoles(raw.subagentRoles).warnings;
+}
+
+function warnDegradedSubagentRoles(rawParsed: unknown): void {
+  for (const warning of subagentRolesLoadWarnings(rawParsed)) {
+    console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+  }
+}
+
+function subagentRolesError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "subagentRoles")) return null;
+  const parsed = parseSubagentRoles(raw.subagentRoles);
+  if (parsed.ok) return null;
+  return `schema_invalid: ${parsed.error}`;
+}
+
 function malformedUpstreamHostCircuitThresholdWarning(rawParsed: unknown): string | null {
   const raw = rawConfigRecord(rawParsed);
   if (!raw || !Object.hasOwn(raw, "upstreamHostCircuitThreshold")) return null;
@@ -2203,11 +2236,12 @@ export function loadConfig(): OcxConfig {
       warnDegradedApiKeys(parsed, config);
       warnDegradedCodexAccountPriorities(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
+      warnDegradedSubagentRoles(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
       warnDegradedAgentTaskRecovery(parsed);
-      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
+      return withRefreshedCostOverlays(normalizeSubagentRoles(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -2227,11 +2261,12 @@ export function loadConfig(): OcxConfig {
       warnDegradedApiKeys(parsed, config);
       warnDegradedCodexAccountPriorities(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
+      warnDegradedSubagentRoles(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
       warnDegradedAgentTaskRecovery(parsed);
-      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
+      return withRefreshedCostOverlays(normalizeSubagentRoles(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed), parsed));
     }
     // Still failing, but if every complaint is about one or more named entries
     // in an independent section, drop exactly those and keep the rest. Falling
@@ -2247,11 +2282,12 @@ export function loadConfig(): OcxConfig {
         warnDegradedApiKeys(parsed, config);
         warnDegradedCodexAccountPriorities(parsed, config);
         warnDegradedClaudeSubagentEffort(parsed);
+        warnDegradedSubagentRoles(parsed);
         warnDegradedNativeSubagentConfig(parsed, config);
         warnDegradedCodexAccountPicker(parsed);
         warnDegradedUpstreamHostCircuitThreshold(parsed);
         warnDegradedAgentTaskRecovery(parsed);
-        return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
+        return withRefreshedCostOverlays(normalizeSubagentRoles(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed), parsed));
       }
     }
     // Merge couldn't fix it — truly broken config
@@ -2300,13 +2336,14 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   // ordinary save persists the normalized absence.
   const syncDisabledReason = nativeSubagentSyncDisabledReason(config, rawParsed);
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
-  const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
+  const normalized = normalizeSubagentRoles(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed), rawParsed);
   const warnings = configPlaceholderWarnings(normalized);
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
     warnings.push(`claudeCode.subagentEffort ignored: expected one of ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}`);
   }
+  warnings.push(...subagentRolesLoadWarnings(rawParsed));
   warnings.push(...malformedNativeSubagentFields(rawParsed).map(malformedNativeSubagentFieldWarning));
   const pickerWarning = malformedCodexAccountPickerWarning(rawParsed);
   if (pickerWarning) warnings.push(pickerWarning);
@@ -2506,6 +2543,7 @@ function loopbackListenerPortError(value: unknown): string | null {
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
+    ?? subagentRolesError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
     ?? agentTaskRecoveryError(value)
@@ -2518,6 +2556,11 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const result = configSchema.safeParse(value);
   if (result.success) {
     const config = normalizeApiKeyIds(result.data as OcxConfig);
+    if (value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, "subagentRoles")) {
+      const parsedRoles = parseSubagentRoles((value as { subagentRoles?: unknown }).subagentRoles);
+      if (!parsedRoles.ok) return { ok: false, error: `schema_invalid: ${parsedRoles.error}` };
+      config.subagentRoles = parsedRoles.roles;
+    }
     return { ok: true, config };
   }
   return { ok: false, error: schemaDiagnosticsError(result.error) };

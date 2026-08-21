@@ -239,6 +239,22 @@ export interface OcxClientIntegrationsConfig {
   "claude-desktop"?: boolean;
 }
 
+/** User-authored specialist the Codex parent may spawn by name. */
+export interface OcxSubagentRole {
+  /** `[a-z][a-z0-9-]{0,31}`, unique within the catalog. */
+  id: string;
+  /** 1..240 chars; parent "when to use" this specialist. */
+  description: string;
+  /** Bare native or `provider/model`. */
+  model: string;
+  /** Codex reasoning ladder; optional. */
+  effort?: string;
+  /** 1..8000 chars; child's developer prompt. */
+  developerInstructions: string;
+  /** Default true. Disabled roles stay in config but are omitted from guidance. */
+  enabled?: boolean;
+}
+
 export interface OcxConfig {
   port: number;
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
@@ -265,6 +281,13 @@ export interface OcxConfig {
    * into a selector-qualified group; Codex still advertises only the first 5 visible rows.
    */
   subagentModels?: string[];
+  /**
+   * Named specialist roles the parent may spawn: id, when-to-use description,
+   * model, optional effort, and child developer instructions. Max 8 roles and
+   * 5 unique enabled models (the spawn picker window). Do not store
+   * `model_fallback` here — use `subagentModelFallbackByModel`.
+   */
+  subagentRoles?: OcxSubagentRole[];
   /**
    * Optional full picker ordering for the Codex model catalog, independent of the
    * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
@@ -360,7 +383,9 @@ export interface OcxConfig {
    * remain unchanged),
    * `{{effort}}` -> injectionEffort, `{{roster}}` -> the resolved sub-agent roster
    * block ("" when nothing resolves), `{{fallback}}` -> the configured subagent
-   * model fallback guidance block ("" when unset).
+   * model fallback guidance block ("" when unset), `{{roles}}` -> the compact
+   * enabled role catalog ("" when none). A custom prompt replaces the built-in
+   * body; include `{{roles}}` to keep the catalog.
    */
   injectionPrompt?: string;
   /**

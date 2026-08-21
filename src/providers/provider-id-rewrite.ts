@@ -73,6 +73,12 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
   routeListAt("disabledModels");
   routeListAt("subagentModels");
   routeListAt("subagentModelFallback");
+  if (config.subagentRoles) {
+    for (const role of config.subagentRoles) {
+      const next = route(role.model);
+      if (next) role.model = next;
+    }
+  }
 
   const scalarOwners: Array<[Record<string, unknown> | undefined, string]> = [
     [config as unknown as Record<string, unknown>, "injectionModel"],

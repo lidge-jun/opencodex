@@ -356,6 +356,86 @@ describe("opencodex config defaults", () => {
     warnSpy.mockRestore();
   });
 
+  test("config candidates validate subagentRoles id, uniqueness, and length rules", () => {
+    const base = getDefaultConfig();
+    const role = {
+      id: "reviewer",
+      description: "PR review",
+      model: "anthropic/claude-sonnet-5",
+      effort: "high",
+      developerInstructions: "Review the diff for regressions.",
+    };
+    expect(validateConfigCandidate({ ...base, subagentRoles: [role] })).toMatchObject({
+      ok: true,
+      config: { subagentRoles: [expect.objectContaining({ id: "reviewer", enabled: true })] },
+    });
+    expect(validateConfigCandidate({ ...base, subagentRoles: [] })).toMatchObject({
+      ok: true,
+      config: { subagentRoles: [] },
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      subagentRoles: [{ ...role, id: "Reviewer" }],
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("subagentRoles"),
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      subagentRoles: [role, { ...role, id: "reviewer", description: "duplicate" }],
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("subagentRoles"),
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      subagentRoles: Array.from({ length: 9 }, (_, i) => ({ ...role, id: `role-${i}` })),
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("subagentRoles"),
+    });
+  });
+
+  test("malformed persisted subagentRoles are dropped with a warning without wiping config", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+      subagentRoles: [
+        {
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        },
+        { id: "BAD", description: "nope", model: "gpt-5.6-luna", developerInstructions: "x" },
+      ],
+    });
+
+    const config = loadConfig();
+    const diagnostics = readConfigDiagnostics();
+
+    expect(config.subagentRoles).toEqual([
+      expect.objectContaining({ id: "reviewer", model: "anthropic/claude-sonnet-5" }),
+    ]);
+    expect(config).toMatchObject({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
+    });
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      warnings: [expect.stringContaining("subagentRoles")],
+    });
+    expect(backupNames()).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   test("a blank hostname already on disk degrades without wiping providers or keys", () => {
     // Regression: rejecting a blank hostname in the schema made loadConfig fail twice
     // (getDefaultConfig() has no hostname key, so the merge-defaults repair cannot fix

@@ -192,8 +192,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "agent",
-    usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...",
-    summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.",
+    usage: "ocx agent <status|injection|effort|subagents|roles|fallback|sidecar> ...",
+    summary: "Manage headless multi-agent, roster, roles, effort, injection, and sidecar settings.",
   },
   {
     name: "observe",

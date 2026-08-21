@@ -27,7 +27,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxSubagentRole, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -62,6 +62,7 @@ import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, ty
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { subagentFallbackGuidanceText } from "../../codex/subagent-model-fallback";
+import { renderRolesCatalog } from "../../codex/agent-roles";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -212,6 +213,7 @@ export interface MultiAgentGuidanceOptions {
   subagentModels?: string[];
   subagentModelFallback?: string[];
   injectionPrompt?: string;
+  subagentRoles?: OcxSubagentRole[];
 }
 
 
@@ -271,6 +273,7 @@ export async function multiAgentGuidanceText(
     subagentModels,
     subagentModelFallback,
     injectionPrompt,
+    subagentRoles,
   } = options;
   const activeAccountNamespace = codexAccountNamespace?.length
     ? codexAccountNamespace
@@ -362,30 +365,39 @@ export async function multiAgentGuidanceText(
         .join(", ")}`);
     }
     const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
-    if (!injectionModel && roster === "" && fallbackGuidance === "") return null;
+    const rolesText = renderRolesCatalog(subagentRoles ?? []);
+    if (!injectionModel && roster === "" && fallbackGuidance === "" && rolesText === "") return null;
     if (injectionPrompt) {
       // Bare ids must resolve to a unique/current-route candidate. Preserve the legacy raw
       // fallback only for explicit routed/account-qualified ids.
       const promptModel = preferred?.model
         ?? (injectionModel?.includes("/") ? injectionModel : undefined);
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
+      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance, rolesText)}</multi_agent_mode>`;
     }
-    if (!preferred && roster === "" && fallbackGuidance === "") return null;
-    let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
+    if (!preferred && roster === "" && fallbackGuidance === "" && rolesText === "") return null;
+    const preamble = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
       + "When setting either override, set fork_turns to \"none\" "
       + "(or a positive turn count such as \"3\"; full-history forks reject overrides) "
       + "and make the task message self-contained.";
+    let preferredText = "";
     if (preferred) {
-      text += ` Preferred sub-agent: model "${preferred.model}"`
+      preferredText = ` Preferred sub-agent: model "${preferred.model}"`
         + (injectionEffort ? `, reasoning_effort "${injectionEffort}"` : "")
         + " — use it unless the user names another.";
     }
-    text += fallbackGuidance;
-    text += roster;
+    const specialist = (catalog: string): string =>
+      catalog ? ` When spawning, use a named specialist: ${catalog}.` : "";
+    let text = preamble + preferredText + fallbackGuidance + specialist(rolesText) + roster;
     if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
-      // Roster is the only unbounded part — drop it before breaking the budget.
-      text = text.slice(0, text.length - roster.length);
+      text = preamble + preferredText + fallbackGuidance + specialist(rolesText);
+    }
+    if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
+      for (const descBudget of [80, 40, 0]) {
+        const shortened = renderRolesCatalog(subagentRoles ?? [], { maxDescriptionChars: descBudget });
+        text = preamble + preferredText + fallbackGuidance + specialist(shortened);
+        if (text.length <= V2_GUIDANCE_CHAR_BUDGET) break;
+      }
     }
     return `<multi_agent_mode>${text}</multi_agent_mode>`;
   }
@@ -401,12 +413,13 @@ export async function multiAgentGuidanceText(
 
 export const V2_GUIDANCE_CHAR_BUDGET = 700;
 
-export function applyInjectionPlaceholders(prompt: string, model?: string, effort?: string, roster?: string, fallback?: string): string {
+export function applyInjectionPlaceholders(prompt: string, model?: string, effort?: string, roster?: string, fallback?: string, roles?: string): string {
   return prompt
     .replaceAll("{{model}}", model ?? "")
     .replaceAll("{{effort}}", effort ?? "")
     .replaceAll("{{roster}}", roster ?? "")
-    .replaceAll("{{fallback}}", fallback ?? "");
+    .replaceAll("{{fallback}}", fallback ?? "")
+    .replaceAll("{{roles}}", roles ?? "");
 }
 
 

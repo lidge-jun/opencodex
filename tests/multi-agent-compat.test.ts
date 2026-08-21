@@ -755,6 +755,113 @@ describe("multiAgentGuidanceText", () => {
     expect(text).toContain("kimi/k3");
   });
 
+  test("v2 built-in guidance includes enabled role id and model", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          effort: "high",
+          developerInstructions: "Review the diff.",
+          enabled: true,
+        }],
+      },
+    );
+    expect(text).toContain("reviewer");
+    expect(text).toContain("anthropic/claude-sonnet-5");
+    expect(text).toContain("named specialist");
+    expect(text).toContain("fork_turns");
+  });
+
+  test("custom injectionPrompt without {{roles}} does not leak the catalog", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "anthropic/claude-sonnet-5", efforts: ["high"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        injectionPrompt: "Use {{model}} only.",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        }],
+      },
+    );
+    expect(text).toContain("Use anthropic/claude-sonnet-5 only.");
+    expect(text).not.toContain("reviewer");
+    expect(text).not.toContain("named specialist");
+  });
+
+  test("custom injectionPrompt with {{roles}} substitutes the catalog", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "gpt-5.6-luna", efforts: ["high"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "gpt-5.6-luna",
+        injectionPrompt: "ROLES={{roles}}",
+        subagentRoles: [{
+          id: "explorer",
+          description: "read-only search",
+          model: "gpt-5.6-luna",
+          developerInstructions: "Search the tree.",
+        }],
+      },
+    );
+    expect(text).toContain("explorer (gpt-5.6-luna) for read-only search");
+    expect(text).not.toContain("{{roles}}");
+  });
+
+  test("v1 ignores roles even at max", async () => {
+    codexHomeFixture(V2_OFF);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({
+        reasoning: "max",
+        tools: [{ name: "spawn_agent", namespace: "agents" }, { name: "send_input", namespace: "agents" }],
+      }),
+      {
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        }],
+      },
+    );
+    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).not.toContain("reviewer");
+    expect(text).not.toContain("named specialist");
+  });
+
+  test("stale catalog still returns null even when roles are configured", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "anthropic/claude-sonnet-5", efforts: ["high"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        }],
+      },
+      { collectCatalogState: () => ({ state: "stale" }) },
+    );
+    expect(text).toBeNull();
+  });
+
   test("v1 ignores injectionPrompt and custom prompt does not fire a bare v2 surface", async () => {
     codexHomeFixture(V2_ON);
     const custom = "CUSTOM RULES model={{model}} effort={{effort}}{{roster}}";

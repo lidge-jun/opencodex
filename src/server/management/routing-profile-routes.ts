@@ -177,6 +177,11 @@ function migrateProfileModelReferences(
   if (config.subagentModels) {
     config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
   }
+  if (config.subagentRoles) {
+    for (const role of config.subagentRoles) {
+      role.model = migrateAgentReference(role.model);
+    }
+  }
   if (config.subagentModelFallback) {
     config.subagentModelFallback = [...new Set(config.subagentModelFallback.map(migrateAgentReference))];
   }
