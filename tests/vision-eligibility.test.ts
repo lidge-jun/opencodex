@@ -4,6 +4,7 @@ import type { OcxConfig } from "../src/types";
 import {
   BASELINE_VISION_MODELS,
   isVisionEligibleModel,
+  isChatVisionProviderUsable,
   modelAcceptsImageInput,
   visionBackendForCandidate,
   visionEligibleModelOptions,
@@ -243,6 +244,53 @@ describe("vision eligibility core", () => {
     const matches = options.filter((o) => o.value === BASELINE_VISION_MODELS.anthropic);
     expect(matches).toHaveLength(1);
     expect(matches[0]?.baseline).toBe(true);
+  });
+
+  test("chat usability rejects missing env-backed keys", () => {
+    const previous = process.env.VISION_ELIGIBILITY_MISSING;
+    delete process.env.VISION_ELIGIBILITY_MISSING;
+    try {
+      expect(isChatVisionProviderUsable("missing-env", {
+        adapter: "openai-chat", baseUrl: "https://example.test", apiKey: "${VISION_ELIGIBILITY_MISSING}",
+      })).toBe(false);
+      expect(isChatVisionProviderUsable("missing-google-env", {
+        adapter: "google", baseUrl: "https://example.test", apiKey: "$VISION_ELIGIBILITY_MISSING",
+      })).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.VISION_ELIGIBILITY_MISSING;
+      else process.env.VISION_ELIGIBILITY_MISSING = previous;
+    }
+  });
+
+  test("chat usability only allows supported OAuth accounts, API keys, and openai-chat keyless local", () => {
+    expect(isChatVisionProviderUsable("xai", {
+      adapter: "openai-chat", baseUrl: "https://xai.example", authMode: "oauth",
+    })).toBe(false);
+    expect(isChatVisionProviderUsable("not-oauth", {
+      adapter: "openai-chat", baseUrl: "https://example.test", authMode: "oauth", apiKey: "stale",
+    })).toBe(false);
+    expect(isChatVisionProviderUsable("google", {
+      adapter: "google", baseUrl: "https://google.example", authMode: "local", keyOptional: true,
+    })).toBe(false);
+    expect(isChatVisionProviderUsable("local", {
+      adapter: "openai-chat", baseUrl: "http://127.0.0.1:1234/v1", authMode: "local",
+    })).toBe(true);
+    expect(isChatVisionProviderUsable("local", {
+      adapter: "openai-chat", baseUrl: "https://example.test", apiKeyPool: [{ key: "pool-key" }],
+    })).toBe(true);
+  });
+
+  test("chat options preserve provider identity and qualify every chat candidate", () => {
+    const config = configWithProviders({
+      first: { adapter: "openai-chat", baseUrl: "https://first.test/v1", apiKey: "first-key" },
+      second: { adapter: "openai-chat", baseUrl: "https://second.test/v1", apiKey: "second-key" },
+    });
+    const options = visionEligibleModelOptions(config, [
+      { provider: "first", id: "same-model", inputModalities: ["text", "image"] },
+      { provider: "second", id: "same-model", inputModalities: ["text", "image"] },
+    ], ["chat"]);
+    expect(options.map(option => option.value)).toEqual(["first/same-model", "second/same-model"]);
+    expect(options.map(option => option.label)).toEqual(["first / same-model", "second / same-model"]);
   });
 
   test("8. backend routing excludes image-capable rows with no executor", () => {

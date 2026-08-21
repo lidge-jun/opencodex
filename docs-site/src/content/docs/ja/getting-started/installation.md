@@ -5,7 +5,8 @@ description: opencodex(ocx)プロキシと前提条件をインストールし�
 
 opencodex をインストールすると同じ実行ファイルを指す `ocx` と `opencodex` コマンドが一緒に提供されます。
 どちらも Bun ベースの小さなローカル HTTP サーバーを実行します。モデルリクエストはルーティングで選ばれたプロバイダーに
-転送され、必要に応じて vision とウェブ検索のサイドカーが ChatGPT ログインを使うこともあります。
+転送されます。Vision サイドカーは ChatGPT ログイン経由の OpenAI、OAuth 経由の Anthropic、または
+明示的な `provider/model` を使う Vision 専用の Chat backend に対応します。
 
 ## 前提条件
 

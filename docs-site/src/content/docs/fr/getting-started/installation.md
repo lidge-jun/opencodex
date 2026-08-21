@@ -5,8 +5,8 @@ description: Installez le proxy opencodex (ocx), ses prérequis et vérifiez qu'
 
 opencodex installe deux commandes équivalentes, `ocx` et `opencodex`. Toutes deux lancent le même petit
 serveur HTTP local, fondé sur Bun. Les requêtes de modèles sont envoyées au fournisseur choisi par le
-routage. Les services auxiliaires facultatifs de vision et de recherche web peuvent également utiliser votre connexion
-ChatGPT lorsqu’un modèle routé en a besoin.
+routage. La vision peut utiliser OpenAI via votre connexion ChatGPT, Anthropic via OAuth ou le backend Chat
+réservé à la vision avec une cible explicite `provider/model` ; la recherche web utilise les backends dédiés.
 
 ## Prérequis
 

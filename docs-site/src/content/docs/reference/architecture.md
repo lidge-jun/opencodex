@@ -62,7 +62,7 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
    seven adapters. Responses passthrough relays the native body, Cursor runs its bidirectional
    `runTurn` transport, and translated adapters build/fetch/parse an upstream request.
 6. For routed models with a hosted `web_search` tool, `web-search/` exposes a synthetic function,
-   executes the real search through the configured backend (the OpenAI/ChatGPT sidecar or Anthropic),
+   executes the real search through the configured OpenAI/ChatGPT or Anthropic backend,
    feeds results back to the routed model, and repeats within the configured loop limit. This loop
    supports only the standard HTTP path; adapters that implement `runTurn`, such as Cursor, bypass it.
 7. `bridge.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal

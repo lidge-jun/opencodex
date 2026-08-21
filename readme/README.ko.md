@@ -198,7 +198,7 @@ opencodex는 두 가지 동작을 분리해서 유지합니다:
 - **Codex가 동작하는 모든 곳에서.** Codex CLI, TUI, App, SDK에 자동으로 주입됩니다. 라우팅된 모델이 네이티브 모델처럼 Codex 모델 선택기에 나타납니다.
 - **알맞은 모델에 위임.** 대시보드나 config에서 최대 5개의 라우팅/네이티브 모델을 Codex 서브에이전트 선택기에 노출해, 복잡한 작업은 reasoning 모델로, 빠른 작업은 저렴한 모델로 보낼 수 있습니다. v2 멀티에이전트 표면(GPT-5.6 Sol/Terra)에서는 프록시가 간결한 위임 가이드를 주입합니다. 선호 서브에이전트 모델·effort(`injectionModel` / `injectionEffort`), 노출된 모델 로스터와 각 모델이 지원하는 effort 사다리, 그리고 크로스모델 `spawn_agent` 오버라이드를 적용하는 `fork_turns` 규칙까지. 알려진 제한: 네이티브 부모가 라우팅 자식을 스폰하면 작업 본문이 백엔드 암호화 상태로 도착해 유실될 수 있습니다([#92](https://github.com/lidge-jun/opencodex/issues/92)) — 안정적인 크로스 프로바이더 위임에는 v1 표면을 쓰세요. 문구를 직접 쓰고 싶다면 `injectionPrompt`에 `{{model}}` / `{{effort}}` / `{{roster}}` 플레이스홀더를 넣으면 됩니다.
 - **프리뷰 게이트된 OpenAI rollout에 대비.** GPT-5.6 Sol/Terra/Luna의 effort 사다리를 보존합니다. Direct/Multi는 372k Codex 계약을, OpenAI API와 OpenRouter는 1.05M metadata를 사용합니다.
-- **어떤 모델에도 초능력을.** OpenAI가 아닌 모델도 ChatGPT 로그인 위에서 도는 `gpt-5.4-mini` sidecar로 실제 웹 검색과 이미지 이해를 사용합니다.
+- **Web 검색과 vision sidecar.** Web 검색은 OpenAI/Anthropic을 사용하며, vision은 구성된 provider를 통한 명시적 Chat backend(`provider/model`)도 지원합니다. 자세한 내용은 [sidecar 가이드](https://opencodex.me/guides/sidecars/)를 참조하세요.
 - **이미지를 네이티브로 생성.** Codex의 독립형 `image_gen` 도구는 생성할 때 `POST /v1/images/generations`, 편집할 때 `POST /v1/images/edits`를 사용합니다. Responses의 hosted `image_generation` 도구와는 별개입니다.
 - **무슨 일이 일어나는지 보이게.** 웹 대시보드가 프로바이더, OAuth 상태, 모델 선택, upstream이 보고한 cached/cache-write 토큰 수를 포함한 실시간 요청 로그를 보여줍니다 — 왜 요청이 실패했는지 더는 추측하지 않아도 됩니다.
 - **백그라운드 실행.** 시스템 서비스(launchd / systemd / Task Scheduler)로 설치하면 부팅 시 자동 시작되어 신경 쓸 필요가 없습니다.

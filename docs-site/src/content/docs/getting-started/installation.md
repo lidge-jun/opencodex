@@ -5,7 +5,7 @@ description: Install the opencodex (ocx) proxy, its prerequisites, and verify it
 
 opencodex installs two equivalent command names, `ocx` and `opencodex`. Both launch the same small
 local HTTP server (built on Bun). Model requests go to the provider selected by routing; optional
-vision and web-search sidecars can also use your ChatGPT login when a routed model needs them.
+Vision sidecars can use OpenAI via your ChatGPT login, Anthropic via OAuth, or the vision-only Chat backend with an explicit `provider/model` target. See the [sidecar guide](/guides/sidecars/).
 
 ## Prerequisites
 

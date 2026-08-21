@@ -368,8 +368,6 @@ La recherche web et la description d'images avec OAuth Anthropic réutilisent le
 d'empreintes précédent. Testez néanmoins ces fonctions avec votre compte et votre charge de travail avant de vous y fier
 pour de longues exécutions sans surveillance.
 
-<!-- TODO(WP5 GUI): Add the sidecar settings-screen walkthrough after the GUI controls ship. -->
-
 ## Effort de raisonnement
 
 Le paramètre `/effort` de Claude Code est conservé sur l'ensemble de l'adaptateur :

@@ -10,6 +10,7 @@
 import type { OcxConfig } from "../../types";
 import { findAnthropicVisionProvider, type AnthropicVisionProvider } from "../../vision";
 import {
+  isChatVisionProviderUsable,
   modelAcceptsImageInput,
   visionEligibleModelOptions,
   type VisionCandidateModel,
@@ -21,7 +22,8 @@ import { pickerVisibleSidecarCandidates } from "../../sidecar/candidates";
 import { resolveSidecarAuth } from "../../sidecar/auth";
 
 /**
- * Backends whose executor could actually run: openai forward, anthropic OAuth.
+ * Backends whose executor could actually run: openai forward, anthropic OAuth,
+ * chat/google provider with usable auth.
  *
  * `anthropicSidecar` is REQUIRED rather than defaulted. `findAnthropicVisionProvider`
  * reads the OAuth account store from disk, and a default argument made every helper
@@ -37,9 +39,20 @@ export function enabledVisionBackends(
   // provider keyed "openai" — same predicate the runtime sidecar resolver uses.
   if (listOpenAiForwardSidecarCandidates(config).length > 0) backends.push("openai");
   if (anthropicSidecar) backends.push("anthropic");
+  // The chat describer needs a configured openai-chat/google provider with usable
+  // auth — same predicate the runtime chat sidecar resolver uses.
+  if (hasUsableChatVisionProvider(config)) backends.push("chat");
   // Neither side resolvable (fresh install, no login): fall back to both so the
   // picker is populated rather than empty, matching the permissive-unknown rule.
   return backends.length > 0 ? backends : ["openai", "anthropic"];
+}
+
+/** Any configured chat/google provider the chat sidecar can actually execute. */
+function hasUsableChatVisionProvider(config: OcxConfig): boolean {
+  return Object.entries(config.providers ?? {}).some(([providerName, provider]) =>
+    (provider.adapter === "openai-chat" || provider.adapter === "google")
+    && isChatVisionProviderUsable(providerName, provider),
+  );
 }
 
 /**

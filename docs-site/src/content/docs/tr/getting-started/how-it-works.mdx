@@ -90,9 +90,10 @@ istekleri Codex'in yerel çoklu ajan rehberliğini korur.
 
 4. **Vizyon sidecar'ı (isteğe bağlı)** — yönlendirilen model
    `provider.noVisionModels` listesinde yer alıyorsa ve istek bir görsel
-   taşıyorsa, opencodex her görseli yapılandırılmış ChatGPT vizyon sidecar'ı ile
-   tanımlar ve metinle değiştirir; böylece salt metin bir model bile görsel
-   hakkında akıl yürütebilir. Bkz. [Sidecar'lar](/tr/guides/sidecars/).
+   taşıyorsa, opencodex her görseli yapılandırılmış vision arka ucuyla — ChatGPT oturumuyla OpenAI,
+   OAuth ile Anthropic veya açık bir `provider/model` hedefi kullanan yalnızca vision için Chat backend'i —
+   tanımlar ve metinle değiştirir; böylece salt metin bir model bile görsel hakkında akıl yürütebilir.
+   Bkz. [Sidecar'lar](/tr/guides/sidecars/).
 
 5. **Doğrudan geçiş hızlı yolu (Passthrough fast path)** — adaptör bir Responses
    doğrudan geçişi ise (`openai-responses` veya `azure-openai`), opencodex

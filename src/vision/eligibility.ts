@@ -25,16 +25,23 @@ import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../gen
 import { nativeInputModalities } from "../codex/catalog/metadata";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import { enrichProviderFromRegistry } from "../providers/derive";
+import { resolveActiveProviderApiKey } from "../providers/api-keys";
+import { isOAuthProvider } from "../oauth";
+import { getAccountSet } from "../oauth/store";
 
-/** The two wire protocols `planVisionSidecar` can actually dispatch to. */
-export type VisionSidecarBackend = "openai" | "anthropic";
+/** The wire protocols `planVisionSidecar` can actually dispatch to. */
+export type VisionSidecarBackend = "openai" | "anthropic" | "chat";
 
 /**
  * Default entry per backend: cheap, image-capable, and present in every deployment. Offered
  * whenever its side is enabled, and withheld only when that provider explicitly lists it as a
  * model the sidecar describes FOR — never merely because a metadata table stayed silent.
+ *
+ * The chat side has no universal baseline: it dispatches through a CONFIGURED chat/google
+ * provider, and no canonical provider exists to name. Chat rows therefore come only from
+ * catalog/configured models, never from a fabricated default.
  */
-export const BASELINE_VISION_MODELS: Record<VisionSidecarBackend, string> = {
+export const BASELINE_VISION_MODELS: Record<"openai" | "anthropic", string> = {
   openai: "gpt-5.6-luna",
   anthropic: "claude-haiku-4-5",
 };
@@ -55,6 +62,33 @@ export interface VisionModelOption {
 }
 
 type EnrichedProviderCache = Map<string, OcxProviderConfig>;
+
+/**
+ * Whether a configured provider can actually execute a chat vision sidecar.
+ * OAuth is usable only for a supported OAuth provider with a healthy active account;
+ * keyless mode is intentionally limited to openai-chat local-compatible servers.
+ */
+export function isChatVisionProviderUsable(providerName: string, provider: OcxProviderConfig): boolean {
+  if (provider.disabled === true) return false;
+  if (provider.adapter !== "openai-chat" && provider.adapter !== "google") return false;
+  if (provider.authMode === "oauth") {
+    if (!isOAuthProvider(providerName)) return false;
+    const accountSet = getAccountSet(providerName);
+    const active = accountSet?.accounts.find(account => account.id === accountSet.activeAccountId);
+    return active !== undefined && active.needsReauth !== true;
+  }
+  if (resolveActiveProviderApiKey(provider)) return true;
+  if (provider.adapter === "openai-chat" && (provider.authMode === "local" || provider.keyOptional === true)) return true;
+  return false;
+}
+
+export function isChatVisionCandidateUsable(
+  config: Pick<OcxConfig, "providers">,
+  providerName: string,
+): boolean {
+  const provider = config.providers?.[providerName];
+  return provider !== undefined && isChatVisionProviderUsable(providerName, provider);
+}
 
 function advertisesImageInput(modalities: readonly string[] | undefined): boolean | undefined {
   if (!modalities || modalities.length === 0) return undefined;
@@ -163,12 +197,19 @@ export function visionBackendForCandidate(
   // executor to name, no catalog row qualifies; the side's baseline is added separately and
   // keeps the picker populated. Narrowing here never widens the write gate, which is a
   // different predicate (`modelAcceptsImageInput`) and still treats unknown as allowed.
-  if (anthropicProviderName === undefined) return undefined;
-  return candidate.provider === anthropicProviderName ? "anthropic" : undefined;
+  if (anthropicProviderName !== undefined && candidate.provider === anthropicProviderName) return "anthropic";
+  // A chat-side row is reachable only through its configured chat/google adapter with
+  // usable auth — the same predicate the runtime chat sidecar resolver uses. A routed
+  // row whose provider is absent, disabled, or keyless must not be offered, because
+  // selecting it would fail at describe time rather than at pick time.
+  const configured = config.providers?.[candidate.provider];
+  if (!configured) return undefined;
+  const chatLike = configured.adapter === "openai-chat" || configured.adapter === "google";
+  return chatLike && isChatVisionProviderUsable(candidate.provider, configured) ? "chat" : undefined;
 }
 
 function baselineCandidate(
-  backend: VisionSidecarBackend,
+  backend: "openai" | "anthropic",
   anthropicProviderName: string | undefined,
 ): VisionCandidateModel {
   return {
@@ -194,9 +235,9 @@ function baselineCandidate(
  * and is the only input to rejection. Absence from this list must never imply
  * rejection — an unknown id stays eligible via the undefined → eligible fallback.
  *
- * De-duplication is by BARE model id, first eligible row wins. Two providers of
- * the same adapter family can expose the same id; they resolve to the same
- * backend, and only `value` reaches the client, so first-wins costs nothing.
+ * Chat rows are provider-qualified because the selected provider is part of the
+ * runtime resolution identity. This also makes same-id rows from different
+ * providers distinct instead of silently first-wins.
  */
 export function visionEligibleModelOptions(
   config: Pick<OcxConfig, "providers">,
@@ -219,8 +260,13 @@ export function visionEligibleModelOptions(
     const backend = visionBackendForCandidate(config, candidate, anthropicProviderName);
     if (!backend || !enabled.has(backend)) continue;
     if (!isVisionEligibleModelWithCache(config, candidate, enrichedProviders)) continue;
-    if (byValue.has(candidate.id)) continue;
-    byValue.set(candidate.id, { value: candidate.id, label: candidate.id, backend });
+    const value = backend === "chat" ? `${candidate.provider}/${candidate.id}` : candidate.id;
+    if (byValue.has(value)) continue;
+    byValue.set(value, {
+      value,
+      label: backend === "chat" ? `${candidate.provider} / ${candidate.id}` : candidate.id,
+      backend,
+    });
   }
 
   const order = (option: VisionModelOption) =>

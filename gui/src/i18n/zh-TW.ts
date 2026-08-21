@@ -205,6 +205,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.backendAuto": "自動",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",
+  "dash.backendChat": "聊天 API",
   "dash.sidecarSaved": "附屬設定已儲存。將在下一個請求時生效。",
   "dash.sidecarSaveFailed": "儲存附屬設定失敗。",
   "dash.injectionLabel": "子代理委託",

@@ -239,8 +239,6 @@ Claude 入站的路由重放会把主 ChatGPT 登录附加到内部请求，因�
 Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例，但在用于长时间无人值守任务前，
 仍应使用你的账户和实际负载进行充分 soak test。
 
-<!-- TODO(WP5 GUI): GUI 控件完成后补充 sidecar 设置页面操作说明。 -->
-
 ## 推理强度
 
 Claude Code 的 `/effort` 设置会完整保留并传递给适配器：

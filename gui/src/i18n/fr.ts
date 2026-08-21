@@ -310,6 +310,7 @@ export const fr: Record<TKey, string> = {
   "dash.backendAuto": "Auto",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",
+  "dash.backendChat": "API Chat",
   "dash.sidecarSaved": "Paramètres des services auxiliaires enregistrés. Ils s’appliqueront à la prochaine requête.",
   "dash.sidecarSaveFailed": "Échec de l’enregistrement des paramètres des services auxiliaires.",
   "dash.injectionLabel": "Délégation aux sous-agents",

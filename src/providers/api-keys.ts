@@ -7,7 +7,7 @@
  * A provider with a legacy bare `apiKey` is seeded into a one-entry pool on first touch.
  */
 import { createHash } from "node:crypto";
-import { saveConfigPreservingClaudeCode } from "../config";
+import { resolveEnvValue, saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 export interface ProviderApiKeyInfo {
@@ -59,6 +59,24 @@ function activeEntryId(provider: OcxProviderConfig): string | null {
   const pool = provider.apiKeyPool ?? [];
   if (pool.length === 0) return null;
   return (pool.find(e => e.key === provider.apiKey) ?? pool[0]!).id;
+}
+
+/**
+ * Resolve the non-mutating active credential for a provider.
+ *
+ * `provider.apiKey` is the active mirror, while `apiKeyPool` may contain the
+ * complete set of slots. Match that mirror to its pool entry instead of
+ * assuming the first slot is active. Environment references are resolved only
+ * for the returned value; the provider config and pool are never changed.
+ */
+export function resolveActiveProviderApiKey(provider: OcxProviderConfig): string | undefined {
+  const pool = provider.apiKeyPool ?? [];
+  const active = provider.apiKey !== undefined
+    ? pool.find(entry => entry.key === provider.apiKey)
+    : undefined;
+  const candidate = active?.key ?? provider.apiKey ?? pool[0]?.key;
+  const resolved = resolveEnvValue(candidate);
+  return sanitizeApiKeyValue(resolved);
 }
 
 export function listProviderApiKeys(config: OcxConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {

@@ -85,7 +85,7 @@ ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i 
 - **Kombolar (Combos)** — Sağlayıcılar arasında yedekli (failover) veya ağırlıklı round-robin ile çalışan tek bir sanal model kimliği. [Kombo rehberine](https://opencodex.me/guides/combos/) bakın.
 - **Herhangi bir modelde alt ajanlar** — v1/v2 yüzey kontrolü ve yedekleme zincirleriyle Codex'in alt ajan seçicisinde yönlendirilen modelleri öne çıkarın. [Alt ajan rehberine](https://opencodex.me/guides/sub-agent-surface/) bakın.
 - **Bir kez giriş yapın, API anahtarını atlayın** — xAI, Anthropic ve Kimi için OAuth; veya `codex login` iletme, anahtar yapıştırma veya `${ENV_VAR}` referansları kullanma.
-- **Web araması ve görsel yan araçları (sidecars)** — OpenAI dışı modeller, ChatGPT girişiniz üzerinden bir sidecar aracılığıyla gerçek web araması ve görsel anlama yeteneği kazanır.
+- **Web araması ve görsel sidecar'ları** — Web araması OpenAI/Anthropic kullanır; vision ayrıca yapılandırılmış bir sağlayıcı üzerinden açık Chat backend'ini (`provider/model`) destekler. [Sidecar kılavuzuna](https://opencodex.me/guides/sidecars/) bakın.
 - **Ne olduğunu görün** — Panel; sağlayıcıları, OAuth durumunu, model seçimini ve önbellek jeton sayılarıyla canlı istek günlüğünü gösterir.
 - **Temiz çıkış, sıfır kalıntı** — `ocx stop` Codex'i orijinal yapılandırmasına geri döndürür.
 

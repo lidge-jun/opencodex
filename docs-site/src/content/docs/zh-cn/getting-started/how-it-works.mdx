@@ -48,8 +48,9 @@ Sol/Terra/Luna 三个模型和 `gpt-5.4-mini`。仪表盘可以从原生或已�
    token 作为 bearer key,从而让现有的 adapter 无需改动即可完成认证。
 
 4. **Vision sidecar(可选)** —— 如果已路由的模型被列在 `provider.noVisionModels` 中,且
-   请求携带了图像，opencodex 会通过你的 ChatGPT 登录凭据，使用已配置的 vision sidecar 描述
-   每张图像并将其替换为文本，让纯文本模型仍可对图像进行推理。
+   请求携带了图像，opencodex 会使用已配置的 vision 后端描述每张图像：OpenAI 使用 ChatGPT 登录，
+   Anthropic 使用 OAuth，或使用带明确 `provider/model` 目标、仅用于 Vision 的 Chat 后端；然后将图像替换为
+   文本，让纯文本模型仍可对图像进行推理。
    参见 [Sidecar](/zh-cn/guides/sidecars/)。
 
 5. **直通快速路径** —— 对于 Responses 直通 adapter（`openai-responses` 或 `azure-openai`），

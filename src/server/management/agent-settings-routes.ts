@@ -1073,13 +1073,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const section = body[field];
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
-      // The widened union applies to the WEB-SEARCH override only (roadmap 060).
-      // Vision keeps its two-backend contract — accepting a wider id there would
-      // persist a backend the vision resolver reads as unset, silently activating
-      // a backend the operator never chose (review F1).
+      // Web search and vision intentionally expose different backend sets.
       const allowedBackends = field === "webSearchSidecar"
         ? ["openai", "anthropic", "xai", "gemini", "exa"]
-        : ["openai", "anthropic"];
+        : ["openai", "anthropic", "chat"];
       if (section.backend !== undefined && section.backend !== null
         && !allowedBackends.includes(section.backend as string)) {
         return jsonResponse({ error: `${field}.backend must be ${allowedBackends.join(", ")}, or null` }, 400);
@@ -1138,9 +1135,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         delete next[field];
         continue;
       }
-      // The per-field validation above guarantees vision only ever carries the two-member
-      // union; the cast is the loop's shared-shape compromise, not a wider write path.
-      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string };
+      // Validation above guarantees the backend belongs to this field's union.
+      const requested = section as {
+        backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | "chat" | null;
+        model?: string;
+      };
       const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
       if (requested.backend === null) delete override.backend;
       else if (requested.backend !== undefined) override.backend = requested.backend as never;

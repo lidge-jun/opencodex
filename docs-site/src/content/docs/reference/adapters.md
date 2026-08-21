@@ -106,8 +106,10 @@ of the HTTP retry loop.
 
 ## `google`
 
-**Targets:** Google **Gemini**, **Vertex AI**, and Antigravity **Cloud Code Assist**. AI Studio uses
-`/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
+**Targets:** Google **Gemini**, **Vertex AI**, and Antigravity **Cloud Code Assist** through Google's
+native adapter. AI Studio uses `/v1beta/models/{model}:streamGenerateContent`; the other modes use
+ their native Google endpoints. This is separate from `openai-chat`, which targets OpenAI-compatible
+`POST {baseUrl}/chat/completions`.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
 
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →

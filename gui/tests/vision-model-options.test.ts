@@ -70,9 +70,9 @@ test("a server-supplied vision backend wins when the catalog cannot identify its
     { value: model, label: model, backend: "anthropic" },
   ], [], undefined);
 
-  // This documents the old save-path result: catalog inference alone defaults
-  // to OpenAI when there is no matching model row.
-  expect(sidecarBackendForModel([], model)).toBe("openai");
+  // Catalog inference alone cannot name a backend for an unknown model. An
+  // unresolved result must never silently persist a guessed backend.
+  expect(sidecarBackendForModel([], model)).toBe("unresolved");
   expect(visionSidecarBackendForModel([], options, model)).toBe("anthropic");
 });
 
@@ -85,7 +85,19 @@ test("an older server with no option list cannot rewrite the persisted anthropic
 
   expect(options[0]).toMatchObject({ value: model, backend: "anthropic" });
   expect(visionSidecarBackendForModel([], options, model)).toBe("anthropic");
-  expect(sidecarBackendForModel([], model)).toBe("openai");
+  expect(sidecarBackendForModel([], model)).toBe("unresolved");
+});
+
+test("a legacy fallback keeps chat on the current option even when the catalog has the same id", () => {
+  const model = "shared-vision-model";
+  const options = visionModelOptions(undefined, [
+    { id: model, provider: "openai", namespaced: model },
+  ], model, "chat");
+
+  // The catalog row is only a legacy fallback suggestion. The persisted chat backend must win
+  // for the current option, otherwise selecting it sends backend:null and reverts to auto.
+  expect(options[0]).toMatchObject({ value: model, backend: "chat" });
+  expect(visionSidecarBackendForModel([], options, model)).toBe("chat");
 });
 
 test("an authoritative empty list still keeps the configured model and its backend", () => {
@@ -108,4 +120,19 @@ test("a server web-search auth-slot option keeps its backend without a catalog r
     backend: "anthropic",
     model,
   });
+});
+
+test("an ambiguous bare id is unresolved while an exact namespaced id wins", () => {
+  const shared: ModelInfo[] = [
+    { id: "shared", provider: "openai", namespaced: "openai/shared" },
+    { id: "shared", provider: "anthropic", namespaced: "anthropic/shared" },
+  ];
+  expect(sidecarBackendForModel(shared, "shared")).toBe("unresolved");
+  expect(sidecarBackendForModel(shared, "anthropic/shared")).toBe("anthropic");
+});
+
+test("a non-OpenAI and non-Anthropic catalog provider resolves to chat", () => {
+  const chat: ModelInfo = { id: "vision-chat", provider: "google", namespaced: "google/vision-chat" };
+  expect(sidecarBackendForModel([chat], "google/vision-chat")).toBe("chat");
+  expect(sidecarBackendForModel([chat], "vision-chat")).toBe("chat");
 });

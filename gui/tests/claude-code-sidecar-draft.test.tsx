@@ -117,6 +117,29 @@ test("Inherit → Auto stays Auto and enables the sidecar model input", async ()
   await act(async () => { root.unmount(); });
 });
 
+test("Chat is available only for the Vision override", async () => {
+  const { root, host } = await mountSettings();
+  const [webSearchTrigger, visionTrigger] = sidecarBackendTriggers(host);
+
+  await act(async () => { webSearchTrigger!.click(); });
+  expect([...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+    .some(option => option.textContent?.includes("Chat API"))).toBe(false);
+  const webInherit = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+    .find(option => option.textContent?.includes("Use main setting"));
+  expect(webInherit).toBeTruthy();
+  await act(async () => { webInherit!.click(); });
+
+  await act(async () => { visionTrigger!.click(); });
+  expect([...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+    .some(option => option.textContent?.includes("Chat API"))).toBe(true);
+  const visionInherit = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+    .find(option => option.textContent?.includes("Use main setting"));
+  expect(visionInherit).toBeTruthy();
+  await act(async () => { visionInherit!.click(); });
+
+  await act(async () => { root.unmount(); });
+});
+
 test("Empty Auto draft keeps model input enabled until Inherit is chosen", async () => {
   const { root, host, getState } = await mountSettings();
   const [webSearchTrigger] = sidecarBackendTriggers(host);

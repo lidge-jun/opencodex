@@ -2728,6 +2728,15 @@ async function handleResponsesInner(
   const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
+    const visionProviderFetch = visionPlan.backend === "chat" && visionPlan.chatSidecar
+      ? providerFetch(visionPlan.chatSidecar.provider, options.codexWsRuntimeIdentity, {
+        providerName: visionPlan.chatSidecar.providerName,
+        modelId: visionPlan.chatSidecar.model,
+      })
+      : providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        providerName: route.providerName,
+        modelId: route.modelId,
+      });
     await describeImagesInPlace(
       parsed,
       visionPlan,
@@ -2735,6 +2744,7 @@ async function handleResponsesInner(
       options.abortSignal,
       recordSidecarOutcome,
       translatorBudget,
+      visionProviderFetch,
     );
   } else if (isModelTextOnly(route.provider, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar

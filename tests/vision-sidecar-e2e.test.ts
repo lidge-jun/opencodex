@@ -66,6 +66,23 @@ function serveSidecar(onRequest: (req: Request, bodyText: string) => void) {
   });
 }
 
+/** Fake chat-completions vision sidecar: records the planned provider request. */
+function serveChatVisionSidecar(record: (bodyText: string) => void) {
+  return Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(req) {
+      record(await req.text());
+      const sse = [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: CAPTION } }] })}`,
+        "",
+        "data: [DONE]",
+        "",
+      ].join("\n");
+      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+}
+
 /** Fake text-only upstream (openai-chat wire): records the forwarded body. */
 function serveUpstream(record: (bodyText: string) => void) {
   return Bun.serve({
@@ -147,6 +164,49 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     expect(stripImagesInPlace(parsed)).toBe(false);
     expect(JSON.stringify(parsed._rawBody)).not.toContain("input_image");
     expect(JSON.stringify(parsed._rawBody)).toContain("[image omitted:");
+  });
+
+  test("chat vision sidecar uses the chat provider executor identity, not the routed provider", async () => {
+    let routedBody = "";
+    let chatBody = "";
+    upstream = serveUpstream(b => { routedBody = b; });
+    sidecar = serveChatVisionSidecar(b => { chatBody = b; });
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "routed", openaiProviderTierVersion: 2,
+      providers: {
+        routed: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "routed-key",
+          noVisionModels: ["blind-model"],
+        },
+        chatvision: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${sidecar.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "chat-key",
+          models: ["vision-model"],
+        },
+      },
+      visionSidecar: { enabled: true, backend: "chat", model: "chatvision/vision-model" },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(baseRequest("routed/blind-model")),
+      });
+      expect(res.status).toBe(200);
+      expect(JSON.parse(chatBody).model).toBe("vision-model");
+      expect(chatBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(routedBody).toContain(CAPTION);
+      expect(routedBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("noVisionModels request fires the sidecar and forwards the caption instead of the image", async () => {

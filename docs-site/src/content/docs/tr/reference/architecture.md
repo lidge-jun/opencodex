@@ -72,8 +72,8 @@ devreder:
    gövdeyi iletir, Cursor çift yönlü `runTurn` aktarımını çalıştırır ve çevrilen
    adaptörler bir yukarı akış isteği oluşturur/getirir/ayrıştırır.
 6. Barındırılan bir `web_search` aracına sahip yönlendirilen modeller için
-   `web-search/` sentetik bir fonksiyon sunar, gerçek aramayı ChatGPT sidecar'ı
-   aracılığıyla yürütür, sonuçları yönlendirilen modele geri besler ve
+   `web-search/` sentetik bir fonksiyon sunar, gerçek aramayı yapılandırılmış OpenAI/ChatGPT veya Anthropic
+   backend'i aracılığıyla yürütür, sonuçları yönlendirilen modele geri besler ve
    yapılandırılmış döngü sınırı içinde tekrarlar.
 7. `bridge.ts` Responses SSE veya JSON üretir. `server/request-log.ts` ve
    `usage/` yanıtı değiştirmeden uç durumu, gecikmeyi, sağlayıcı/model

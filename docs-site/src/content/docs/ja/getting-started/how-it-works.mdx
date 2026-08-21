@@ -69,8 +69,9 @@ Codex は OpenAI **Responses API** を使います。opencodex は HTTP と Serv
    パススルーアダプターは進みません。
 
 4. **Vision サイドカー(任意)** — ルーティングされたモデルが `provider.noVisionModels` に列挙されており
-   リクエストに画像が含まれる場合、opencodex は設定された ChatGPT vision サイドカーで各画像を説明した
-   後テキストに置き換えます。これによりテキスト専用モデルでも該当画像を推論できます。
+   リクエストに画像が含まれる場合、opencodex は設定された vision backend（ChatGPT ログイン経由の OpenAI、
+   OAuth 経由の Anthropic、または明示的な `provider/model` を使う Vision 専用の Chat backend）で各画像を
+   説明した後、テキストに置き換えます。これによりテキスト専用モデルでも該当画像を推論できます。
    [サイドカー](/ja/guides/sidecars/)を参照してください。
 
 5. **パススルーの高速経路** — Responses パススルーアダプター(`openai-responses` または

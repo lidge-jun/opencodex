@@ -306,6 +306,7 @@ export const zh: Record<TKey, string> = {
   "dash.backendAuto": "自动",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",
+  "dash.backendChat": "Chat API",
   "dash.sidecarSaved": "附属设置已保存。将在下一个请求时生效。",
   "dash.sidecarSaveFailed": "保存附属设置失败。",
   "dash.injectionLabel": "子代理委托",
