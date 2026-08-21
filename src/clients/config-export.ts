@@ -937,10 +937,10 @@ export interface McodeGeneratedConfig {
 
 /**
  * ZCode's `~/.zcode/v2/config.json` provider entry (observed schema, validated
- * live against ZCode 3.7.7). `kind: "anthropic"` selects the Anthropic
- * Messages protocol, which the proxy serves at `/v1/messages`. `apiKeyRequired`
- * keeps ZCode's UI from prompting for a key it does not need on loopback; the
- * serialized key is always the non-secret loopback placeholder.
+ * live against ZCode 3.7.7 / 3.8.1). `kind: "openai-compatible"` selects the
+ * OpenAI Chat Completions protocol, which the proxy serves at `/v1/chat/completions`.
+ * `apiKeyRequired` keeps ZCode's UI from prompting for a key it does not need on
+ * loopback; the serialized key is always the non-secret loopback placeholder.
  */
 export interface ZcodeModelEntry {
   name?: string;
@@ -950,7 +950,7 @@ export interface ZcodeModelEntry {
 
 export interface ZcodeProviderBlock {
   name: "OpenCodex";
-  kind: "anthropic";
+  kind: "openai-compatible";
   enabled: true;
   source: "custom";
   options: {
@@ -1298,10 +1298,10 @@ function buildMcodeClientConfig(ctx: ExportContext): McodeGeneratedConfig {
 }
 
 /**
- * ZCode dials the Anthropic Messages surface, so `baseURL` is the proxy origin
- * without the `/v1` suffix (ZCode appends `/v1/messages` itself — the same
- * shape its builtin Z.ai providers use). Model ids are the proxy's canonical
- * `provider/id` selectors, which `/v1/messages` resolves directly. Context
+ * ZCode dials the OpenAI Chat Completions surface (`openai-compatible`), which
+ * appends `/chat/completions` to `baseURL`. We supply `baseURL` with the `/v1`
+ * suffix so requests land on `/v1/chat/completions`. Model ids are the proxy's canonical
+ * `provider/id` selectors, which `/v1/chat/completions` resolves directly. Context
  * limits follow the authoritative-window rule: a model without one ships
  * without `limit` rather than guessing. Modalities are ZCode's observed
  * `text`-floor vocabulary; image-capable rows advertise image input.
@@ -1330,12 +1330,12 @@ function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig {
     provider: {
       [OPENCODE_PROVIDER_ID]: {
         name: "OpenCodex",
-        kind: "anthropic",
+        kind: "openai-compatible",
         enabled: true,
         source: "custom",
         options: {
           apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
-          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, ""),
+          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, "") + "/v1",
           apiKeyRequired: true,
         },
         models,
