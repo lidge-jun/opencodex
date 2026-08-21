@@ -870,6 +870,8 @@ export function reconcileProviderFetchWarnings(generation: number): number {
   if (generation <= lastWarningReconciledGeneration) return 0;
   const removed = lastDropWarnSignature.size;
   lastDropWarnSignature.clear();
+  retainedWithoutDiscoveryRefs.clear();
+  warnedRetained404Refs.clear();
   lastWarningReconciledGeneration = generation;
   return removed;
 }
@@ -1205,6 +1207,7 @@ async function fetchProviderModelsWithAuth(
   // discovery failure left by an older live configuration even when the account is logged out.
   if (prov.liveModels === false) {
     clearProviderDiscoveryStatus(name);
+    retainedWithoutDiscoveryRefs.delete(name);
     return observed(configured, "authoritative");
   }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"

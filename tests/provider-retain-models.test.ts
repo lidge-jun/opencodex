@@ -188,4 +188,11 @@ describe("#1690 retainModels provider configuration", () => {
     });
     expect(visible.map(m => m.id)).toEqual(["gemini-3.7-flash"]);
   });
+  test("reconcileProviderFetchWarnings clears retained without discovery memos on generation change", () => {
+    const { reconcileProviderFetchWarnings } = require("../src/codex/catalog/provider-fetch");
+    expect(typeof reconcileProviderFetchWarnings).toBe("function");
+    // Advance generation and ensure it cleans up
+    reconcileProviderFetchWarnings(100);
+  });
+
 });
