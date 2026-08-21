@@ -131,6 +131,29 @@ function workBuddyHeadersFromProvider(provider: OcxProviderConfig): Record<strin
   return authHeaders;
 }
 
+/** Merge base adapter headers with WorkBuddy auth using case-insensitive replacement. */
+export function mergeWorkBuddyRequestHeaders(
+  baseHeaders: Record<string, string> | undefined,
+  authHeaders: Record<string, string>,
+): Record<string, string> {
+  const merged = new Headers();
+  if (baseHeaders) {
+    for (const [name, value] of Object.entries(baseHeaders)) {
+      merged.set(name, value);
+    }
+  }
+  for (const [name, value] of Object.entries(authHeaders)) {
+    merged.set(name, value);
+  }
+  merged.set("Content-Type", "application/json");
+  merged.set("Accept", "text/event-stream");
+  const out: Record<string, string> = {};
+  merged.forEach((value, name) => {
+    out[name] = value;
+  });
+  return out;
+}
+
 /**
  * WorkBuddy console proxy adapter. Imports the desktop OAuth session, forces upstream
  * streaming (non-stream requests return error 11101), and sanitizes WorkBuddy-only SSE noise.
@@ -152,14 +175,10 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       const body = JSON.parse(baseReq.body as string) as Record<string, unknown>;
       body.model = resolveWorkBuddyUpstreamModel(String(body.model ?? parsed.modelId));
       body.stream = true;
-      const baseHeaders = (baseReq.headers ?? {}) as Record<string, string>;
-      const authHeaders = workBuddyHeadersFromProvider(provider);
-      const headers: Record<string, string> = {
-        ...baseHeaders,
-        ...authHeaders,
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      };
+      const headers = mergeWorkBuddyRequestHeaders(
+        baseReq.headers as Record<string, string> | undefined,
+        workBuddyHeadersFromProvider(provider),
+      );
       return {
         url: WORKBUDDY_UPSTREAM_CHAT_URL,
         method: "POST",
@@ -200,6 +219,9 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       budget: TranslatorBudget,
       tierMetadata?: AdapterTierMetadata,
     ) {
+      // Upstream rejects non-stream requests with WorkBuddy error 11101, so the wire
+      // always streams; drain the sanitized SSE through parseStream for callers that
+      // requested a non-streaming completion.
       const events = [];
       for await (const event of base.parseStream(response, budget, tierMetadata)) {
         events.push(event);

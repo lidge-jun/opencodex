@@ -7,6 +7,7 @@ import { deriveOAuthIds } from "../src/providers/derive";
 import {
   createWorkBuddyAdapter,
   findWorkBuddySseRecordEnd,
+  mergeWorkBuddyRequestHeaders,
   resolveWorkBuddyUpstreamModel,
   sanitizeWorkBuddySseBlock,
   WORKBUDDY_MODELS,
@@ -111,11 +112,10 @@ describe("workbuddy adapter buildRequest", () => {
     const adapter = createWorkBuddyAdapter(minimalProvider());
     const request = adapter.buildRequest(minimalRequest(), { inboundWire: "chat" });
     expect(request.url).toBe(WORKBUDDY_UPSTREAM_CHAT_URL);
-    expect(request.headers?.Accept).toBe("text/event-stream");
-    expect(request.headers?.["Content-Type"]).toBe("application/json");
-    expect(request.headers?.Authorization).toBe("Bearer stored-access-token");
-    expect(request.headers?.["X-User-Id"]).toBe("desktop-user");
-    expect(request.headers?.["X-Domain"]).toBe("personal.example.cn");
+    expect(request.headers?.Accept ?? request.headers?.accept).toBe("text/event-stream");
+    expect(request.headers?.Authorization ?? request.headers?.authorization).toBe("Bearer stored-access-token");
+    expect(request.headers?.["X-User-Id"] ?? request.headers?.["x-user-id"]).toBe("desktop-user");
+    expect(request.headers?.["X-Domain"] ?? request.headers?.["x-domain"]).toBe("personal.example.cn");
     const body = JSON.parse(String(request.body)) as { model?: string; stream?: boolean };
     expect(body.model).toBe("deepseek-v4-flash");
     expect(body.stream).toBe(true);
@@ -127,9 +127,38 @@ describe("workbuddy adapter buildRequest", () => {
       headers: { "X-Custom-Trace": "keep-me" },
     });
     const request = adapter.buildRequest(minimalRequest(), { inboundWire: "chat" });
-    expect(request.headers?.["X-Custom-Trace"]).toBe("keep-me");
-    expect(request.headers?.["Content-Type"]).toBe("application/json");
-    expect(request.headers?.Accept).toBe("text/event-stream");
+    expect(request.headers?.["X-Custom-Trace"] ?? request.headers?.["x-custom-trace"]).toBe("keep-me");
+    expect(request.headers?.["Content-Type"] ?? request.headers?.["content-type"]).toBe("application/json");
+    expect(request.headers?.Accept ?? request.headers?.accept).toBe("text/event-stream");
+  });
+
+  test("replaces a lowercase authorization header with the WorkBuddy bearer", () => {
+    const adapter = createWorkBuddyAdapter({
+      ...minimalProvider(),
+      headers: { authorization: "Bearer stale-key" },
+    });
+    const request = adapter.buildRequest(minimalRequest(), { inboundWire: "chat" });
+    const authKeys = Object.keys(request.headers ?? {}).filter(key => key.toLowerCase() === "authorization");
+    expect(authKeys).toHaveLength(1);
+    const bearer = request.headers?.[authKeys[0]!];
+    expect(bearer).toBe("Bearer stored-access-token");
+  });
+
+  test("mergeWorkBuddyRequestHeaders collapses case-insensitive duplicates", () => {
+    const merged = mergeWorkBuddyRequestHeaders(
+      { authorization: "Bearer stale", "x-trace": "keep" },
+      {
+        Authorization: "Bearer fresh",
+        "X-User-Id": "uid-1",
+        "Content-Type": "application/json",
+      },
+    );
+    const authKeys = Object.keys(merged).filter(key => key.toLowerCase() === "authorization");
+    expect(authKeys).toHaveLength(1);
+    expect(merged[authKeys[0]!]).toBe("Bearer fresh");
+    expect(merged["x-trace"]).toBe("keep");
+    expect(merged["Content-Type"] ?? merged["content-type"]).toBe("application/json");
+    expect(merged.Accept ?? merged.accept).toBe("text/event-stream");
   });
 
   test("fetchResponse emits CRLF-framed SSE before upstream EOF", async () => {
