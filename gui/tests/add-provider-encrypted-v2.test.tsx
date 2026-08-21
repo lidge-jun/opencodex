@@ -12,6 +12,7 @@ let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let postedBodies: unknown[];
+let presetRows: unknown[] = [];
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
@@ -27,12 +28,13 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
   postedBodies = [];
+  presetRows = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
       if (url.pathname === "/api/oauth/providers") return Response.json({ providers: [] });
-      if (url.pathname === "/api/provider-presets") return Response.json({ providers: [] });
+      if (url.pathname === "/api/provider-presets") return Response.json({ providers: presetRows });
       if (url.pathname === "/api/usage") return Response.json({ providers: [] });
       if (url.pathname === "/api/providers" && init?.method === "POST") {
         postedBodies.push(JSON.parse(String(init.body)));
@@ -72,10 +74,29 @@ async function mountModal(onAdded: (name: string) => void = () => {}): Promise<v
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
 }
 
+async function mountCatalogModal(initialTier: "accounts" | "free" | "paid" = "paid"): Promise<void> {
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <AddProviderModal apiBase="" existingNames={[]} initialTier={initialTier} onClose={() => {}} onAdded={() => {}} />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+}
+
 function adapterSelect(): HTMLSelectElement {
   const select = host.querySelector<HTMLSelectElement>("select.input");
   expect(select).toBeTruthy();
   return select!;
+}
+
+function endpointSelect(): HTMLSelectElement {
+  const selects = host.querySelectorAll<HTMLSelectElement>("select.input");
+  expect(selects.length).toBeGreaterThan(1);
+  return selects[1]!;
 }
 
 async function chooseAdapter(value: string): Promise<void> {
@@ -122,6 +143,11 @@ test("custom provider creation confirms and posts encrypted V2 passthrough only 
     setInputValue(textInputs[1]!, "https://responses.example.test/v1");
   });
 
+  // The trust confirmation must be made for the final destination, not before it.
+  expect(encryptedTaskCheckbox()!.checked).toBe(false);
+  testWindow.confirm = () => true;
+  await act(async () => { encryptedTaskCheckbox()!.click(); });
+
   const addButton = host.querySelector<HTMLButtonElement>("button.btn-primary");
   expect(addButton).toBeTruthy();
   await act(async () => {
@@ -137,6 +163,83 @@ test("custom provider creation confirms and posts encrypted V2 passthrough only 
       baseUrl: "https://responses.example.test/v1",
       authMode: "key",
       allowEncryptedV2AgentTasks: true,
+    },
+  }]);
+});
+
+test("changing a confirmed custom endpoint clears the opt-in before submit", async () => {
+  await mountModal();
+  await chooseAdapter("openai-responses");
+
+  const textInputs = host.querySelectorAll<HTMLInputElement>("input.input:not([type='password'])");
+  await act(async () => {
+    setInputValue(textInputs[0]!, "trusted-responses");
+    setInputValue(textInputs[1]!, "https://responses-a.example.test/v1");
+  });
+  testWindow.confirm = () => true;
+  await act(async () => { encryptedTaskCheckbox()!.click(); });
+  expect(encryptedTaskCheckbox()!.checked).toBe(true);
+
+  await act(async () => {
+    setInputValue(textInputs[1]!, "https://responses-b.example.test/v1");
+  });
+  expect(encryptedTaskCheckbox()!.checked).toBe(false);
+
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>("button.btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(postedBodies).toEqual([{
+    name: "trusted-responses",
+    provider: {
+      adapter: "openai-responses",
+      baseUrl: "https://responses-b.example.test/v1",
+      authMode: "key",
+    },
+  }]);
+});
+
+test("changing a confirmed preset endpoint clears the opt-in before submit", async () => {
+  presetRows = [{
+    id: "responses-endpoints",
+    label: "Responses endpoints",
+    adapter: "openai-responses",
+    baseUrl: "https://responses-a.example.test/v1",
+    auth: "key",
+    baseUrlChoices: [
+      { id: "primary", label: "Primary", baseUrl: "https://responses-a.example.test/v1" },
+      { id: "secondary", label: "Secondary", baseUrl: "https://responses-b.example.test/v1" },
+    ],
+  }];
+  await mountCatalogModal();
+  await act(async () => {
+    const row = Array.from(host.querySelectorAll<HTMLButtonElement>("button.list-row"))
+      .find(candidate => candidate.textContent?.includes("Responses endpoints"));
+    expect(row).toBeTruthy();
+    row!.click();
+  });
+
+  testWindow.confirm = () => true;
+  await act(async () => { encryptedTaskCheckbox()!.click(); });
+  expect(encryptedTaskCheckbox()!.checked).toBe(true);
+
+  await act(async () => {
+    const select = endpointSelect();
+    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!.set!.call(select, "secondary");
+    select.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  expect(encryptedTaskCheckbox()!.checked).toBe(false);
+
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>("button.btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(postedBodies).toEqual([{
+    name: "responses-endpoints",
+    provider: {
+      adapter: "openai-responses",
+      baseUrl: "https://responses-b.example.test/v1",
+      authMode: "key",
     },
   }]);
 });

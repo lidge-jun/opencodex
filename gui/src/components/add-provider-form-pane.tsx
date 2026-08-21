@@ -40,6 +40,15 @@ export function AddProviderFormPane({
 }) {
   const t = useT();
 
+  const changeBaseUrl = (baseUrl: string) => {
+    const destinationChanged = baseUrl.trim() !== form.baseUrl.trim();
+    onFormChange({
+      ...form,
+      baseUrl,
+      ...(destinationChanged ? { allowEncryptedV2AgentTasks: false } : {}),
+    });
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {!isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
@@ -90,10 +99,7 @@ export function AddProviderFormPane({
                 onChange={e => {
                   const id = e.target.value;
                   onEndpointChoiceChange(id);
-                  onFormChange({
-                    ...form,
-                    baseUrl: baseUrlForChoice(preset.baseUrlChoices, id, form.baseUrl),
-                  });
+                  changeBaseUrl(baseUrlForChoice(preset.baseUrlChoices, id, form.baseUrl));
                 }}
               >
                 {preset.baseUrlChoices.map(c => (
@@ -111,7 +117,7 @@ export function AddProviderFormPane({
                 <input
                   className="input"
                   value={form.baseUrl}
-                  onChange={e => onFormChange({ ...form, baseUrl: e.target.value })}
+                  onChange={e => changeBaseUrl(e.target.value)}
                   placeholder={t("modal.baseUrlPlaceholder")}
                 />
               </AddProviderField>
@@ -119,7 +125,7 @@ export function AddProviderFormPane({
           </>
         ) : (
           <AddProviderField label={t("modal.baseUrl")}>
-            <input className="input" value={form.baseUrl} onChange={e => onFormChange({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+            <input className="input" value={form.baseUrl} onChange={e => changeBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
           </AddProviderField>
         )}
         {!isReservedForward && (
