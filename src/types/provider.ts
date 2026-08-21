@@ -209,11 +209,12 @@ export interface OcxProviderConfig {
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
    */
    decodesNativeCompactionBlobs?: boolean;
+  /**
    * Trust this Responses provider to consume opaque encrypted V2 agent tasks.
    * Canonical ChatGPT forwarding is always trusted. Other providers remain
    * fail-closed unless this explicit operator opt-in is true.
    */
-   allowEncryptedV2AgentTasks?: boolean;
+  allowEncryptedV2AgentTasks?: boolean;
   /**
    * Explicit opt-in for non-registry private-network destinations such as localhost, RFC1918,
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
