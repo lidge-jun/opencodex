@@ -103,31 +103,37 @@ to GUI static serving.
 
 A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
 and the client replays it on every later turn. The proxy's own `ocx1:` envelopes are transparent
-base64, so they always lower to plain user messages. A native blob is relayed only to destinations
-known to decode them — the canonical ChatGPT forward surface, the official OpenAI API, or a provider
-with the explicit `decodesNativeCompactionBlobs` capability. Forward auth alone is not evidence:
-noncanonical forward providers receive no caller credentials and may point at any backend. On any
-other routed destination the blob degrades to the same opaque note the bridged parser uses, because
-forwarding it there fails the turn and the item outlives the failure in the client transcript,
-repeating on every later turn including the compaction turn the proxy itself drives. With
-`store: false`, request sanitization strips ids from every input item, including compact-wire items,
-matching codex-rs (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side
-field backfill.
+base64, so they always lower to plain user messages. A native blob is relayed only when there is no
+known serving-identity mismatch and the destination is known to decode native blobs — the canonical
+ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
+`decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more
+than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob
+without being able to decode the previous backend's. The same serving-identity mismatch signal
+therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the
+existing opaque-note path. When the thread has no recorded identity, the destination-only behavior
+is deliberately unchanged. Forward auth alone is not evidence: noncanonical forward providers
+receive no caller credentials and may point at any backend. On any other routed destination the blob
+also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the
+turn and the item outlives the failure in the client transcript, repeating on every later turn
+including the compaction turn the proxy itself drives. With `store: false`, request sanitization
+strips ids from every input item, including compact-wire items, matching codex-rs
+(`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
 
 [Decision Log]
 - 목적과 의도: Keep a session usable after its history crosses backends, instead of wedging it on a
   compaction blob the current upstream cannot decode.
 - 기존 구현 및 제약 조건: Compaction handling was binary — `ocx1:` envelopes were ours, everything
-  else was assumed to be OpenAI's and forwarded verbatim, with no record of which upstream minted a
-  blob. Response-side field backfill exempted only `compaction`, so its two sibling types received
-  synthesized ids the client then replayed.
+  else was treated as a native blob and gated only by the destination, even though multiple backends
+  mint mutually incompatible blobs. Response-side field backfill exempted only `compaction`, so its
+  two sibling types received synthesized ids the client then replayed.
 - 검토한 주요 대안: Tag every compaction item with its minting provider/credential/model identity;
   drop compaction items on any route change; gate relay on the destination that would decode them.
-- 선택한 방식: Relay a native blob only to destinations that mint them and degrade it elsewhere, and
-  treat the compact wire family as one enumeration so id-bearing passes cannot diverge per type.
-- 다른 대안 대신 이 방식을 선택한 이유: Full provenance tagging needs per-conversation state this
-  boundary does not have, while dropping on any change would discard compacted context that still
-  round-trips correctly; the destination test is decidable from the request alone.
+- 선택한 방식: Reuse the thread's recorded serving identity to degrade native blobs after a known
+  route change; otherwise retain the destination capability gate, and treat the compact wire family
+  as one enumeration so id-bearing passes cannot diverge per type.
+- 다른 대안 대신 이 방식을 선택한 이유: Full per-item provenance tagging is unnecessary when the
+  existing thread identity proves a route change, while dropping the item would silently discard
+  compacted context and widening unknown-identity behavior needs a separate decision.
 - 장점, 단점 및 영향: A cross-backend session degrades one compaction summary to a note instead of
   failing every later turn. A self-hosted OpenAI relay keeps its blobs only when explicitly opted in;
   other routed gateways see a note because routed compaction produces an `ocx1:` envelope.

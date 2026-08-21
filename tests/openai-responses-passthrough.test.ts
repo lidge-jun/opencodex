@@ -2605,13 +2605,18 @@ describe("replayed compaction blobs", () => {
     decodesNativeCompactionBlobs: true,
   };
 
-  function forwardedInput(target: PassthroughProvider, input: unknown[]): Record<string, unknown>[] {
+  function forwardedInput(
+    target: PassthroughProvider,
+    input: unknown[],
+    threadServingIdentityChanged = false,
+  ): Record<string, unknown>[] {
     const request = createResponsesPassthroughAdapter(target).buildRequest({
       modelId: "grok-4.6",
       context: { messages: [] },
       stream: true,
       options: {},
       _rawBody: { model: "grok-4.6", store: false, input },
+      ...(threadServingIdentityChanged ? { _stripReasoningEncryptedContent: true } : {}),
     }, { headers: new Headers({ authorization: "Bearer token" }) });
     return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input;
   }
@@ -2642,23 +2647,48 @@ describe("replayed compaction blobs", () => {
     }
   });
 
+  test("a known serving-identity change overrides the native-blob destination gate", () => {
+    const before = { type: "message", role: "user", content: [{ type: "input_text", text: "before" }] };
+    const after = { type: "message", role: "user", content: [{ type: "input_text", text: "after" }] };
+
+    expect(forwardedInput(openaiKeyedProvider, [
+      before,
+      { type: "compaction", encrypted_content: NATIVE_BLOB },
+      after,
+    ], true)).toEqual([
+      before,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+      },
+      after,
+    ]);
+  });
+
   // The proxy's own envelope is transparent base64, so no upstream can read it anywhere.
   test("lowers proxy-minted ocx1 envelopes on every destination", () => {
     const item = { type: "compaction", encrypted_content: encodeCompactionSummary("prior work") };
     for (const target of [provider, openaiKeyedProvider, routedProvider]) {
-      expect(forwardedInput(target, [item])[0]).toEqual({
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\nprior work` }],
-      });
+      for (const threadServingIdentityChanged of [false, true]) {
+        expect(forwardedInput(target, [item], threadServingIdentityChanged)[0]).toEqual({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\nprior work` }],
+        });
+      }
     }
   });
 
   // A bare marker carries no blob, so there is nothing to mis-route.
-  test("leaves a bare context_compaction marker alone", () => {
-    const item = { type: "context_compaction" };
+  test("leaves compaction items without encrypted_content alone", () => {
     for (const target of [provider, routedProvider]) {
-      expect(forwardedInput(target, [item])[0]).toEqual(item);
+      for (const type of ["compaction", "context_compaction"]) {
+        for (const threadServingIdentityChanged of [false, true]) {
+          const item = { type };
+          expect(forwardedInput(target, [item], threadServingIdentityChanged)[0]).toEqual(item);
+        }
+      }
     }
   });
 });

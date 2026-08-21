@@ -240,15 +240,19 @@ function stripItemIdsWhenUnstored(body: unknown): unknown {
  * A compaction item carries an `encrypted_content` blob the client replays verbatim on every later
  * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` envelopes are
  * transparent base64 rather than encryption, so no upstream can read them and they always become
- * plain user messages. A foreign blob was minted by an OpenAI-operated backend: forwarding it to a
- * different destination makes that upstream reject the turn ("Could not decode the compaction
- * blob"), and because the item lives in the client transcript the rejection repeats on every later
- * turn — including the compaction turn the proxy itself drives — leaving the session unable to
- * recover. Off those destinations it degrades to the same note the bridged parser uses.
+ * plain user messages. Native blobs have multiple possible minters, so a destination's ability to
+ * decode its own blobs does not make a blob from a previous serving identity portable. On a known
+ * identity mismatch the blob degrades to the same note the bridged parser uses, even when the
+ * destination normally accepts native blobs. Without a known mismatch, the destination capability
+ * keeps the existing behavior.
  *
  * A bare `context_compaction` marker carries no blob and is forwarded untouched.
  */
-function scrubOcxCompactionItems(body: unknown, destinationDecodesNativeBlob: boolean): unknown {
+function scrubOcxCompactionItems(
+  body: unknown,
+  destinationDecodesNativeBlob: boolean,
+  threadServingIdentityChanged: boolean,
+): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   let changed = false;
@@ -256,7 +260,11 @@ function scrubOcxCompactionItems(body: unknown, destinationDecodesNativeBlob: bo
     if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
     const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
     if (encrypted === undefined) return item;
-    if (decodeCompactionSummary(encrypted) === null && destinationDecodesNativeBlob) return item;
+    if (
+      decodeCompactionSummary(encrypted) === null
+      && destinationDecodesNativeBlob
+      && !threadServingIdentityChanged
+    ) return item;
     changed = true;
     return {
       type: "message",
@@ -1683,10 +1691,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody, destinationDecodesNativeCompactionBlob(provider)), {
+      const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(
+        outBody,
+        destinationDecodesNativeCompactionBlob(provider),
+        threadServingIdentityChanged,
+      ), {
         preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
         dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
-        stripEncryptedContent: parsed._stripReasoningEncryptedContent === true,
+        stripEncryptedContent: threadServingIdentityChanged,
       })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
