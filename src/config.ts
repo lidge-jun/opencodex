@@ -29,6 +29,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import { MAX_DISPLAY_LABEL_LENGTH, isValidDisplayLabel } from "./codex/catalog/display-labels";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -714,6 +715,25 @@ const providerConfigSchema = z.object({
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
+  // Display-only labels for discovered models, keyed by native model id — the same
+  // key space as `modelAdapters`. Declared rather than left to `.passthrough()`
+  // below, for the reason the `codexToolMode` comment gives: an undeclared key is
+  // accepted, persisted, and then silently ignored (#2106).
+  //
+  // Salvaged entry by entry rather than validated strictly, following `apiKeys`:
+  // one hand-edited label must not send the whole config through the
+  // backup-and-defaults repair path, and must not take the operator's other
+  // labels down with it. Writes go through displayLabelRecordConfigError instead,
+  // so an invalid label is a 400 at the API and a dropped entry on load.
+  modelDisplayNames: z.unknown().optional().transform(value => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "object" || Array.isArray(value)) return undefined;
+    const kept = Object.entries(value as Record<string, unknown>)
+      .filter(([id, label]) => id.trim().length > 0 && isValidDisplayLabel(label))
+      .slice(0, MAX_MODEL_DISPLAY_NAMES)
+      .map(([id, label]) => [id.trim(), (label as string).trim()] as const);
+    return kept.length > 0 ? Object.fromEntries(kept) : undefined;
+  }),
   preserveResponsesReasoningContent: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
@@ -943,6 +963,48 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
   for (const [key, entry] of Object.entries(value)) {
     if (!key.trim()) return `${field} keys must be nonblank model ids`;
     if (typeof entry !== "boolean") return `${field}.${key} must be a boolean`;
+  }
+  return null;
+}
+
+/**
+ * Bound on how many labels one provider may carry. A display map is a convenience,
+ * not a catalogue, so an unbounded hand-edited map is a mistake rather than a use
+ * case — and every entry is walked on each convergence.
+ */
+export const MAX_MODEL_DISPLAY_NAMES = 512;
+
+/**
+ * Strict diagnostic for `providers[<name>].modelDisplayNames`, mirroring
+ * `booleanRecordConfigError`.
+ *
+ * This is the *write* rule, used by the provider editor so a bad label is a 400
+ * rather than something that lands on disk. The load path is deliberately more
+ * forgiving — see the schema entry, which drops a bad entry instead of failing —
+ * because the two paths answer different questions: "is this a valid edit?" and
+ * "can this file still be served?".
+ *
+ * `null` is accepted as an explicit clear, matching `upstreamHttpVersion`: the
+ * management API says null means "remove this", so rejecting it here would refuse
+ * the documented way to take a label back off.
+ */
+export function displayLabelRecordConfigError(value: unknown, field = "modelDisplayNames"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_MODEL_DISPLAY_NAMES) {
+    return `${field} must hold at most ${MAX_MODEL_DISPLAY_NAMES} entries`;
+  }
+  for (const [key, label] of entries) {
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (label === null) continue;
+    if (typeof label !== "string") return `${field}.${key} must be a string`;
+    if (!isValidDisplayLabel(label)) {
+      return `${field}.${key} must be a nonblank single-line label of at most `
+        + `${MAX_DISPLAY_LABEL_LENGTH} characters, and must not contain '/'`;
+    }
   }
   return null;
 }

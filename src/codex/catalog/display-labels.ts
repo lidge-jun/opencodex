@@ -15,6 +15,7 @@
 
 import { COMBO_NAMESPACE } from "../../combos/types";
 import type { OcxConfig } from "../../types/config";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND } from "./parsing";
 import type { CatalogModel } from "./parsing";
 
 /** Same bound as the combo display label (src/combos/types.ts) so every label surface agrees. */
@@ -45,8 +46,15 @@ export function isValidDisplayLabel(value: unknown): value is string {
  *   2. trusted discovery metadata — a label discovery already attached
  *   3. undefined — caller keeps its derived slug, i.e. today's behaviour
  *
- * Combo rows are skipped: they validate their own bounded label independently, so
- * an entry under the combo namespace must not be relabelled from provider config.
+ * Rows that already own an operator-supplied label keep it, and the provider map
+ * must not outrank them:
+ *   - combo rows validate their own bounded label independently, so an entry under
+ *     the combo namespace is never relabelled from provider config;
+ *   - an explicit `customModels[]` row carries the label the operator typed there,
+ *     and #2201 requires those to continue unchanged. Matching on `catalogKind`
+ *     rather than on the provider name is what makes that hold, because a custom
+ *     model shares its provider with the discovered rows this function exists for.
+ *
  * Native OpenAI rows never reach here at all — they come from the pinned snapshot
  * path with no `CatalogModel` — so upstream marketing names stay untouched.
  */
@@ -54,7 +62,7 @@ export function resolveModelDisplayLabel(
   config: OcxConfig,
   model: CatalogModel,
 ): string | undefined {
-  if (model.provider === COMBO_NAMESPACE) {
+  if (model.provider === COMBO_NAMESPACE || model.catalogKind === CODEX_CUSTOM_MODEL_CATALOG_KIND) {
     return isValidDisplayLabel(model.displayName) ? model.displayName.trim() : undefined;
   }
   const override = config.providers?.[model.provider]?.modelDisplayNames?.[model.id];

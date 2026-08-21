@@ -7,7 +7,13 @@ import {
   resolveModelDisplayLabel,
 } from "../src/codex/catalog/display-labels";
 import { COMBO_NAMESPACE } from "../src/combos/types";
+import {
+  CODEX_CUSTOM_MODEL_CATALOG_KIND,
+  CODEX_PROVIDER_MODEL_CATALOG_KIND,
+} from "../src/codex/catalog/parsing";
 import type { CatalogModel } from "../src/codex/catalog/parsing";
+import { MAX_MODEL_DISPLAY_NAMES, validateConfigCandidate } from "../src/config";
+import { providerDisplayNamesConfigError } from "../src/server/management/provider-capability-config";
 import type { OcxConfig } from "../src/types/config";
 
 /** The reported case: a discovered NVIDIA NIM row whose label is its routed slug. */
@@ -90,6 +96,32 @@ describe("resolveModelDisplayLabel precedence", () => {
     expect(resolveModelDisplayLabel(config, NVIDIA)).toBeUndefined();
   });
 
+  test("an explicit custom-model row keeps the label the operator already typed", () => {
+    // #2201's migration rule. Matching on catalogKind rather than provider name is
+    // what makes this hold: a custom model shares its provider with the discovered
+    // rows this feature exists to relabel, so the provider name cannot separate them.
+    const custom = {
+      provider: "nvidia",
+      id: "deepseek-ai/deepseek-v4-flash-0731",
+      displayName: "My Existing Custom Label",
+      catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
+    } as CatalogModel;
+    const config = configWith({
+      nvidia: { modelDisplayNames: { "deepseek-ai/deepseek-v4-flash-0731": "Provider Map Value" } },
+    });
+    expect(resolveModelDisplayLabel(config, custom)).toBe("My Existing Custom Label");
+  });
+
+  test("a discovered row on the same provider is still relabelled", () => {
+    // The guard above must not be so broad that it disables the feature.
+    const config = configWith({
+      nvidia: { modelDisplayNames: { "deepseek-ai/deepseek-v4-flash-0731": "Provider Map Value" } },
+    });
+    expect(resolveModelDisplayLabel(config, NVIDIA)).toBe("Provider Map Value");
+    expect(resolveModelDisplayLabel(config, { ...NVIDIA, catalogKind: CODEX_PROVIDER_MODEL_CATALOG_KIND }))
+      .toBe("Provider Map Value");
+  });
+
   test("a combo row keeps its own label and cannot be relabelled from provider config", () => {
     const combo: CatalogModel = {
       provider: COMBO_NAMESPACE,
@@ -132,5 +164,68 @@ describe("applyOperatorDisplayLabels", () => {
   test("returns the identical array when nothing resolves", () => {
     const models = [NVIDIA];
     expect(applyOperatorDisplayLabels(models, configWith({ nvidia: {} }))).toBe(models);
+  });
+});
+
+describe("modelDisplayNames config contract", () => {
+  const load = (modelDisplayNames: unknown) =>
+    validateConfigCandidate({
+      defaultProvider: "nvidia",
+      providers: { nvidia: { adapter: "openai", baseUrl: "https://nim.example/v1", modelDisplayNames } },
+    });
+  const kept = (modelDisplayNames: unknown) => {
+    const result = load(modelDisplayNames);
+    if (!result.ok) throw new Error(`unexpectedly rejected: ${result.error}`);
+    return result.config.providers.nvidia?.modelDisplayNames;
+  };
+  const writeError = (modelDisplayNames: unknown) =>
+    providerDisplayNamesConfigError("nvidia", {
+      adapter: "openai", baseUrl: "https://nim.example/v1", modelDisplayNames,
+    });
+
+  // The two paths answer different questions, so they are allowed to differ:
+  // "can this file still be served?" versus "is this a valid edit?".
+  test("load keeps a well-formed map, trimming the label", () => {
+    expect(kept({ m: "  DeepSeek V4 Flash  " })).toEqual({ m: "DeepSeek V4 Flash" });
+    expect(writeError({ m: "DeepSeek V4 Flash" })).toBeNull();
+  });
+
+  test("load drops an unusable entry instead of failing the whole config", () => {
+    for (const bad of [["array"], { m: "bad/label" }, { m: 42 }, { "": "blank key" }, "string"]) {
+      expect(load(bad).ok).toBe(true);
+      expect(kept(bad)).toBeUndefined();
+    }
+  });
+
+  test("a write of the same values is refused, so a bad label never lands silently", () => {
+    expect(writeError(["array"])).toMatch(/must be a plain object/);
+    expect(writeError({ m: "bad/label" })).toMatch(/must not contain '\/'/);
+    expect(writeError({ m: 42 })).toMatch(/must be a string/);
+    expect(writeError({ "": "blank key" })).toMatch(/nonblank model ids/);
+  });
+
+  test("one bad neighbour does not evict the operator's other labels", () => {
+    expect(kept({ bad: "a/b", good: "Kimi K3" })).toEqual({ good: "Kimi K3" });
+  });
+
+  test("null is an explicit clear on both paths", () => {
+    expect(kept({ m: null })).toBeUndefined();
+    expect(writeError({ m: null })).toBeNull();
+  });
+
+  test("the map is bounded, and the bound is a write error rather than silent truncation", () => {
+    const oversized = Object.fromEntries(
+      Array.from({ length: MAX_MODEL_DISPLAY_NAMES + 1 }, (_, i) => [`m${i}`, `L${i}`]),
+    );
+    expect(Object.keys(kept(oversized) ?? {}).length).toBe(MAX_MODEL_DISPLAY_NAMES);
+    expect(writeError(oversized)).toMatch(/at most 512 entries/);
+  });
+
+  test("a prototype key is not a usable label source", () => {
+    // `{}.constructor` is a function, not a string, so the lookup in
+    // resolveModelDisplayLabel cannot promote it to a label.
+    const config = configWith({ nvidia: { modelDisplayNames: {} } });
+    expect(resolveModelDisplayLabel(config, { provider: "nvidia", id: "constructor" } as CatalogModel))
+      .toBeUndefined();
   });
 });
