@@ -223,7 +223,7 @@ için kendi varsayılanlarını uygular) gelir.
 | İstemci | Kurallı hedef | İndirme dosya adı | Ortam değişkeni |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` ayarlandığında kazanır) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | yok — blok değişmez `opencodex-loopback` taşır |
+| `pi` | `~/.pi/agent/models.json` (ayarlandığında `PI_CODING_AGENT_DIR` öncelikli; göreli değer reddedilir) | `pi-models.json` | yok — blok değişmez `opencodex-loopback` taşır |
 | `omp` | `~/.omp/agent/models.yml` (boş olduğunda bile `OMP_PROFILE`, `PI_PROFILE`'a üstün gelir; adlandırılmış profiller eve göre `PI_CONFIG_DIR` dizin adını kullanır ve `PI_CODING_AGENT_DIR`'i yok sayar, varsayılan profil ise `PI_CODING_AGENT_DIR`'in kazanmasına izin verir) | `omp-models.yaml` | yok — geri döngü yer tutucusu |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |

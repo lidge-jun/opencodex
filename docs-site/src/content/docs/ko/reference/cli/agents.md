@@ -156,7 +156,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | 클라이언트 | 표준 대상 경로 | 다운로드 파일명 | 환경 변수 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME`이 설정되어 있으면 우선합니다) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 없음 - 블록에 리터럴 `opencodex-loopback`이 들어갑니다 |
+| `pi` | `~/.pi/agent/models.json` (`PI_CODING_AGENT_DIR`가 설정되면 우선. 상대 경로는 거부됩니다) | `pi-models.json` | 없음 - 블록에 리터럴 `opencodex-loopback`이 들어갑니다 |
 | `omp` | `~/.omp/agent/models.yml` (기본값. 빈 값이어도 `OMP_PROFILE`이 `PI_PROFILE`보다 우선합니다) | `omp-models.yaml` | 없음 - 리터럴 `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |

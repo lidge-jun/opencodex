@@ -150,7 +150,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 |クライアント |正規の宛先 |ダウンロードファイル名 |環境変数 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (設定すると `XDG_CONFIG_HOME` が勝ち) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | なし - ブロックにリテラル `opencodex-loopback` が入ります |
+| `pi` | `~/.pi/agent/models.json` (`PI_CODING_AGENT_DIR` が設定時に優先。相対値は拒否されます) | `pi-models.json` | なし - ブロックにリテラル `opencodex-loopback` が入ります |
 | `omp` | `~/.omp/agent/models.yml` (デフォルト。空の場合も `OMP_PROFILE` が `PI_PROFILE` より優先されます) | `omp-models.yaml` | なし - リテラル `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |

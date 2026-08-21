@@ -285,6 +285,72 @@ describe("GET /api/client-config", () => {
     expect(body.config).toBeUndefined();
   }, 15_000);
 
+  /**
+   * A client's own environment override can name a path the resolver refuses.
+   * The CLI already surfaces that as a readable error, and the integration
+   * state and writer paths already catch it — this route did not, so the
+   * exception escaped `handleManagementAPI` and the dashboard download saw a
+   * generic 500 with the corrective message stripped. The hole was reachable
+   * for every client whose destination resolves an override (mcode, zcode,
+   * dsh); Pi joined that set when its resolver started honoring
+   * `PI_CODING_AGENT_DIR`.
+   */
+  test("a refused path override answers 400 with the bounded message, not a thrown 500", async () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = "relative";
+    try {
+      const response = await clientConfigApi(baseConfig(), "?client=pi");
+      expect(response.status).toBe(400);
+      const body = await response.json() as { error: string; config?: unknown };
+      expect(body.error).toContain("PI_CODING_AGENT_DIR");
+      expect(body.error).toContain("absolute path");
+      // The refusal must not leak a half-built envelope.
+      expect(body.config).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
+  }, 15_000);
+
+  test("an accepted override still resolves through the route", async () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = "/tmp/opencodex-pi-route-fixture";
+    try {
+      const response = await clientConfigApi(baseConfig(), "?client=pi");
+      expect(response.status).toBe(200);
+      const body = await response.json() as ClientConfigEnvelope;
+      expect(body.destination).toBe("/tmp/opencodex-pi-route-fixture/models.json");
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
+  }, 15_000);
+
+  test("a refused override wins over a failing catalog, and skips the catalog work", async () => {
+    // The refusal is a property of the request, not of the catalog. Validating
+    // it after the load let 503 answer first and hid the corrective message.
+    const config = baseConfig();
+    let providersRead = 0;
+    Object.defineProperty(config, "providers", {
+      get() { providersRead += 1; throw new Error("catalog offline"); },
+      configurable: true,
+    });
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = "relative";
+    try {
+      const response = await clientConfigApi(config, "?client=pi");
+      expect(response.status).toBe(400);
+      const body = await response.json() as { error: string };
+      expect(body.error).toContain("PI_CODING_AGENT_DIR");
+      expect(body.error).not.toContain("catalog offline");
+      // Nothing enumerated the catalog for input that was going to be rejected.
+      expect(providersRead).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
+  }, 15_000);
+
   test("cross-origin admission is unchanged from every other /api route", async () => {
     const url = new URL("http://127.0.0.1:10100/api/client-config?client=opencode");
     const response = await handleManagementAPI(

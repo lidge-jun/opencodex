@@ -195,7 +195,7 @@ propres valeurs par défaut à ces lignes.
 | Client | Destination canonique | Télécharger le nom du fichier | Var.environnement |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` gagne une fois défini) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — le bloc porte le littéral `opencodex-loopback` |
+| `pi` | `~/.pi/agent/models.json` (`PI_CODING_AGENT_DIR` l'emporte une fois défini ; une valeur relative est refusée) | `pi-models.json` | none — le bloc porte le littéral `opencodex-loopback` |
 | `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE` l'emporte sur `PI_PROFILE`, même lorsqu'il est vide ; les profils nommés utilisent le nom du répertoire `PI_CONFIG_DIR` relatif à la maison et ignorent `PI_CODING_AGENT_DIR`, tandis que le profil par défaut laisse `PI_CODING_AGENT_DIR` gagner) | `omp-models.yaml` | aucun — espace réservé de bouclage |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
