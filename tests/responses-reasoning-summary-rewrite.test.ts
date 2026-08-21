@@ -209,6 +209,52 @@ describe("responses reasoning summary channel rewrite", () => {
     expect(rewrite("not json")).toBe("not json");
     expect(rewrite("[1,2]")).toBe("[1,2]");
   });
+
+  // `encrypted_content` is opaque, state-bearing provider data, so preserve the complete item
+  // shape defensively when the client replays it. This rewrite's round-trip was verified against
+  // DeepSeek, which is stateless and issues no blob; providers that do issue one joined later
+  // through `preserveReasoningContentModels`.
+  describe("items carrying encrypted_content", () => {
+    const blobItem = {
+      type: "reasoning",
+      id: "rs_1",
+      status: "completed",
+      encrypted_content: "gAAAAAB-upstream-issued-blob",
+      content: [{ type: "reasoning_text", text: "thinking" }],
+      summary: [],
+    };
+
+    test("are returned byte-for-byte on output_item.done", () => {
+      const payload = { type: "response.output_item.done", output_index: 0, item: blobItem };
+      expect(apply(payload)).toEqual(payload);
+    });
+
+    test("are returned byte-for-byte inside response.completed output", () => {
+      const payload = {
+        type: "response.completed",
+        response: { id: "resp_1", output: [blobItem] },
+      };
+      expect(apply(payload)).toEqual(payload);
+    });
+
+    test("are returned byte-for-byte through the non-streaming document rewrite", () => {
+      const doc = { id: "resp_1", object: "response", output: [blobItem] };
+      expect(rewriteReasoningSummaryInJson(doc)).toBe(doc);
+      const json = JSON.stringify(doc);
+      expect(rewriteReasoningSummaryInJsonString(json)).toBe(json);
+    });
+
+    // Only the stored item is protected: the live trace Codex renders comes from the delta events,
+    // which carry no blob and are still routed to the summary channel.
+    test("do not disable the delta rewrite that renders the live trace", () => {
+      expect(apply({
+        type: "response.reasoning_text.delta",
+        delta: "think",
+        item_id: "rs_1",
+        output_index: 0,
+      })).toMatchObject({ type: "response.reasoning_summary_text.delta", delta: "think" });
+    });
+  });
 });
 
 describe("routeUsesContentChannelReasoning", () => {

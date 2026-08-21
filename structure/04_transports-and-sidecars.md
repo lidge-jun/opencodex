@@ -861,6 +861,16 @@ Codex app, so tool cells group like native models — while the text still round
 `content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
 `devlog/_fin/260709_native_response_pattern/`.
 
+The content-to-summary channel rewrite skips any reasoning item that carries a native
+`encrypted_content` blob. The blob is opaque, state-bearing provider data, so the item must
+round-trip unchanged unless that backend has an explicit replay contract permitting a rewrite.
+This defensively protects providers that issue blobs and later join the route through
+`preserveReasoningContentModels`. The rewrite's round trip was verified against DeepSeek, which is
+`statelessResponses` and issues no blob. Grok is unaffected in practice because it natively emits
+summary-channel reasoning and no `reasoning_text` events, so this content-to-summary item rewrite
+does not engage on its route. Only the stored item is exempt — `reasoning_text` delta events carry
+no blob and still route to the summary channel, so the live expandable trace is unchanged.
+
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential
 identity. API-key material is represented only by a process-keyed HMAC; OAuth replay is bound to the
