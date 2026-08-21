@@ -168,6 +168,24 @@ export function isCursorExternalWireModel(modelId: string): boolean {
   return !isCursorNativeWireModel(modelId);
 }
 
+/**
+ * Native composer models whose tool-result continuation must still be sent as a
+ * userMessageAction with the plain "Continue:" text instead of a bare resumeAction.
+ *
+ * Observed on live Cursor Connect traffic (2026-08-20): `composer-2.5` (the
+ * standard, non-fast build) resumes a tool-result turn with server-side native
+ * tool calls (read/grep/exec) instead of answering, or completes with zero text
+ * (empty `content` + `stop`). `composer-2.5-fast` answers correctly on the same
+ * resumeAction path, so only the affected id is listed here. Sending the same
+ * continuation as an explicit user message (external path) makes the model
+ * answer reliably.
+ */
+export function cursorNeedsExternalToolContinuation(modelId: string): boolean {
+  if (isCursorExternalWireModel(modelId)) return true;
+  const wire = cursorCodexToWireModelId(modelId).trim().toLowerCase();
+  return wire === "composer-2.5";
+}
+
 function stripCursorEffortSuffix(wireModelId: string): string {
   const suffixes = [...CANONICAL_EFFORT_SUFFIXES].sort((a, b) => b.length - a.length);
   for (const suffix of suffixes) {

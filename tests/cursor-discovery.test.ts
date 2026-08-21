@@ -17,6 +17,7 @@ import {
   inferCursorContextWindow,
   isCursorExternalWireModel,
   isCursorNativeWireModel,
+  cursorNeedsExternalToolContinuation,
   normalizeCursorModels,
 } from "../src/adapters/cursor/discovery";
 
@@ -204,5 +205,14 @@ describe("Cursor discovery metadata", () => {
     expect(isCursorExternalWireModel("gpt-5.6-sol-xhigh")).toBe(true);
     expect(isCursorExternalWireModel("claude-4.6-sonnet-high")).toBe(true);
     expect(isCursorExternalWireModel("cursor/gpt-5.6-sol")).toBe(true);
+  });
+
+  test("routes composer-2.5 tool continuations through the external userMessageAction path", () => {
+    expect(cursorNeedsExternalToolContinuation("composer-2.5")).toBe(true);
+    expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5")).toBe(true);
+    expect(cursorNeedsExternalToolContinuation("composer-2.5-fast")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5-fast")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("auto")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("gpt-5.6-sol")).toBe(true);
   });
 });
