@@ -30,7 +30,11 @@ import {
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
-import { providerServiceTierConfigError, withProviderServiceTierDTO } from "../src/server/management/provider-capability-config";
+import {
+  providerServiceTierConfigError,
+  providerSyntheticMaxConfigError,
+  withProviderServiceTierDTO,
+} from "../src/server/management/provider-capability-config";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -310,12 +314,14 @@ describe("provider management validation", () => {
       baseUrl: "https://relay.example/v1",
       modelSuppressSyntheticMax: { "gemini-3.7-flash": true, legacy: false },
     };
-    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    expect(providerSyntheticMaxConfigError("relay", provider)).toBeNull();
     for (const modelSuppressSyntheticMax of [[], { model: "true" }, { "": true }]) {
-      expect(providerManagementConfigError("relay", {
+      const invalidProvider = {
         ...provider,
         modelSuppressSyntheticMax,
-      })).toContain("modelSuppressSyntheticMax");
+      };
+      expect(providerManagementConfigError("relay", invalidProvider)).toBeNull();
+      expect(providerSyntheticMaxConfigError("relay", invalidProvider)).toContain("modelSuppressSyntheticMax");
     }
   });
 

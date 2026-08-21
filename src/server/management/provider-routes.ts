@@ -75,7 +75,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { providerServiceTierConfigError } from "./provider-capability-config";
+import { providerServiceTierConfigError, providerSyntheticMaxConfigError } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -500,6 +500,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (providerError) return jsonResponse({ error: providerError }, 400);
     const serviceTierError = providerServiceTierConfigError(name, body.provider);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+    const syntheticMaxError = providerSyntheticMaxConfigError(name, body.provider);
+    if (syntheticMaxError) return jsonResponse({ error: syntheticMaxError }, 400);
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
     // PATCH already clears on null; POST persisted the body as submitted, so a `null` here
     // reached disk and the next loadConfig() refused it. Canonicalize to absent, which is what
@@ -661,6 +663,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (providerError) return jsonResponse({ error: providerError }, 400);
       const serviceTierError = providerServiceTierConfigError(name, next);
       if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+      const syntheticMaxError = providerSyntheticMaxConfigError(name, next);
+      if (syntheticMaxError) return jsonResponse({ error: syntheticMaxError }, 400);
       const resolvedError = await providerDestinationResolvedError(name, next);
       if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
     } else if (applied.enablingOpenAi) {
@@ -694,6 +698,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const serviceTierError = providerServiceTierConfigError(name, replay.next);
         if (serviceTierError) {
           replayError = serviceTierError;
+          return;
+        }
+        const syntheticMaxError = providerSyntheticMaxConfigError(name, replay.next);
+        if (syntheticMaxError) {
+          replayError = syntheticMaxError;
           return;
         }
       } else if (replay.enablingOpenAi && !isCanonicalOpenAiForwardProvider(replay.next)) {

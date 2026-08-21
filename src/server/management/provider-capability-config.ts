@@ -17,6 +17,17 @@ export function providerServiceTierConfigError(name: unknown, provider: unknown)
   return error ? `provider ${name} ${error}` : null;
 }
 
+export function providerSyntheticMaxConfigError(name: unknown, provider: unknown): string | null {
+  if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
+    return null;
+  }
+  const error = booleanRecordConfigError(
+    (provider as { modelSuppressSyntheticMax?: unknown }).modelSuppressSyntheticMax,
+    "modelSuppressSyntheticMax",
+  );
+  return error ? `provider ${name} ${error}` : null;
+}
+
 function publicServiceTierRecord(value: unknown): Record<string, boolean> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const entries = Object.entries(value).filter(([model, supported]) =>
