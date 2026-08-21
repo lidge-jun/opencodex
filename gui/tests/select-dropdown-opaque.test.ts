@@ -53,7 +53,8 @@ function reducedTransparencyBlock(css: string): string {
 
 /** Every `background` / `background-color` value in the rule, in source order. */
 function backgroundDeclarations(body: string): string[] {
-  return [...body.matchAll(/(?:^|;)\s*(?:background-color|background)\s*:\s*([^;]+)/g)].map(
+  // Lookbehind (not `^|;`) so a comment between declarations still counts.
+  return [...body.matchAll(/(?<![\w-])(?:background-color|background)\s*:\s*([^;]+)/g)].map(
     (match) => match[1]!.trim(),
   );
 }
