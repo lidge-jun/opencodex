@@ -27,6 +27,7 @@ import { modelLabel } from "../../model-display";
 import { SectionTabs } from "../section-tabs";
 import { sectionAnchorId } from "../../section-anchors";
 import SubagentDelegationSection from "./SubagentDelegationSection";
+import SubagentRolesSection from "./SubagentRolesSection";
 import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
 
 export interface SubagentsWorkspaceProps {
@@ -50,6 +51,16 @@ export interface SubagentsWorkspaceProps {
     onUltraModeSave: (patch: UltraModePatch) => void;
     ultraLoadFailed: boolean;
     onUltraModeRetry: () => void;
+    prompt: string;
+    childInstructions: string;
+    childInstructionsSaving: boolean;
+    onChildInstructionsSave: (value: string | null) => void;
+  };
+  roles: {
+    apiBase: string;
+    multiAgentMode: "v1" | "default" | "v2";
+    keepNativeChatGptOnV1: boolean;
+    onStatus: (ok: boolean, message: string) => void;
   };
 }
 
@@ -63,6 +74,7 @@ export default function SubagentsWorkspace({
   onMove,
   onSave,
   delegation,
+  roles,
 }: SubagentsWorkspaceProps) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -76,6 +88,7 @@ export default function SubagentsWorkspace({
   }, [available, query]);
 
   const tabs = useMemo(() => [
+    { id: "roles", label: t("sub.roles") },
     { id: "featured", label: t("sub.featured"), meta: `${chosen.length}/${FEATURED_MAX}` },
     { id: "models", label: t("sub.models"), meta: String(availableFiltered.length) },
     { id: "settings", label: t("sub.settings") },
@@ -85,6 +98,23 @@ export default function SubagentsWorkspace({
     <div className="subagents-workspace-shell">
       <SectionTabs scope="subagents" items={tabs} ariaLabel={t("sub.sections")} />
       <div className="subagents-workspace-root">
+        <section
+          id={sectionAnchorId("subagents", "roles")}
+          className="subagents-workspace-section"
+          aria-label={t("sub.roles")}
+        >
+          <div className="swi-featured-head">
+            <h2 className="swi-featured-title">{t("sub.roles")}</h2>
+          </div>
+          <SubagentRolesSection
+            apiBase={roles.apiBase}
+            available={delegation.available}
+            efforts={delegation.efforts}
+            multiAgentMode={roles.multiAgentMode}
+            keepNativeChatGptOnV1={roles.keepNativeChatGptOnV1}
+            onStatus={roles.onStatus}
+          />
+        </section>
         <section
           id={sectionAnchorId("subagents", "featured")}
           className="subagents-workspace-section"
@@ -234,6 +264,10 @@ export default function SubagentsWorkspace({
             onUltraModeSave={delegation.onUltraModeSave}
             ultraLoadFailed={delegation.ultraLoadFailed}
             onUltraModeRetry={delegation.onUltraModeRetry}
+            prompt={delegation.prompt}
+            childInstructions={delegation.childInstructions}
+            childInstructionsSaving={delegation.childInstructionsSaving}
+            onChildInstructionsSave={delegation.onChildInstructionsSave}
           />
         </section>
       </div>

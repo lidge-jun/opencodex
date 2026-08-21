@@ -68,7 +68,7 @@ inherits the parent model and rejects model or effort overrides. Guidance theref
 use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
 `reasoning_effort`, and to make the task message self-contained.
 
-Custom `injectionPrompt` text can use all four placeholders:
+Custom `injectionPrompt` text can use these placeholders:
 
 | Placeholder | Replaced with |
 | --- | --- |
@@ -76,6 +76,7 @@ Custom `injectionPrompt` text can use all four placeholders:
 | `{{effort}}` | The configured `injectionEffort`, or an empty string |
 | `{{roster}}` | The resolved picker-visible, surface-compatible roster |
 | `{{fallback}}` | The configured global fallback guidance |
+| `{{roles}}` | Compact enabled-role catalog (id, when-to-use, model, optional effort), filtered to the current surface and 700-character budget |
 
 The built-in v2 guidance has a 700-character budget. If it would exceed the budget, opencodex drops
 the roster first rather than truncating the core spawn instructions. Built-in guidance fires only
@@ -168,7 +169,7 @@ encrypted tasks.
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
 - **Models** → top-row segmented control: choose the same global mode.
 - **Dashboard** → **Sub-agent delegation**: set guidance model/effort and the native-default opt-in.
-- **Subagents**: choose and order the roster and configure the global fallback chain.
+- **Subagents**: edit named roles, choose and order the roster, and configure custom parent guidance, global child instructions, and the native-default opt-in.
 
 ### CLI
 

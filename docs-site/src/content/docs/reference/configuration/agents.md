@@ -17,7 +17,7 @@ routes, and limits delegated work.
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, `{{fallback}}`, and `{{roles}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | Controls only opencodex-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
-| `subagentRoles?` | `object[]` | — | Named specialists (`id`, `description`, `model`, optional `effort`, `developerInstructions`, optional `enabled`). Max 8 roles and 5 unique enabled models. An explicit empty list is preserved. |
+| `subagentRoles?` | `object[]` | — | Named specialists (`id`, `description`, `model`, optional `effort`, `developerInstructions`, optional `enabled`). Max 8 roles and 5 unique enabled models. An explicit empty list is preserved. The Subagents dashboard edits this catalog. |
 | `syncCodexAgentRoles?` | `boolean` | on once any enabled role exists | Project enabled roles into marker-owned `$CODEX_HOME/agents/ocx-<id>.toml`. `false` prunes those owned files and leaves user-authored agent files untouched. Never writes `model_fallback`. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |

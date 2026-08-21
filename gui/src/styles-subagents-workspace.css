@@ -426,6 +426,84 @@
   gap: 10px;
 }
 
+.swi-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.swi-roles-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.swi-role-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.swi-role-grid {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.4fr) minmax(7rem, 0.8fr);
+  gap: var(--space-2);
+}
+
+.swi-role-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.swi-role-label {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+}
+
+.swi-role-instructions {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.swi-role-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.swi-role-enable {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.swi-prompt-editor {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.swi-prompt-draft {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.swi-ultra-mode-textarea {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+}
+
 /* ── Detail view ──────────────────────────────────────── */
 
 .swi-detail {
