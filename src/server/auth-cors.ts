@@ -614,7 +614,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     raw.modelAutoCompactTokenLimits,
     { requireNativeIds: name === "openai" },
   );
-  if (autoCompactError) return `provider ${name} ${autoCompactError}`;
+  if (autoCompactError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${autoCompactError}`;
+  }
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
