@@ -2772,6 +2772,11 @@ async function handleResponsesInner(
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 
+  let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();
+  const refreshRoutedNamespaceToolAliases = (builtRequest: AdapterRequest): void => {
+    routedNamespaceToolAliases = builtRequest.convertedRoutedNamespaceToolAliases ?? new Map();
+  };
+
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     let hostAdmissionLease = pendingHostAdmissionLease;
     pendingHostAdmissionLease = null;
@@ -2781,7 +2786,6 @@ async function handleResponsesInner(
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
     const routedCustomToolNames = new Set<string>();
     const routedToolSearchNames = new Set<string>();
-    let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -2817,7 +2821,7 @@ async function handleResponsesInner(
       }
       throw error;
     }
-    if (route.provider.authMode !== "forward") {
+    if (!isCanonicalOpenAiForwardProvider(route.provider)) {
       for (const name of request.convertedRoutedCustomToolNames ?? []) {
         if (
           toolBridgeMaps.freeformToolNames.has(name)
@@ -2831,7 +2835,7 @@ async function handleResponsesInner(
       // would incorrectly disable restoration for the exact ambiguous-name case the alias fixes.
       routedToolSearchNames.add(name);
     }
-    routedNamespaceToolAliases = request.convertedRoutedNamespaceToolAliases ?? routedNamespaceToolAliases;
+    refreshRoutedNamespaceToolAliases(request);
     // #1700: the bridged paths refuse a call to a tool the request never declared
     // (`declaredToolNames`, src/bridge.ts). The passthrough had no equivalent, so a routed
     // provider's top-level `apply_patch` — which under Codex code mode exists only as a nested
@@ -3045,6 +3049,7 @@ async function handleResponsesInner(
           headers: selectedForwardHeaders,
           translatorBudget,
         });
+        refreshRoutedNamespaceToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       } catch (err) {
@@ -3158,6 +3163,7 @@ async function handleResponsesInner(
           headers: selectedForwardHeaders,
           translatorBudget,
         });
+        refreshRoutedNamespaceToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       } catch (err) {
@@ -3316,6 +3322,7 @@ async function handleResponsesInner(
         if (retry.kind === "retried") {
           authCtx = retry.authCtx;
           request = retry.request;
+          refreshRoutedNamespaceToolAliases(request);
           upstreamResponse = retry.upstreamResponse;
           selectedForwardHeaders = retry.selectedForwardHeaders;
           // Keep subagent quota-failure health keyed to the account that actually served.
@@ -4321,6 +4328,7 @@ async function handleResponsesInner(
   let inputTokenEstimate: number | undefined;
   try {
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
+    refreshRoutedNamespaceToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
     inputTokenEstimate = typeof initialRequest.usageLog?.inputTokens === "number"
@@ -4453,6 +4461,7 @@ async function handleResponsesInner(
         sameTargetParsed = parsed;
         sameTargetToken = transportToken;
       }
+      refreshRoutedNamespaceToolAliases(retryRequest);
       const retryEstimate = typeof retryRequest.usageLog?.inputTokens === "number"
         ? retryRequest.usageLog.inputTokens
         : undefined;

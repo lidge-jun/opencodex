@@ -36,7 +36,15 @@ export function isCanonicalOpenAiForwardProvider(provider: OcxProviderConfig): b
     && normalizedBaseUrl(provider.baseUrl) === CODEX_FORWARD_BASE_URL;
 }
 
-const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_API_ORIGIN = "https://api.openai.com";
+const OPENAI_API_BASE_URL = `${OPENAI_API_ORIGIN}/v1`;
+
+function isOfficialOpenAiApiBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  // Accept the conventional `/v1` base and the bare official origin used with an explicit
+  // `/v1/responses` path. Exact normalized URLs keep lookalike/suffix hosts out of this set.
+  return normalized === OPENAI_API_ORIGIN || normalized === OPENAI_API_BASE_URL;
+}
 
 /**
  * Whether this provider can serve `POST /responses/compact`. The canonical ChatGPT
@@ -65,7 +73,7 @@ export function supportsNativeResponsesCompactEndpoint(
 export function isOpenAiOperatedResponsesDestination(provider: OcxProviderConfig): boolean {
   if (isCanonicalOpenAiForwardProvider(provider)) return true;
   return provider.adapter === "openai-responses"
-    && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
+    && isOfficialOpenAiApiBaseUrl(provider.baseUrl);
 }
 
 /**

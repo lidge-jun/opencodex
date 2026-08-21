@@ -65,7 +65,10 @@ export interface OcxParsedRequest {
   _clientThreadId?: string;
   /** Provider/account/model-bound namespace for process-local raw-reasoning replay. */
   _reasoningReplayScope?: OcxReasoningReplayScopeRef;
-  /** A known in-process route switch requires opaque Responses reasoning blobs to be dropped. */
+  /**
+   * Set by bindRouteReasoningReplayScope after a proven serving-identity change, or by
+   * prepareOpaqueBlobRecovery after an authoritative rejection; consumers strip replayed blobs.
+   */
   _stripReasoningEncryptedContent?: boolean;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.

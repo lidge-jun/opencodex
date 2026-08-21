@@ -2510,6 +2510,58 @@ describe("routed namespace and custom-tool identity", () => {
       globalThis.fetch = savedFetch;
     }
   });
+
+  test("noncanonical forward lowers a namespaced custom tool and restores its response identity", async () => {
+    const forwardConfig = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://forward-gateway.example.test/v1",
+          authMode: "forward",
+        },
+      },
+    } as OcxConfig;
+    const savedFetch = globalThis.fetch;
+    let outbound: { tools?: Array<Record<string, unknown>> } | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      outbound = JSON.parse(String(init?.body)) as { tools?: Array<Record<string, unknown>> };
+      return Response.json({
+        id: "resp_forward_custom",
+        status: "completed",
+        output: [customUpstreamItem],
+      });
+    }) as typeof fetch;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/routed-model",
+          stream: false,
+          input: "read",
+          tools: [rawTools[0]],
+        }),
+      }), forwardConfig, { model: "", provider: "" });
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+
+      expect(outbound?.tools).toEqual([
+        expect.objectContaining({ type: "function", name: `${customNamespace}__read` }),
+      ]);
+      expect(outbound?.tools?.[0]).not.toHaveProperty("format");
+      expect(body.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        namespace: customNamespace,
+        name: "read",
+        input: "freeform payload",
+      });
+      expect(body.output[0]).not.toHaveProperty("arguments");
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
 });
 
 describe("OpenAI Responses forward-mode unsupported param stripping", () => {
@@ -2757,6 +2809,7 @@ describe("reasoning input content channel", () => {
     for (const target of [
       { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
       { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key" as const, apiKey: "sk-t" },
+      { adapter: "openai-responses", baseUrl: "https://api.openai.com", responsesPath: "/v1/responses", authMode: "key" as const, apiKey: "sk-t" },
     ]) {
       const request = createResponsesPassthroughAdapter(target).buildRequest({
         modelId: "gpt-5.6-sol",

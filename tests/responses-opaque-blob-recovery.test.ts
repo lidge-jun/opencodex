@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ADAPTER_REGISTRY } from "../src/adapters/registry";
 import { clearReasoningReplayCacheForTests } from "../src/responses/reasoning-replay-cache";
 import { OPAQUE_COMPACTION_NOTE } from "../src/responses/compaction";
 import { resetThoughtSignatureReplayForTests } from "../src/responses/thought-signature-replay";
@@ -208,6 +209,80 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(retriedInput[3]).toEqual(reasoningReplayInput()[3]);
     expect(logCtx.activeAttempt?.sendCount).toBe(2);
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["opaque-blob-rejection"]);
+  });
+
+  test("restores namespace names from the rebuilt request alias set", async () => {
+    const definition = ADAPTER_REGISTRY["openai-responses"] as unknown as {
+      create: typeof ADAPTER_REGISTRY["openai-responses"]["create"];
+    };
+    const originalCreate = definition.create;
+    let buildCount = 0;
+    definition.create = (provider, context) => {
+      const adapter = originalCreate(provider, context);
+      const buildRequest = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (parsed, incoming) => {
+        const built = await buildRequest(parsed, incoming);
+        buildCount += 1;
+        built.convertedRoutedNamespaceToolAliases = buildCount === 1
+          ? new Map([["stale_catalog__read", { namespace: "stale_catalog", name: "read" }]])
+          : new Map([["fresh_catalog__read", { namespace: "fresh_catalog", name: "read" }]]);
+        return built;
+      };
+      return adapter;
+    };
+
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) return rejection();
+      return Response.json({
+        id: "resp-rebuilt-aliases",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_fresh_read",
+          call_id: "call_fresh_read",
+          name: "fresh_catalog__read",
+          arguments: "{}",
+          status: "completed",
+        }],
+      });
+    }) as typeof fetch;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-codex-parent-thread-id": "thread-rebuilt-namespace-aliases",
+        },
+        body: JSON.stringify({
+          model: "first/model-a",
+          stream: false,
+          store: false,
+          input: reasoningReplayInput(),
+          tools: [{
+            type: "namespace",
+            name: "fresh_catalog",
+            tools: [{ type: "function", name: "read", parameters: { type: "object" } }],
+          }],
+        }),
+      }), config(), { model: "", provider: "" });
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+
+      expect(response.status).toBe(200);
+      expect(buildCount).toBe(2);
+      expect(outbound).toHaveLength(2);
+      expect(body.output[0]).toMatchObject({
+        type: "function_call",
+        namespace: "fresh_catalog",
+        name: "read",
+        arguments: "{}",
+      });
+      expect(JSON.stringify(body)).not.toContain("stale_catalog");
+    } finally {
+      definition.create = originalCreate;
+    }
   });
 
   test("degrades a compaction blob through the generic routed-compaction recovery resend", async () => {
