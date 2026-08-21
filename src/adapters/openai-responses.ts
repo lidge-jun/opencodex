@@ -725,8 +725,18 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthes
   };
   const reorderBatchOutputs = (items: unknown[]): unknown[] => {
     const ordered: unknown[] = [];
+    const claimedOutputIndexes = new Set<number>();
+    const outputIndexesByKey = new Map<string, { indexes: number[]; offset: number }>();
+    for (let outputIndex = 0; outputIndex < items.length; outputIndex += 1) {
+      const outputKey = outputKeyOf(items[outputIndex]);
+      if (outputKey === null) continue;
+      const bucket = outputIndexesByKey.get(outputKey);
+      if (bucket) bucket.indexes.push(outputIndex);
+      else outputIndexesByKey.set(outputKey, { indexes: [outputIndex], offset: 0 });
+    }
     let index = 0;
     while (index < items.length) {
+      if (claimedOutputIndexes.has(index)) { index += 1; continue; }
       const key = callKeyOf(items[index]);
       if (key === null) { ordered.push(items[index]); index += 1; continue; }
       const batch: unknown[] = [];
@@ -745,20 +755,24 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthes
         index = cursor;
         continue;
       }
-      const remainder: unknown[] = [];
-      const batchOutputs: Array<{ key: string; item: unknown }> = [];
-      for (let probe = cursor; probe < items.length; probe += 1) {
-        const outputKey = outputKeyOf(items[probe]);
-        if (outputKey !== null && batchKeys.includes(outputKey)) {
-          batchOutputs.push({ key: outputKey, item: items[probe] });
-        } else {
-          remainder.push(items[probe]);
+      const batchOutputs: unknown[] = [];
+      for (const batchKey of batchKeys) {
+        const bucket = outputIndexesByKey.get(batchKey);
+        if (!bucket) continue;
+        while (bucket.offset < bucket.indexes.length && bucket.indexes[bucket.offset]! < cursor) {
+          bucket.offset += 1;
+        }
+        while (bucket.offset < bucket.indexes.length) {
+          const outputIndex = bucket.indexes[bucket.offset]!;
+          bucket.offset += 1;
+          if (claimedOutputIndexes.has(outputIndex)) continue;
+          claimedOutputIndexes.add(outputIndex);
+          batchOutputs.push(items[outputIndex]);
+          break;
         }
       }
-      batchOutputs.sort((left, right) => batchKeys.indexOf(left.key) - batchKeys.indexOf(right.key));
-      ordered.push(...batch, ...batchOutputs.map(output => output.item));
-      ordered.push(...reorderBatchOutputs(remainder));
-      return ordered;
+      ordered.push(...batch, ...batchOutputs);
+      index = cursor;
     }
     return ordered;
   };
