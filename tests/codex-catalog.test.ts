@@ -2565,10 +2565,12 @@ describe("Codex catalog routed normalization", () => {
     expect((priorSynthetic.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
       .toEqual(["low", "high", "ultra", "max"]);
     expect(priorSynthetic.opencodex_max_provenance).toBe("synthetic");
+    priorSynthetic.default_reasoning_level = "max";
 
     const suppressed = preserve(priorSynthetic, true);
     expect((suppressed?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
       .toEqual(["low", "high", "ultra"]);
+    expect(suppressed?.default_reasoning_level).toBe("high");
     expect(suppressed?.opencodex_max_provenance).toBeUndefined();
 
     const priorProviderMax = buildCatalogEntries(null, [], [{
@@ -2623,6 +2625,35 @@ describe("Codex catalog routed normalization", () => {
       "google/gemini-3.7-flash",
       "google/vendor-model",
     ]));
+  });
+
+  test("synthetic-max policy uses family and case-insensitive matching for preserved rows", () => {
+    const prior = buildCatalogEntries(null, [], [
+      { provider: "google", id: "gemini-family:preview", reasoningEfforts: ["low", "high"] },
+      { provider: "google", id: "GEMINI-CASE", reasoningEfforts: ["low", "high"] },
+    ]);
+    const policy = syntheticMaxSuppressedCatalogSlugs({
+      providers: {
+        google: {
+          adapter: "google",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          modelSuppressSyntheticMax: { "gemini-family": true, "gemini-case": true },
+        },
+      },
+    }, prior);
+    const preserved = mergeObservedForTest({
+      catalogModels: prior,
+      routedEntries: [],
+      template: null,
+      gatheredProviderNames: new Set(["google"]),
+      degradedProviderNames: new Set(["google"]),
+      syntheticMaxSuppressedSlugs: policy,
+    });
+
+    for (const slug of ["google/gemini-family:preview", "google/GEMINI-CASE"]) {
+      expect((preserved.find(row => row.slug === slug)?.supported_reasoning_levels as Array<{ effort: string }>)
+        .map(level => level.effort)).toEqual(["low", "high", "ultra"]);
+    }
   });
 
   test("does not reuse a routed native alias as the native catalog template", () => {

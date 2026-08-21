@@ -353,7 +353,11 @@ function prepareCatalog(
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
-    syntheticMaxSuppressedSlugs: syntheticMaxSuppressedCatalogSlugs(config),
+    syntheticMaxSuppressedSlugs: syntheticMaxSuppressedCatalogSlugs(config, [
+      ...catalogModels,
+      ...baselineCatalogModels,
+      ...routedEntries,
+    ]),
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],

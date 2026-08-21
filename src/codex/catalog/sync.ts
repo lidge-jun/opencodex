@@ -14,7 +14,7 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
-import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
+import { encodeRoutedModelId, routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -50,7 +50,7 @@ import {
   resetBundledCatalogCacheForTests,
 } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
-import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug, MAX_REASONING_PROVENANCE_FIELD, stampMaxReasoningProvenance } from "./effort";
+import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampedDefaultEffort, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug, MAX_REASONING_PROVENANCE_FIELD, stampMaxReasoningProvenance } from "./effort";
 import {
   clearGatherRoutedModelsInflight,
   filterCatalogVisibleModels,
@@ -1120,6 +1120,12 @@ export function mergeCatalogEntriesFromObservedState({
         levels = levels.filter(level => level.effort !== "max");
         e.supported_reasoning_levels = levels;
         delete e[MAX_REASONING_PROVENANCE_FIELD];
+        const currentDefault = e.default_reasoning_level;
+        const surviving = catalogEntryEfforts(e);
+        if (typeof currentDefault === "string" && !surviving.includes(currentDefault)) {
+          if (surviving.length === 0) delete e.default_reasoning_level;
+          else e.default_reasoning_level = clampedDefaultEffort(currentDefault, surviving);
+        }
       }
       if (levels.length > 0 && !levels.some(level => level.effort === "max")) {
         const providerDeclaredMax = e[MAX_REASONING_PROVENANCE_FIELD] === "provider";
@@ -1233,12 +1239,24 @@ export function mergeCatalogEntriesForSync(
 /** Current config policy, kept explicit so degraded discovery cannot resurrect synthetic max. */
 export function syntheticMaxSuppressedCatalogSlugs(
   config: Pick<OcxConfig, "providers">,
+  candidateEntries: readonly RawEntry[] = [],
 ): Set<string> {
   const slugs = new Set<string>();
   for (const [provider, entry] of Object.entries(config.providers)) {
     if (entry.disabled === true) continue;
-    for (const [model, suppress] of Object.entries(entry.modelSuppressSyntheticMax ?? {})) {
+    const policy = entry.modelSuppressSyntheticMax ?? {};
+    for (const [model, suppress] of Object.entries(policy)) {
       if (suppress === true) slugs.add(routedSlug(provider, model));
+    }
+    const encodedPolicy = Object.fromEntries(
+      Object.entries(policy).map(([model, suppress]) => [encodeRoutedModelId(model), suppress]),
+    );
+    const prefix = `${provider}/`;
+    for (const candidate of candidateEntries) {
+      if (typeof candidate.slug !== "string" || !candidate.slug.startsWith(prefix)) continue;
+      if (modelRecordValue(encodedPolicy, candidate.slug.slice(prefix.length)) === true) {
+        slugs.add(candidate.slug);
+      }
     }
   }
   return slugs;
@@ -1629,7 +1647,11 @@ function writeRetainedCatalogSync({
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
-    syntheticMaxSuppressedSlugs: syntheticMaxSuppressedCatalogSlugs(config),
+    syntheticMaxSuppressedSlugs: syntheticMaxSuppressedCatalogSlugs(config, [
+      ...catalogModelsForMerge,
+      ...(baselineCatalog?.models ?? []),
+      ...goEntries,
+    ]),
     openaiContextCap,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,

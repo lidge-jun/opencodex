@@ -325,6 +325,36 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST redacts token-shaped synthetic-max validation identifiers", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+    const secret = "sk-super-secret-9876";
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: secret,
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "https://relay.example/v1",
+            modelSuppressSyntheticMax: { [secret]: "true" },
+          },
+        }),
+      });
+      const body = await response.text();
+      expect(response.status).toBe(400);
+      expect(body).not.toContain(secret);
+      expect(body).toContain("[REDACTED]");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("normalizes hand-edited structured-output model opt-outs at load", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

@@ -1,4 +1,5 @@
 import { booleanRecordConfigError } from "../../config";
+import { redactSecretString } from "../../lib/redact";
 import type { OcxConfig } from "../../types";
 
 /**
@@ -25,7 +26,9 @@ export function providerSyntheticMaxConfigError(name: unknown, provider: unknown
     (provider as { modelSuppressSyntheticMax?: unknown }).modelSuppressSyntheticMax,
     "modelSuppressSyntheticMax",
   );
-  return error ? `provider ${name} ${error}` : null;
+  return error
+    ? `provider ${JSON.stringify(redactSecretString(name))} ${redactSecretString(error)}`
+    : null;
 }
 
 function publicServiceTierRecord(value: unknown): Record<string, boolean> | undefined {
