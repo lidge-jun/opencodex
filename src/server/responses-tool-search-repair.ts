@@ -1,5 +1,6 @@
 import {
   isTranslatorBudgetExceededError,
+  TranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import {
@@ -24,6 +25,19 @@ type PendingArgumentBlock = {
 
 const MAX_PENDING_ARGUMENT_FRAMES = 256;
 const MAX_PENDING_ARGUMENT_BYTES = 1024 * 1024;
+const MAX_CLASSIFIED_ITEM_IDS = 256;
+const MAX_CLASSIFIED_ITEM_ID_BYTES = 256 * 1024;
+
+class ClassifiedItemIdCountExceededError extends Error {
+  readonly code = "translation_buffer_limit";
+  readonly kind = "item_ids";
+  readonly limitItems = MAX_CLASSIFIED_ITEM_IDS;
+
+  constructor() {
+    super(`translator item_ids count exceeded ${MAX_CLASSIFIED_ITEM_IDS} items`);
+    this.name = "ClassifiedItemIdCountExceededError";
+  }
+}
 
 /**
  * Public Responses gateways stream a lowered search as a normal function lifecycle. Codex expects
@@ -36,6 +50,7 @@ export function createRoutedToolSearchRestoreBlockRewrite(
 ): SseBlockRewrite {
   const routedItemIds = new Set<string>();
   const ordinaryItemIds = new Set<string>();
+  let classifiedItemIdBytes = 0;
   let pendingArguments: PendingArgumentBlock[] = [];
   let pendingArgumentBytes = 0;
   let passthrough = false;
@@ -49,8 +64,43 @@ export function createRoutedToolSearchRestoreBlockRewrite(
     }
     pendingArguments = [];
     pendingArgumentBytes = 0;
+    if (classifiedItemIdBytes > 0) {
+      budget?.releaseRetained(classifiedItemIdBytes, { kind: "item_ids" });
+    }
+    classifiedItemIdBytes = 0;
     routedItemIds.clear();
     ordinaryItemIds.clear();
+  };
+
+  const clearOrdinaryItemIds = (): void => {
+    let releasedBytes = 0;
+    for (const itemId of ordinaryItemIds) {
+      releasedBytes += Buffer.byteLength(JSON.stringify(itemId), "utf8");
+    }
+    ordinaryItemIds.clear();
+    classifiedItemIdBytes = Math.max(0, classifiedItemIdBytes - releasedBytes);
+    if (releasedBytes > 0) budget?.releaseRetained(releasedBytes, { kind: "item_ids" });
+  };
+
+  const classifyItemId = (itemId: string, routed: boolean): void => {
+    const target = routed ? routedItemIds : ordinaryItemIds;
+    const previous = routed ? ordinaryItemIds : routedItemIds;
+    if (target.has(itemId)) return;
+    if (previous.delete(itemId)) {
+      target.add(itemId);
+      return;
+    }
+
+    if (routedItemIds.size + ordinaryItemIds.size >= MAX_CLASSIFIED_ITEM_IDS) {
+      throw new ClassifiedItemIdCountExceededError();
+    }
+    const retainedBytes = Buffer.byteLength(JSON.stringify(itemId), "utf8");
+    if (classifiedItemIdBytes + retainedBytes > MAX_CLASSIFIED_ITEM_ID_BYTES) {
+      throw new TranslatorBudgetExceededError("item_ids", MAX_CLASSIFIED_ITEM_ID_BYTES);
+    }
+    budget?.chargeRetained(retainedBytes, { kind: "item_ids" });
+    target.add(itemId);
+    classifiedItemIdBytes += retainedBytes;
   };
 
   const retainPending = (
@@ -73,7 +123,7 @@ export function createRoutedToolSearchRestoreBlockRewrite(
       // that we forget what we already classified: an item restored to `tool_search_call`
       // upstream of here would otherwise start emitting `function_call_arguments.*` again and
       // the client would see a mixed private/public lifecycle for one call.
-      ordinaryItemIds.clear();
+      clearOrdinaryItemIds();
       return flushed;
     }
     if (retainedBytes > 0) {
@@ -90,7 +140,7 @@ export function createRoutedToolSearchRestoreBlockRewrite(
         passthrough = true;
         // Same reasoning as the frame/byte overflow above: an already-restored routed item
         // must keep its frames suppressed even once buffering stops.
-        ordinaryItemIds.clear();
+        clearOrdinaryItemIds();
         return flushed;
       }
     }
@@ -135,7 +185,11 @@ export function createRoutedToolSearchRestoreBlockRewrite(
   const rewrite: SseBlockRewrite = (block: string): readonly string[] => {
     if (disposed) return [block];
     const payload = sseDataPayload(block);
-    if (payload === null || payload === "[DONE]") return [block];
+    if (payload === null) return [block];
+    if (payload === "[DONE]") {
+      releaseAll();
+      return [block];
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(payload);
@@ -145,11 +199,16 @@ export function createRoutedToolSearchRestoreBlockRewrite(
     if (!isPlainObject(parsed)) return [block];
 
     const type = typeof parsed.type === "string" ? parsed.type : "";
+    const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
     // After overflow we stop BUFFERING unknown frames, but an item already restored to
     // `tool_search_call` must keep its public argument frames suppressed — otherwise the client
     // receives a private item followed by `function_call_arguments.*` for the same id, which is
     // exactly the mixed lifecycle this rewrite exists to prevent. Everything else passes through.
     if (passthrough) {
+      if (terminal) {
+        releaseAll();
+        return [block];
+      }
       const passthroughItemId = typeof parsed.item_id === "string" ? parsed.item_id : undefined;
       const isArgumentEvent = type === "response.function_call_arguments.delta"
         || type === "response.function_call_arguments.done";
@@ -169,22 +228,14 @@ export function createRoutedToolSearchRestoreBlockRewrite(
     ) {
       const itemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
       const routed = names.has(parsed.item.name);
-      if (itemId) {
-        if (routed) {
-          routedItemIds.add(itemId);
-          ordinaryItemIds.delete(itemId);
-        } else {
-          ordinaryItemIds.add(itemId);
-          routedItemIds.delete(itemId);
-        }
-      }
+      if (itemId) classifyItemId(itemId, routed);
       const pending = takePending(itemId, outputIndex);
       const restored = routed ? restoreRoutedToolSearchCalls(parsed, names) : { value: parsed, changed: false };
       const restoredBlock = restored.changed
         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
         : block;
       // Classification is retained past `output_item.done` for BOTH kinds, until the terminal
-      // event releases everything.
+      // event releases the bounded, budgeted state.
       //
       // `done` ends the item, not the id's relevance. Forgetting a ROUTED id let a trailing
       // `function_call_arguments.*` — which some upstreams emit after done — fall through to
@@ -204,7 +255,6 @@ export function createRoutedToolSearchRestoreBlockRewrite(
     }
     if (argumentEvent && itemId && routedItemIds.has(itemId)) return [];
 
-    const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
     if (!terminal) return [block];
     const restored = restoreRoutedToolSearchCalls(parsed, names);
     releaseAll();

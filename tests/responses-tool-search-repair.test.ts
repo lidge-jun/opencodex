@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isTranslatorBudgetExceededError } from "../src/lib/translator-budget";
 import {
   restoreRoutedToolSearchCallsInJson,
   rewriteRoutedToolSearchForUpstream,
@@ -237,7 +238,8 @@ describe("routed Responses tool-search compatibility", () => {
       arguments: {},
       status: "in_progress",
     });
-    expect(budget.snapshot().currentBytes).toBe(0);
+    expect(budget.snapshot().currentBytes)
+      .toBe(Buffer.byteLength(JSON.stringify("fc_search"), "utf8"));
 
     expect(rewrite(frame("response.function_call_arguments.done", {
       output_index: 0,
@@ -627,5 +629,149 @@ describe("routed Responses tool-search compatibility", () => {
       delta: "x",
     }));
     expect(trailing).toHaveLength(1);
+  });
+
+  test("bounds classified item ids by count and releases the retained charge", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]), budget);
+    let expectedRetainedBytes = 0;
+
+    for (let index = 0; index < 256; index += 1) {
+      const itemId = `fc_${index}`;
+      expectedRetainedBytes += Buffer.byteLength(JSON.stringify(itemId), "utf8");
+      rewrite(frame("response.output_item.done", {
+        output_index: index,
+        item: { type: "function_call", id: itemId, name: "tool_search", arguments: "{}" },
+      }));
+    }
+
+    const beforeOverflow = budget.snapshot().currentBytes;
+    expect(beforeOverflow).toBe(expectedRetainedBytes);
+    let overflow: unknown;
+    try {
+      rewrite(frame("response.output_item.done", {
+        output_index: 256,
+        item: { type: "function_call", id: "fc_overflow", name: "tool_search", arguments: "{}" },
+      }));
+    } catch (error) {
+      overflow = error;
+    }
+    expect(isTranslatorBudgetExceededError(overflow)).toBe(true);
+    expect(overflow).toBeInstanceOf(Error);
+    expect((overflow as Error).message).toBe("translator item_ids count exceeded 256 items");
+    expect(budget.snapshot().currentBytes).toBe(beforeOverflow);
+
+    rewrite.dispose?.();
+    rewrite.dispose?.();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("bounds classified item ids by serialized UTF-8 bytes", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]), budget);
+    const nearlyFullId = "x".repeat(256 * 1024 - 7);
+    rewrite(frame("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: nearlyFullId, name: "tool_search", arguments: "{}" },
+    }));
+    expect(budget.snapshot().currentBytes).toBe(256 * 1024 - 5);
+    rewrite(frame("response.output_item.done", {
+      output_index: 1,
+      item: { type: "function_call", id: "界", name: "tool_search", arguments: "{}" },
+    }));
+    expect(budget.snapshot().currentBytes).toBe(256 * 1024);
+
+    let overflow: unknown;
+    try {
+      rewrite(frame("response.output_item.done", {
+        output_index: 2,
+        item: {
+          type: "function_call",
+          id: "y",
+          name: "tool_search",
+          arguments: "{}",
+        },
+      }));
+    } catch (error) {
+      overflow = error;
+    }
+    if (!isTranslatorBudgetExceededError(overflow)) throw overflow;
+    expect(overflow.kind).toBe("item_ids");
+    expect(overflow.limitBytes).toBe(256 * 1024);
+    expect(budget.snapshot().currentBytes).toBe(256 * 1024);
+    rewrite.dispose?.();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("deduplicates and reclassifies one item id without double charging", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]), budget);
+    const itemId = "fc_shared";
+    const retainedBytes = Buffer.byteLength(JSON.stringify(itemId), "utf8");
+    const emit = (event: "response.output_item.added" | "response.output_item.done", name: string) => {
+      rewrite(frame(event, {
+        output_index: 0,
+        item: { type: "function_call", id: itemId, name, arguments: "{}" },
+      }));
+      expect(budget.snapshot().currentBytes).toBe(retainedBytes);
+    };
+
+    emit("response.output_item.added", "tool_search");
+    emit("response.output_item.done", "tool_search");
+    const argument = frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: itemId,
+      delta: "x",
+    });
+    expect(rewrite(argument)).toEqual([]);
+    emit("response.output_item.added", "ordinary");
+    expect(rewrite(argument)).toEqual([argument]);
+    emit("response.output_item.done", "tool_search");
+    expect(rewrite(argument)).toEqual([]);
+
+    rewrite(frame("response.completed", {
+      response: { id: "resp_done", status: "completed", output: [] },
+    }));
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("releases routed ids on terminal and DONE after pending passthrough", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 64 });
+    const rewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]), budget);
+    const routedBytes = Buffer.byteLength(JSON.stringify("fc_search"), "utf8");
+    const ordinaryBytes = Buffer.byteLength(JSON.stringify("fc_plain"), "utf8");
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_search", name: "tool_search", arguments: "{}" },
+    }));
+    rewrite(frame("response.output_item.added", {
+      output_index: 1,
+      item: { type: "function_call", id: "fc_plain", name: "ordinary", arguments: "{}" },
+    }));
+    expect(budget.snapshot().currentBytes).toBe(routedBytes + ordinaryBytes);
+
+    const pending = frame("response.function_call_arguments.delta", {
+      output_index: 1,
+      item_id: "unknown",
+      delta: "x".repeat(256),
+    });
+    expect(rewrite(pending)).toEqual([pending]);
+    expect(budget.snapshot().currentBytes).toBe(routedBytes);
+    rewrite(frame("response.completed", {
+      response: { id: "resp_done", status: "completed", output: [] },
+    }));
+    expect(budget.snapshot().currentBytes).toBe(0);
+
+    const doneBudget = createTestTranslatorBudget();
+    const doneRewrite = createRoutedToolSearchRestoreBlockRewrite(new Set(["tool_search"]), doneBudget);
+    doneRewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_done", name: "tool_search", arguments: "{}" },
+    }));
+    expect(doneBudget.snapshot().currentBytes).toBeGreaterThan(0);
+    expect(doneRewrite("data: [DONE]")).toEqual(["data: [DONE]"]);
+    expect(doneBudget.snapshot().currentBytes).toBe(0);
+    doneRewrite.dispose?.();
+    expect(doneBudget.snapshot().currentBytes).toBe(0);
   });
 });
