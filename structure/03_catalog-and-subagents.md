@@ -333,6 +333,17 @@ cause delegation. The TOML edit owns only marker-tagged values, preserves existi
 user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
 without changing the file.
 
+Named specialist roles (`subagentRoles`) are a separate catalog: id, when-to-use
+description, model, optional effort, and child developer instructions. Enabled role
+models are unioned into the five-slot `subagentModels` roster on save. When
+`syncCodexAgentRoles` is effective (unset defaults on once any enabled role exists;
+explicit `false` always wins), OpenCodex writes marker-owned
+`$CODEX_HOME/agents/ocx-<id>.toml` with only `name`, `description`,
+`developer_instructions`, `model`, and optional `model_reasoning_effort`. It never
+writes `model_fallback` (#1190). Files without the marker, including `reviewer.toml`,
+are never touched; a user-owned file whose TOML `name` matches a role id wins.
+Owned files for disabled or removed ids are pruned.
+
 Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
 whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke

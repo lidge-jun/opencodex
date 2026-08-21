@@ -15,8 +15,10 @@ routes, and limits delegated work.
 | `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. An explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
-| `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
+| `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, `{{fallback}}`, and `{{roles}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | Controls only opencodex-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
+| `subagentRoles?` | `object[]` | — | Named specialists (`id`, `description`, `model`, optional `effort`, `developerInstructions`, optional `enabled`). Max 8 roles and 5 unique enabled models. An explicit empty list is preserved. |
+| `syncCodexAgentRoles?` | `boolean` | on once any enabled role exists | Project enabled roles into marker-owned `$CODEX_HOME/agents/ocx-<id>.toml`. `false` prunes those owned files and leaves user-authored agent files untouched. Never writes `model_fallback`. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
 | `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Per-primary-model fallback chains, keyed by the requested primary model id. This is the supported home for per-role fallback metadata; `model_fallback` inside Codex agent TOML makes Codex 0.146+ skip the role (#1190). |
@@ -46,8 +48,9 @@ an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`);
 `ocx v2 on` alone does not satisfy that dashboard gate.
 
 The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
-`/api/subagent-models`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
-the custom prompt is the `prompt` field on that API.
+`/api/subagent-models`, `/api/subagent-roles`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
+the custom prompt is the `prompt` field on that API. Role catalog updates are a full replace, or
+`PUT { "remove": "<id>" }` to delete one id against the live catalog.
 
 The Codex Auth page can also toggle Codex's own `default_mode_request_user_input`
 feature flag (`GET`/`PUT /api/codex-auth/features/default-mode-request-user-input`). Enabling it

@@ -289,6 +289,12 @@ export interface OcxConfig {
    */
   subagentRoles?: OcxSubagentRole[];
   /**
+   * Project enabled roles into marker-owned `$CODEX_HOME/agents/ocx-<id>.toml`.
+   * Unset means on once any enabled role exists. `false` leaves user files
+   * untouched and prunes our owned `ocx-*.toml` files.
+   */
+  syncCodexAgentRoles?: boolean;
+  /**
    * Optional full picker ordering for the Codex model catalog, independent of the
    * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
    * the Codex model picker for large routed catalogs (10-20+ models) that would otherwise sort

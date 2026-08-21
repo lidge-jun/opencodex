@@ -109,6 +109,15 @@ rejects `model_fallback` as an unknown field, which skips the entire role defini
 backwards compatibility, but `ocx doctor` warns about it and Codex itself will ignore
 the affected role.
 
+When `syncCodexAgentRoles` is effective, opencodex also writes marker-owned
+`$CODEX_HOME/agents/ocx-<id>.toml` files for enabled named roles (`subagentRoles`).
+Those files carry only `name`, `description`, `developer_instructions`, `model`, and
+optional `model_reasoning_effort`. Unset means on once any enabled role exists;
+`syncCodexAgentRoles: false` prunes OpenCodex-owned `ocx-*.toml` files and leaves
+user-authored agent files untouched. A user-owned agent file with the same `name`
+(including `reviewer.toml` next to `ocx-reviewer.toml`) wins; OpenCodex skips or
+prunes its owned file and leaves the user file unchanged.
+
 Duplicate model ids are removed while preserving the first occurrence. During selection, opencodex
 skips candidates that are disabled, unroutable, backed by a disabled provider, marked unhealthy,
 inside a cooldown, missing a usable pooled Codex account, or beyond the configured quota threshold.

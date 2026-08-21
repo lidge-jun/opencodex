@@ -70,10 +70,12 @@ import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels, fetchGrokCandidateModels, buildClaudeDesktopState } from "./shared";
 import {
+  agentRolesSyncEffective,
   parseSubagentRoles,
   routedOnV2Warnings,
   unionRoleModelsIntoRoster,
 } from "../../codex/agent-roles";
+import { syncCodexAgentRoles } from "../../codex/agent-roles-sync";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { readManagementJsonBody, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
@@ -675,6 +677,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       )));
     return jsonResponse({
       roles: config.subagentRoles ?? [],
+      ...(config.syncCodexAgentRoles === undefined ? {} : { syncCodexAgentRoles: config.syncCodexAgentRoles }),
+      syncCodexAgentRolesEffective: agentRolesSyncEffective(config),
       efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
       available: [...nativeModels, ...routedModels],
     });
@@ -690,7 +694,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
       return jsonResponse({ error: "body must be a JSON object" }, 400);
     }
-    const body = parsedBody as { roles?: unknown; remove?: unknown };
+    const body = parsedBody as { roles?: unknown; remove?: unknown; syncCodexAgentRoles?: unknown };
     if ("remove" in body) {
       if ("roles" in body) return jsonResponse({ error: "body.remove cannot be combined with body.roles" }, 400);
       if (typeof body.remove !== "string" || body.remove.trim().length === 0) {
@@ -700,19 +704,27 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       config.subagentRoles = (config.subagentRoles ?? []).filter(role => role.id !== id);
       const { saveConfigPreservingClaudeCode: save } = await import("../../config");
       save(config);
+      const warnings = [...syncCodexAgentRoles(config).warnings];
       const catalogRefresh = await convergeCodexCatalog();
       await syncClaudeAgentDefsBestEffort();
       await autoApplyDesktopBestEffort();
       return jsonResponse({
         ok: true,
         roles: config.subagentRoles,
-        warnings: [],
+        ...(config.syncCodexAgentRoles === undefined ? {} : { syncCodexAgentRoles: config.syncCodexAgentRoles }),
+        syncCodexAgentRolesEffective: agentRolesSyncEffective(config),
+        warnings,
         catalogRefresh,
       });
     }
     if (!("roles" in body)) return jsonResponse({ error: "body.roles is required" }, 400);
     const parsed = parseSubagentRoles(body.roles);
     if (!parsed.ok) return jsonResponse({ error: parsed.error, index: parsed.index }, 400);
+    if ("syncCodexAgentRoles" in body && body.syncCodexAgentRoles !== null) {
+      if (typeof body.syncCodexAgentRoles !== "boolean") {
+        return jsonResponse({ error: "syncCodexAgentRoles must be a boolean" }, 400);
+      }
+    }
 
     const warnings: string[] = [];
     const union = unionRoleModelsIntoRoster(config.subagentModels, parsed.roles);
@@ -723,14 +735,20 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
 
     config.subagentRoles = parsed.roles;
     config.subagentModels = union.models;
+    if ("syncCodexAgentRoles" in body && typeof body.syncCodexAgentRoles === "boolean") {
+      config.syncCodexAgentRoles = body.syncCodexAgentRoles;
+    }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     save(config);
+    warnings.push(...syncCodexAgentRoles(config).warnings);
     const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
     return jsonResponse({
       ok: true,
       roles: config.subagentRoles,
+      ...(config.syncCodexAgentRoles === undefined ? {} : { syncCodexAgentRoles: config.syncCodexAgentRoles }),
+      syncCodexAgentRolesEffective: agentRolesSyncEffective(config),
       warnings,
       catalogRefresh,
     });

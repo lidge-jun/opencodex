@@ -115,6 +115,7 @@ describe("windows replace retry counters", () => {
       "prompt-journal",
       "config-ownership",
       "claude-agents",
+      "codex-agent-roles",
       "lab-automation",
       "lab-ledger",
       "storage-cleanup",
@@ -123,6 +124,7 @@ describe("windows replace retry counters", () => {
     for (const publisher of publishers) renameAtomicFile("a", "b", flakyIo(1), publisher);
     expect(Object.keys(readWindowsReplaceRetryCounters()).sort()).toEqual([
       "claude-agents:EBUSY",
+      "codex-agent-roles:EBUSY",
       "config-ownership:EBUSY",
       "config:EBUSY",
       "lab-automation:EBUSY",
