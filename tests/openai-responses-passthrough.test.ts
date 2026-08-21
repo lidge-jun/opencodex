@@ -2158,12 +2158,19 @@ describe("replayed compaction blobs", () => {
     authMode: "key",
     apiKey: "sk-test",
   };
-  // Forward auth relays the caller's own OpenAI credentials, so a self-hosted relay is standing in
-  // front of an OpenAI backend and must keep its users' compacted history.
+  // Forward auth alone says nothing about the backend. Noncanonical providers receive no caller
+  // credentials, so this relay cannot be assumed to understand OpenAI's native blob.
   const forwardRelayProvider: PassthroughProvider = {
     adapter: "openai-responses",
     baseUrl: "https://relay.example/backend-api/codex",
     authMode: "forward",
+  };
+  const optedInRelayProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://openai-relay.example/v1",
+    authMode: "key",
+    apiKey: "relay-test",
+    decodesNativeCompactionBlobs: true,
   };
 
   function forwardedInput(target: PassthroughProvider, input: unknown[]): Record<string, unknown>[] {
@@ -2181,22 +2188,24 @@ describe("replayed compaction blobs", () => {
   // in the client transcript the failure repeats on every later turn — including the compaction turn
   // — so the session cannot recover until its history is cleared.
   test("degrades a foreign blob to a note on a destination that cannot decode it", () => {
-    for (const type of ["compaction", "compaction_summary", "context_compaction"]) {
-      const forwarded = forwardedInput(routedProvider, [
-        { type, encrypted_content: NATIVE_BLOB },
-      ]);
-      expect(forwarded[0]).toEqual({
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
-      });
-      expect(JSON.stringify(forwarded)).not.toContain(NATIVE_BLOB);
+    for (const target of [routedProvider, forwardRelayProvider]) {
+      for (const type of ["compaction", "compaction_summary", "context_compaction"]) {
+        const forwarded = forwardedInput(target, [
+          { type, encrypted_content: NATIVE_BLOB },
+        ]);
+        expect(forwarded[0]).toEqual({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+        });
+        expect(JSON.stringify(forwarded)).not.toContain(NATIVE_BLOB);
+      }
     }
   });
 
-  test("forwards a foreign blob untouched to the backends that mint them", () => {
+  test("forwards a foreign blob untouched to destinations known to decode it", () => {
     const item = { type: "compaction", encrypted_content: NATIVE_BLOB };
-    for (const target of [provider, openaiKeyedProvider, forwardRelayProvider]) {
+    for (const target of [provider, openaiKeyedProvider, optedInRelayProvider]) {
       expect(forwardedInput(target, [item])[0]).toEqual(item);
     }
   });
