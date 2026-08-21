@@ -198,7 +198,7 @@ export default function ProviderAuthPanel({
   const importFileRef = useRef<HTMLInputElement>(null);
   const deviceCodeCopy = useCopyFeedback<string>();
   const manualFlowKey = loginHint?.provider === item.name
-    ? `${loginHint.provider}\0${loginHint.url ?? ""}\0${loginHint.deviceCode ?? ""}`
+    ? `${loginHint.provider}\0${loginHint.url ?? ""}\0${loginHint.deviceCode ?? ""}\0${loginHint.instructions ?? ""}\0${loginHint.attemptId ?? ""}`
     : "";
   const [seenManualFlowKey, setSeenManualFlowKey] = useState(manualFlowKey);
   const manualFlowKeyRef = useRef(manualFlowKey);
@@ -303,7 +303,8 @@ export default function ProviderAuthPanel({
     setManualCodeBusy(true);
     setManualCodeMsg("");
     try {
-      await authHandlers.onSubmitManualCode(item.name, input);
+      const outcome = await authHandlers.onSubmitManualCode(item.name, input);
+      if (outcome !== "submitted") return;
       if (!mountedRef.current || manualFlowKeyRef.current !== submittedFlowKey) return;
       setManualCode("");
       setManualCodeOk(true);

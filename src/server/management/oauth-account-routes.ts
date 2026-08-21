@@ -155,7 +155,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // request may already have mutated live config and yielded before its save.
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
-      const { url: authUrl, instructions, deviceCode } = await startLoginFlow(provider, {
+      const { url: authUrl, instructions, deviceCode, attemptId } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
       }, {
@@ -173,7 +173,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         const { openUrl } = await import("../../lib/open-url");
         openUrl(authUrl);
       }
-      return jsonResponse({ url: authUrl, instructions, deviceCode });
+      return jsonResponse({ url: authUrl, instructions, deviceCode, attemptId });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -200,14 +200,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)
   // when the browser cannot reach the loopback callback (remote/SSH/blocked localhost).
   if (url.pathname === "/api/oauth/login/code" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string; attemptId?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
+    const attemptId = typeof body.attemptId === "string" ? body.attemptId.trim() || undefined : undefined;
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
     if (input.length > 4096) return jsonResponse({ error: "input too long" }, 400);
-    const result = submitManualLoginCode(provider, input);
+    const result = submitManualLoginCode(provider, input, attemptId);
     if (!result.ok) return jsonResponse({ error: result.error }, 409);
     return jsonResponse({ ok: true });
   }

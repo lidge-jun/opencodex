@@ -91,8 +91,8 @@ describe("OAuth manual login code fallback", () => {
       return originalFetch(input, init);
     }) as typeof fetch;
     try {
-      await startLoginFlow("xai", { forceLogin: true });
-      expect(submitManualLoginCode("xai", `${"한".repeat(1365)}xx`)).toEqual({
+      const startedTooLarge = await startLoginFlow("xai", { forceLogin: true });
+      expect(submitManualLoginCode("xai", `${"한".repeat(1365)}xx`, startedTooLarge.attemptId)).toEqual({
         ok: false,
         error: "code too large",
       });
@@ -143,21 +143,21 @@ describe("OAuth manual login code fallback", () => {
       // Wait until the flow registers its expected state with the manual-code slot:
       // a mismatched redirect URL must then be rejected SYNCHRONOUSLY.
       const deadline = Date.now() + 5_000;
-      let mismatch = submitManualLoginCode("xai", `${redirectUri}?code=evil&state=WRONG`);
+      let mismatch = submitManualLoginCode("xai", `${redirectUri}?code=evil&state=WRONG`, started.attemptId);
       while (mismatch.ok && Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 50));
-        mismatch = submitManualLoginCode("xai", `${redirectUri}?code=evil&state=WRONG`);
+        mismatch = submitManualLoginCode("xai", `${redirectUri}?code=evil&state=WRONG`, started.attemptId);
       }
       expect(mismatch.ok).toBe(false);
       if (!mismatch.ok) expect(mismatch.error).toBe("state mismatch — paste the redirect URL from THIS login attempt");
 
       // URL-shaped input with NO state is rejected, not downgraded to a raw code.
-      const missingState = submitManualLoginCode("xai", `${redirectUri}?code=abc`);
+      const missingState = submitManualLoginCode("xai", `${redirectUri}?code=abc`, started.attemptId);
       expect(missingState.ok).toBe(false);
       if (!missingState.ok) expect(missingState.error).toBe("redirect URL is missing the state parameter");
 
       // Correct paste: matching state completes the login via the original verifier.
-      const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-auth-code&state=${state}`);
+      const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-auth-code&state=${state}`, started.attemptId);
       expect(goodSubmit).toEqual({ ok: true });
 
       // Background runLogin finishes: poll status until done.
@@ -213,8 +213,8 @@ describe("OAuth manual login code fallback", () => {
       return originalFetch(input, init);
     }) as typeof fetch;
     try {
-      await startLoginFlow("xai", { forceLogin: true });
-      const raw = submitManualLoginCode("xai", "manual-auth-code-only");
+      const startedRaw = await startLoginFlow("xai", { forceLogin: true });
+      const raw = submitManualLoginCode("xai", "manual-auth-code-only", startedRaw.attemptId);
       expect(raw).toEqual({ ok: true });
       const statusDeadline = Date.now() + 10_000;
       while (!getLoginStatus("xai").done && Date.now() < statusDeadline) {
@@ -253,8 +253,93 @@ describe("OAuth manual login code fallback", () => {
       const noLogin = await post({ provider: "xai", input: "some-code" });
       expect(noLogin.status).toBe(409);
       expect(((await noLogin.json()) as { error?: string }).error).toBe("no login in progress");
+      // New: stale attemptId cannot reach replacement flow.
+      {
+        const loginRes = await fetch(new URL("/api/oauth/login", server.url), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "xai", addAccount: true }),
+        });
+        expect(loginRes.status).toBe(200);
+        const loginData = (await loginRes.json()) as { attemptId?: string; url?: string };
+        const attemptA = loginData.attemptId;
+        expect(typeof attemptA).toBe("string");
+        // Delayed A: would be consumed if server keyed only by provider.
+        // Cancel A and start B; A must be stale.
+        const cancelRes = await fetch(new URL("/api/oauth/login/cancel", server.url), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "xai" }),
+        });
+        expect(cancelRes.status).toBe(200);
+        const loginB = await fetch(new URL("/api/oauth/login", server.url), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "xai", addAccount: true }),
+        });
+        expect(loginB.status).toBe(200);
+        const dataB = (await loginB.json()) as { attemptId?: string };
+        const attemptB = dataB.attemptId!;
+        expect(attemptB).not.toBe(attemptA);
+        const stale = await post({ provider: "xai", input: "manual-auth-delayed", attemptId: attemptA });
+        expect(stale.status).toBe(409);
+        expect(((await stale.json()) as { error?: string }).error).toBe("stale login attempt");
+        // Correct attempt still accepts input.
+        const fresh = await post({ provider: "xai", input: "manual-auth-delayed", attemptId: attemptB });
+        // fresh may be ok or rejected for no code/bad code, but must NOT be stale
+        if (fresh.status === 409) {
+          const body = (await fresh.json()) as { error?: string };
+          expect(body.error).not.toBe("stale login attempt");
+        }
+        await fetch(new URL("/api/oauth/login/cancel", server.url), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "xai" }),
+        });
+      }
     } finally {
       await server.stop(true);
     }
   });
+
+  test("stale raw user_ credential cannot reach replacement flow", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("openid-configuration")) {
+        return new Response(JSON.stringify({
+          authorization_endpoint: "https://auth.x.ai/authorize",
+          token_endpoint: "https://auth.x.ai/oauth/token",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const first = await startLoginFlow("xai", { forceLogin: true });
+      const attemptA = first.attemptId;
+      expect(typeof attemptA).toBe("string");
+      // Raw paste succeeds for the active attempt.
+      expect(submitManualLoginCode("xai", "manual-raw-a", attemptA)).toEqual({ ok: true });
+      // Cancel and start a replacement flow: delayed raw for A must be stale.
+      cancelLoginFlow("xai");
+      clearLoginState("xai");
+      const second = await startLoginFlow("xai", { forceLogin: true });
+      const attemptB = second.attemptId;
+      expect(attemptB).not.toBe(attemptA);
+      const stale = submitManualLoginCode("xai", "manual-raw-a", attemptA);
+      expect(stale.ok).toBe(false);
+      if (!stale.ok) expect(stale.error).toBe("stale login attempt");
+      // Correct attempt can still paste.
+      expect(submitManualLoginCode("xai", "manual-raw-b", attemptB)).toEqual({ ok: true });
+      // Missing attemptId is also stale when an attempt is active.
+      const missing = submitManualLoginCode("xai", "manual-raw-b");
+      expect(missing.ok).toBe(false);
+      if (!missing.ok) expect(missing.error).toBe("stale login attempt");
+    } finally {
+      globalThis.fetch = originalFetch;
+      cancelLoginFlow("xai");
+      clearLoginState("xai");
+    }
+  });
+
 });

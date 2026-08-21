@@ -1254,7 +1254,8 @@ export async function runLogin(
  * localhost), the GUI can POST the final redirect URL or authorization code via
  * submitManualLoginCode(), which feeds OAuthController.onManualCodeInput.
  */
-const loginState = new Map<string, { error?: string; done: boolean }>();
+const loginState = new Map<string, { error?: string; done: boolean; attemptId?: string }>();
+const loginAttemptId = new Map<string, string>();
 const loginAbort = new Map<string, AbortController>();
 const kiroLoginSettling = new Set<string>();
 
@@ -1277,6 +1278,7 @@ export function reconcileOAuthFlowState(context: GenerationContext): number {
     if (loginState.delete(provider)) removed += 1;
     if (loginManual.delete(provider)) removed += 1;
     if (loginAbort.delete(provider)) removed += 1;
+    if (loginAttemptId.delete(provider)) removed += 1;
   }
   lastOAuthFlowReconciledGeneration = context.generation;
   return removed;
@@ -1326,12 +1328,17 @@ function waitForManualLoginCode(provider: string, signal: AbortSignal, expectedS
  * Returns ok:false when no login is waiting (or input is empty). Invalid pastes are accepted
  * here and re-prompted by the OAuth callback loop if they cannot be parsed / fail state checks.
  */
-export function submitManualLoginCode(provider: string, input: string): { ok: true } | { ok: false; error: string } {
+export function submitManualLoginCode(provider: string, input: string, attemptId?: string): { ok: true } | { ok: false; error: string } {
   const trimmed = input.trim();
   if (!trimmed) return { ok: false, error: "empty code" };
   if (retainedUtf8Bytes(trimmed) > OAUTH_PENDING_CODE_MAX_BYTES) return { ok: false, error: "code too large" };
   const st = loginState.get(provider);
   if (!st || st.done) return { ok: false, error: "no login in progress" };
+  // An active login always carries an attempt ID (startLoginFlow). Fail closed if it does not.
+  const activeAttemptId = loginAttemptId.get(provider);
+  if (!activeAttemptId || !attemptId || attemptId !== activeAttemptId) {
+    return { ok: false, error: "stale login attempt" };
+  }
   const slot = ensureManualCodeSlot(provider);
   // Synchronous validation (validated request/ack): reject un-parseable input and
   // authorization responses (url/query kind) whose state is missing or mismatched
@@ -1403,6 +1410,7 @@ export function clearLoginState(provider: string): void {
   loginAbort.get(provider)?.abort("cleared");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
+  loginAttemptId.delete(provider);
   loginState.delete(provider);
 }
 
@@ -1413,6 +1421,7 @@ export function cancelLoginFlow(provider: string): boolean {
   ctrl?.abort("cancelled");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
+  loginAttemptId.delete(provider);
   loginState.set(provider, { done: true, error: "Login cancelled" });
   return true;
 }
@@ -1421,7 +1430,7 @@ export async function startLoginFlow(
   provider: string,
   opts?: LoginOpts,
   lifecycle?: LoginFlowLifecycle,
-): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
+): Promise<{ url: string; instructions?: string; deviceCode?: string; attemptId: string }> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const existing = loginState.get(provider);
@@ -1429,7 +1438,9 @@ export async function startLoginFlow(
     throw new Error(`A login for ${provider} is already in progress`);
   }
   clearManualCodeSlot(provider);
-  loginState.set(provider, { done: false });
+  const attemptId = randomUUID();
+  loginAttemptId.set(provider, attemptId);
+  loginState.set(provider, { done: false, attemptId });
   const abort = new AbortController();
   loginAbort.set(provider, abort);
   if (provider === "kiro") kiroLoginSettling.add(provider);
@@ -1438,7 +1449,7 @@ export async function startLoginFlow(
     const ctrl: OAuthController = {
       onAuth: ({ url, instructions, deviceCode }) => {
         urlResolved = true;
-        resolve({ url, instructions, deviceCode });
+        resolve({ url, instructions, deviceCode, attemptId });
       },
       onProgress: () => {},
       // GUI fallback when the browser cannot hit the loopback callback server.
@@ -1467,16 +1478,18 @@ export async function startLoginFlow(
       if (finalError === undefined) {
         loginAbort.delete(provider);
         clearManualCodeSlot(provider);
+        loginAttemptId.delete(provider);
         loginState.set(provider, { done: true });
         // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
         // resolve so the GUI call returns instead of hanging.
-        if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
+        if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed.", attemptId });
         return;
       }
 
       const e = finalError;
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
+      loginAttemptId.delete(provider);
       const msg = publicOAuthAuthenticationErrorMessage(e);
       loginState.set(provider, { done: true, error: msg });
       if (!urlResolved) reject(e);
@@ -1494,6 +1507,7 @@ export async function startLoginFlow(
       if (abandonIfNotOwner(e)) return;
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
+      loginAttemptId.delete(provider);
       const msg = publicOAuthAuthenticationErrorMessage(e);
       loginState.set(provider, { done: true, error: msg });
       if (!urlResolved) reject(e);
