@@ -166,6 +166,38 @@ describe("Responses namespace tool compatibility", () => {
     expect([...rewritten.aliases]).toEqual([]);
   });
 
+  test("chooses the bare declaration regardless of which tool container comes first", () => {
+    const bare = {
+      type: "function",
+      name: "exec",
+      description: "canonical bare declaration",
+      parameters: { type: "object", properties: { input: { type: "string" } } },
+    };
+    const functionsGroup = {
+      type: "namespace",
+      name: "functions",
+      tools: [{
+        type: "function",
+        name: "exec",
+        description: "namespace duplicate",
+        parameters: { type: "object", properties: {} },
+      }],
+    };
+    const flatten = (bodyTools: unknown[], additionalTools: unknown[]) => {
+      const rewritten = rewriteRoutedNamespaceToolsForUpstream({
+        tools: bodyTools,
+        input: [{ type: "additional_tools", role: "developer", tools: additionalTools }],
+      }).body as {
+        tools: Array<Record<string, unknown>>;
+        input: Array<{ tools: Array<Record<string, unknown>> }>;
+      };
+      return [...rewritten.tools, ...rewritten.input[0]!.tools];
+    };
+
+    expect(flatten([bare], [functionsGroup])).toEqual([bare]);
+    expect(flatten([functionsGroup], [bare])).toEqual([bare]);
+  });
+
   // The routed compaction turn strips the whole tool surface before this runs, and a catalog can
   // change mid-session — but the client is still replaying items this layer's own restoration
   // stamped with a private `namespace`.

@@ -3,8 +3,9 @@ import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterP
 import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
-import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { handleResponses, sanitizeEncryptedContentInPlace } from "../src/server/responses";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
+import type { OcxConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
@@ -2159,6 +2160,196 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       && t.tools?.some(inner => inner.name === "imagegen")
     )).toBe(true);
     expect(body.tool_choice).toEqual({ type: "function", name: "image_gen.imagegen" });
+  });
+});
+
+describe("routed namespace and custom-tool identity", () => {
+  const customNamespace = "custom_catalog";
+  const functionNamespace = "function_catalog";
+  const rawTools = [
+    {
+      type: "namespace",
+      name: customNamespace,
+      tools: [{
+        type: "custom",
+        name: "read",
+        description: "Read freeform input",
+        format: { type: "text" },
+      }],
+    },
+    {
+      type: "namespace",
+      name: functionNamespace,
+      tools: [{
+        type: "function",
+        name: "read",
+        description: "Read structured input",
+        parameters: { type: "object", properties: {} },
+      }],
+    },
+  ];
+  const customUpstreamItem = {
+    type: "function_call",
+    id: "fc_custom_read",
+    call_id: "call_custom_read",
+    name: `${customNamespace}__read`,
+    arguments: JSON.stringify({ input: "freeform payload" }),
+    status: "completed",
+  };
+  const functionUpstreamItem = {
+    type: "function_call",
+    id: "fc_function_read",
+    call_id: "call_function_read",
+    name: `${functionNamespace}__read`,
+    arguments: "{}",
+    status: "completed",
+  };
+  const config = {
+    port: 0,
+    defaultProvider: "fixture",
+    providers: {
+      fixture: {
+        adapter: "openai-responses",
+        baseUrl: "https://fixture.test/v1",
+        authMode: "key",
+        apiKey: "fixture-key",
+      },
+    },
+  } as OcxConfig;
+
+  const frame = (event: string, payload: Record<string, unknown>): string =>
+    `event: ${event}\ndata: ${JSON.stringify({ type: event, ...payload })}`;
+
+  test("round-trips same-named namespaced custom and function calls through JSON and SSE", async () => {
+    const adapter = createResponsesPassthroughAdapter(config.providers.fixture!);
+    const built = adapter.buildRequest({
+      modelId: "routed-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "routed-model", input: "read", tools: rawTools },
+    }, { headers: new Headers() });
+    const builtBody = JSON.parse(built.body) as { tools: Array<Record<string, unknown>> };
+
+    expect(builtBody.tools.map(tool => ({ type: tool.type, name: tool.name }))).toEqual([
+      { type: "function", name: `${customNamespace}__read` },
+      { type: "function", name: `${functionNamespace}__read` },
+    ]);
+    expect([...(built.convertedRoutedCustomToolNames ?? [])]).toEqual([
+      `${customNamespace}__read`,
+    ]);
+
+    const savedFetch = globalThis.fetch;
+    const outboundBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      const outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      outboundBodies.push(outbound);
+      if (outbound.stream === true) {
+        const upstream = [
+          frame("response.output_item.added", {
+            output_index: 0,
+            item: { ...customUpstreamItem, arguments: "", status: "in_progress" },
+          }),
+          frame("response.function_call_arguments.done", {
+            output_index: 0,
+            item_id: customUpstreamItem.id,
+            arguments: customUpstreamItem.arguments,
+          }),
+          frame("response.output_item.done", { output_index: 0, item: customUpstreamItem }),
+          frame("response.output_item.added", {
+            output_index: 1,
+            item: { ...functionUpstreamItem, arguments: "", status: "in_progress" },
+          }),
+          frame("response.function_call_arguments.done", {
+            output_index: 1,
+            item_id: functionUpstreamItem.id,
+            arguments: functionUpstreamItem.arguments,
+          }),
+          frame("response.output_item.done", { output_index: 1, item: functionUpstreamItem }),
+          frame("response.completed", {
+            response: {
+              id: "resp_stream",
+              status: "completed",
+              output: [customUpstreamItem, functionUpstreamItem],
+            },
+          }),
+          "data: [DONE]",
+        ].join("\n\n") + "\n\n";
+        return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({
+        id: "resp_json",
+        status: "completed",
+        output: [customUpstreamItem, functionUpstreamItem],
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const requestBody = (stream: boolean) => ({
+      model: "fixture/routed-model",
+      stream,
+      input: [{ role: "user", content: [{ type: "input_text", text: "read both" }] }],
+      tools: rawTools,
+    });
+
+    try {
+      const jsonResponse = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody(false)),
+      }), config, { model: "", provider: "" });
+      const json = await jsonResponse.json() as { output: Array<Record<string, unknown>> };
+      expect(json.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        namespace: customNamespace,
+        name: "read",
+        input: "freeform payload",
+      });
+      expect(json.output[0]).not.toHaveProperty("arguments");
+      expect(json.output[1]).toMatchObject({
+        type: "function_call",
+        namespace: functionNamespace,
+        name: "read",
+        arguments: "{}",
+      });
+
+      const sseResponse = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody(true)),
+      }), config, { model: "", provider: "" });
+      const clientSse = await sseResponse.text();
+      const payloads = clientSse
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data:") && line.slice(5).trim() !== "[DONE]")
+        .map(line => JSON.parse(line.slice(5).trim()) as Record<string, unknown>);
+      const completed = payloads.find(payload => payload.type === "response.completed") as {
+        response: { output: Array<Record<string, unknown>> };
+      } | undefined;
+      expect(completed?.response.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        namespace: customNamespace,
+        name: "read",
+        input: "freeform payload",
+      });
+      expect(completed?.response.output[1]).toMatchObject({
+        type: "function_call",
+        namespace: functionNamespace,
+        name: "read",
+        arguments: "{}",
+      });
+      expect(payloads.some(payload => payload.type === "response.custom_tool_call_input.done")).toBe(true);
+      expect(payloads.some(payload => payload.type === "response.function_call_arguments.done")).toBe(true);
+
+      for (const outbound of outboundBodies) {
+        const tools = outbound.tools as Array<Record<string, unknown>>;
+        expect(tools.map(tool => ({ type: tool.type, name: tool.name }))).toEqual([
+          { type: "function", name: `${customNamespace}__read` },
+          { type: "function", name: `${functionNamespace}__read` },
+        ]);
+      }
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
   });
 });
 

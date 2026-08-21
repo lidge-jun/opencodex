@@ -2545,7 +2545,10 @@ async function handleResponsesInner(
     }
     if (route.provider.authMode !== "forward") {
       for (const name of request.convertedRoutedCustomToolNames ?? []) {
-        if (toolBridgeMaps.freeformToolNames.has(name)) routedCustomToolNames.add(name);
+        if (
+          toolBridgeMaps.freeformToolNames.has(name)
+          || toolBridgeMaps.toolNsMap.get(name)?.freeform === true
+        ) routedCustomToolNames.add(name);
       }
     }
     for (const name of request.convertedRoutedToolSearchNames ?? []) {

@@ -68,7 +68,7 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
-    /** Custom-tool names actually lowered to upstream function calls while building this request. */
+    /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
     /** Client tool-search names actually lowered to upstream function calls for this request. */
     convertedRoutedToolSearchNames?: ReadonlySet<string>;

@@ -90,6 +90,7 @@ function addSelector(
 
 type NamespaceRewritePlan = {
   aliases: Map<string, RoutedNamespaceToolIdentity>;
+  bareWireNames: Set<string>;
   identities: Map<string, string>;
   selectors: Map<string, string | null>;
 };
@@ -99,6 +100,7 @@ export class NamespaceToolCollisionError extends Error {}
 
 function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
+  const bareWireNames = new Set<string>();
   const identities = new Map<string, string>();
   const selectors = new Map<string, string | null>();
   const wireOwners = new Map<string, string>();
@@ -110,6 +112,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         // declaring the same tool both ways is the duplicate the parser already tolerates, not a
         // collision, and `promoteClientLoadedTools` produces exactly that shape.
         wireOwners.set(tool.name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, tool.name));
+        bareWireNames.add(tool.name);
         addSelector(selectors, tool.name, tool.name);
       }
     }
@@ -141,7 +144,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
     }
   }
 
-  return { aliases, identities, selectors };
+  return { aliases, bareWireNames, identities, selectors };
 }
 
 /**
@@ -165,13 +168,25 @@ function rewriteToolList(
       if (!parsed) continue;
       for (const child of parsed.children) {
         const wireName = plan.identities.get(loweredIdentity(parsed.namespace, child.name as string));
-        if (wireName === undefined || emitted.has(wireName)) continue;
+        // A bare declaration is the canonical representation of a `functions` child. Decide that
+        // from the complete catalog rather than whichever container happens to be rewritten first.
+        if (
+          wireName === undefined
+          || (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE && plan.bareWireNames.has(wireName))
+          || emitted.has(wireName)
+        ) continue;
         emitted.add(wireName);
         rewritten.push(wireName === child.name ? child : { ...child, name: wireName });
       }
       continue;
     }
-    if (isPlainObject(tool) && isRepresentableName(tool.name)) emitted.add(tool.name);
+    if (isPlainObject(tool) && isRepresentableName(tool.name)) {
+      if (emitted.has(tool.name)) {
+        changed = true;
+        continue;
+      }
+      emitted.add(tool.name);
+    }
     rewritten.push(tool);
   }
   return changed ? rewritten : tools;
