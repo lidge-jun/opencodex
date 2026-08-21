@@ -52,6 +52,22 @@ function publisherForPrivateKey(privateKeyPem: string): PublicPublisherV1 {
   };
 }
 
+/**
+ * The bounded errno-shaped code from a failed ACL harden, or null when the cause
+ * carries none.
+ *
+ * Only the code is allowed into the message. `hardenSecretPath` already sanitizes
+ * its own diagnostic prose, but this error is what reaches a CI log, so what
+ * crosses that boundary is re-checked here rather than trusted: an errno code has
+ * no separator, no lowercase and a bounded length, and therefore cannot carry the
+ * key pathname or the username component inside it.
+ */
+function aclFailureCode(error: unknown): string | null {
+  if (!(error instanceof Error) || !("code" in error)) return null;
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,30}$/.test(code) ? code : null;
+}
+
 function requirePublisherKeyAcl(path: string, timeoutMemoKey = path): void {
   privateRegularFileSize(path, PRIVATE_KEY_FILE_OPTIONS);
   let hardened: { ok: boolean };
@@ -63,9 +79,17 @@ function requirePublisherKeyAcl(path: string, timeoutMemoKey = path): void {
     hardened = { ok: false };
   }
   if (!hardened.ok) {
+    // Name the cause in the message, not only on `cause`. Every harden failure
+    // reaches a CI log as this one string, and the three that occur there need
+    // different fixes: ETIMEDOUT is the budget, EACLIDENTITY is the effective-SID
+    // lookup, EICACLS is icacls refusing the path. A message identical across all
+    // three cannot be acted on without a Windows box to re-run it under (#2152).
+    const code = aclFailureCode(hardeningError);
     const failure = new PublicEvidenceValidationError(
       "public_publisher_key_unsafe",
-      "public publisher key ACL hardening did not complete",
+      code
+        ? `public publisher key ACL hardening did not complete (${code})`
+        : "public publisher key ACL hardening did not complete",
     );
     if (hardeningError !== undefined) {
       (failure as Error & { cause?: unknown }).cause = hardeningError;

@@ -15,11 +15,13 @@ import {
   setIcaclsRunnerForTests,
   setPlatformForTests,
 } from "../src/lib/windows-secret-acl";
+import { setWindowsPrincipalRunnerForTests } from "../src/lib/windows-user-principal";
 
 const roots: string[] = [];
 
 afterEach(() => {
   setIcaclsRunnerForTests(null);
+  setWindowsPrincipalRunnerForTests(null);
   setPlatformForTests(null);
   resetHardenedStateForTests();
   for (const root of roots.splice(0)) {
@@ -185,4 +187,63 @@ test("publisher key ACL failures preserve their underlying cause", () => {
 
   expect(caught).toBeInstanceOf(Error);
   expect((caught as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
+});
+
+function publisherKeyAclFailureMessage(prefix: string): string {
+  const home = configDir(prefix);
+  try {
+    getOrCreatePublicPublisher(home);
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error("expected required publisher key ACL hardening to fail");
+}
+
+// #2152: on the Windows CI leg every publisher-key harden failure arrived as one
+// fixed string. The three causes that occur there need different fixes -- the
+// budget, the effective-SID lookup, or icacls itself -- and the code lived only on
+// `cause`, which the reporter does not print. Diagnosing it needed a Windows box.
+test("a required publisher key ACL timeout names ETIMEDOUT in its message", () => {
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+
+  expect(publisherKeyAclFailureMessage("ocx-cl10-acl-code-timeout-")).toContain("ETIMEDOUT");
+});
+
+test("a required publisher key icacls refusal names EICACLS in its message", () => {
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setIcaclsRunnerForTests(() => ({ success: false, exitCode: 5, timedOut: false, stdout: "" }));
+
+  expect(publisherKeyAclFailureMessage("ocx-cl10-acl-code-icacls-")).toContain("EICACLS");
+});
+
+// The identity code is raised by windows-user-principal, one module further out
+// than the icacls runner, so this also pins that it survives the hand-off.
+test("a required publisher key SID lookup failure names EACLIDENTITY in its message", () => {
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+  setWindowsPrincipalRunnerForTests(() => ({
+    success: false,
+    exitCode: null,
+    timedOut: true,
+    stdout: "",
+  }));
+
+  expect(publisherKeyAclFailureMessage("ocx-cl10-acl-code-identity-")).toContain("EACLIDENTITY");
+});
+
+// A cause with no errno-shaped code must leave the message alone rather than
+// print an empty parenthetical, and nothing but the bounded code may be appended.
+test("a publisher key ACL failure without a bounded code keeps the plain message", () => {
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setIcaclsRunnerForTests(() => {
+    throw new Error("synthetic icacls runner failure");
+  });
+
+  const message = publisherKeyAclFailureMessage("ocx-cl10-acl-code-plain-");
+  expect(message).toBe("public publisher key ACL hardening did not complete");
 });
