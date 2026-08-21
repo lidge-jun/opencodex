@@ -76,6 +76,7 @@ import {
   webSearchModelOptionsFrom,
   webSearchModelRejection,
 } from "./web-search-sidecar-options";
+import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
@@ -523,6 +524,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
+        ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
@@ -541,7 +543,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown };
+      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -551,9 +553,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         timeoutMs?: unknown;
       };
     };
+    const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
-      && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
-      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, or null" }, 400);
+      && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
+      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
     }
     if (body.webSearch?.model !== undefined && typeof body.webSearch.model !== "string") {
       return jsonResponse({ error: "webSearch.model must be a string" }, 400);
@@ -628,21 +631,77 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
           return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
         }
       }
-      config.webSearchSidecar = { ...config.webSearchSidecar };
+      const webSearchCandidate = { ...config.webSearchSidecar };
       if (typeof body.webSearch.model === "string") {
-        if (body.webSearch.model === "") delete config.webSearchSidecar.model;
-        else config.webSearchSidecar.model = body.webSearch.model;
+        if (body.webSearch.model === "") delete webSearchCandidate.model;
+        else webSearchCandidate.model = body.webSearch.model;
       }
-      if (body.webSearch.backend === null) delete config.webSearchSidecar.backend;
-      else if (body.webSearch.backend === "openai" || body.webSearch.backend === "anthropic") {
-        config.webSearchSidecar.backend = body.webSearch.backend;
+      if (body.webSearch.backend === null) delete webSearchCandidate.backend;
+      else if (WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
+        webSearchCandidate.backend = body.webSearch.backend as typeof WEB_SEARCH_BACKENDS_UNION[number];
       }
-      if (typeof body.webSearch.reasoning === "string") config.webSearchSidecar.reasoning = body.webSearch.reasoning;
+      if (typeof body.webSearch.reasoning === "string") webSearchCandidate.reasoning = body.webSearch.reasoning;
+      // Operator secret for the exa backend: string sets, empty string clears. The GET
+      // payload deliberately never carries it and redact.ts strips the key from logs.
+      if (typeof body.webSearch.exaApiKey === "string") {
+        if (body.webSearch.exaApiKey === "") delete webSearchCandidate.exaApiKey;
+        else webSearchCandidate.exaApiKey = body.webSearch.exaApiKey;
+      }
+      // Opt-in x_search block (L7): null clears; an object is doc-validated before persisting.
+      if (body.webSearch.xSearch === null) delete webSearchCandidate.xSearch;
+      else if (body.webSearch.xSearch !== undefined) {
+        if (!isPlainRecord(body.webSearch.xSearch)) {
+          return jsonResponse({ error: "webSearch.xSearch must be an object or null" }, 400);
+        }
+        const x = body.webSearch.xSearch as Record<string, unknown>;
+        const allowedXSearchKeys = new Set([
+          "enabled",
+          "allowedXHandles",
+          "excludedXHandles",
+          "fromDate",
+          "toDate",
+        ]);
+        const unknownKey = Object.keys(x).find(key => !allowedXSearchKeys.has(key));
+        if (unknownKey !== undefined) {
+          return jsonResponse({ error: `webSearch.xSearch.${unknownKey} is not a supported field` }, 400);
+        }
+        if (x.enabled !== undefined && typeof x.enabled !== "boolean") {
+          return jsonResponse({ error: "webSearch.xSearch.enabled must be a boolean" }, 400);
+        }
+        for (const field of ["allowedXHandles", "excludedXHandles"] as const) {
+          const value = x[field];
+          if (value !== undefined && (!Array.isArray(value) || !value.every(handle => typeof handle === "string"))) {
+            return jsonResponse({ error: `webSearch.xSearch.${field} must be an array of strings` }, 400);
+          }
+        }
+        for (const field of ["fromDate", "toDate"] as const) {
+          if (x[field] !== undefined && typeof x[field] !== "string") {
+            return jsonResponse({ error: `webSearch.xSearch.${field} must be an ISO-8601 date (YYYY-MM-DD)` }, 400);
+          }
+        }
+        const candidate = {
+          ...(x.enabled === true ? { enabled: true } : {}),
+          ...(x.allowedXHandles !== undefined ? { allowedXHandles: x.allowedXHandles as string[] } : {}),
+          ...(x.excludedXHandles !== undefined ? { excludedXHandles: x.excludedXHandles as string[] } : {}),
+          ...(x.fromDate !== undefined ? { fromDate: x.fromDate as string } : {}),
+          ...(x.toDate !== undefined ? { toDate: x.toDate as string } : {}),
+        };
+        const invalid = validateXaiSearchOptions({
+          xSearch: candidate.enabled,
+          allowedXHandles: candidate.allowedXHandles,
+          excludedXHandles: candidate.excludedXHandles,
+          fromDate: candidate.fromDate,
+          toDate: candidate.toDate,
+        });
+        if (invalid) return jsonResponse({ error: `webSearch.xSearch invalid: ${invalid}` }, 400);
+        webSearchCandidate.xSearch = candidate;
+      }
       if (typeof body.webSearch.streamRoutedModelOutput === "boolean") {
         // `false` is the default — drop the key so config files stay minimal.
-        if (body.webSearch.streamRoutedModelOutput) config.webSearchSidecar.streamRoutedModelOutput = true;
-        else delete config.webSearchSidecar.streamRoutedModelOutput;
+        if (body.webSearch.streamRoutedModelOutput) webSearchCandidate.streamRoutedModelOutput = true;
+        else delete webSearchCandidate.streamRoutedModelOutput;
       }
+      config.webSearchSidecar = webSearchCandidate;
     }
     if (body.vision) {
       config.visionSidecar = { ...config.visionSidecar };
@@ -680,6 +739,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
+        ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,

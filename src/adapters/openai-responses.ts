@@ -1376,6 +1376,30 @@ function stripUnsupportedHostedTools(body: unknown): unknown {
   return tools.length === body.tools.length ? body : { ...body, tools };
 }
 
+/**
+ * OpenAI hosted web_search config fields that a capability-classified Responses
+ * upstream may reject wholesale. xAI's /v1/responses 400s the entire request on
+ * `external_web_access` and `search_context_size` ("Argument not supported"),
+ * which killed every routed Grok turn whose client (Codex) attaches its
+ * default web_search tool config (probe 2026-08-21: both fields 400
+ * individually; `user_location` and `filters` are accepted and kept).
+ * The caller decides whether to apply this compatibility transform from explicit
+ * provider capability metadata; an unclassified upstream keeps the fields.
+ */
+const OPENAI_ONLY_WEB_SEARCH_FIELDS = ["external_web_access", "search_context_size"] as const;
+export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
+  let changed = false;
+  const tools = body.tools.map(t => {
+    if (!isPlainObject(t) || (t.type !== "web_search" && t.type !== "web_search_preview")) return t;
+    if (!OPENAI_ONLY_WEB_SEARCH_FIELDS.some(field => Object.hasOwn(t, field))) return t;
+    const { external_web_access: _access, search_context_size: _size, ...rest } = t;
+    changed = true;
+    return rest;
+  });
+  return changed ? { ...body, tools } : body;
+}
+
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -1571,6 +1595,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedToolSearchForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
+        // xAI rejects these OpenAI web_search extensions with HTTP 400. Keep them
+        // for OpenAI API-key traffic and unclassified gateways; only an explicit
+        // provider capability denial activates the compatibility transform.
+        if (provider.supportsOpenAiWebSearchToolFields === false) {
+          outBody = stripOpenAiOnlyWebSearchFields(outBody);
+        }
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(

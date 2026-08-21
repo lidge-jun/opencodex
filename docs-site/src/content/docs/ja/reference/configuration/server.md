@@ -133,14 +133,16 @@ Codex は、タイトルやコミット メッセージなどのタスクに小�
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` |使用可能な場合はオン |マスタースイッチ。 |
-| `backend?` | `"openai" \| "anthropic"` |自動 |明示的な勝利。それ以外の場合は使用可能な保存された Anthropic OAuth は `anthropic` を選択し、次に `openai` を選択します。 |
-| `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.6-luna`、Anthropic の場合は `claude-sonnet-5`。従来の明示的な `gpt-5.4-mini` は開始時に移行されます。 |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 明示設定が優先され、未設定なら常に `openai` です。`anthropic` と `xai` は明示設定時のみ実行され、`gemini` と `exa` は executor が提供されるまで予約値です。 |
+| `model?` | `string` |バックエンド依存 | OpenAI は `gpt-5.6-luna`、Anthropic は `claude-sonnet-5`、xAI は `grok-4.6`。従来の明示的な `gpt-5.4-mini` は開始時に移行されます。 |
+| `exaApiKey?` | `string` | なし | `exa` バックエンドのオペレーターキー。書き込み専用で、管理 API の読み取りでは保存値を返しません。 |
+| `xSearch?` | `object` | 省略 | xAI 専用の hosted `x_search` opt-in。`enabled`、相互排他的な `allowedXHandles` / `excludedXHandles` 配列（最大 20 件）、ISO の `fromDate` / `toDate`（`YYYY-MM-DD`）を指定します。 |
 | `reasoning?` | `string` | `low` |サイドカーの取り組み。 `minimal` は Web 検索で拒否されます。 |
 | `maxSearchesPerTurn?` | `number` | `3` |メインモデルのターンごとに許可される実際の検索。 |
 | `routedModelStallTimeoutMs?` | `number` | `200000` |設定ファイルのみのルーテッド モデルの raw ボディの非アクティブ期限。整数 1 ～ 2147483647。空でないすべてのチャンクがリセットされます。 |
 | `timeoutMs?` | `number` | `60000` | 1 つのホストされた検索の期限。 |
 
-OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forward` プロバイダーが必要です。クロードインバウンドのルーティングされたリプレイは、メインの ChatGPT 認証を内部リクエストに挿入します。 Anthropic バックエンドは、有効な Anthropic OAuth プロバイダーからのアクティブに保存された資格情報を使用します。使用可能なアカウントがない、明示的に選択された Anthropic バックエンドは、フォールバックせずに失敗して閉じられます。 Anthropic executor は、ネイティブの `web_search_20250305` ツールを使用します。
+OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forward` プロバイダーが必要です。クロードインバウンドのルーティングされたリプレイは、メインの ChatGPT 認証を内部リクエストに挿入します。 Anthropic バックエンドは、有効な Anthropic OAuth プロバイダーからのアクティブに保存された資格情報を使用します。使用可能なアカウントがない、明示的に選択された Anthropic バックエンドは、フォールバックせずに失敗して閉じられます。 Anthropic executor は、ネイティブの `web_search_20250305` ツールを使用します。xAI バックエンドには使用可能な保存済み Grok OAuth アカウントが必要で、hosted `web_search` を使用し、`xSearch.enabled` が true の場合は hosted `x_search` を追加します。不正な `xSearch` 管理入力は `400` を返し、不正な永続化ブロックは計画時に fail closed します。`gemini` と `exa` は資格情報の検出やフォールバックからは決して有効にならず、オペレーターが明示的に選択する必要があります。`exaApiKey` は書き込み時に受け付けますが、管理レスポンスからは省略されます。
 
 検索は 4 つのクロック (ベース `stallTimeoutSec`、`connectTimeoutMs`、ルーテッド モデルの非アクティビティ、ホスト型検索のタイムアウト) によって制御されます。有効なブリッジ ウォッチドッグは、最大プラス 30 秒です。ルート ストールは非アクティブ ガードであり、総生成期限ではありません。
 
@@ -149,7 +151,7 @@ OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forw
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` |使用可能な場合はオン |マスターイメージと説明のスイッチ。 |
-| `backend?` | `"openai" \| "anthropic"` |自動 | Web 検索と同じ、明示的優先、人間認証情報を意識した選択。 |
+| `backend?` | `"openai" \| "anthropic"` |自動 | 明示的な値が優先されます。未設定の場合、使用可能な保存済み Anthropic OAuth 認証情報が優先され、それ以外は `openai` になります。 |
 | `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.4-mini`、Anthropic の場合は `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses の推論負荷。Anthropic は無視します。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` |新しい説明のキャッシュミスはメインターンごとに許可されます。 `0` は通話を無効にします。無効な値にはデフォルトが使用されます。 |

@@ -1070,9 +1070,16 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const section = body[field];
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
+      // The widened union applies to the WEB-SEARCH override only (roadmap 060).
+      // Vision keeps its two-backend contract — accepting a wider id there would
+      // persist a backend the vision resolver reads as unset, silently activating
+      // a backend the operator never chose (review F1).
+      const allowedBackends = field === "webSearchSidecar"
+        ? ["openai", "anthropic", "xai", "gemini", "exa"]
+        : ["openai", "anthropic"];
       if (section.backend !== undefined && section.backend !== null
-        && section.backend !== "openai" && section.backend !== "anthropic") {
-        return jsonResponse({ error: `${field}.backend must be openai, anthropic, or null` }, 400);
+        && !allowedBackends.includes(section.backend as string)) {
+        return jsonResponse({ error: `${field}.backend must be ${allowedBackends.join(", ")}, or null` }, 400);
       }
       if (section.model !== undefined && typeof section.model !== "string") {
         return jsonResponse({ error: `${field}.model must be a string` }, 400);
@@ -1128,13 +1135,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         delete next[field];
         continue;
       }
-      const requested = section as { backend?: "openai" | "anthropic" | null; model?: string };
-      const override: NonNullable<OcxClaudeCodeConfig[typeof field]> = { ...next[field] };
+      // The per-field validation above guarantees vision only ever carries the two-member
+      // union; the cast is the loop's shared-shape compromise, not a wider write path.
+      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string };
+      const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
       if (requested.backend === null) delete override.backend;
-      else if (requested.backend !== undefined) override.backend = requested.backend;
+      else if (requested.backend !== undefined) override.backend = requested.backend as never;
       if (requested.model === "") delete override.model;
       else if (requested.model !== undefined) override.model = requested.model;
-      if (Object.keys(override).length > 0) next[field] = override;
+      // Indexed write across the field union collapses to an intersection; runtime
+      // validation above already guarantees the per-field shape.
+      if (Object.keys(override).length > 0) next[field] = override as never;
       else delete next[field];
     }
     if (body.enabled !== undefined) {

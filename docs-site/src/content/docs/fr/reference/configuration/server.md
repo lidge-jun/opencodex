@@ -209,8 +209,10 @@ l'API Images d'OpenAI et la forme de réponse attendue par Codex.
 | Champ | Type | Par défaut | Signification |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | activé lorsqu'il est utilisable | Interrupteur principal. |
-| `backend?` | `"openai" \| "anthropic"` | automatique | Une valeur explicite est prioritaire ; sinon, la présence d'identifiants OAuth Anthropic stockés et utilisables sélectionne `anthropic`, puis `openai`. |
-| `model?` | `string` | dépendant du backend | `gpt-5.6-luna` pour OpenAI ou `claude-sonnet-5` pour Anthropic. L'héritage explicite `gpt-5.4-mini` migre au démarrage. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Une valeur explicite est prioritaire ; l'absence de valeur sélectionne toujours `openai`. `anthropic` et `xai` ne s'exécutent que s'ils sont configurés explicitement ; `gemini` et `exa` restent réservés jusqu'à la livraison de leur executor. |
+| `model?` | `string` | dépendant du backend | `gpt-5.6-luna` pour OpenAI, `claude-sonnet-5` pour Anthropic ou `grok-4.6` pour xAI. L'héritage explicite `gpt-5.4-mini` migre au démarrage. |
+| `exaApiKey?` | `string` | aucun | Clé opérateur pour le backend `exa`. Écriture seule : les lectures de gestion ne renvoient jamais la valeur stockée. |
+| `xSearch?` | `object` | omis | Activation facultative de `x_search` hébergé, propre à xAI : `enabled`, tableaux mutuellement exclusifs `allowedXHandles` / `excludedXHandles` (20 au maximum), et dates ISO `fromDate` / `toDate` (`YYYY-MM-DD`). |
 | `reasoning?` | `string` | `low` | Effort secondaire. `minimal` est rejeté lors de la recherche sur le Web. |
 | `maxSearchesPerTurn?` | `number` | `3` | Recherches réelles autorisées par tour de modèle principal. |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Date limite d'inactivité du corps brut du modèle routé uniquement pour les fichiers de configuration. Entier 1–2147483647 ; chaque morceau non vide le réinitialise. |
@@ -220,7 +222,11 @@ Le moteur OpenAI nécessite une connexion à ChatGPT et un fournisseur ChatGPT `
 entrantes depuis Claude injectent l'authentification ChatGPT principale dans la requête interne. Le moteur Anthropic utilise les
 identifiants actifs stockés auprès d'un fournisseur Anthropic OAuth activé. Si le moteur Anthropic est sélectionné explicitement
 mais qu'aucun compte n'est utilisable, l'opération échoue de manière sûre au lieu de se rabattre sur un autre moteur. L'exécuteur Anthropic utilise son
-outil `web_search_20250305` natif.
+outil `web_search_20250305` natif. Le backend xAI nécessite un compte OAuth Grok stocké et utilisable, emploie
+`web_search` hébergé et ajoute `x_search` hébergé lorsque `xSearch.enabled` vaut true. Une entrée de gestion
+`xSearch` mal formée renvoie `400` ; un bloc persistant mal formé échoue de manière sûre pendant la planification.
+Les voies `gemini` et `exa` ne s'activent jamais par découverte d'identifiants ni par fallback ; l'opérateur doit
+les sélectionner explicitement. `exaApiKey` est accepté en écriture mais omis des réponses de gestion.
 
 Quatre horloges régissent la recherche : base `stallTimeoutSec`, `connectTimeoutMs`, inactivité du modèle routé et
 délai d'expiration de la recherche hébergée. Le chien de garde efficace du pont est le maximum plus 30 secondes. Le décrochage routé est
@@ -231,7 +237,7 @@ une garde d'inactivité, pas un délai de génération total.
 | Champ | Type | Par défaut | Signification |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | activé lorsqu'il est utilisable | Commutateur principal de description d'images. |
-| `backend?` | `"openai" \| "anthropic"` | automatique | Même sélection, prioritaire lorsqu'elle est explicite et tenant compte des identifiants Anthropic, que pour la recherche Web. |
+| `backend?` | `"openai" \| "anthropic"` | automatique | La valeur explicite prévaut ; si elle est omise, un identifiant OAuth Anthropic stocké et utilisable est privilégié, sinon `openai`. |
 | `model?` | `string` | dépendant du backend | `gpt-5.4-mini` pour OpenAI ou `claude-sonnet-5` pour Anthropic. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | Nouvelles descriptions des ratés du cache admises par tour principal. `0` désactive les appels ; les valeurs non valides utilisent la valeur par défaut. |
 | `timeoutMs?` | `number` | `45000` | Délai d'expiration de la récupération par le service auxiliaire. Entier 1–2147483647. |

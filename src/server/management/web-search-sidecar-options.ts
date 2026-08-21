@@ -17,8 +17,12 @@ import type { OcxConfig } from "../../types";
 import { AUTH_SLOT_MODELS, resolveSidecarAuth } from "../../sidecar/auth";
 import { pickerVisibleSidecarCandidates, type SidecarCandidate } from "../../sidecar/candidates";
 import { WEB_SEARCH_BACKENDS, webSearchSidecarCandidates } from "../../web-search/backends";
+import type { WebSearchBackendId } from "../../web-search/index";
 
-export type WebSearchBackend = "openai" | "anthropic";
+// The full configured union. Rows only ever materialize for backends whose
+// executor admits the candidate, so inert arms (gemini/exa without config)
+// simply never produce rows.
+export type WebSearchBackend = WebSearchBackendId;
 
 export interface WebSearchCandidateRow extends SidecarCandidate {
   /** Executor backend that admitted this exact candidate row. */
@@ -40,8 +44,8 @@ export async function webSearchCandidateRows(config: OcxConfig): Promise<WebSear
   const auth = resolveSidecarAuth(config);
   const all = await pickerVisibleSidecarCandidates(config, auth);
   return webSearchSidecarCandidates(config, auth, all).flatMap(candidate => {
-    const descriptor = WEB_SEARCH_BACKENDS.find(entry =>
-      entry.isActive(auth) && entry.eligibleModel(candidate, auth));
+   const descriptor = WEB_SEARCH_BACKENDS.find(entry =>
+      entry.isActive(auth, config) && entry.eligibleModel(candidate, auth));
     return descriptor ? [{ ...candidate, backend: descriptor.backend }] : [];
   });
 }

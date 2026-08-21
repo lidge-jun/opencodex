@@ -162,8 +162,10 @@ Codex использует маленькие helper-model'и для задач 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Главный переключатель. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Явный выбор выигрывает; иначе usable stored Anthropic OAuth выбирает `anthropic`, затем `openai`. |
-| `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI или `claude-sonnet-5` для Anthropic. Старый явный `gpt-5.4-mini` мигрирует при старте. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Явный выбор выигрывает; отсутствие значения всегда означает `openai`. `anthropic` и `xai` запускаются только при явной настройке; `gemini` и `exa` зарезервированы до появления executor. |
+| `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI, `claude-sonnet-5` для Anthropic или `grok-4.6` для xAI. Старый явный `gpt-5.4-mini` мигрирует при старте. |
+| `exaApiKey?` | `string` | отсутствует | Ключ оператора для backend `exa`. Только для записи: management-read никогда не возвращает сохранённое значение. |
+| `xSearch?` | `object` | отсутствует | Опциональный hosted `x_search` только для xAI: `enabled`, взаимоисключающие массивы `allowedXHandles` / `excludedXHandles` (не более 20) и ISO-даты `fromDate` / `toDate` (`YYYY-MM-DD`). |
 | `reasoning?` | `string` | `low` | Effort sidecar'а. Значение `minimal` с web search отклоняется. |
 | `maxSearchesPerTurn?` | `number` | `3` | Число реальных поисков, разрешённых за один turn основной модели. |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only дедлайн бездействия raw-body у routed-model. Целое 1–2147483647; каждый непустой chunk сбрасывает таймер. |
@@ -173,7 +175,12 @@ Backend OpenAI требует логина в ChatGPT и включённого 
 с входом от Claude внедряет auth основного ChatGPT во внутренний запрос. Anthropic-backend
 использует активный stored credential из включённого Anthropic OAuth-провайдера. Явно выбранный
 Anthropic-backend без рабочего аккаунта закрывается с ошибкой и не откатывается на другой backend.
-Исполнитель Anthropic использует нативный tool `web_search_20250305`.
+Исполнитель Anthropic использует нативный tool `web_search_20250305`. Backend xAI требует рабочего
+сохранённого аккаунта Grok OAuth, использует hosted `web_search` и добавляет hosted `x_search`, когда
+`xSearch.enabled` равно true. Некорректный management-input `xSearch` возвращает `400`, а некорректный
+сохранённый блок закрывается с ошибкой при планировании. Линии `gemini` и `exa` никогда не активируются
+через обнаружение credentials или fallback; оператор должен выбрать их явно. `exaApiKey` принимается
+при записи, но не включается в management-response.
 
 Поиск ограничивают четыре clock'а: базовый `stallTimeoutSec`, `connectTimeoutMs`, inactivity для
 routed-model и hosted-search timeout. Эффективный watchdog моста равен максимуму этих значений плюс
@@ -184,7 +191,7 @@ routed-model и hosted-search timeout. Эффективный watchdog мост�
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Главный переключатель описания изображений. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Та же логика выбора explicit-first/Anthropic-credential-aware, что и у web search. |
+| `backend?` | `"openai" \| "anthropic"` | auto | Явное значение имеет приоритет; если оно не задано, предпочтение отдаётся пригодным сохранённым учётным данным Anthropic OAuth, иначе используется `openai`. |
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` для OpenAI или `claude-sonnet-5` для Anthropic. |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | Уровень рассуждений OpenAI Responses. Anthropic его игнорирует. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | Максимум новых промахов description-cache за один main turn. `0` отключает вызовы; некорректные значения возвращают дефолт. |

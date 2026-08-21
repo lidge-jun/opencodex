@@ -5,13 +5,13 @@ description: Dotez les modèles routés d’une véritable recherche web et donn
 
 Tous les modèles routés ne proposent pas une **recherche web** hébergée ni une **entrée d’image** native. opencodex complète
 ces capacités au moyen de deux services auxiliaires. Chacun peut s’appuyer sur un fournisseur connecté à ChatGPT (`forward`) ou sur un
-fournisseur Anthropic OAuth enregistré. Les erreurs des services auxiliaires sont converties en résultats d’outil limités ou en marqueurs d’image,
+fournisseur Anthropic OAuth enregistré ; la recherche web peut aussi utiliser un OAuth Grok enregistré via le moteur `xai` explicite. Les erreurs des services auxiliaires sont converties en résultats d’outil limités ou en marqueurs d’image,
 au lieu de faire échouer l’intégralité du tour.
 
 :::note[Sélection automatique du moteur]
-Une valeur `backend` explicite est prioritaire. Lorsqu'elle est omise, opencodex utilise `anthropic` si un fournisseur OAuth Anthropic actif
-possède un compte actif qui n'est pas marqué `needsReauth` ; sinon, il utilise `openai`. Une sélection explicite de
-`anthropic` sans ces identifiants échoue de manière sûre. `openai` exige à la fois une connexion ChatGPT et un
+Une valeur `backend` explicite est prioritaire. Sans valeur, la recherche web utilise toujours `openai` ; Vision utilise
+`anthropic` si un compte OAuth Anthropic utilisable existe, sinon `openai`. Une sélection explicite de
+`anthropic` ou `xai` sans identifiants utilisables échoue sans repli. `openai` exige à la fois une connexion ChatGPT et un
 fournisseur `forward` actif.
 :::
 
@@ -24,7 +24,8 @@ Lorsque Codex demande un hébergement `web_search` pour un modèle routé sans p
 2. Exécute le modèle routé dans une petite **boucle d'agent**. Lorsqu'il appelle `web_search`, opencodex utilise le
    moteur du service auxiliaire sélectionné : OpenAI exécute l'outil hébergé `web_search` avec `gpt-5.6-luna` par défaut ;
    Anthropic exécute `web_search_20250305` avec `claude-sonnet-5` par défaut. La réponse en streaming et
-   les citations deviennent le résultat d’un outil.
+   les citations deviennent le résultat d’un outil. xAI exécute `web_search` avec `grok-4.6` par défaut et ajoute
+   `x_search` à la même requête lorsque `xSearch.enabled` vaut true.
 3. **Répète la boucle** jusqu'à ce que le modèle réponde ou que le nombre total de recherches réelles atteigne `maxSearchesPerTurn`
    (par défaut 3), supprime ensuite l'outil de recherche et force une réponse finale. De vrais outils clients tels que
    `apply_patch` ou le shell mettent fin au tour afin que ces appels parviennent à Codex.

@@ -29,6 +29,7 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest as Request } from "./helpers/management-auth";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/account-id";
+import { xaiSearchOptionsFromConfig } from "../src/web-search";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const forward: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" };
@@ -190,5 +191,97 @@ describe("HTTP contract on /api/sidecar-settings", () => {
     const rejection = webSearchModelRejection("webSearch.model", "openai", "o3-mini", candidates);
     expect(rejection.allowedModels).toContain("gpt-5.6-luna");
     expect(rejection.allowedModels).toContain("claude-haiku-4-5");
+  });
+});
+
+describe("xSearch config round-trip (review High)", () => {
+  test("PUT validates doc limits (400) and persists+echoes a valid block; GET carries it; null clears", async () => {
+    usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
+    const cfg = config();
+    const bad = await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { xSearch: { enabled: true, allowedXHandles: ["a"], excludedXHandles: ["b"] } } } });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toContain("mutually exclusive");
+    const ok = await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { xSearch: { enabled: true, allowedXHandles: ["xai"], fromDate: "2026-08-01" } } } });
+    expect(ok.status).toBe(200);
+    const putBody = await ok.json() as { webSearch: { xSearch?: unknown } };
+    expect(putBody.webSearch.xSearch).toEqual({ enabled: true, allowedXHandles: ["xai"], fromDate: "2026-08-01" });
+    const get = await sidecarSettings(cfg);
+    expect(((await get.json()) as { webSearch: { xSearch?: unknown } }).webSearch.xSearch).toEqual({ enabled: true, allowedXHandles: ["xai"], fromDate: "2026-08-01" });
+    const clear = await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { xSearch: null } } });
+    expect(clear.status).toBe(200);
+    expect(cfg.webSearchSidecar?.xSearch).toBeUndefined();
+  });
+
+  test("invalid xSearch does not partially mutate other web-search settings", async () => {
+    const original = {
+      backend: "openai" as const,
+      model: "gpt-5.6-luna",
+      reasoning: "low",
+      streamRoutedModelOutput: true,
+    };
+    const cfg = config({ webSearchSidecar: { ...original } });
+
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: {
+        webSearch: {
+          backend: "xai",
+          reasoning: "high",
+          streamRoutedModelOutput: false,
+          xSearch: { enabled: true, allowedXHandles: ["a"], excludedXHandles: ["b"] },
+        },
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(cfg.webSearchSidecar).toEqual(original);
+  });
+
+  test("rejects allowedXHandle typo without broadening or partially mutating x_search", async () => {
+    const original = {
+      backend: "xai" as const,
+      reasoning: "low",
+      xSearch: { enabled: true as const, allowedXHandles: ["trusted"] },
+    };
+    const cfg = config({ webSearchSidecar: structuredClone(original) });
+
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: {
+        webSearch: {
+          reasoning: "high",
+          xSearch: { enabled: true, allowedXHandle: ["xai"] },
+        },
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain("webSearch.xSearch.allowedXHandle");
+    expect(cfg.webSearchSidecar).toEqual(original);
+    expect(xaiSearchOptionsFromConfig(cfg.webSearchSidecar!)).toEqual({
+      xSearch: true,
+      allowedXHandles: ["trusted"],
+    });
+  });
+
+  test.each([
+    ["non-object block", "invalid", "webSearch.xSearch must be an object or null"],
+    ["non-boolean enabled", { enabled: "true" }, "enabled must be a boolean"],
+    ["non-array handles", { enabled: true, allowedXHandles: "xai" }, "allowedXHandles must be an array of strings"],
+    ["mixed handle array", { enabled: true, excludedXHandles: ["xai", 7] }, "excludedXHandles must be an array of strings"],
+    ["non-string date", { enabled: true, fromDate: 20260801 }, "fromDate must be an ISO-8601 date"],
+    ["malformed date", { enabled: true, toDate: "08/01/2026" }, "toDate must be an ISO-8601 date"],
+    ["unknown field", { enabled: true, scope: "following" }, "webSearch.xSearch.scope"],
+  ])("rejects malformed xSearch input: %s", async (_name, xSearch, message) => {
+    const cfg = config({ webSearchSidecar: { backend: "openai" } });
+
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { xSearch } },
+    });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain(message);
+    expect(cfg.webSearchSidecar).toEqual({ backend: "openai" });
   });
 });

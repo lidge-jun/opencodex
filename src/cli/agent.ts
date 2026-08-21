@@ -27,7 +27,7 @@ const USAGE = `Usage:
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
-  ocx agent sidecar <status|web|vision> [--list] [--model <id|->] [--backend <openai|anthropic|->]
+  ocx agent sidecar <status|web|vision> [--list] [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {

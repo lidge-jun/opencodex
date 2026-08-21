@@ -19,11 +19,13 @@
 import type { OcxConfig } from "../types";
 import { AUTH_SLOT_MODELS, type SidecarAuthState } from "../sidecar/auth";
 import type { SidecarCandidate } from "../sidecar/candidates";
+import { getAccountSet } from "../oauth/store";
+import type { WebSearchBackendId } from "./index";
 
 export interface WebSearchBackendDescriptor {
-  backend: "openai" | "anthropic";
+  backend: WebSearchBackendId;
   /** Liveness signal for this backend (auth presence for the shipped two). */
-  isActive(auth: SidecarAuthState): boolean;
+  isActive(auth: SidecarAuthState, config: OcxConfig): boolean;
   /** Which candidate rows this backend's executor can actually run. */
   eligibleModel(candidate: SidecarCandidate, auth: SidecarAuthState): boolean;
 }
@@ -50,6 +52,40 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
     // rows are unreachable, mirroring visionBackendForCandidate's stance.
     eligibleModel: (candidate, auth) => candidate.provider === auth.anthropicProviderName,
   },
+  {
+    backend: "xai",
+    // Probe = stored Grok OAuth usable: enabled oauth-mode "xai" provider whose
+    // active account is not marked for reauth — the same predicate
+    // findXaiSidecarProvider applies at plan time (L7).
+    isActive: (_auth, config) => {
+      const provider = config.providers["xai"];
+      if (!provider || provider.disabled === true || provider.authMode !== "oauth") return false;
+      const set = getAccountSet("xai");
+      const active = set?.accounts.find(account => account.id === set.activeAccountId);
+      return !!active && active.needsReauth !== true;
+    },
+    eligibleModel: candidate => candidate.provider === "xai",
+  },
+  {
+    backend: "gemini",
+    // Probe = usable Antigravity OAuth + discovered projectId (findGeminiSidecarProvider's predicate).
+    isActive: (_auth, config) => {
+      const provider = config.providers["google-antigravity"];
+      if (!provider || provider.disabled === true || provider.authMode !== "oauth") return false;
+      const set = getAccountSet("google-antigravity");
+      const active = set?.accounts.find(account => account.id === set.activeAccountId);
+      if (!active || active.needsReauth === true) return false;
+      return !!(active.credential as { projectId?: string } | undefined)?.projectId;
+    },
+    eligibleModel: candidate => candidate.provider === "google-antigravity",
+  },
+  {
+    backend: "exa",
+    // Probe = operator key present. Exa is not an LLM: no candidate models ever
+    // match, so the GUI's model list stays untouched by this backend.
+    isActive: (_auth, config) => !!config.webSearchSidecar?.exaApiKey,
+    eligibleModel: () => false,
+  },
 ];
 
 /**
@@ -58,11 +94,11 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
  * side keeps Luna/Haiku even when the picker hides them.
  */
 export function webSearchSidecarCandidates(
-  _config: OcxConfig,
+  config: OcxConfig,
   auth: SidecarAuthState,
   all: readonly SidecarCandidate[],
 ): SidecarCandidate[] {
-  const active = WEB_SEARCH_BACKENDS.filter(descriptor => descriptor.isActive(auth));
+  const active = WEB_SEARCH_BACKENDS.filter(descriptor => descriptor.isActive(auth, config));
   return all.filter(candidate => active.some(descriptor => descriptor.eligibleModel(candidate, auth)));
 }
 

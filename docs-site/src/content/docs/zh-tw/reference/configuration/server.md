@@ -167,14 +167,16 @@ Codex 使用小型 helper 模型處理如標題與 commit 訊息等任務。啟�
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 可用時開啟 | 主開關。 |
-| `backend?` | `"openai" \| "anthropic"` | 自動 | 明確勝出；否則可用的已儲存 Anthropic OAuth 選擇 `anthropic`，然後 `openai`。 |
-| `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.6-luna` 或 Anthropic 為 `claude-sonnet-5`。舊版明確 `gpt-5.4-mini` 在啟動時遷移。 |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 明確設定優先；省略時一律使用 `openai`。`anthropic` 與 `xai` 僅在明確設定時執行；`gemini` 與 `exa` 在 executor 推出前仍為保留值。 |
+| `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.6-luna`、Anthropic 為 `claude-sonnet-5`、xAI 為 `grok-4.6`。舊版明確 `gpt-5.4-mini` 在啟動時遷移。 |
+| `exaApiKey?` | `string` | 無 | `exa` backend 的操作員金鑰。僅可寫入：管理讀取永遠不會傳回已儲存的值。 |
+| `xSearch?` | `object` | 省略 | xAI 專用的託管 `x_search` opt-in：`enabled`、互斥的 `allowedXHandles` / `excludedXHandles` 陣列（最多 20 項），以及 ISO `fromDate` / `toDate`（`YYYY-MM-DD`）。 |
 | `reasoning?` | `string` | `low` | Sidecar effort。`minimal` 在網頁搜尋時被拒絕。 |
 | `maxSearchesPerTurn?` | `number` | `3` | 每個主模型回合允許的實際搜尋。 |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | 僅設定檔的路由模型原始 body 不活動截止時間。整數 1–2147483647；每個非空 chunk 重置它。 |
 | `timeoutMs?` | `number` | `60000` | 一個代管搜尋的截止時間。 |
 
-OpenAI backend 需要 ChatGPT 登入與啟用的 ChatGPT `forward` 供應商。Claude-inbound 路由重播將主 ChatGPT 認證注入內部請求。Anthropic backend 使用來自已啟用 Anthropic OAuth 供應商的現用已儲存憑證。明確選擇的 Anthropic backend 在無可用帳號時 fail closed 而非後退。Anthropic 執行器使用其原生 `web_search_20250305` 工具。
+OpenAI backend 需要 ChatGPT 登入與啟用的 ChatGPT `forward` 供應商。Claude-inbound 路由重播將主 ChatGPT 認證注入內部請求。Anthropic backend 使用來自已啟用 Anthropic OAuth 供應商的現用已儲存憑證。明確選擇的 Anthropic backend 在無可用帳號時 fail closed 而非後退。Anthropic 執行器使用其原生 `web_search_20250305` 工具。xAI backend 需要可用的已儲存 Grok OAuth 帳號，使用託管 `web_search`，並在 `xSearch.enabled` 為 true 時加入託管 `x_search`。格式錯誤的 `xSearch` 管理輸入會傳回 `400`；格式錯誤的持久化區塊會在規劃期間 fail closed。`gemini` 與 `exa` 通道絕不會因憑證探索或 fallback 而啟用；操作員必須明確選擇它們。`exaApiKey` 可在寫入時接受，但會從管理回應中省略。
 
 四個時鐘治理搜尋：基礎 `stallTimeoutSec`、`connectTimeoutMs`、路由模型不活動與代管搜尋逾時。有效的橋接看門狗為最大值加 30 秒。路由停滯是不活動防護，而非總生成截止時間。
 
@@ -183,7 +185,7 @@ OpenAI backend 需要 ChatGPT 登入與啟用的 ChatGPT `forward` 供應商。C
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 可用時開啟 | 主圖片描述開關。 |
-| `backend?` | `"openai" \| "anthropic"` | 自動 | 與網頁搜尋相同的明確優先、Anthropic 憑證感知選擇。 |
+| `backend?` | `"openai" \| "anthropic"` | 自動 | 明確值優先；未設定時優先使用可用的已儲存 Anthropic OAuth 憑證，否則使用 `openai`。 |
 | `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.4-mini` 或 Anthropic 為 `claude-sonnet-5`。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每個主回合允許的新描述快取未命中。`0` 停用呼叫；無效值使用預設。 |
 | `timeoutMs?` | `number` | `45000` | Sidecar 擷取逾時。整數 1–2147483647。 |

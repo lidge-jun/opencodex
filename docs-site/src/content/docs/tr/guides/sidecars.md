@@ -6,14 +6,13 @@ description: Yerel ChatGPT sidecar'ları aracılığıyla yönlendirilen modelle
 Yönlendirilen modellerin tümü barındırılan **web araması** veya yerel **görsel
 girişi** sunmaz. opencodex bu yetenekleri iki sidecar ile doldurur. Her biri bir
 ChatGPT girişi (`forward`) sağlayıcısı veya saklanan bir Anthropic OAuth
-sağlayıcısı aracılığıyla çalışabilir. Sidecar hataları tüm turu başarısız kılmak
+sağlayıcısı aracılığıyla çalışabilir; web araması açık `xai` arka ucuyla saklanan Grok OAuth'ı da kullanabilir. Sidecar hataları tüm turu başarısız kılmak
 yerine sınırlı araç sonuçları veya görsel işaretçileri haline gelir.
 
 :::note[Otomatik arka uç seçimi]
-Açık `backend` yapılandırması kazanır. Ayarlanmadığında opencodex,
-etkinleştirilmiş bir Anthropic OAuth sağlayıcısının `needsReauth` olarak
-işaretlenmemiş etkin bir hesabı varsa `anthropic`'i kullanır; aksi takdirde
-`openai`'yi kullanır. Bu kimlik bilgisi olmadan açık `anthropic` kapalı olarak
+Açık `backend` yapılandırması kazanır. Web araması ayarlanmadığında her zaman `openai` kullanır;
+Vision kullanılabilir bir Anthropic OAuth hesabı varsa `anthropic`, yoksa `openai` kullanır.
+Kullanılabilir kimlik bilgisi olmadan açık `anthropic` veya `xai` geri dönüş yapmadan
 başarısız olur. `openai`, hem ChatGPT girişi kimlik doğrulamasını hem de
 etkinleştirilmiş bir `forward` sağlayıcısını gerektirir.
 :::
@@ -30,8 +29,9 @@ Codex, doğrudan geçiş olmayan bir yönlendirilmiş model için barındırıla
    `web_search`'i çağırdığında opencodex seçilen sidecar arka ucunu kullanır:
    OpenAI varsayılan olarak `gpt-5.6-luna` ile barındırılan `web_search`'i
    çalıştırır; Anthropic varsayılan olarak `claude-sonnet-5` ile
-   `web_search_20250305`'i çalıştırır. Akışlı yanıt ve alıntılar bir araç sonucu
-   haline gelir.
+   `web_search_20250305`'i çalıştırır. xAI varsayılan olarak `grok-4.6` ile hosted
+   `web_search` çalıştırır ve `xSearch.enabled` true olduğunda aynı isteğe `x_search` ekler.
+   Akışlı yanıt ve alıntılar bir araç sonucu haline gelir.
 3. Model yanıt verene veya toplam gerçek sorgu bütçesi `maxSearchesPerTurn`'e
    (varsayılan 3) ulaşana kadar **döngüye girer**, ardından arama aracını
    kaldırır ve nihai bir yanıta zorlar. `apply_patch` veya kabuk gibi gerçek
@@ -198,5 +198,4 @@ hedeflenen hesap ve iş yükü ile kapsamlı bir şekilde test edilmelidir.
 
 Her alan için [Yapılandırma referansı](/tr/reference/configuration/#sidecars)
 bölümüne bakın.
-
 
