@@ -117,7 +117,7 @@ Les sondes de disponibilité sont mises en cache pendant `subagentModelFallbackP
 
 La solution de secours ne rend pas lisibles les tâches chiffrées incompatibles. Lorsque la tâche enfant est chiffrée pour
 ChatGPT, la sélection est restreinte aux cibles capables de recevoir ce chiffrage : les cibles ChatGPT natives
-canoniques ou un fournisseur Responses avec l’option explicite `allowEncryptedV2AgentTasks: true`, lorsque le wire final
+canoniques ou un fournisseur Responses avec l'option explicite `allowEncryptedV2AgentTasks: true`, lorsque le wire final
 reste `openai-responses`. Une surcharge `modelAdapters` qui résout le modèle vers `openai-chat` reste non admissible.
 
 ## Livraison de tâches v2 cryptées
@@ -127,7 +127,7 @@ backend natif ChatGPT peut consommer cette charge utile ; certains relais compa
 backend capable de la consommer. opencodex ne peut pas déduire cette capacité du nom du fournisseur ou de son Base URL. C'est la
 limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 
-opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
+opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible. Les règles de routage sont les suivantes :
 
 - Une route directe non native inéligible renvoie HTTP 400 avec
   `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré.
@@ -142,7 +142,7 @@ contenu lorsque vous contrôlez l’appelant.
 
 Si un endpoint Responses non canonique a été vérifié pour consommer ou relayer ce chiffrage, activez l’option **Passer les tâches
 d’agent V2 chiffrées** dans les paramètres de ce fournisseur, ou définissez `allowEncryptedV2AgentTasks: true` dans sa
-configuration. Cette option est désactivée par défaut et n’est valide que lorsque le wire final du modèle sélectionné est
+configuration. Cette option est désactivée par défaut et n'est valide que lorsque le wire final du modèle sélectionné est
 `openai-responses` ; une surcharge `modelAdapters` vers `openai-chat` reste donc non admissible. La charge utile opaque est
 transmise sans modification : opencodex ne la déchiffre pas, ne la traduit pas et ne la récupère pas, et cette option ne prouve
 pas la compatibilité du fournisseur. La cible ChatGPT canonique est toujours admissible sans cette option. Une cible ayant activé
