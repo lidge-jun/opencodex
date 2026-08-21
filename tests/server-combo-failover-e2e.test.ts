@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "./helpers/logs-api";
 import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,7 +15,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { saveCredential } from "../src/oauth/store";
 import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
-import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
+import type { AdapterEvent, OcxConfig, OcxProviderConfig, OcxProviderContinuationState } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { clearRequestLogsForTests, hydrateRequestLogsFromDisk, type RequestLogContext } from "../src/server/request-log";
 import { responseWithDeferredRequestLog } from "../src/server/relay";
@@ -29,6 +29,13 @@ import {
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
+import {
+  clearResponseStateForTests,
+  flushResponseState,
+  responseStatePersistPendingForTests,
+} from "../src/responses/state";
+import { clearCursorThreadContinuityForTests } from "../src/adapters/cursor/thread-continuity";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -54,9 +61,13 @@ mock.module("../src/server/adapter-resolve", () => ({
       // tests can drive the genuine continuation/persistence policy without a live socket.
       return createCursorAdapter(provider, { createTransport: customCursorTransportFactory });
     }
-    if (provider.adapter === "test-run-turn") {
+    if (
+      provider.adapter === "test-run-turn"
+      || provider.adapter === "test-kiro"
+      || provider.adapter === "test-owned"
+    ) {
       const adapter: ProviderAdapter = {
-        name: "test-run-turn",
+        name: provider.adapter === "test-kiro" ? "kiro" : provider.adapter,
         buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
         async *parseStream(): AsyncGenerator<AdapterEvent> {
           yield { type: "error", message: "test runTurn adapter does not use parseStream" };
@@ -132,23 +143,34 @@ beforeEach(() => {
   customUsageEstimate = undefined;
   customCursorTransportFactory = undefined;
   clearRequestLogsForTests();
+  clearResponseStateForTests();
+  clearCursorThreadContinuityForTests();
 });
 
 afterEach(async () => {
-  globalThis.fetch = originalFetch;
-  Date.now = originalNow;
-  for (const server of servers.splice(0)) await server.stop(true);
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousCursorToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-  else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorToken;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
-  clearComboSelectionState();
-  clearComboTargetCooldowns();
-  clearCodexUpstreamHealth();
-  clearRequestLogsForTests();
+  let responseStatePending = true;
+  try {
+    for (const server of servers.splice(0)) await server.stop(true);
+    await flushResponseState();
+    responseStatePending = responseStatePersistPendingForTests();
+  } finally {
+    clearResponseStateForTests();
+    clearCursorThreadContinuityForTests();
+    globalThis.fetch = originalFetch;
+    Date.now = originalNow;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousCursorToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorToken;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    if (testDir) removeTreeWithRetry(testDir);
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    clearCodexUpstreamHealth();
+    clearRequestLogsForTests();
+  }
+  expect(responseStatePending).toBe(false);
 });
 
 function serve(handler: (request: Request) => Response | Promise<Response>) {
@@ -1403,6 +1425,564 @@ describe("server combo failover 030 activation matrix", () => {
     expect(inputText.split("next turn")).toHaveLength(2);
   });
 
+  test("combo continuation expansion respects the client task scope", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "legacy private history" },
+      {
+        id: "resp_combo_legacy_unscoped",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "legacy reply" }],
+      },
+    );
+    rememberResponseState(
+      { model: "combo/free", input: "scoped private history" },
+      {
+        id: "resp_combo_scoped",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "scoped reply" }],
+      },
+      undefined,
+      { clientThreadId: "combo-task" },
+    );
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("continued", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") });
+    const headers = { "x-codex-parent-thread-id": "combo-task" };
+
+    const legacyResponse = await post(config, {
+      previous_response_id: "resp_combo_legacy_unscoped",
+      input: "fresh scoped input",
+    }, {}, headers);
+    const scopedResponse = await post(config, {
+      previous_response_id: "resp_combo_scoped",
+      input: "continue scoped task",
+    }, {}, headers);
+
+    expect(legacyResponse.status).toBe(200);
+    expect(scopedResponse.status).toBe(200);
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[0])).not.toContain("legacy private history");
+    expect(JSON.stringify(bodies[0])).toContain("fresh scoped input");
+    expect(JSON.stringify(bodies[1])).toContain("scoped private history");
+    expect(JSON.stringify(bodies[1])).toContain("continue scoped task");
+  });
+
+  test("combo child preserves replay provenance for compaction and generated guidance", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    const { multiAgentGuidanceText, PROACTIVE_MULTI_AGENT_MODE_TEXT } = await import("../src/server/responses/collaboration");
+    const guidance = `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
+    const tools = ["spawn_agent", "send_input"].map(name => ({
+      type: "function",
+      name,
+      namespace: "multi_agent_v1",
+      description: "Collaborate on work",
+      parameters: { type: "object", properties: {} },
+    }));
+    rememberResponseState(
+      {
+        model: "combo/free",
+        input: [
+          { type: "context_compaction" },
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: guidance }],
+          },
+          { type: "message", role: "user", content: "prior task" },
+        ],
+        reasoning: { effort: "max" },
+        tools,
+      },
+      {
+        id: "resp_combo_replay_provenance",
+        status: "completed",
+        output: [{
+          id: "msg_combo_replay_provenance",
+          type: "message",
+          role: "assistant",
+          content: "prior answer",
+        }],
+      },
+      undefined,
+      { clientThreadId: "combo-provenance-task" },
+    );
+
+    let observed: {
+      replayPrefixLength: number;
+      contextCompactionBoundary: boolean | undefined;
+      generatedGuidance: string | null;
+      taggedGuidance: string[];
+    } | undefined;
+    const guidanceOptions = { multiAgentGuidanceEnabled: true };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+    });
+    Object.assign(config, guidanceOptions);
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const rawInput = (parsed._rawBody as { input?: unknown[] } | undefined)?.input ?? [];
+      const taggedGuidance = rawInput.flatMap(item => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const record = item as Record<string, unknown>;
+        if (record.type !== "message" || record.role !== "developer" || !Array.isArray(record.content)) return [];
+        return record.content.flatMap(part => !!part && typeof part === "object"
+          && !Array.isArray(part)
+          && (part as Record<string, unknown>).type === "input_text"
+          && typeof (part as Record<string, unknown>).text === "string"
+          && ((part as Record<string, unknown>).text as string).startsWith("<multi_agent_mode>")
+          && ((part as Record<string, unknown>).text as string).endsWith("</multi_agent_mode>")
+          ? [(part as Record<string, unknown>).text as string]
+          : []);
+      });
+      observed = {
+        replayPrefixLength: parsed._replayPrefixLen ?? 0,
+        contextCompactionBoundary: parsed._contextCompactionBoundary,
+        generatedGuidance: await multiAgentGuidanceText(parsed, guidanceOptions),
+        taggedGuidance,
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_replay_provenance",
+      input: [{ type: "message", role: "user", content: "current turn" }],
+      reasoning: { effort: "max" },
+      tools,
+    }, {}, { "x-codex-parent-thread-id": "combo-provenance-task" });
+
+    expect(response.status).toBe(200);
+    expect(observed).toEqual({
+      replayPrefixLength: expect.any(Number),
+      contextCompactionBoundary: undefined,
+      generatedGuidance: guidance,
+      taggedGuidance: [guidance],
+    });
+    expect(observed!.replayPrefixLength).toBeGreaterThan(0);
+  });
+
+  test("combo failover dispatches the one parent-validated continuation snapshot", async () => {
+    const { clearResponseStateForTests, rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: [{ role: "user", content: "stable prior history" }] },
+      {
+        id: "resp_combo_stable_snapshot",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "stable prior answer" }],
+      },
+    );
+    const a = serve(() => {
+      clearResponseStateForTests();
+      return Response.json({ error: { message: "retry" } }, { status: 503 });
+    });
+    let backupParsed: {
+      previousResponseId?: string;
+      replayPrefixLength: number;
+      rawInput: unknown[];
+    } | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      backupParsed = {
+        previousResponseId: parsed.previousResponseId,
+        replayPrefixLength: parsed._replayPrefixLen ?? 0,
+        rawInput: (parsed._rawBody as { input?: unknown[] } | undefined)?.input ?? [],
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_stable_snapshot",
+      input: [{ role: "user", content: "stable current turn" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(backupParsed?.previousResponseId).toBe("resp_combo_stable_snapshot");
+    expect(backupParsed?.replayPrefixLength).toBeGreaterThan(0);
+    const requestText = JSON.stringify(backupParsed?.rawInput);
+    expect(backupParsed?.rawInput).toHaveLength(3);
+    expect(requestText.split("stable prior history")).toHaveLength(2);
+    expect(requestText.split("stable prior answer")).toHaveLength(2);
+    expect(requestText.split("stable current turn")).toHaveLength(2);
+  });
+
+  test("combo keeps an explicitly empty provider-state snapshot across failover", async () => {
+    const { previousResponseProviderState, rememberResponseState } = await import("../src/responses/state");
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      emit({ type: "text_delta", text: "seed" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "late-owned-state" } } });
+    };
+    const config = comboConfig({
+      b: provider("test-owned", "https://provider-b.test/v1", "key-b"),
+    }, [{ provider: "b", model: "m2" }]);
+    const seed = await post(config, { input: "seed owner" });
+    expect(seed.status).toBe(200);
+    const seedJson = await seed.json() as { id: string };
+    const ownedState = previousResponseProviderState(seedJson.id);
+    expect(ownedState?.__ocxOwner?.providerName).toBe("b");
+
+    config.providers.a = provider("test-owned", "https://provider-a.test/v1", "key-a");
+    config.combos!.free!.targets = [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ];
+    let backupObserved: string | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      if (parsed.modelId === "m1") {
+        rememberResponseState(
+          { model: "combo/free", input: "late state" },
+          {
+            id: "resp_combo_late_provider_state",
+            status: "completed",
+            output: [{ type: "message", role: "assistant", content: "late" }],
+          },
+          ownedState,
+          { force: true },
+        );
+        emit({ type: "error", message: "retry elsewhere", status: 503, retryable: true });
+        return;
+      }
+      backupObserved = parsed._providerContinuation?.kiro?.conversationId;
+      emit({ type: "text_delta", text: "backup" });
+      emit({ type: "done" });
+    };
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_late_provider_state",
+      input: "continue",
+    });
+
+    expect(response.status).toBe(200);
+    expect(backupObserved).toBeUndefined();
+  });
+
+  test("combo response state deep-merges provider-private payloads generically", async () => {
+    const { previousResponseProviderState } = await import("../src/responses/state");
+    let turn = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      turn += 1;
+      emit({ type: "text_delta", text: `turn-${turn}` });
+      emit({
+        type: "done",
+        providerState: turn === 1
+          ? {
+              cursor: { checkpointRef: "opaque-ref" },
+              future: {
+                stable: "keep",
+                changed: "old",
+                metadata: {
+                  stable: "keep-nested",
+                  changed: "old-nested",
+                  list: ["old"],
+                  scalar: "old",
+                },
+              },
+            }
+          : {
+              cursor: { checkpointUsable: true },
+              future: {
+                changed: "new",
+                metadata: {
+                  changed: "new-nested",
+                  list: ["new"],
+                  scalar: 42,
+                },
+              },
+            },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-owned", "https://provider-a.test/v1", "key-a"),
+    }, [{ provider: "a", model: "m1" }]);
+
+    const first = await post(config, { input: "seed future provider state" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      previous_response_id: firstJson.id,
+      input: "update future provider state",
+    });
+    expect(second.status).toBe(200);
+    const secondJson = await second.json() as { id: string };
+
+    const stored = previousResponseProviderState(secondJson.id);
+    expect(stored?.future).toEqual({
+      stable: "keep",
+      changed: "new",
+      metadata: {
+        stable: "keep-nested",
+        changed: "new-nested",
+        list: ["new"],
+        scalar: 42,
+      },
+    });
+    expect(stored?.cursor).toEqual({ checkpointRef: "opaque-ref", checkpointUsable: true });
+    expect(stored?.__ocxOwner?.providerName).toBe("a");
+  });
+
+  test("combo child retains the local id without inheriting unbound provider state", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "prior target turn" },
+      {
+        id: "resp_combo_unbound_provider_state",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "prior target answer" }],
+      },
+      {
+        cursor: { conversationId: "cursor_owned_by_another_target" },
+        kiro: { conversationId: "kiro_owned_by_another_target" },
+      },
+    );
+    let observed: {
+      previousResponseId?: string;
+      providerContinuation: unknown;
+      cursorConversationId: unknown;
+    } | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      observed = {
+        previousResponseId: parsed.previousResponseId,
+        providerContinuation: parsed._providerContinuation,
+        cursorConversationId: parsed._cursorConversationId,
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_unbound_provider_state",
+      input: [{ role: "user", content: "continue" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(observed?.previousResponseId).toBe("resp_combo_unbound_provider_state");
+    expect(observed?.providerContinuation).toBeUndefined();
+    expect(observed?.cursorConversationId).toBeUndefined();
+  });
+
+  test("combo rejects malformed provider-continuation owner metadata", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "prior target turn" },
+      {
+        id: "resp_combo_malformed_provider_owner",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "prior target answer" }],
+      },
+      {
+        __ocxOwner: {
+          version: 2,
+          providerName: "a",
+          providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+          adapterName: "kiro",
+          modelId: "m1",
+          credentialIdentity: `key:${"b".repeat(64)}`,
+        },
+        kiro: { conversationId: "must-not-restore" },
+      } as unknown as OcxProviderContinuationState,
+    );
+    let observed: string | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      observed = parsed._providerContinuation?.kiro?.conversationId;
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "fresh" } } });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_malformed_provider_owner",
+      input: "continue",
+    });
+
+    expect(response.status).toBe(200);
+    expect(observed).toBeUndefined();
+  });
+
+  test("same Kiro combo target and credential retain the provider conversation id", async () => {
+    const seen: Array<string | undefined> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push(conversationId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({
+        type: "done",
+        providerState: { kiro: { conversationId: conversationId ?? "kiro-owned-conversation" } },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
+    });
+
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([undefined, "kiro-owned-conversation"]);
+  });
+
+  test("same Cursor combo target without a parent-thread header retains its conversation id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = () => ({
+      async *run(request) {
+        seen.push(request.conversationId);
+        yield { type: "text", text: "cursor ok" };
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, estimated: true } };
+      },
+      writeClient() {},
+      close() {},
+    });
+    const config = comboConfig(
+      { cursortest: provider("cursor", "https://api2.cursor.sh", "fake-cursor-token") },
+      [{ provider: "cursortest", model: "composer-2" }],
+    );
+
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("combo failover to another provider does not inherit provider continuation state", async () => {
+    const seen: Array<{ model: string; conversationId?: string }> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push({ model: parsed.modelId, ...(conversationId ? { conversationId } : {}) });
+      emit({ type: "text_delta", text: "first" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "kiro-provider-a" } } });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
+    });
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+
+    config.providers.b = provider("test-owned", "https://provider-b.test/v1", "key-b");
+    config.combos!.free!.targets = [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push({ model: parsed.modelId, ...(conversationId ? { conversationId } : {}) });
+      if (parsed.modelId === "m1") {
+        emit({ type: "error", message: "retry elsewhere", status: 503, retryable: true });
+        return;
+      }
+      emit({ type: "text_delta", text: "backup" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "provider-b" } } });
+    };
+
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen.slice(1)).toEqual([
+      { model: "m1", conversationId: "kiro-provider-a" },
+      { model: "m2" },
+    ]);
+  });
+
+  test("same provider with a different credential does not inherit provider continuation state", async () => {
+    const seen: Array<string | undefined> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push(conversationId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({
+        type: "done",
+        providerState: { kiro: { conversationId: conversationId ?? "credential-one-conversation" } },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "credential-one"),
+    });
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+
+    config.providers.a!.apiKey = "credential-two";
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
+  test.each(["provider", "destination", "adapter", "model"] as const)(
+    "continuation owner rejects an exact %s mismatch",
+    async mismatch => {
+      const seen: Array<string | undefined> = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+        seen.push(conversationId);
+        emit({ type: "text_delta", text: "continued" });
+        emit({
+          type: "done",
+          providerState: { kiro: { conversationId: conversationId ?? "owned-conversation" } },
+        });
+      };
+      const config = comboConfig({
+        a: provider("test-kiro", "https://kiro-a.test/v1", "credential-one"),
+      });
+      const first = await post(config, { store: false, input: "first" });
+      expect(first.status).toBe(200);
+      const firstJson = await first.json() as { id: string };
+
+      if (mismatch === "provider") {
+        config.providers.b = provider("test-kiro", "https://kiro-a.test/v1", "credential-one");
+        config.combos!.free!.targets = [{ provider: "b", model: "m1" }];
+      } else if (mismatch === "destination") {
+        config.providers.a!.baseUrl = "https://kiro-b.test/v1";
+      } else if (mismatch === "adapter") {
+        // Keep provider, destination, credential, and model fixed so only the adapter owner
+        // component changes. The first test-kiro turn already persisted the owned state.
+        config.providers.a!.adapter = "test-owned";
+      } else {
+        config.combos!.free!.targets = [{ provider: "a", model: "m2" }];
+      }
+      const second = await post(config, {
+        store: false,
+        previous_response_id: firstJson.id,
+        input: "second",
+      });
+
+      expect(second.status).toBe(200);
+      expect(seen).toEqual([undefined, undefined]);
+    },
+  );
+
   test("disabled image input rejects an image restored from previous_response_id before dispatch", async () => {
     const { rememberResponseState } = await import("../src/responses/state");
     rememberResponseState(
@@ -2019,6 +2599,32 @@ describe("cursor conversation continuity across store:false chains", () => {
       },
     };
   }
+
+  test("ownerless legacy Cursor state fails closed before adapter dispatch", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "cursortest/composer-2", input: "legacy" },
+      {
+        id: "resp_cursor_ownerless_legacy",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "legacy reply" }],
+      },
+      { cursor: { conversationId: "legacy-cursor-conversation" } },
+      { force: true },
+    );
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+
+    const response = await postCursor(cursorConfig(), {
+      model: "cursortest/composer-2",
+      previous_response_id: "resp_cursor_ownerless_legacy",
+      input: "continue",
+    });
+
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBe("legacy-cursor-conversation");
+  });
 
   test("store:false chain reuses the SAME cursor conversationId (native model)", async () => {
     const seen: string[] = [];

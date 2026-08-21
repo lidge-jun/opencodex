@@ -21,6 +21,7 @@ import { buildResponseJSON } from "../src/bridge";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { createCursorContextUsageTracker } from "../src/adapters/cursor/protobuf-events";
 import { parseRequest } from "../src/responses/parser";
+import { mergeProviderContinuationPayload } from "../src/responses/provider-continuation";
 import { createSseInspector } from "../src/server/relay";
 import {
   clearResponseStateForTests,
@@ -772,6 +773,54 @@ describe("Responses previous_response_id state", () => {
     }) as { input: unknown[] };
     expect(previousResponseProviderState("resp_spill_tool")?.cursor?.conversationId).toBe("cursor-spill");
     expect(expanded.input.at(-1)).toMatchObject({ type: "function_call_output", call_id: "call_1" });
+  });
+
+  test("validates reserved continuation ownership separately from provider spill state", () => {
+    const owner = {
+      version: 1 as const,
+      providerName: "kiro",
+      providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+      adapterName: "kiro",
+      modelId: "gpt-5.6-sol",
+      credentialIdentity: `oauth:${"b".repeat(64)}`,
+    };
+    const valid = writeResponseSpillDurably("resp_valid_spill_owner", {
+      createdAt: Date.now(),
+      items: ["valid"],
+      providers: { __ocxOwner: owner, kiro: { conversationId: "kiro-valid" } },
+    });
+    expect(readResponseSpill("resp_valid_spill_owner", valid).ok).toBe(true);
+
+    const invalid = writeResponseSpillDurably("resp_invalid_spill_owner", {
+      createdAt: Date.now(),
+      items: ["invalid"],
+      providers: {
+        __ocxOwner: { ...owner, version: 2 },
+        kiro: { conversationId: "must-not-load" },
+      } as never,
+    });
+    expect(readResponseSpill("resp_invalid_spill_owner", invalid)).toEqual({
+      ok: false,
+      reason: "corrupt",
+    });
+  });
+
+  test("deep provider-state merge keeps __proto__ as data", () => {
+    const inherited = JSON.parse(
+      '{"__proto__":{"stable":"keep"},"future":{"metadata":{"stable":"keep","list":["old"]}}}',
+    ) as Record<string, unknown>;
+    const emitted = JSON.parse(
+      '{"__proto__":{"changed":"new"},"future":{"metadata":{"changed":"new","list":["new"]}}}',
+    ) as Record<string, unknown>;
+
+    const merged = mergeProviderContinuationPayload(inherited, emitted);
+
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+    expect(Object.hasOwn(merged, "__proto__")).toBe(true);
+    expect(merged["__proto__"]).toEqual({ stable: "keep", changed: "new" });
+    expect(merged.future).toEqual({
+      metadata: { stable: "keep", changed: "new", list: ["new"] },
+    });
   });
 
   test("replays a durable spill after simulated process restart", async () => {
@@ -1877,6 +1926,14 @@ describe("Responses previous_response_id state", () => {
       { model: "kiro/gpt-5.6-sol", input: "hello" },
       first,
       {
+        __ocxOwner: {
+          version: 1,
+          providerName: "kiro",
+          providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+          adapterName: "kiro",
+          modelId: "gpt-5.6-sol",
+          credentialIdentity: `oauth:${"b".repeat(64)}`,
+        },
         cursor: { conversationId: "cursor_conv_2" },
         kiro: { conversationId: "kiro_conv_2" },
       },
@@ -1885,6 +1942,14 @@ describe("Responses previous_response_id state", () => {
     clearResponseStateMemoryForTests();
 
     expect(previousResponseProviderState(first.id as string)).toEqual({
+      __ocxOwner: {
+        version: 1,
+        providerName: "kiro",
+        providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+        adapterName: "kiro",
+        modelId: "gpt-5.6-sol",
+        credentialIdentity: `oauth:${"b".repeat(64)}`,
+      },
       cursor: { conversationId: "cursor_conv_2", checkpointUsable: true },
       kiro: { conversationId: "kiro_conv_2" },
     });

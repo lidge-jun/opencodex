@@ -18,6 +18,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { isValidProviderContinuationOwner } from "./provider-continuation";
 import type { OcxProviderContinuationState } from "../types";
 
 export const RESPONSE_SPILL_VERSION = 1;
@@ -287,7 +288,11 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   }
   if (payload.providers !== undefined) {
     if (!payload.providers || typeof payload.providers !== "object" || Array.isArray(payload.providers)) return false;
-    for (const providerState of Object.values(payload.providers)) {
+    const providers = payload.providers as Record<string, unknown>;
+    if (providers.__ocxOwner !== undefined
+      && !isValidProviderContinuationOwner(providers.__ocxOwner)) return false;
+    for (const [provider, providerState] of Object.entries(providers)) {
+      if (provider === "__ocxOwner") continue;
       if (!providerState || typeof providerState !== "object" || Array.isArray(providerState)) return false;
     }
   }

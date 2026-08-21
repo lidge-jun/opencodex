@@ -1216,6 +1216,17 @@ export function previousResponseReplayPrefixLength(body: unknown): number {
   return replayedInputPrefixLengths.get(body) ?? 0;
 }
 
+/** Copy proxy-private replay provenance to an internal clone with the same materialized input. */
+export function copyPreviousResponseReplayProvenance(source: unknown, target: unknown): void {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return;
+  if (!target || typeof target !== "object" || Array.isArray(target)) return;
+  const prefixLength = replayedInputPrefixLengths.get(source);
+  if (!prefixLength) return;
+  const input = (target as { input?: unknown }).input;
+  if (!Array.isArray(input) || prefixLength > input.length) return;
+  replayedInputPrefixLengths.set(target, prefixLength);
+}
+
 /** True when a stale or foreign previous_response_id was removed from this exact request body. */
 export function previousResponseScopeMismatch(body: unknown): boolean {
   return !!body && typeof body === "object" && replayScopeMismatches.has(body as object);
