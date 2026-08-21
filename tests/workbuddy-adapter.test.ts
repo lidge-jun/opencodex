@@ -6,6 +6,7 @@ import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { deriveOAuthIds } from "../src/providers/derive";
 import {
   createWorkBuddyAdapter,
+  findWorkBuddySseRecordEnd,
   resolveWorkBuddyUpstreamModel,
   sanitizeWorkBuddySseBlock,
   WORKBUDDY_MODELS,
@@ -73,6 +74,11 @@ describe("workbuddy SSE sanitize", () => {
       'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n',
     );
   });
+
+  test("findWorkBuddySseRecordEnd recognizes LF and CRLF delimiters", () => {
+    expect(findWorkBuddySseRecordEnd('data: {"x":1}\n\nrest')).toEqual({ end: 13, delimiterLength: 2 });
+    expect(findWorkBuddySseRecordEnd('data: {"x":1}\r\n\r\nrest')).toEqual({ end: 13, delimiterLength: 4 });
+  });
 });
 
 describe("workbuddy adapter buildRequest", () => {
@@ -106,12 +112,55 @@ describe("workbuddy adapter buildRequest", () => {
     const request = adapter.buildRequest(minimalRequest(), { inboundWire: "chat" });
     expect(request.url).toBe(WORKBUDDY_UPSTREAM_CHAT_URL);
     expect(request.headers?.Accept).toBe("text/event-stream");
+    expect(request.headers?.["Content-Type"]).toBe("application/json");
     expect(request.headers?.Authorization).toBe("Bearer stored-access-token");
     expect(request.headers?.["X-User-Id"]).toBe("desktop-user");
     expect(request.headers?.["X-Domain"]).toBe("personal.example.cn");
     const body = JSON.parse(String(request.body)) as { model?: string; stream?: boolean };
     expect(body.model).toBe("deepseek-v4-flash");
     expect(body.stream).toBe(true);
+  });
+
+  test("merges configured provider headers from the base openai-chat request", () => {
+    const adapter = createWorkBuddyAdapter({
+      ...minimalProvider(),
+      headers: { "X-Custom-Trace": "keep-me" },
+    });
+    const request = adapter.buildRequest(minimalRequest(), { inboundWire: "chat" });
+    expect(request.headers?.["X-Custom-Trace"]).toBe("keep-me");
+    expect(request.headers?.["Content-Type"]).toBe("application/json");
+    expect(request.headers?.Accept).toBe("text/event-stream");
+  });
+
+  test("fetchResponse emits CRLF-framed SSE before upstream EOF", async () => {
+    const adapter = createWorkBuddyAdapter(minimalProvider());
+    const encoder = new TextEncoder();
+    let sent = false;
+    const upstream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          controller.close();
+          return;
+        }
+        sent = true;
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"early"}}]}\r\n\r\n'));
+      },
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(upstream, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+    try {
+      const request = adapter.buildRequest(minimalRequest(), { inboundWire: "chat" });
+      const response = await adapter.fetchResponse!(request, {});
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain('"content":"early"');
+      reader.releaseLock();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("fetchResponse sanitizes upstream SSE before parseStream", async () => {

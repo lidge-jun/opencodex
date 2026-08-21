@@ -53,7 +53,7 @@ export function resolveWorkBuddyUpstreamModel(modelId: string): string {
  */
 export function sanitizeWorkBuddySseBlock(rawText: string): string {
   const out: string[] = [];
-  const lines = rawText.split("\n");
+  const lines = rawText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.startsWith("event:")) {
@@ -79,6 +79,16 @@ export function sanitizeWorkBuddySseBlock(rawText: string): string {
   return out.length > 0 ? `${out.join("\n\n")}\n\n` : "";
 }
 
+/** Locate the next SSE record delimiter (`\\n\\n` or `\\r\\n\\r\\n`). */
+export function findWorkBuddySseRecordEnd(buffer: string): { end: number; delimiterLength: number } | null {
+  const lf = buffer.indexOf("\n\n");
+  const crlf = buffer.indexOf("\r\n\r\n");
+  if (lf === -1 && crlf === -1) return null;
+  if (lf === -1) return { end: crlf, delimiterLength: 4 };
+  if (crlf === -1) return { end: lf, delimiterLength: 2 };
+  return crlf < lf ? { end: crlf, delimiterLength: 4 } : { end: lf, delimiterLength: 2 };
+}
+
 function sanitizedSseReadableStream(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const reader = source.getReader();
   const decoder = new TextDecoder();
@@ -87,12 +97,13 @@ function sanitizedSseReadableStream(source: ReadableStream<Uint8Array>): Readabl
   return new ReadableStream({
     async pull(controller) {
       while (true) {
-        while (buffer.includes("\n\n")) {
-          const splitAt = buffer.indexOf("\n\n");
-          const part = buffer.slice(0, splitAt);
-          buffer = buffer.slice(splitAt + 2);
+        let boundary = findWorkBuddySseRecordEnd(buffer);
+        while (boundary) {
+          const part = buffer.slice(0, boundary.end);
+          buffer = buffer.slice(boundary.end + boundary.delimiterLength);
           const cleaned = sanitizeWorkBuddySseBlock(part);
           if (cleaned) controller.enqueue(encoder.encode(cleaned));
+          boundary = findWorkBuddySseRecordEnd(buffer);
         }
         const { done, value } = await reader.read();
         if (done) {
@@ -141,9 +152,12 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       const body = JSON.parse(baseReq.body as string) as Record<string, unknown>;
       body.model = resolveWorkBuddyUpstreamModel(String(body.model ?? parsed.modelId));
       body.stream = true;
+      const baseHeaders = (baseReq.headers ?? {}) as Record<string, string>;
       const authHeaders = workBuddyHeadersFromProvider(provider);
       const headers: Record<string, string> = {
+        ...baseHeaders,
         ...authHeaders,
+        "Content-Type": "application/json",
         Accept: "text/event-stream",
       };
       return {

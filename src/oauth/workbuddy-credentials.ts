@@ -64,9 +64,11 @@ export function resolveWorkBuddyAuthFilePath(inputs: WorkBuddyNativeInputs): str
   return join(configHome, "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info");
 }
 
-function parseExpiresAt(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return value < 1_000_000_000_000 ? value * 1000 : value;
+function parseExpiresAt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  const normalized = value < 1_000_000_000_000 ? value * 1000 : value;
+  if (!Number.isFinite(normalized) || normalized <= 0) return null;
+  return normalized;
 }
 
 /** Parse a WorkBuddy desktop session JSON payload into a normalized snapshot. */
@@ -89,10 +91,12 @@ export function parseWorkBuddyAuthFile(raw: string): WorkBuddySessionSnapshot | 
   const enterpriseId = typeof parsed.account?.enterpriseId === "string" && parsed.account.enterpriseId.trim()
     ? parsed.account.enterpriseId.trim()
     : undefined;
+  const expires = parseExpiresAt(parsed.auth?.expiresAt);
+  if (expires === null) return null;
   return {
     accessToken: accessToken.trim(),
     refreshToken: refreshToken.trim(),
-    expires: parseExpiresAt(parsed.auth?.expiresAt),
+    expires,
     uid: uid.trim(),
     ...(domain ? { domain } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
