@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON, setOwnedBudgetAbandonedMsForTests } from "../src/bridge";
 import {
+  createTranslatorBudget,
   resetTranslatorAggregateForTests,
+  retainTranslatedEventBatch,
   translatorAggregateCurrentBytesForTests,
   translatorLiveBudgetCountForTests,
 } from "../src/lib/translator-budget";
@@ -1030,6 +1032,11 @@ describe("Responses bridge web_search_call native item", () => {
     ]), "routed/model"));
     const done = frames.find(f => f.event === "response.output_item.done"
       && (f.data.item as Record<string, unknown>)?.type === "message");
+    const searchDone = frames.find(f => f.event === "response.output_item.done"
+      && (f.data.item as Record<string, unknown>)?.type === "web_search_call");
+    expect((searchDone!.data.item as Record<string, unknown>).sources).toEqual([
+      { url: "https://nodejs.org", title: "Node.js" },
+    ]);
     const item = done!.data.item as Record<string, unknown>;
     const part = (item.content as Record<string, unknown>[])[0];
     expect(part.annotations).toEqual([{
@@ -1045,11 +1052,107 @@ describe("Responses bridge web_search_call native item", () => {
       { type: "done" },
     ], "routed/model");
     const output = json.output as Record<string, unknown>[];
+    expect(output.find(item => item.type === "web_search_call")?.sources).toEqual([
+      { url: "https://nodejs.org", title: "Node.js" },
+    ]);
     const message = output.find(item => item.type === "message") as Record<string, unknown>;
     const part = (message.content as Record<string, unknown>[])[0];
     expect(part.annotations).toEqual([{
       type: "url_citation", url: "https://nodejs.org", title: "Node.js", start_index: 0, end_index: 0,
     }]);
+  });
+
+  test("unsafe and oversized search sources are absent from cells and annotations", async () => {
+    const sources = [
+      { url: "javascript:alert(1)", title: "unsafe" },
+      { url: "https://user:pass@credential.test/private" },
+      { url: "https://control.test/path\u0000" },
+      { url: "https://safe.test/docs", title: "Safe docs" },
+      { url: "https://title.test", title: "bad\u0001title" },
+      { url: "https://safe.test/docs", title: "duplicate" },
+      ...Array.from({ length: 25 }, (_, index) => ({ url: `https://safe.test/${index}` })),
+    ];
+    const events: AdapterEvent[] = [
+      { type: "web_search_call_begin", id: "ws_safe" },
+      { type: "web_search_call_end", id: "ws_safe", queries: ["docs"], sources },
+      { type: "text_delta", text: "answer" },
+      { type: "done" },
+    ];
+
+    const frames = await collectSse(bridgeToResponsesSSE(replay(events), "routed/model"));
+    const streamingCell = frames.find(f => f.event === "response.output_item.done"
+      && (f.data.item as Record<string, unknown>)?.type === "web_search_call")!.data.item as Record<string, unknown>;
+    const streamingSources = streamingCell.sources as Record<string, unknown>[];
+    expect(streamingSources).toHaveLength(20);
+    expect(streamingSources.slice(0, 2)).toEqual([
+      { url: "https://safe.test/docs", title: "Safe docs" },
+      { url: "https://title.test" },
+    ]);
+    expect(streamingSources.some(source => String(source.url).includes("credential"))).toBe(false);
+
+    const streamingMessage = frames.find(f => f.event === "response.output_item.done"
+      && (f.data.item as Record<string, unknown>)?.type === "message")!.data.item as Record<string, unknown>;
+    const streamingAnnotations = (streamingMessage.content as Record<string, unknown>[])[0].annotations as Record<string, unknown>[];
+    expect(streamingAnnotations.map(({ url, title }) => ({ url, ...(title ? { title } : {}) })))
+      .toEqual(streamingSources);
+
+    const json = buildResponseJSON(events, "routed/model");
+    const output = json.output as Record<string, unknown>[];
+    const batchCell = output.find(item => item.type === "web_search_call")!;
+    expect(batchCell.sources).toEqual(streamingSources);
+    const batchMessage = output.find(item => item.type === "message")!;
+    const batchAnnotations = (batchMessage.content as Record<string, unknown>[])[0].annotations as Record<string, unknown>[];
+    expect(batchAnnotations).toEqual(streamingAnnotations);
+  });
+
+  test("non-streaming citation transfer releases its temporary source ownership", () => {
+    const events: AdapterEvent[] = [
+      { type: "web_search_call_begin", id: "ws_budget" },
+      { type: "web_search_call_end", id: "ws_budget", queries: ["docs"], sources: [
+        { url: "https://safe.test/docs", title: "Safe docs" },
+      ] },
+      { type: "text_delta", text: "answer" },
+      { type: "done" },
+    ];
+    const budget = createTranslatorBudget();
+    try {
+      retainTranslatedEventBatch(events, budget);
+      const json = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = json.output as Record<string, unknown>[];
+      const outputBytes = output.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0);
+      expect(budget.snapshot().currentBytes).toBe(outputBytes);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("streaming source-only completion releases unconsumed citation ownership", async () => {
+    const events: AdapterEvent[] = [
+      { type: "web_search_call_begin", id: "ws_source_only" },
+      { type: "web_search_call_end", id: "ws_source_only", queries: ["docs"], sources: [
+        { url: "https://safe.test/docs", title: "Safe docs" },
+      ] },
+      { type: "done" },
+    ];
+    const budget = createTranslatorBudget();
+    try {
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { translatorBudget: budget },
+      ));
+      const terminal = frames.find(frame => frame.event === "response.completed")!;
+      const output = (terminal.data.response as Record<string, unknown>).output as Record<string, unknown>[];
+      expect(output.map(item => item.type)).toEqual(["web_search_call"]);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify(output[0])));
+    } finally {
+      budget.dispose();
+    }
   });
 });
 

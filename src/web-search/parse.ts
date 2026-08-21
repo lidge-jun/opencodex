@@ -1,10 +1,12 @@
 import { sseFieldValue } from "../lib/sse-decoder";
+import {
+  appendSafeWebSearchSource,
+  safeWebSearchSources,
+  type SafeWebSearchSource,
+} from "./sources";
 
 /** A single web source backing the sidecar's answer. */
-export interface WebSearchSource {
-  url: string;
-  title?: string;
-}
+export type WebSearchSource = SafeWebSearchSource;
 
 /** The sidecar's synthesized answer plus its sources (empty `sources` is fine). */
 export interface WebSearchResult {
@@ -36,8 +38,10 @@ export const MAX_SIDECAR_RESPONSE_BYTES = 64 * 1024;
 /** Push a `url_citation` annotation as a source, de-duplicated by URL. */
 function collectAnnotation(ann: AnnotationLike | undefined, sources: WebSearchSource[], seen: Set<string>): void {
   if (!ann || ann.type !== "url_citation" || typeof ann.url !== "string" || seen.has(ann.url)) return;
-  seen.add(ann.url);
-  sources.push({ url: ann.url, ...(ann.title ? { title: ann.title } : {}) });
+  if (appendSafeWebSearchSource(sources, {
+    url: ann.url,
+    ...(ann.title !== undefined ? { title: ann.title } : {}),
+  })) seen.add(ann.url);
 }
 
 /**
@@ -51,7 +55,11 @@ function collectAnnotation(ann: AnnotationLike | undefined, sources: WebSearchSo
  * (`### Sources:`, `**Sources**`), a title line whose URL sits on the FOLLOWING line, and trailing
  * URL punctuation (`;`, `,`, `)`, `]`, `.`). Prose that follows the source list is preserved.
  */
-const URL_RE = /https?:\/\/[^\s<>()\[\]]+/;
+const URL_RE = /https?:\/\/[^\s<>()\[\]]+/i;
+// Recognize URI-like candidates separately from the HTTP(S)-only acceptance boundary. A rejected
+// citation (for example `javascript:`) still belongs to the trailing Sources block and must not be
+// left behind as ordinary assistant text.
+const URI_LIKE_RE = /[a-z][a-z0-9+.-]*:[^\s<>()\[\]]+/i;
 // A "Sources:" / "Source:" header, allowing markdown prefixes (#, *, -, >) and bold/italic wrappers.
 const SOURCES_WORD_RE = /^sources?/i;
 
@@ -113,14 +121,14 @@ function cleanTitle(prefix: string): string {
   return title;
 }
 
-function extractTrailingSources(text: string): { text: string; sources: WebSearchSource[] } {
+function extractTrailingSources(text: string): { text: string; sources: WebSearchSource[]; stripped: boolean } {
   const lines = text.split("\n");
   // Find the LAST line that is a "Sources:" header (markdown prefixes allowed).
   let headerIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (isSourcesHeader(lines[i])) { headerIdx = i; break; }
   }
-  if (headerIdx === -1) return { text, sources: [] };
+  if (headerIdx === -1) return { text, sources: [], stripped: false };
   const sources: WebSearchSource[] = [];
   const seen = new Set<string>();
   // Track the last line index actually consumed as part of the source list so trailing prose after
@@ -128,14 +136,16 @@ function extractTrailingSources(text: string): { text: string; sources: WebSearc
   let lastConsumed = headerIdx;
   // A title line whose URL is expected on a following line (multiline entry).
   let pendingTitle: string | null = null;
+  let consumedSourceLine = false;
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const raw = lines[i].trim();
     if (raw === "") {
       // Blank line between header and first entry is fine; a blank AFTER entries ends the list.
-      if (sources.length > 0 || pendingTitle !== null) break;
+      if (consumedSourceLine || pendingTitle !== null) break;
       continue;
     }
-    const m = raw.match(URL_RE);
+    const httpMatch = raw.match(URL_RE);
+    const m = httpMatch ?? raw.match(URI_LIKE_RE);
     if (!m) {
       // A list-ish line with no URL may be a title whose URL is on the next line. Only treat it as a
       // pending title when it looks like a list item; otherwise it's prose → stop.
@@ -144,23 +154,27 @@ function extractTrailingSources(text: string): { text: string; sources: WebSearc
       }
       break;
     }
+    // A non-HTTP URI embedded in prose is not sufficient to classify the line as a citation.
+    // Accept it as a consumed source line only when it is a list item or the whole line starts with
+    // the URI candidate, matching the existing bare-URL grammar.
+    if (!httpMatch && !/^[-*>\d.)]/.test(raw) && m.index !== 0) break;
     const url = cleanUrl(m[0]);
     if (!url) { break; }
+    consumedSourceLine = true;
     lastConsumed = i;
     // Title: text before the URL on this line, else a buffered title from a preceding line.
     const inlinePrefix = raw.slice(0, m.index);
     const title = cleanTitle(inlinePrefix) || (pendingTitle ? cleanTitle(pendingTitle) : "");
     pendingTitle = null;
     if (seen.has(url)) continue;
-    seen.add(url);
-    sources.push(title ? { url, title } : { url });
+    if (appendSafeWebSearchSource(sources, title ? { url, title } : { url })) seen.add(url);
   }
-  if (sources.length === 0) return { text, sources: [] };
+  if (!consumedSourceLine) return { text, sources: [], stripped: false };
   // Keep text before the header AND any prose after the consumed source lines.
   const before = lines.slice(0, headerIdx).join("\n").replace(/\s+$/, "");
   const after = lines.slice(lastConsumed + 1).join("\n").replace(/^\s+/, "");
   const body = after ? (before ? `${before}\n\n${after}` : after) : before;
-  return { text: body, sources };
+  return { text: body, sources, stripped: true };
 }
 
 /** Pull final text + url_citation sources from a completed Responses `output[]` array. */
@@ -283,22 +297,19 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     || acc.doneText.trim() && acc.doneText
     || acc.deltaText;
   // Merge sources from the final output[] and the streaming annotation events.
-  const sources = [...(acc.final?.sources ?? [])];
-  const seenMerge = new Set(sources.map(s => s.url));
+  const sources = safeWebSearchSources(acc.final?.sources ?? []);
   for (const s of acc.streamSources) {
-    if (!seenMerge.has(s.url)) { seenMerge.add(s.url); sources.push(s); }
+    appendSafeWebSearchSource(sources, s);
   }
   // Hosted web_search usually omits url_citation annotations and lists sources in a trailing
   // `Sources:` markdown block instead. Pull those out (and strip the block from the answer so the
   // tool_result renderer doesn't print sources twice). Annotation titles win; text-block titles
   // only fill a gap. URL-deduped against annotation sources.
-  const { text: body, sources: textSources } = extractTrailingSources(typeof text === "string" ? text : "");
+  const { text: body, sources: textSources, stripped } = extractTrailingSources(typeof text === "string" ? text : "");
   for (const s of textSources) {
-    if (seenMerge.has(s.url)) continue;
-    seenMerge.add(s.url);
-    sources.push(s);
+    appendSafeWebSearchSource(sources, s);
   }
-  const finalText = textSources.length > 0 ? body : (typeof text === "string" ? text : "");
+  const finalText = stripped ? body : (typeof text === "string" ? text : "");
   if (!finalText.trim() && acc.error) return { text: "", sources, error: acc.error };
   return { text: finalText, sources };
 }
