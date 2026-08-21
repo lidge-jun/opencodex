@@ -163,6 +163,10 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
+Once connected, `ocx sync` also refreshes the owned MCode block with current context
+windows and reasoning-effort ladders. It leaves missing, foreign-edited, unsafe, and
+never-owned blocks untouched; re-enable explicitly when you intend to reconnect one.
+
 The separate MiniMax platform CLI (`mmx`) is not a file-toggle integration. Its text
 commands use MiniMax's Anthropic-compatible endpoint, so OpenCodex provides a
 credential-isolated, loopback-only launcher:

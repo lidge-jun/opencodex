@@ -51,8 +51,11 @@ overwriting that selection. The block does not write a real key, does not replac
 `custom_provider:opencodex/...`.
 
 `ocx mcode` verifies that this provider points at the currently running proxy before it
-launches the client. If the port changed, refresh the managed block by running the enable
-command again. Disable or restore it through the same audited integration system:
+launches the client. After the one-time enable, `ocx sync` refreshes the owned block when
+the port or catalog capabilities change. Automatic sync never creates an unowned block,
+recreates one you removed, or overwrites a file that changed after OpenCodex wrote it; use
+the enable command when you intentionally want to reconnect. Disable or restore it through
+the same audited integration system:
 
 ```bash
 ocx integration client disable --client mcode

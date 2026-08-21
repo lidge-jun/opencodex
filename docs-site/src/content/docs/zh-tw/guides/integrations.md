@@ -87,6 +87,10 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
+完成一次連接後，`ocx sync` 也會以目前的 context window 與 reasoning-effort 階梯更新
+OpenCodex 已擁有的 MCode 區塊。若區塊已刪除、遭外部修改、不安全或從未由 OpenCodex
+建立，sync 會保持原檔不動；只有在你確定要重新連接時才再次執行 enable。
+
 另一個 MiniMax 平台 CLI（`mmx`）不是檔案開關整合。其文字命令使用 MiniMax 的
 Anthropic 相容端點，因此 OpenCodex 提供憑證隔離、僅限 loopback 的 launcher：
 

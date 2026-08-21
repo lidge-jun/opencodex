@@ -204,8 +204,9 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   sync: async deps => {
     const restartCodex = deps.args.slice(1).includes("--restart-codex");
+    const live = await deps.findLiveProxy();
     const synced = await syncModelsToCodex(
-      (await deps.findLiveProxy())?.port,
+      live?.port,
       undefined,
       undefined,
       undefined,
@@ -228,6 +229,28 @@ const commandRunners: Record<string, CommandRunner> = {
     // exactly when a long-lived app-server is holding the stale list.
     if (synced.catalogWritten || synced.cacheSynced) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    }
+    // `ocx sync` is a direct CLI path; it does not call the management
+    // `/api/sync` route. Refresh the already-connected MCode block here too,
+    // after Codex has published the catalog that supplies its capabilities.
+    if (synced.status !== "refused" && live) {
+      try {
+        const config = deps.loadConfig();
+        const { refreshOwnedIntegration } = await import("../integrations/owned-refresh");
+        const result = await refreshOwnedIntegration({
+          clientId: "mcode",
+          models: async () => {
+            const { loadExportModels } = await import("../server/management/model-rows");
+            return loadExportModels(config);
+          },
+          config,
+          port: live.port,
+        });
+        if (result?.changed) console.log("MCode integration refreshed from the current catalog.");
+        else if (result?.reason) console.warn(`MCode integration was not refreshed: ${result.reason}`);
+      } catch (error) {
+        console.warn(`MCode integration was not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     return code;
   },
