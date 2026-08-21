@@ -1090,7 +1090,14 @@ select.input { appearance: none; }
 .select-dropdown {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--z-popover);
   min-width: 100%; max-height: 280px; overflow-y: auto;
-  background: color-mix(in oklab, canvas 84%, transparent);
+  /*
+    Opaque fill, not glass. A portaled menu opens over rows beneath its trigger
+    (Subagents → Settings: Preferred model covers the Tell Codex switch). A
+    translucent canvas mix let those controls show through and look like they
+    floated above every layer. Keep backdrop-filter for edge refraction only —
+    the fill itself must hide what sits behind the panel.
+  */
+  background: var(--surface);
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   border: 1px solid var(--border); border-radius: var(--radius);
@@ -1284,12 +1291,14 @@ select.input { appearance: none; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .sidebar { background: var(--rail); }
   .lang-toggle .select-dropdown { background: var(--rail); }
+  .select-dropdown { background: var(--surface); }
   .modal-card { background: var(--surface); }
 }
 @media (prefers-reduced-transparency: reduce) {
   body::before { display: none; }
   .sidebar { background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .lang-toggle .select-dropdown { background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .select-dropdown { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .modal-card { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .modal-overlay { backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
