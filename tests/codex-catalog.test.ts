@@ -5587,7 +5587,10 @@ describe("Codex reasoning-effort capability clamp", () => {
       })]),
     });
     const before = JSON.stringify(observed);
-    const models = [routedEntry()];
+    const models = [{
+      ...routedEntry(),
+      opencodex_max_provenance: "synthetic",
+    }];
     models[0]!.default_reasoning_level = "ultra";
 
     const supported = supportedCodexReasoningEffortsFromObservedCatalog(observed);
@@ -5600,6 +5603,7 @@ describe("Codex reasoning-effort capability clamp", () => {
     expect(models[0]!.supported_reasoning_levels.map(level => level.effort))
       .toEqual(["low", "medium", "high", "xhigh"]);
     expect(models[0]!.default_reasoning_level).toBe("xhigh");
+    expect(models[0]!.opencodex_max_provenance).toBeUndefined();
     expect(JSON.stringify(observed)).toBe(before);
   });
 

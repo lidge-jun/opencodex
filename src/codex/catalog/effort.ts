@@ -341,6 +341,10 @@ export function clampEntryToCodexSupportedEfforts(
       : CODEX_REASONING_LEVELS
         .filter(level => level.effort === "low" || level.effort === "medium" || level.effort === "high")
         .map(level => ({ ...level }));
+    if (entry[MAX_REASONING_PROVENANCE_FIELD] === "synthetic"
+      && !catalogEntryEfforts(entry).includes("max")) {
+      delete entry[MAX_REASONING_PROVENANCE_FIELD];
+    }
   }
   const currentDefault = entry.default_reasoning_level;
   if (typeof currentDefault === "string" && !supported.has(currentDefault)) {
