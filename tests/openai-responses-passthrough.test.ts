@@ -2145,3 +2145,49 @@ describe("openaiResponsesUrl", () => {
     );
   });
 });
+
+describe("reasoning input content channel", () => {
+  const routed = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "key" as const,
+    apiKey: "xai-test",
+  };
+
+  function forwarded(item: Record<string, unknown>): Record<string, unknown> {
+    const request = createResponsesPassthroughAdapter(routed).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input: [item] },
+    }, { headers: new Headers() });
+    return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+  }
+
+  // Codex serializes an absent reasoning content channel as `"content": null`. xAI rejects the item
+  // and blames the sibling blob (`Could not decode the compaction blob`), so this reads as an
+  // encrypted_content failure; dropping the null key is what actually fixes it. Verified against a
+  // captured failing request: removing only this key turned the 400 into a 200.
+  test("drops a null content channel while keeping the replayable blob", () => {
+    const out = forwarded({
+      type: "reasoning",
+      content: null,
+      summary: [{ type: "summary_text", text: "thinking" }],
+      encrypted_content: "upstream-issued-blob",
+    });
+    expect(out).not.toHaveProperty("content");
+    expect(out.encrypted_content).toBe("upstream-issued-blob");
+    expect(out.summary).toEqual([{ type: "summary_text", text: "thinking" }]);
+  });
+
+  test("leaves an array content channel to the existing sanitizer", () => {
+    const out = forwarded({
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "raw" }],
+      encrypted_content: "upstream-issued-blob",
+    });
+    expect(out.content).toEqual([]);
+    expect(out.encrypted_content).toBe("upstream-issued-blob");
+  });
+});

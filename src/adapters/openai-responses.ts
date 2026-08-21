@@ -56,6 +56,18 @@ export function sanitizeReasoningInputContent(
     // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
+    // Codex serializes an absent reasoning content channel as `"content": null`. The field is
+    // optional and null carries nothing, but a strict gateway rejects the item on its declared type
+    // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
+    // rather than the field it actually refused, which is why this reads as a blob failure. Drop the
+    // key so the item matches the shape the upstream issued.
+    if ("content" in rec && !Array.isArray(rec.content)) {
+      changed = true;
+      const next: Record<string, unknown> = { ...rec };
+      delete next.content;
+      if (hasOcxEnvelope) delete next.encrypted_content;
+      return next;
+    }
     if (!hasRawContent && !hasOcxEnvelope) return item;
     if (hasOcxEnvelope) {
       changed = true;
