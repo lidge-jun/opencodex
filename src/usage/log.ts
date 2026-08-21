@@ -29,6 +29,7 @@ export type AttemptRecoveryKind =
   | "rate-limit-429"
   | "anthropic-oauth-429"
   | "image-413"
+  | "opaque-blob-rejection"
   | "empty-completion";
 
 export interface PersistedUsageAttempt {
@@ -218,6 +219,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "rate-limit-429",
   "anthropic-oauth-429",
   "image-413",
+  "opaque-blob-rejection",
   "empty-completion",
 ]);
 const USAGE_STATUSES = new Set<UsageStatus>([

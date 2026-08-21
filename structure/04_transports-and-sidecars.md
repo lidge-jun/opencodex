@@ -555,8 +555,17 @@ survive; `status` is also removed from blobless reasoning items. Missing, expire
 state is unknown. The comparison uses the durable destination and credential identities with the
 provider, adapter, and model, so OAuth token-generation refreshes do not look like backend changes;
 when either durable dimension is unavailable it refuses to record rather than falling back to a
-volatile identity. The record is deliberately process-local, so a backend switch spanning a proxy
-restart is not detected and may still be rejected upstream.
+volatile identity. This deterministic pre-flight is the primary path and covers threads the process
+has served while their record remains inside the TTL/LRU bounds. Missing, expired, evicted, and
+pre-process history stays fail-soft on the first send. If a Responses upstream then returns its own
+self-identifying opaque-blob 4xx (`invalid_encrypted_content`, or xAI's two `invalid-argument`
+decoder errors), the proxy rebuilds once through the same sanitation path: reasoning
+`encrypted_content` is removed and compaction blobs use the existing text degradation. A one-shot
+guard makes a second rejection terminal, and a successful recovery records the current serving
+identity so later route changes return to deterministic pre-flight. A cold-record cross-backend
+switch therefore costs one extra upstream round trip and one turn of degraded reasoning, rather than
+wedging the thread; unrelated 4xx responses and requests whose outbound body carries no blob never
+enter this recovery.
 
 A combo target rotation between turns legitimately changes that serving identity, so the following
 turn drops blobs minted by the prior target. This is correct because the new target cannot decode
@@ -573,10 +582,10 @@ conversation's last-serving identity and cause a later main-model turn to strip 
 [Decision Log]
 - 목적과 의도: Keep same-backend opaque reasoning replay while preventing backend-private blobs and output-only fields from breaking the first turn after a route change.
 - 기존 구현 및 제약 조건: Reasoning-input sanitation already handled raw content and `ocxr1:` envelopes; the replay cache already supplied a bounded, thread-scoped physical-route identity, but no record connected that identity to native `encrypted_content` provenance.
-- 검토한 주요 대안: Strip every opaque blob, persist provenance across restarts, retry after an upstream 4xx, or compare and strip before the first outbound request only when an in-process record proves a route change.
-- 선택한 방식: Preserve `status` whenever its blob is forwarded without changing the pre-existing raw-`content` blanking rule; otherwise remove output-only `status`, compare and update a 64-entry/256 KiB/one-hour in-process serving-identity record using durable destination and credential dimensions at request time, and pass the proven-change decision into the Responses adapter to remove foreign `encrypted_content`.
-- 다른 대안 대신 이 방식을 선택한 이유: Unknown provenance can still be valid after restart, durable storage is unnecessary for this bounded compatibility hint, and a deterministic pre-flight decision avoids a second paid or stateful upstream attempt.
-- 장점, 단점 및 영향: Same-route and unknown replay retain cached reasoning, known cross-route replay keeps the reasoning item without its undecodable blob, and switches spanning a proxy restart remain an explicit coverage gap.
+- 검토한 주요 대안: Strip every opaque blob, persist provenance across restarts, trust generic 4xx prose, rely only on a retry, or combine deterministic route comparison with a narrowly identified recovery.
+- 선택한 방식: Preserve `status` whenever its blob is forwarded without changing the pre-existing raw-`content` blanking rule; otherwise remove output-only `status`, compare and update a 64-entry/256 KiB/one-hour in-process serving-identity record using durable destination and credential dimensions at request time, pass a proven change into the Responses adapter before the first send, and use one self-identified opaque-blob recovery only when provenance was unknown.
+- 다른 대안 대신 이 방식을 선택한 이유: Unknown provenance can still be valid after restart, durable storage is unnecessary for this bounded compatibility hint, and deterministic pre-flight avoids the extra paid or stateful upstream attempt whenever the process has evidence. The upstream's narrow error identity supplies authoritative evidence only for histories the process could not observe.
+- 장점, 단점 및 영향: Same-route and unknown replay retain cached reasoning on the first send, known cross-route replay keeps the reasoning item without its undecodable blob, and a cold cross-route replay recovers with one extra round trip and one degraded-reasoning turn. A repeated rejection is surfaced unchanged after exactly one recovery attempt.
 
 DeepSeek's stateless Responses compatibility pass normalizes only unambiguous tool-call batches.
 Calls emitted before the first matched output stay together as one assistant batch, followed by
