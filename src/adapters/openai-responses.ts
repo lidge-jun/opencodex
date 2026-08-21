@@ -41,7 +41,10 @@ export const FORWARD_HEADERS = [
 
 export function sanitizeReasoningInputContent(
   body: unknown,
-  opts?: { preserveRawReasoningContent?: boolean },
+  opts?: {
+    preserveRawReasoningContent?: boolean;
+    stripEncryptedContent?: boolean;
+  },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -56,14 +59,23 @@ export function sanitizeReasoningInputContent(
     // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
-    if (!hasRawContent && !hasOcxEnvelope) return item;
-    if (hasOcxEnvelope) {
-      changed = true;
-      const next: Record<string, unknown> = { ...rec };
-      delete next.encrypted_content;
-      if (!opts?.preserveRawReasoningContent) next.content = [];
-      return next;
-    }
+    const hasOutputStatus = Object.prototype.hasOwnProperty.call(rec, "status");
+    const hasEncryptedContent = Object.prototype.hasOwnProperty.call(rec, "encrypted_content");
+    const stripEncryptedContent = hasOcxEnvelope
+      || (opts?.stripEncryptedContent === true && hasEncryptedContent);
+    const retainsEncryptedContent = hasEncryptedContent && !stripEncryptedContent;
+    // Invariant for fields newly stripped by this cross-backend layer: an item whose
+    // encrypted_content is forwarded keeps status because OpenAI-operated backends bind opaque
+    // reasoning blobs to the item shape. Content blanking predates this invariant and remains
+    // required by ChatGPT's input contract; a native blob plus raw content is a known unresolved
+    // shape conflict, not an oversight to resolve by preserving content here.
+    const stripOutputStatus = hasOutputStatus && !retainsEncryptedContent;
+    const blankContent = !opts?.preserveRawReasoningContent && (hasRawContent || hasOcxEnvelope);
+    if (!blankContent && !stripOutputStatus && !stripEncryptedContent) return item;
+    changed = true;
+    const next: Record<string, unknown> = { ...rec };
+    if (stripOutputStatus) delete next.status;
+    if (stripEncryptedContent) delete next.encrypted_content;
     // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
     // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
     // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.
@@ -71,9 +83,8 @@ export function sanitizeReasoningInputContent(
     // guide merges reasoning items into the adjacent assistant message), so providers flagged
     // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
     // continuations after tool calls (issue #875 family).
-    if (opts?.preserveRawReasoningContent) return item;
-    changed = true;
-    return { ...rec, content: [] };
+    if (blankContent) next.content = [];
+    return next;
   });
 
   return changed ? { ...raw, input } : body;
@@ -1572,7 +1583,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), {
+        preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+        stripEncryptedContent: parsed._stripReasoningEncryptedContent === true,
+      })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

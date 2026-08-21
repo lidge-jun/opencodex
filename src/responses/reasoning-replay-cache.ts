@@ -52,8 +52,16 @@ interface CacheEntry {
   at: number;
 }
 
+interface ServingIdentityEntry {
+  identity: string;
+  bytes: number;
+  at: number;
+}
+
 const entries = new Map<string, CacheEntry>();
+const servingIdentities = new Map<string, ServingIdentityEntry>();
 let totalBytes = 0;
+let servingIdentityTotalBytes = 0;
 let clockForTests: (() => number) | null = null;
 
 const now = (): number => clockForTests?.() ?? Date.now();
@@ -62,26 +70,95 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
-  const identity = scope?.current;
+type ReasoningReplayIdentityTuple = readonly [string, string, string, string, string];
+
+function tupleForIdentity(
+  identity: Readonly<OcxReasoningReplayIdentity> | undefined,
+): ReasoningReplayIdentityTuple | undefined {
   if (
-    !nonEmpty(callId)
-    || !nonEmpty(scope?.clientThreadId)
-    || !nonEmpty(identity?.providerName)
+    !nonEmpty(identity?.providerName)
     || !nonEmpty(identity?.providerDestinationIdentity)
     || !nonEmpty(identity?.adapterName)
     || !nonEmpty(identity?.modelId)
     || !nonEmpty(identity?.credentialIdentity)
   ) return undefined;
-  return JSON.stringify([
-    scope.clientThreadId,
+  return [
     identity.providerName,
     identity.providerDestinationIdentity,
     identity.adapterName,
     identity.modelId,
     identity.credentialIdentity,
+  ];
+}
+
+function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
+  const identity = tupleForIdentity(scope?.current);
+  if (!nonEmpty(callId) || !nonEmpty(scope?.clientThreadId) || !identity) return undefined;
+  return JSON.stringify([
+    scope.clientThreadId,
+    ...identity,
     callId,
   ]);
+}
+
+function deleteServingIdentity(threadId: string): void {
+  const entry = servingIdentities.get(threadId);
+  if (!entry) return;
+  servingIdentities.delete(threadId);
+  servingIdentityTotalBytes -= entry.bytes;
+}
+
+function sweepExpiredServingIdentities(at: number): void {
+  for (const [threadId, entry] of servingIdentities) {
+    if (at - entry.at >= TTL_MS) deleteServingIdentity(threadId);
+  }
+}
+
+/**
+ * Compare this request's route with the last route recorded for its client thread, then
+ * record the current route. A live mismatch means replayed opaque reasoning was minted by
+ * another backend and must not be forwarded to this one.
+ *
+ * Missing, expired, or evicted state is deliberately unknown rather than a mismatch. This
+ * store is process-local, so a backend switch spanning a proxy restart is not detected.
+ */
+export function updateReasoningReplayServingIdentity(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): boolean {
+  const threadId = scope?.clientThreadId;
+  const identityTuple = tupleForIdentity(scope?.current);
+  if (!nonEmpty(threadId) || !identityTuple) return false;
+  const identity = JSON.stringify(identityTuple);
+
+  const at = now();
+  sweepExpiredServingIdentities(at);
+  const previous = servingIdentities.get(threadId);
+  const changed = previous !== undefined && previous.identity !== identity;
+  const bytes = Buffer.byteLength(JSON.stringify([threadId, identity]), "utf8");
+  if (bytes > MAX_TOTAL_BYTES) {
+    deleteServingIdentity(threadId);
+    return false;
+  }
+
+  if (previous) deleteServingIdentity(threadId);
+  servingIdentities.set(threadId, { identity, bytes, at });
+  servingIdentityTotalBytes += bytes;
+  while (
+    (servingIdentityTotalBytes > MAX_TOTAL_BYTES || servingIdentities.size > MAX_ENTRIES)
+    && servingIdentities.size > 1
+  ) {
+    let oldestThreadId: string | undefined;
+    let oldestAt = Infinity;
+    for (const [candidateThreadId, entry] of servingIdentities) {
+      if (entry.at < oldestAt) {
+        oldestAt = entry.at;
+        oldestThreadId = candidateThreadId;
+      }
+    }
+    if (oldestThreadId === undefined) break;
+    deleteServingIdentity(oldestThreadId);
+  }
+  return changed;
 }
 
 function processLocalIdentity(domain: string, material: string): string {
@@ -303,6 +380,8 @@ export function peekReasoningForCall(
 /** Test-only: reset the cache and optionally pin the clock. */
 export function clearReasoningReplayCacheForTests(clock?: (() => number) | null): void {
   entries.clear();
+  servingIdentities.clear();
   totalBytes = 0;
+  servingIdentityTotalBytes = 0;
   clockForTests = clock ?? null;
 }

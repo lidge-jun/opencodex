@@ -21,6 +21,7 @@ import {
   durableReplayCredentialIdentity,
   reasoningReplayKeyCredentialIdentity,
   reasoningReplayOAuthCredentialIdentity,
+  updateReasoningReplayServingIdentity,
 } from "../../responses/reasoning-replay-cache";
 import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
@@ -407,6 +408,11 @@ function bindRouteReasoningReplayScope(args: {
         }
       : undefined,
   );
+  // Keep this sticky for the whole outbound request: a later auth/key rebind may compare equal
+  // after the first mismatch, but it cannot make history minted by the prior route decodable.
+  if (updateReasoningReplayServingIdentity(parsed._reasoningReplayScope)) {
+    parsed._stripReasoningEncryptedContent = true;
+  }
 }
 
 function nonEmptyProviderApiKey(provider: OcxProviderConfig): string | undefined {

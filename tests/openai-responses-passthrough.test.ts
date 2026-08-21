@@ -774,6 +774,154 @@ describe("OpenAI Responses passthrough sanitization", () => {
     });
   });
 
+  test("keeps a blob-bearing reasoning item byte-identical when the route is unchanged", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const reasoningItem = {
+      type: "reasoning",
+      id: "rs_same_backend",
+      status: "completed",
+      summary: [{ type: "summary_text", text: "summary" }],
+      encrypted_content: "backend-minted-blob",
+      content: [],
+    };
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        store: true,
+        input: [reasoningItem],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(JSON.stringify(body.input[0])).toBe(JSON.stringify(reasoningItem));
+  });
+
+  test("keeps a native blob while blanking its raw reasoning content", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "reasoning",
+          status: "completed",
+          summary: [],
+          encrypted_content: "native-backend-blob",
+          content: [{ type: "reasoning_text", text: "raw routed reasoning" }],
+        }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      status: "completed",
+      summary: [],
+      encrypted_content: "native-backend-blob",
+      content: [],
+    });
+  });
+
+  test("keeps encrypted reasoning content without a proven route switch", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "reasoning",
+          summary: [],
+          encrypted_content: "same-backend-blob",
+        }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      summary: [],
+      encrypted_content: "same-backend-blob",
+    });
+  });
+
+  test("strips encrypted reasoning content after a known route switch but keeps the item", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _stripReasoningEncryptedContent: true,
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [
+          {
+            type: "reasoning",
+            id: "rs_foreign_backend",
+            status: "completed",
+            summary: [{ type: "summary_text", text: "still useful" }],
+            encrypted_content: "foreign-backend-blob",
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "continue" }],
+          },
+        ],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input).toEqual([
+      {
+        type: "reasoning",
+        id: "rs_foreign_backend",
+        summary: [{ type: "summary_text", text: "still useful" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue" }],
+      },
+    ]);
+  });
+
+  test("strips status from a reasoning item that has no encrypted content", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "reasoning",
+          id: "rs_without_blob",
+          status: "completed",
+          summary: [{ type: "summary_text", text: "summary" }],
+        }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      id: "rs_without_blob",
+      summary: [{ type: "summary_text", text: "summary" }],
+    });
+  });
+
   test("strips image_generation hosted tool for codex-spark passthrough", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
