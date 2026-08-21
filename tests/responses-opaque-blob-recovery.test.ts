@@ -366,3 +366,70 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(hasBlob(outbound.get("second")![0]!)).toBe(false);
   });
 });
+
+describe("reasoning replay serving identity commit through /v1/responses", () => {
+  test("a failed A-to-B turn does not commit B, so the next B retry still strips A-minted blobs", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 2) {
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    const first = await handleResponses(request("first", "thread-failed-switch"), config(), { model: "", provider: "" });
+    expect(first.status).toBe(200);
+    await first.text();
+
+    const failedSwitch = await handleResponses(request("second", "thread-failed-switch"), config(), { model: "", provider: "" });
+    expect(failedSwitch.status).toBe(429);
+    await failedSwitch.text();
+
+    const retry = await handleResponses(request("second", "thread-failed-switch"), config(), { model: "", provider: "" });
+    expect(retry.status).toBe(200);
+    await retry.text();
+
+    expect(outbound).toHaveLength(3);
+    expect(hasBlob(outbound[0]!)).toBe(true);
+    expect(hasBlob(outbound[1]!)).toBe(false);
+    expect(hasBlob(outbound[2]!)).toBe(false);
+  });
+
+  test("a successful A-to-B turn commits B, so the following B turn keeps B-minted blobs", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    for (const provider of ["first", "second", "second"]) {
+      const response = await handleResponses(request(provider, "thread-successful-switch"), config(), { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(3);
+    expect(hasBlob(outbound[0]!)).toBe(true);
+    expect(hasBlob(outbound[1]!)).toBe(false);
+    expect(hasBlob(outbound[2]!)).toBe(true);
+  });
+
+  test("a thread without a serving record keeps opaque blobs", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success("resp-cold-thread");
+    }) as typeof fetch;
+
+    const response = await handleResponses(request("first", "thread-without-record"), config(), { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(hasBlob(outbound[0]!)).toBe(true);
+  });
+});

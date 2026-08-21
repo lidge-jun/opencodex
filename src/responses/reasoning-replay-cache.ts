@@ -133,32 +133,51 @@ function sweepExpiredServingIdentities(at: number): void {
   }
 }
 
+function servingIdentityFor(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): { threadId: string; identity: string } | undefined {
+  const threadId = scope?.clientThreadId;
+  const identityTuple = tupleForServingIdentity(scope?.current);
+  if (!nonEmpty(threadId) || !identityTuple) return undefined;
+  return { threadId, identity: JSON.stringify(identityTuple) };
+}
+
 /**
- * Compare this request's route with the last route recorded for its client thread, then
- * record the current route. A live mismatch means replayed opaque reasoning was minted by
- * another backend and must not be forwarded to this one.
+ * Compare this request's route with the last successfully serving route for its client thread.
+ * A live mismatch means replayed opaque reasoning was minted by another backend and must not be
+ * forwarded to this one. Comparison deliberately does not refresh or replace the recorded route:
+ * a failed candidate request did not serve the thread.
  *
  * Serving provenance uses restart-stable destination and credential dimensions so token
  * generations and other volatile credential material cannot create false route changes. Missing
  * durable identity, expired, or evicted state is deliberately unknown rather than a mismatch.
  * This store is process-local, so a backend switch spanning a proxy restart is not detected.
  */
-export function updateReasoningReplayServingIdentity(
+export function reasoningReplayServingIdentityChanged(
   scope: OcxReasoningReplayScopeRef | undefined,
 ): boolean {
-  const threadId = scope?.clientThreadId;
-  const identityTuple = tupleForServingIdentity(scope?.current);
-  if (!nonEmpty(threadId) || !identityTuple) return false;
-  const identity = JSON.stringify(identityTuple);
-
+  const current = servingIdentityFor(scope);
+  if (!current) return false;
   const at = now();
   sweepExpiredServingIdentities(at);
-  const previous = servingIdentities.get(threadId);
-  const changed = previous !== undefined && previous.identity !== identity;
+  const previous = servingIdentities.get(current.threadId);
+  return previous !== undefined && previous.identity !== current.identity;
+}
+
+/** Record the route only after it has successfully served the client thread. */
+export function commitReasoningReplayServingIdentity(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): void {
+  const current = servingIdentityFor(scope);
+  if (!current) return;
+  const at = now();
+  sweepExpiredServingIdentities(at);
+  const previous = servingIdentities.get(current.threadId);
+  const { threadId, identity } = current;
   const bytes = Buffer.byteLength(JSON.stringify([threadId, identity]), "utf8");
   if (bytes > MAX_TOTAL_BYTES) {
     deleteServingIdentity(threadId);
-    return false;
+    return;
   }
 
   if (previous) deleteServingIdentity(threadId);
@@ -179,7 +198,6 @@ export function updateReasoningReplayServingIdentity(
     if (oldestThreadId === undefined) break;
     deleteServingIdentity(oldestThreadId);
   }
-  return changed;
 }
 
 function processLocalIdentity(domain: string, material: string): string {

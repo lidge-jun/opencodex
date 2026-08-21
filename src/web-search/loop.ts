@@ -310,6 +310,8 @@ export interface WebSearchLoopDeps {
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
+  /** Called only when the final bridged Responses stream reaches completed or incomplete. */
+  onCompletedResponse?: (response: Record<string, unknown>) => void;
 }
 
 /**
@@ -884,6 +886,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+      ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });
