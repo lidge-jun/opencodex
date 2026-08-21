@@ -28,6 +28,25 @@ function buildWebSearchBody(provider: OcxProviderConfig): Record<string, unknown
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+function buildScopedToolFieldsBody(provider: OcxProviderConfig): Record<string, unknown> {
+  const request = createResponsesPassthroughAdapter(provider).buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: {
+      model: "test-model",
+      input: "ping",
+      tools: [{
+        type: "web_search",
+        external_web_access: true,
+        defer_loading: true,
+      }],
+    },
+  }, { headers: new Headers() });
+  return JSON.parse(request.body) as Record<string, unknown>;
+}
+
 // #2188 follow-up: routed Responses upstreams (xAI api.x.ai) 400 the WHOLE request on
 // OpenAI-only web_search config fields (probe 2026-08-21: external_web_access and
 // search_context_size each 400 individually; user_location and filters are accepted).
@@ -78,6 +97,36 @@ describe("Responses buildRequest web_search capability", () => {
     expect(body.tools).toEqual([{
       type: "web_search",
       user_location: { type: "approximate" },
+    }]);
+  });
+});
+
+describe("Responses buildRequest destination-scoped tool fields", () => {
+  test("official OpenAI API-key provider keeps external_web_access and drops defer_loading", () => {
+    const body = buildScopedToolFieldsBody({
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-openai-key",
+    });
+
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      external_web_access: true,
+    }]);
+  });
+
+  test("canonical ChatGPT forward provider keeps both fields", () => {
+    const body = buildScopedToolFieldsBody({
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+    });
+
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      external_web_access: true,
+      defer_loading: true,
     }]);
   });
 });

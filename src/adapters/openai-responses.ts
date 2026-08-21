@@ -156,26 +156,40 @@ function stripInvalidItemIds(body: unknown): unknown {
 }
 
 /**
- * Codex-private tool fields that only the ChatGPT backend understands.
+ * Tool fields with destination-specific support.
  *
- * A third-party Responses gateway validates its schema and rejects the whole request before
- * inference — xAI answers `Argument not supported: external_web_access` — so these are removed at
- * the noncanonical boundary while the tool and every public option stay.
+ * A third-party Responses gateway validates its schema and may reject the whole request before
+ * inference, so each entry declares which destinations understand it while the tool and every
+ * public option stay intact elsewhere.
  *
  * Keep this a table. Each private bit Codex attaches has so far arrived as its own bespoke strip
  * with its own traversal, and the traversals disagreed about which containers they covered; a new
- * one should be a row here instead. `toolTypes` omitted means the field is private on any tool.
+ * one should be a row here instead. `toolTypes` omitted means the field is scoped on any tool.
+ *
+ * `external_web_access` is understood by both OpenAI-operated Responses surfaces. Routed web-search
+ * incompatibility is also handled by the `supportsOpenAiWebSearchToolFields` capability flag, which
+ * strips the broader OpenAI-only web-search field set for explicit denials; do not collapse that
+ * layer into this table. `defer_loading` differs because it is private to the canonical ChatGPT
+ * surface and the official OpenAI API rejects it.
  */
-const CANONICAL_ONLY_TOOL_FIELDS: readonly { field: string; toolTypes?: ReadonlySet<string> }[] = [
-  // ChatGPT's browsing policy bit. The public hosted tool is enabled by its presence alone.
-  { field: "external_web_access", toolTypes: new Set(["web_search", "web_search_preview"]) },
+const CANONICAL_ONLY_TOOL_FIELDS: readonly {
+  field: string;
+  toolTypes?: ReadonlySet<string>;
+  isSupportedDestination: (provider: OcxProviderConfig) => boolean;
+}[] = [
+  // OpenAI's browsing policy bit. The public hosted tool is enabled by its presence alone.
+  {
+    field: "external_web_access",
+    toolTypes: new Set(["web_search", "web_search_preview"]),
+    isSupportedDestination: isOpenAiOperatedResponsesDestination,
+  },
   // Deferred-discovery marker. `activateDeferredTool` clears it only for tools a `tool_search_output`
   // already loaded, so a still-deferred declaration — including one promoted out of a namespace
   // group — otherwise reaches the wire carrying it.
-  { field: "defer_loading" },
+  { field: "defer_loading", isSupportedDestination: isCanonicalOpenAiForwardProvider },
 ];
 
-function stripCanonicalOnlyToolFields(body: unknown): unknown {
+function stripCanonicalOnlyToolFields(body: unknown, provider: OcxProviderConfig): unknown {
   if (!isPlainObject(body)) return body;
 
   const rewriteTools = (tools: unknown[]): unknown[] => {
@@ -183,7 +197,8 @@ function stripCanonicalOnlyToolFields(body: unknown): unknown {
     const rewritten = tools.map(tool => {
       if (!isPlainObject(tool)) return tool;
       let next = tool;
-      for (const { field, toolTypes } of CANONICAL_ONLY_TOOL_FIELDS) {
+      for (const { field, toolTypes, isSupportedDestination } of CANONICAL_ONLY_TOOL_FIELDS) {
+        if (isSupportedDestination(provider)) continue;
         if (!Object.hasOwn(next, field)) continue;
         if (toolTypes && (typeof next.type !== "string" || !toolTypes.has(next.type))) continue;
         const { [field]: _private, ...rest } = next;
@@ -1721,9 +1736,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
-        // Last, so promoted namespace children are also cleared of Codex-private fields.
-        outBody = stripCanonicalOnlyToolFields(outBody);
       }
+      // Last, so promoted namespace children are also cleared of destination-unsupported fields.
+      // This still runs for OpenAI API-key traffic, where only the canonical-only entries apply.
+      outBody = stripCanonicalOnlyToolFields(outBody, provider);
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(
         outBody,
