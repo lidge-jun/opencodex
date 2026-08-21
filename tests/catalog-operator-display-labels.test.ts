@@ -50,6 +50,29 @@ describe("isValidDisplayLabel", () => {
   test("rejects a label carrying a control character", () => {
     expect(isValidDisplayLabel("DeepSeek\u0007V4")).toBe(false);
   });
+
+  test("no control character can reach the stored label, whichever side of trim it falls on", () => {
+    // The check runs on the trimmed value, so the whitespace-class controls are
+    // normalised away rather than rejected: `"Label\n"` stores as `"Label"`. Every
+    // other control character is rejected wherever it sits. Pinned explicitly
+    // because the outcome depends on trim() and the class overlapping, which is
+    // not obvious from either line on its own.
+    for (const edge of ["\u000a", "\u0009", "\u000d"]) {
+      expect(isValidDisplayLabel(`Label${edge}`)).toBe(true);
+      expect(isValidDisplayLabel(`${edge}Label`)).toBe(true);
+      expect(resolveModelDisplayLabel(
+        configWith({ nvidia: { modelDisplayNames: { [NVIDIA.id]: `Label${edge}` } } }),
+        NVIDIA,
+      )).toBe("Label");
+    }
+    for (const inner of ["\u0000", "\u0007", "\u001f", "\u007f"]) {
+      expect(isValidDisplayLabel(`Label${inner}`)).toBe(false);
+      expect(isValidDisplayLabel(`La${inner}bel`)).toBe(false);
+    }
+    // A control character mid-label is rejected even from the whitespace class,
+    // because a label is single-line by definition.
+    expect(isValidDisplayLabel("La\u000abel")).toBe(false);
+  });
 });
 
 describe("resolveModelDisplayLabel precedence", () => {
