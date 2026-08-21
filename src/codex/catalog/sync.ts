@@ -1122,11 +1122,12 @@ export function mergeCatalogEntriesFromObservedState({
         delete e[MAX_REASONING_PROVENANCE_FIELD];
       }
       if (levels.length > 0 && !levels.some(level => level.effort === "max")) {
-        if (!suppressSyntheticMax) {
+        const providerDeclaredMax = e[MAX_REASONING_PROVENANCE_FIELD] === "provider";
+        if (providerDeclaredMax || !suppressSyntheticMax) {
           levels.push(CODEX_REASONING_LEVELS.find(level => level.effort === "max")
             ?? { effort: "max", description: "Maximum reasoning depth for the hardest problems" });
           e.supported_reasoning_levels = levels;
-          e[MAX_REASONING_PROVENANCE_FIELD] = "synthetic";
+          e[MAX_REASONING_PROVENANCE_FIELD] = providerDeclaredMax ? "provider" : "synthetic";
         }
       }
     }

@@ -2583,6 +2583,16 @@ describe("Codex catalog routed normalization", () => {
       .toEqual(["low", "high", "max", "ultra"]);
     expect(preserved?.opencodex_max_provenance).toBe("provider");
 
+    const clampedProviderMax = structuredClone(priorProviderMax);
+    clampCatalogModelsToObservedCodexSupport(
+      [clampedProviderMax],
+      new Set(["low", "medium", "high", "xhigh", "ultra"]),
+    );
+    const preservedAfterClamp = preserve(clampedProviderMax, true);
+    expect((preservedAfterClamp?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "ultra", "max"]);
+    expect(preservedAfterClamp?.opencodex_max_provenance).toBe("provider");
+
     const unknownMax = structuredClone(priorProviderMax);
     delete unknownMax.opencodex_max_provenance;
     const preservedUnknown = preserve(unknownMax, true);
