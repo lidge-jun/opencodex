@@ -274,6 +274,9 @@ import {
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-tool-repair";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
+import {
+  restoreNamespaceToolCallsInJson,
+} from "../../responses/namespace-tool-compat";
 import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import {
   collectDeclaredWireToolNames,
@@ -2540,6 +2543,7 @@ async function handleResponsesInner(
       // would incorrectly disable restoration for the exact ambiguous-name case the alias fixes.
       routedToolSearchNames.add(name);
     }
+    const namespaceToolAliases = new Map(request.convertedNamespaceToolAliases ?? []);
     // #1700: the bridged paths refuse a call to a tool the request never declared
     // (`declaredToolNames`, src/bridge.ts). The passthrough had no equivalent, so a routed
     // provider's top-level `apply_patch` — which under Codex code mode exists only as a nested
@@ -3071,8 +3075,12 @@ async function handleResponsesInner(
         && parsed._responseModelId !== parsed.modelId
         ? createResponsesModelPayloadRewrite(parsed._responseModelId)
         : undefined;
-      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
+      // Compose opt-in payload rewrites into one parse/stringify pass. Namespace restoration
+      // precedes custom-tool restoration so a namespaced custom tool recovers both shapes.
       const payloadRewrites = [
+        namespaceToolAliases.size > 0
+          ? (payload: string) => restoreNamespaceToolCallsInJson(payload, namespaceToolAliases)
+          : undefined,
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
@@ -3291,7 +3299,10 @@ async function handleResponsesInner(
       inspectResponseLogJson(logCtx, text);
       const clientJson = (() => {
         const restored = restoreRoutedCustomCallsInJson(
-          restoreImageGenCallsInJson(text, imageGenCallAliases),
+          restoreNamespaceToolCallsInJson(
+            restoreImageGenCallsInJson(text, imageGenCallAliases),
+            namespaceToolAliases,
+          ),
           routedCustomToolNames,
         );
         const restoredToolSearch = restoreRoutedToolSearchCallsInJson(

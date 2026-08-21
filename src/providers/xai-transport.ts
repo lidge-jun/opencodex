@@ -4,6 +4,15 @@ import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
+export function isXaiTransportBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname;
+    return host === "cli-chat-proxy.grok.com" || host === "api.x.ai";
+  } catch {
+    return false;
+  }
+}
+
 export const XAI_GROK_COMPATIBILITY = {
   version: "0.2.93",
   userAgent: "opencodex-grok/0.2.93",

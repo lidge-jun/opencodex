@@ -18,7 +18,10 @@ export function customToolItemId(id: unknown): unknown {
   return id.startsWith("fc_") ? `ctc_${id.slice(3)}` : id;
 }
 
-export function collectRoutedCustomToolNames(body: unknown): Set<string> {
+export function collectRoutedCustomToolNames(
+  body: unknown,
+  options?: { includeNativePassthrough?: boolean },
+): Set<string> {
   const names = new Set<string>();
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
@@ -29,7 +32,7 @@ export function collectRoutedCustomToolNames(body: unknown): Set<string> {
     if (
       value.type === "custom"
       && typeof value.name === "string"
-      && !ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(value.name)
+      && (options?.includeNativePassthrough === true || !ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(value.name))
     ) {
       names.add(value.name);
     }
@@ -121,11 +124,14 @@ function rewriteForUpstream(
   return changed ? next : value;
 }
 
-export function rewriteRoutedCustomToolsForUpstream(body: unknown): {
+export function rewriteRoutedCustomToolsForUpstream(
+  body: unknown,
+  options?: { includeNativePassthrough?: boolean },
+): {
   body: unknown;
   names: Set<string>;
 } {
-  const names = collectRoutedCustomToolNames(body);
+  const names = collectRoutedCustomToolNames(body, options);
   if (names.size === 0) return { body, names };
   const callIds = new Set<string>();
   collectConvertedCallIds(body, names, callIds);

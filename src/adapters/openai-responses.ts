@@ -13,6 +13,8 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
+import { isXaiTransportBaseUrl } from "../providers/xai-transport";
+import { rewriteNamespaceToolsForXai } from "../responses/namespace-tool-compat";
 import {
   createAdapterTierMetadata,
 } from "../providers/fastwire";
@@ -1506,6 +1508,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
       let convertedRoutedToolSearchNames: Set<string> | undefined;
+      let convertedNamespaceToolAliases: Map<string, { namespace: string; name: string }> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -1561,7 +1564,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = promoteClientLoadedTools(outBody);
       }
       if (provider.authMode !== "forward") {
-        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody);
+        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody, {
+          includeNativePassthrough: isXaiTransportBaseUrl(provider.baseUrl),
+        });
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
@@ -1571,6 +1576,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedToolSearchForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
+      }
+      if (isXaiTransportBaseUrl(provider.baseUrl)) {
+        const rewritten = rewriteNamespaceToolsForXai(outBody);
+        outBody = rewritten.body;
+        convertedNamespaceToolAliases = rewritten.aliases;
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(
@@ -1600,6 +1610,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
+        ...(convertedNamespaceToolAliases ? { convertedNamespaceToolAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
     },

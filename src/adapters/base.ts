@@ -72,6 +72,8 @@ export interface AdapterRequest {
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
     /** Client tool-search names actually lowered to upstream function calls for this request. */
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
+    /** xAI-safe flat aliases created from Codex namespace tool containers. */
+    convertedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string }>;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
