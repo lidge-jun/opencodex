@@ -66,6 +66,28 @@ describe("OpenAI single-provider option foundation", () => {
       adapter: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
     })).toBe(false);
+    // The adapter sends key-auth traffic to `baseUrl + responsesPath`, so an official-looking base
+    // pointed at a non-Responses path is not an OpenAI-operated Responses destination.
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com",
+      responsesPath: "/other",
+    })).toBe(false);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com/v1",
+      responsesPath: "/other",
+    })).toBe(false);
+    // The conventional defaults still classify: no `responsesPath` resolves to `/v1/responses`.
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com",
+    })).toBe(true);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com/v1",
+      responsesPath: "/responses",
+    })).toBe(true);
   });
 
   test("publishes one Codex-login registry, preset, init, and default row", () => {
