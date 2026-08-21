@@ -781,7 +781,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     });
   });
 
-  test("keeps a blob-bearing reasoning item byte-identical when the route is unchanged", () => {
+  test("keeps a blob-bearing reasoning item but strips output-only status when the route is unchanged", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const reasoningItem = {
       type: "reasoning",
@@ -804,7 +804,13 @@ describe("OpenAI Responses passthrough sanitization", () => {
     }, { headers: new Headers({ authorization: "Bearer token" }) });
     const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
 
-    expect(JSON.stringify(body.input[0])).toBe(JSON.stringify(reasoningItem));
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      id: "rs_same_backend",
+      summary: [{ type: "summary_text", text: "summary" }],
+      encrypted_content: "backend-minted-blob",
+      content: [],
+    });
   });
 
   test("keeps a native blob while blanking its raw reasoning content", () => {
@@ -829,7 +835,6 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     expect(body.input[0]).toEqual({
       type: "reasoning",
-      status: "completed",
       summary: [],
       encrypted_content: "native-backend-blob",
       content: [],

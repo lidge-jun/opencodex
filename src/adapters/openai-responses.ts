@@ -65,7 +65,6 @@ export function sanitizeReasoningInputContent(
     const hasEncryptedContent = Object.prototype.hasOwnProperty.call(rec, "encrypted_content");
     const stripEncryptedContent = hasOcxEnvelope
       || (opts?.stripEncryptedContent === true && hasEncryptedContent);
-    const retainsEncryptedContent = hasEncryptedContent && !stripEncryptedContent;
     // Codex serializes an absent reasoning content channel as `"content": null`. The field is
     // optional and null carries nothing, but a strict gateway rejects the item on its declared type
     // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
@@ -75,17 +74,16 @@ export function sanitizeReasoningInputContent(
     // Gated to routed destinations. An OpenAI-operated backend binds the blob to the item's exact
     // shape, so deleting a field there invalidates it (`The encrypted content ... could not be
     // verified`); the two requirements are exactly opposed, and a live regression proved it. That
-    // gate is also why this drop may touch an item that keeps its blob, which the status invariant
-    // below forbids: xAI demonstrably accepts its own blob without the null channel, and the
-    // destinations that bind blobs to item shape never reach this branch.
+    // gate is also why this drop may touch an item that keeps its blob: xAI demonstrably accepts its
+    // own blob without the null channel, and the destinations that bind blobs to item shape never
+    // reach this branch. This is independent of the output-only status removal below.
     const dropNullContentChannel = opts?.dropNullContentChannel === true
       && "content" in rec && !Array.isArray(rec.content);
-    // Invariant for fields newly stripped by this cross-backend layer: an item whose
-    // encrypted_content is forwarded keeps status because OpenAI-operated backends bind opaque
-    // reasoning blobs to the item shape. Content blanking predates this invariant and remains
-    // required by ChatGPT's input contract; a native blob plus raw content is a known unresolved
-    // shape conflict, not an oversight to resolve by preserving content here.
-    const stripOutputStatus = hasOutputStatus && !retainsEncryptedContent;
+    // `status` is output-only. Measured OpenAI reasoning items never contain it, and Grok accepts
+    // its own encrypted_content with status removed. Keeping a foreign status beside a retained
+    // blob makes OpenAI reject the field before blob validation, starving the provenance recovery
+    // of the opaque-blob error it needs. Content blanking remains the separate pre-existing rule.
+    const stripOutputStatus = hasOutputStatus;
     const blankContent = !dropNullContentChannel
       && !opts?.preserveRawReasoningContent
       && (hasRawContent || hasOcxEnvelope);
