@@ -51,13 +51,12 @@ describe("isValidDisplayLabel", () => {
     expect(isValidDisplayLabel("DeepSeek\u0007V4")).toBe(false);
   });
 
-  test("no control character can reach the stored label, whichever side of trim it falls on", () => {
-    // The check runs on the trimmed value, so the whitespace-class controls are
-    // normalised away rather than rejected: `"Label\n"` stores as `"Label"`. Every
-    // other control character is rejected wherever it sits. Pinned explicitly
-    // because the outcome depends on trim() and the class overlapping, which is
-    // not obvious from either line on its own.
-    for (const edge of ["\u000a", "\u0009", "\u000d"]) {
+  test("ordinary ASCII whitespace at the edges is normalised, not rejected", () => {
+    // Deliberately forgiving, and only for this class: a stray space, tab, newline
+    // or CR in a hand-edited config is plausible slop, and on the load path a
+    // rejection means silently losing the operator's label. `"Label\n"` therefore
+    // stores as `"Label"` rather than disappearing.
+    for (const edge of ["\u0020", "\u0009", "\u000a", "\u000d"]) {
       expect(isValidDisplayLabel(`Label${edge}`)).toBe(true);
       expect(isValidDisplayLabel(`${edge}Label`)).toBe(true);
       expect(resolveModelDisplayLabel(
@@ -65,13 +64,65 @@ describe("isValidDisplayLabel", () => {
         NVIDIA,
       )).toBe("Label");
     }
-    for (const inner of ["\u0000", "\u0007", "\u001f", "\u007f"]) {
-      expect(isValidDisplayLabel(`Label${inner}`)).toBe(false);
-      expect(isValidDisplayLabel(`La${inner}bel`)).toBe(false);
-    }
-    // A control character mid-label is rejected even from the whitespace class,
-    // because a label is single-line by definition.
+    // Mid-label, the same characters are rejected: a label is single-line.
     expect(isValidDisplayLabel("La\u000abel")).toBe(false);
+    expect(isValidDisplayLabel("La\u0009bel")).toBe(false);
+  });
+
+  test("no control character reaches a stored label — C0, DEL, C1, and the line separators", () => {
+    // The class was originally C0 + DEL only. C1 (U+0080-U+009F) and U+2028/U+2029
+    // leaked: `Label<U+0085>More` and `Label<U+2028>More` were reported valid and
+    // stored verbatim, and both are line breaks, so the "single-line" guarantee did
+    // not hold.
+    //
+    // The invariant is about what is STORED, not what is rejected — an edge TAB or
+    // newline is accepted and normalised away, which is deliberate. So this walks the
+    // ranges and, for every candidate the validator accepts, checks the value that
+    // actually lands on the row. Enumerated rather than sampled so a future narrowing
+    // of the regex cannot slip past this test.
+    const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+    const leaked: string[] = [];
+    for (const code of [
+      ...Array.from({ length: 0x20 }, (_, i) => i),          // C0
+      0x7f,                                                   // DEL
+      ...Array.from({ length: 0x20 }, (_, i) => 0x80 + i),    // C1
+      0x2028, 0x2029,                                         // LINE / PARAGRAPH SEPARATOR
+    ]) {
+      const ch = String.fromCharCode(code);
+      const hex = `U+${code.toString(16).padStart(4, "0").toUpperCase()}`;
+      for (const candidate of [`La${ch}bel`, `Label${ch}`, `${ch}Label`, ch]) {
+        if (!isValidDisplayLabel(candidate)) continue;
+        const stored = resolveModelDisplayLabel(
+          configWith({ nvidia: { modelDisplayNames: { [NVIDIA.id]: candidate } } }),
+          NVIDIA,
+        );
+        if (stored !== undefined && CONTROL.test(stored)) {
+          leaked.push(`${hex} stored as ${JSON.stringify(stored)}`);
+        }
+      }
+    }
+    expect(leaked).toEqual([]);
+  });
+
+  test("a C1 control or line separator is rejected outright, not normalised", () => {
+    // The distinction from the whitespace class above: these are never plausible slop
+    // in a display label, and U+2028/U+2029 are in JS's whitespace set, so trimming
+    // first would have quietly accepted a trailing one.
+    for (const code of [0x85, 0x80, 0x9f, 0x2028, 0x2029]) {
+      const ch = String.fromCharCode(code);
+      expect(isValidDisplayLabel(`La${ch}bel`)).toBe(false);
+      expect(isValidDisplayLabel(`Label${ch}`)).toBe(false);
+      expect(isValidDisplayLabel(`${ch}Label`)).toBe(false);
+    }
+  });
+
+  test("the label characters that must keep working are not caught by that class", () => {
+    // The C1 range sits just above Latin-1 punctuation, so an over-wide regex would
+    // quietly break ordinary labels. These are the neighbours worth pinning.
+    for (const label of ["DeepSeek V4 Flash", "Qwen3-Max", "Llama_3.1", "GLM 4.6 (free)",
+                         "Café Model", "モデル", "Ω-preview", "model@v2", "a^b", "x~y"]) {
+      expect(isValidDisplayLabel(label)).toBe(true);
+    }
   });
 });
 

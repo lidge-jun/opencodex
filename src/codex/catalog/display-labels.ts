@@ -22,7 +22,23 @@ import type { CatalogModel } from "./parsing";
 export const MAX_DISPLAY_LABEL_LENGTH = 128;
 
 // Control characters corrupt picker rendering, so a label carrying one is rejected.
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+// The range is C0, DEL, and C1 (U+0080-U+009F). C1 was originally missing, which let
+// a label such as `Label<U+0085>More` through — U+0085 is NEL, a line break, and
+// `trim()` does not touch a mid-string one. U+2028/U+2029 are added for the same
+// reason: they are line and paragraph separators, so a label carrying one is not
+// single-line whatever its width.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/**
+ * Checked against the *untrimmed* value, unlike `CONTROL_CHARS`.
+ *
+ * `trim()` counts U+2028/U+2029 as whitespace and would strip an edge one, so a
+ * trailing line separator would otherwise be normalised away and reported as
+ * valid. A stray space or newline is plausible slop in a hand-edited config and
+ * is still forgiven; a Unicode line separator is not, so it is rejected wherever
+ * it appears rather than quietly removed.
+ */
+const CONTROLS_TRIM_WOULD_HIDE = /[\u0080-\u009f\u2028\u2029]/;
 
 /**
  * A label is usable when it is a non-empty single-line string within the shared bound.
@@ -33,6 +49,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
  */
 export function isValidDisplayLabel(value: unknown): value is string {
   if (typeof value !== "string") return false;
+  if (CONTROLS_TRIM_WOULD_HIDE.test(value)) return false;
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_DISPLAY_LABEL_LENGTH) return false;
   if (CONTROL_CHARS.test(trimmed)) return false;

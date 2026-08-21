@@ -756,6 +756,144 @@ describe("provider management validation", () => {
     });
   });
 
+  // #2201: `ProviderPayload` has no member for modelDisplayNames either, and that PR leaves
+  // the dashboard editor to a follow-up, so the add/edit form structurally cannot round-trip
+  // the field. Absence in a POST therefore means "not carried", never "the operator deleted
+  // it" — without preservation, saving any unrelated provider setting wipes every label.
+  describe("provider POST overwrite preserves operator display labels (#2201)", () => {
+    const LABELS = { "deepseek-ai/deepseek-v4-flash-0731": "DeepSeek V4 Flash" };
+
+    async function seedProvider(url: URL, extra: Record<string, unknown>): Promise<Response> {
+      return fetch(new URL("/api/providers", url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "labels",
+          provider: { adapter: "openai-chat", baseUrl: "https://nim.example.test/v1", apiKey: "k", ...extra },
+        }),
+      });
+    }
+
+    function freshHome(): void {
+      if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      process.env.OPENCODEX_HOME = TEST_DIR;
+      saveConfig(config("127.0.0.1"));
+    }
+
+    test("an omitted modelDisplayNames keeps the operator's map", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a submitted modelDisplayNames updates that key and keeps the others", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
+        expect((await seedProvider(server.url, { modelDisplayNames: { "moonshotai/kimi-k3": "Kimi K3" } })).status).toBe(200);
+
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual({
+          ...LABELS,
+          "moonshotai/kimi-k3": "Kimi K3",
+        });
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a provider that never had labels does not gain the key", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toBeUndefined();
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("an invalid label is a 400 rather than a silent drop", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        // A slash-bearing label reads as a routed slug. The load path would drop it, so
+        // accepting the write would return 200 for a label that is then simply absent.
+        const bad = await seedProvider(server.url, {
+          modelDisplayNames: { "deepseek-ai/deepseek-v4-flash-0731": "bad/label" },
+        });
+        expect(bad.status).toBe(400);
+        expect(loadConfig().providers.labels).toBeUndefined();
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("PATCH clears one label with a per-key null, and the whole map with null", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, {
+          modelDisplayNames: { ...LABELS, "moonshotai/kimi-k3": "Kimi K3" },
+        })).status).toBe(200);
+
+        const one = await fetch(new URL("/api/providers?name=labels", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelDisplayNames: { "moonshotai/kimi-k3": null } }),
+        });
+        expect(one.status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
+
+        const all = await fetch(new URL("/api/providers?name=labels", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelDisplayNames: null }),
+        });
+        expect(all.status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toBeUndefined();
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a control character PATCH is refused, including the ones trim would hide", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
+
+        const C = (code: number) => String.fromCharCode(code);
+        // U+0085 is NEL and U+2028 a line separator: both are line breaks that the
+        // original C0-only class let through into a stored picker label.
+        for (const label of [`Label${C(0x85)}More`, `Label${C(0x2028)}More`, `Label${C(0x2028)}`]) {
+          const patch = await fetch(new URL("/api/providers?name=labels", server.url), {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ modelDisplayNames: { "deepseek-ai/deepseek-v4-flash-0731": label } }),
+          });
+          expect(patch.status).toBe(400);
+          // Assert on the reason, not just the status. Before modelDisplayNames was a
+          // recognised PATCH field this same body returned 400 "no recognized fields to
+          // update", so a status-only assertion passed without the label rule running at all.
+          expect((await patch.json()).error).toMatch(/modelDisplayNames values must be/);
+        }
+        // The seeded map is untouched by the refused writes.
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
   test("provider management accepts modelCosts on the canonical openai provider", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

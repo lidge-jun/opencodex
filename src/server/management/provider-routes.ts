@@ -75,6 +75,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { MAX_DISPLAY_LABEL_LENGTH, isValidDisplayLabel } from "../../codex/catalog/display-labels";
 import { providerDisplayNamesConfigError, providerServiceTierConfigError } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import {
@@ -263,6 +264,34 @@ function applyProviderPatchFields(
       }
       if (Object.keys(windows).length > 0) next.modelContextWindows = windows;
       else delete next.modelContextWindows;
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelDisplayNames")) {
+    const value = rawBody.modelDisplayNames;
+    if (value === null) {
+      delete next.modelDisplayNames;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelDisplayNames must be a plain object or null" };
+      const labels: Record<string, string> = { ...(next.modelDisplayNames ?? {}) };
+      for (const [model, label] of Object.entries(value)) {
+        if (!model.trim()) return { error: "modelDisplayNames keys must be nonblank model ids" };
+        // Per-key null clears one label, matching `modelContextWindows`, so an operator can
+        // take a single label back off without resubmitting the rest of the map.
+        if (label === null) {
+          delete labels[model.trim()];
+          continue;
+        }
+        if (!isValidDisplayLabel(label)) {
+          return {
+            error: "modelDisplayNames values must be a nonblank single-line label of at most "
+              + `${MAX_DISPLAY_LABEL_LENGTH} characters without '/', or null`,
+          };
+        }
+        labels[model.trim()] = label.trim();
+      }
+      if (Object.keys(labels).length > 0) next.modelDisplayNames = labels;
+      else delete next.modelDisplayNames;
     }
     touched = true;
   }
@@ -539,6 +568,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
+    const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -569,6 +599,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       prov.modelContextWindows = submittedModelContextWindows
         ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
         : { ...existing.modelContextWindows };
+    }
+    // ...and to operator display labels, for the same structural reason: `ProviderPayload`
+    // has no member for `modelDisplayNames` either, and this change deliberately leaves the
+    // dashboard editor to a follow-up, so the add/edit form cannot round-trip the field at
+    // all. Without this, saving an unrelated setting on the provider silently erases every
+    // label the operator set. Deletion goes through PATCH with an explicit null.
+    if (existing?.modelDisplayNames) {
+      prov.modelDisplayNames = submittedModelDisplayNames
+        ? { ...existing.modelDisplayNames, ...(prov.modelDisplayNames ?? {}) }
+        : { ...existing.modelDisplayNames };
     }
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
