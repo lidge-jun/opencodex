@@ -42,7 +42,11 @@ export const FORWARD_HEADERS = [
 
 export function sanitizeReasoningInputContent(
   body: unknown,
-  opts?: { preserveRawReasoningContent?: boolean; dropNullContentChannel?: boolean },
+  opts?: {
+    preserveRawReasoningContent?: boolean;
+    dropNullContentChannel?: boolean;
+    stripEncryptedContent?: boolean;
+  },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -57,6 +61,11 @@ export function sanitizeReasoningInputContent(
     // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
+    const hasOutputStatus = Object.prototype.hasOwnProperty.call(rec, "status");
+    const hasEncryptedContent = Object.prototype.hasOwnProperty.call(rec, "encrypted_content");
+    const stripEncryptedContent = hasOcxEnvelope
+      || (opts?.stripEncryptedContent === true && hasEncryptedContent);
+    const retainsEncryptedContent = hasEncryptedContent && !stripEncryptedContent;
     // Codex serializes an absent reasoning content channel as `"content": null`. The field is
     // optional and null carries nothing, but a strict gateway rejects the item on its declared type
     // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
@@ -65,22 +74,29 @@ export function sanitizeReasoningInputContent(
     //
     // Gated to routed destinations. An OpenAI-operated backend binds the blob to the item's exact
     // shape, so deleting a field there invalidates it (`The encrypted content ... could not be
-    // verified`); the two requirements are exactly opposed, and a live regression proved it.
-    if (opts?.dropNullContentChannel === true && "content" in rec && !Array.isArray(rec.content)) {
-      changed = true;
-      const next: Record<string, unknown> = { ...rec };
-      delete next.content;
-      if (hasOcxEnvelope) delete next.encrypted_content;
-      return next;
+    // verified`); the two requirements are exactly opposed, and a live regression proved it. That
+    // gate is also why this drop may touch an item that keeps its blob, which the status invariant
+    // below forbids: xAI demonstrably accepts its own blob without the null channel, and the
+    // destinations that bind blobs to item shape never reach this branch.
+    const dropNullContentChannel = opts?.dropNullContentChannel === true
+      && "content" in rec && !Array.isArray(rec.content);
+    // Invariant for fields newly stripped by this cross-backend layer: an item whose
+    // encrypted_content is forwarded keeps status because OpenAI-operated backends bind opaque
+    // reasoning blobs to the item shape. Content blanking predates this invariant and remains
+    // required by ChatGPT's input contract; a native blob plus raw content is a known unresolved
+    // shape conflict, not an oversight to resolve by preserving content here.
+    const stripOutputStatus = hasOutputStatus && !retainsEncryptedContent;
+    const blankContent = !dropNullContentChannel
+      && !opts?.preserveRawReasoningContent
+      && (hasRawContent || hasOcxEnvelope);
+    if (!blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel) {
+      return item;
     }
-    if (!hasRawContent && !hasOcxEnvelope) return item;
-    if (hasOcxEnvelope) {
-      changed = true;
-      const next: Record<string, unknown> = { ...rec };
-      delete next.encrypted_content;
-      if (!opts?.preserveRawReasoningContent) next.content = [];
-      return next;
-    }
+    changed = true;
+    const next: Record<string, unknown> = { ...rec };
+    if (dropNullContentChannel) delete next.content;
+    if (stripOutputStatus) delete next.status;
+    if (stripEncryptedContent) delete next.encrypted_content;
     // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
     // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
     // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.
@@ -88,9 +104,8 @@ export function sanitizeReasoningInputContent(
     // guide merges reasoning items into the adjacent assistant message), so providers flagged
     // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
     // continuations after tool calls (issue #875 family).
-    if (opts?.preserveRawReasoningContent) return item;
-    changed = true;
-    return { ...rec, content: [] };
+    if (blankContent) next.content = [];
+    return next;
   });
 
   return changed ? { ...raw, input } : body;
@@ -1671,6 +1686,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody, destinationDecodesNativeCompactionBlob(provider)), {
         preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
         dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
+        stripEncryptedContent: parsed._stripReasoningEncryptedContent === true,
       })))))));
       const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),

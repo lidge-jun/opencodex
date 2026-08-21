@@ -543,6 +543,41 @@ replays are explicit and receive the same repair.
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
+Responses passthrough keeps output-only `status` on any `reasoning` input item that retains opaque
+`encrypted_content` because OpenAI-operated backends may bind the blob to that field. The established
+raw-`content` rule remains separate: ChatGPT accepts reasoning input only with empty `content`, so a
+native blob plus raw content keeps the blob and `status` but still blanks `content`. That shape is a
+known unresolved contract conflict, not evidence that either existing rule is safe to broaden. The
+blob is kept unless the in-process thread record proves that the current provider, destination,
+adapter, model, or credential differs from the route recorded for the prior request on that client
+thread. On a proven change the blob and `status` are removed while the reasoning item and its summary
+survive; `status` is also removed from blobless reasoning items. Missing, expired, or evicted identity
+state is unknown. The comparison uses the durable destination and credential identities with the
+provider, adapter, and model, so OAuth token-generation refreshes do not look like backend changes;
+when either durable dimension is unavailable it refuses to record rather than falling back to a
+volatile identity. The record is deliberately process-local, so a backend switch spanning a proxy
+restart is not detected and may still be rejected upstream.
+
+A combo target rotation between turns legitimately changes that serving identity, so the following
+turn drops blobs minted by the prior target. This is correct because the new target cannot decode
+them, but it is intentionally unobvious to the client: `pickComboTarget` keys selection state only by
+combo id, without a conversation dimension, and the SSE model-name rewrite preserves the requested
+combo name instead of exposing the concrete target switch. A user can therefore observe a reasoning
+cache drop with no visible model change.
+
+The image and web-search auxiliary loops consume `_reasoningReplayScope` for bridge-level replay but
+never call `bindRouteReasoningReplayScope`, so their internal small-model requests do not update the
+serving-identity record. That omission is intentional: binding those routes would poison the main
+conversation's last-serving identity and cause a later main-model turn to strip valid blobs.
+
+[Decision Log]
+- 목적과 의도: Keep same-backend opaque reasoning replay while preventing backend-private blobs and output-only fields from breaking the first turn after a route change.
+- 기존 구현 및 제약 조건: Reasoning-input sanitation already handled raw content and `ocxr1:` envelopes; the replay cache already supplied a bounded, thread-scoped physical-route identity, but no record connected that identity to native `encrypted_content` provenance.
+- 검토한 주요 대안: Strip every opaque blob, persist provenance across restarts, retry after an upstream 4xx, or compare and strip before the first outbound request only when an in-process record proves a route change.
+- 선택한 방식: Preserve `status` whenever its blob is forwarded without changing the pre-existing raw-`content` blanking rule; otherwise remove output-only `status`, compare and update a 64-entry/256 KiB/one-hour in-process serving-identity record using durable destination and credential dimensions at request time, and pass the proven-change decision into the Responses adapter to remove foreign `encrypted_content`.
+- 다른 대안 대신 이 방식을 선택한 이유: Unknown provenance can still be valid after restart, durable storage is unnecessary for this bounded compatibility hint, and a deterministic pre-flight decision avoids a second paid or stateful upstream attempt.
+- 장점, 단점 및 영향: Same-route and unknown replay retain cached reasoning, known cross-route replay keeps the reasoning item without its undecodable blob, and switches spanning a proxy restart remain an explicit coverage gap.
+
 DeepSeek's stateless Responses compatibility pass normalizes only unambiguous tool-call batches.
 Calls emitted before the first matched output stay together as one assistant batch, followed by
 their outputs in call order; hook-injected messages that split the batch move after it without being

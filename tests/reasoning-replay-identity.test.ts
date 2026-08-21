@@ -10,6 +10,7 @@ import {
   reasoningReplayKeyCredentialIdentity,
   reasoningReplayOAuthCredentialIdentity,
   rememberReasoningForCall,
+  updateReasoningReplayServingIdentity,
 } from "../src/responses/reasoning-replay-cache";
 import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
 
@@ -25,9 +26,11 @@ function scope(
     current: {
       providerName: "provider-a",
       providerDestinationIdentity: "destination:provider-a",
+      providerDestinationDurableIdentity: "destination:durable-provider-a",
       adapterName: "openai-chat",
       modelId: "deepseek-v4-flash",
       credentialIdentity: "key:physical-a",
+      credentialDurableIdentity: "credential:durable-slot-a",
       ...overrides,
     },
   };
@@ -67,6 +70,95 @@ describe("reasoning replay provider and credential identity", () => {
     ]) {
       expect(peekReasoningForCall(CALL_ID, changed)).toBeUndefined();
     }
+  });
+
+  test("serving identity ignores credential generation but reports durable route changes", () => {
+    expect(updateReasoningReplayServingIdentity(scope({
+      credentialIdentity: "oauth:slot-a-generation-a",
+    }))).toBe(false);
+    expect(updateReasoningReplayServingIdentity(scope({
+      credentialIdentity: "oauth:slot-a-generation-b",
+    }))).toBe(false);
+
+    const changedModel = scope({
+      modelId: "deepseek-v4",
+      credentialIdentity: "oauth:slot-a-generation-b",
+    });
+    expect(updateReasoningReplayServingIdentity(changedModel)).toBe(true);
+    expect(updateReasoningReplayServingIdentity(changedModel)).toBe(false);
+
+    const changedCredential = scope({
+      modelId: "deepseek-v4",
+      credentialIdentity: "oauth:slot-b-generation-a",
+      credentialDurableIdentity: "credential:durable-slot-b",
+    });
+    expect(updateReasoningReplayServingIdentity(changedCredential)).toBe(true);
+    expect(updateReasoningReplayServingIdentity(changedCredential)).toBe(false);
+
+    const changedDestination = scope({
+      modelId: "deepseek-v4",
+      providerDestinationIdentity: "destination:provider-b",
+      providerDestinationDurableIdentity: "destination:durable-provider-b",
+      credentialIdentity: "oauth:slot-b-generation-a",
+      credentialDurableIdentity: "credential:durable-slot-b",
+    });
+    expect(updateReasoningReplayServingIdentity(changedDestination)).toBe(true);
+    expect(updateReasoningReplayServingIdentity(changedDestination)).toBe(false);
+
+    expect(updateReasoningReplayServingIdentity(undefined)).toBe(false);
+    expect(updateReasoningReplayServingIdentity({ clientThreadId: "thread-unknown" })).toBe(false);
+  });
+
+  test("serving identity refuses to record when durable dimensions are unavailable", () => {
+    const clientThreadId = "thread-without-durable-identity";
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ credentialDurableIdentity: undefined }),
+      clientThreadId,
+    })).toBe(false);
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ modelId: "different-model" }),
+      clientThreadId,
+    })).toBe(false);
+
+    const destinationThreadId = "thread-without-durable-destination";
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ providerDestinationDurableIdentity: undefined }),
+      clientThreadId: destinationThreadId,
+    })).toBe(false);
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ modelId: "different-model" }),
+      clientThreadId: destinationThreadId,
+    })).toBe(false);
+  });
+
+  test("expired serving identity is unknown rather than a backend change", () => {
+    let clock = 1_000;
+    clearReasoningReplayCacheForTests(() => clock);
+    expect(updateReasoningReplayServingIdentity(scope())).toBe(false);
+
+    clock += 60 * 60 * 1000 + 1;
+    expect(updateReasoningReplayServingIdentity(scope({ modelId: "deepseek-v4" }))).toBe(false);
+  });
+
+  test("repeated identity changes do not grow the thread store beyond 64 entries", () => {
+    const servingScope = (
+      threadId: string,
+      modelId: string,
+    ): OcxReasoningReplayScopeRef => ({
+      ...scope({ modelId }),
+      clientThreadId: threadId,
+    });
+
+    for (let i = 0; i < 64; i++) {
+      expect(updateReasoningReplayServingIdentity(servingScope(`thread-${i}`, "model-a"))).toBe(false);
+    }
+    for (let i = 0; i < 70; i++) {
+      expect(updateReasoningReplayServingIdentity(servingScope("thread-63", `model-change-${i}`))).toBe(true);
+    }
+
+    expect(updateReasoningReplayServingIdentity(servingScope("thread-64", "model-a"))).toBe(false);
+    expect(updateReasoningReplayServingIdentity(servingScope("thread-1", "model-b"))).toBe(true);
+    expect(updateReasoningReplayServingIdentity(servingScope("thread-0", "model-b"))).toBe(false);
   });
 
   test("incomplete, unscoped, and legacy thread-only namespaces fail closed", () => {
