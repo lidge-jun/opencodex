@@ -339,7 +339,7 @@ export function shouldResolveOpenAiVisionSidecar(
   modelId: string,
   parsed: OcxParsedRequest,
 ): boolean {
-  if (!modelInList(provider.noVisionModels, modelId) || !messagesHaveImage(parsed)) return false;
+  if (!isModelTextOnly(provider, modelId) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
   return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
@@ -356,8 +356,8 @@ export interface VisionPlan {
 
 /**
  * Decide whether the vision sidecar should pre-describe images for this request, returning the plan
- * if so. Active when: the routed model is in `provider.noVisionModels`, the request actually carries
- * an image, the sidecar isn't disabled, and the selected backend has usable auth. Returns undefined
+ * if so. Active when: the routed model is explicitly text-only, the request actually carries an
+ * image, the sidecar isn't disabled, and the selected backend has usable auth. Returns undefined
  * otherwise (the caller strips images before sending to a text-only model).
  */
 export function planVisionSidecar(
@@ -367,7 +367,7 @@ export function planVisionSidecar(
   parsed: OcxParsedRequest,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): VisionPlan | undefined {
-  if (!modelInList(provider.noVisionModels, modelId)) return undefined;
+  if (!isModelTextOnly(provider, modelId)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;

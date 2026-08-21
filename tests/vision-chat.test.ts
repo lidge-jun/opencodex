@@ -360,6 +360,20 @@ describe("chat vision plan provider resolution", () => {
     expect(plan?.chatSidecar?.providerName).toBe("p1");
   });
 
+  test("modelInputModalities text-only evidence triggers chat planning", () => {
+    const config = chatConfig({
+      routed,
+      p1: { adapter: "openai-chat", baseUrl: "https://p1.test/v1", apiKey: "k1", defaultModel: "gemini-flash" },
+    }, "gemini-flash");
+    const modalitiesOnly = {
+      ...routed,
+      noVisionModels: undefined,
+      modelInputModalities: { "text-model": ["text"] },
+    };
+
+    expect(planVisionSidecar(config, modalitiesOnly, "text-model", request)?.backend).toBe("chat");
+  });
+
   test("disabled or unauthenticated chat providers produce no plan", () => {
     const disabled = chatConfig({
       routed,

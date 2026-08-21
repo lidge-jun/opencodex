@@ -73,6 +73,12 @@ test("vision sidecar auth stays lazy for no-image and disabled branches", () => 
     withImage,
   )).toBe(false);
   expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", withImage)).toBe(true);
+  expect(shouldResolveOpenAiVisionSidecar(
+    cfg,
+    { ...textOnlyProvider, noVisionModels: undefined, modelInputModalities: { "text-model": ["text"] } },
+    "text-model",
+    withImage,
+  )).toBe(true);
 });
 
 function parsed(parts: Array<Record<string, unknown>>) {
