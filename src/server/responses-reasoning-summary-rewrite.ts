@@ -34,13 +34,12 @@ function reasoningTextOf(item: Record<string, unknown>): string {
 /** Move a reasoning item's content channel into the summary channel. */
 function reasoningItemToSummaryShape(item: Record<string, unknown>): Record<string, unknown> {
   if (item.type !== "reasoning") return item;
-  // An item carrying `encrypted_content` is replayed verbatim by the client, and the backend that
-  // issued the blob verifies the item it gets back ("Could not decrypt the provided
-  // encrypted_content. Ensure the value is the unmodified encrypted_content from a previous
-  // response."). Reshaping it here is a modification the client then replays on every later turn.
-  // The delta rewrite still gives Codex the expandable trace for the live turn; only the stored
-  // shape has to stay exactly as the upstream sent it. DeepSeek — the provider this rewrite was
-  // verified against — is `statelessResponses` and issues no blob, so it is unaffected.
+  // `encrypted_content` is opaque, state-bearing provider data, so the entire item must retain its
+  // upstream shape unless that backend has an explicit replay contract permitting a rewrite. This
+  // defensively protects content-channel backends that do issue blobs when the client replays the
+  // stored item. The delta rewrite can still provide the expandable trace for the live turn.
+  // DeepSeek — the provider this rewrite was verified against — is `statelessResponses` and issues
+  // no blob, so it is unaffected.
   if (typeof item.encrypted_content === "string" && item.encrypted_content.length > 0) return item;
   const text = reasoningTextOf(item);
   // Items that already use the summary channel (or carry no content text at

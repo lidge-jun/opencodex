@@ -210,10 +210,10 @@ describe("responses reasoning summary channel rewrite", () => {
     expect(rewrite("[1,2]")).toBe("[1,2]");
   });
 
-  // The client replays the reasoning item it received, and a backend that issued
-  // `encrypted_content` rejects a reshaped item on that replay. This rewrite's round-trip was
-  // verified against DeepSeek, which is stateless and issues no blob; providers that do issue one
-  // joined later through `preserveReasoningContentModels`.
+  // `encrypted_content` is opaque, state-bearing provider data, so preserve the complete item
+  // shape defensively when the client replays it. This rewrite's round-trip was verified against
+  // DeepSeek, which is stateless and issues no blob; providers that do issue one joined later
+  // through `preserveReasoningContentModels`.
   describe("items carrying encrypted_content", () => {
     const blobItem = {
       type: "reasoning",

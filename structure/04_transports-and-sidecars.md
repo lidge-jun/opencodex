@@ -798,13 +798,14 @@ Codex app, so tool cells group like native models — while the text still round
 `devlog/_fin/260709_native_response_pattern/`.
 
 The content-to-summary channel rewrite skips any reasoning item that carries a native
-`encrypted_content` blob. Codex replays the reasoning item it received, and a backend that issued
-that blob verifies what comes back, so reshaping the stored item makes every later turn fail with
-`Could not decrypt the provided encrypted_content`. The rewrite's round trip was verified against
-DeepSeek, which is `statelessResponses` and issues no blob; providers that do issue one joined the
-same route later through `preserveReasoningContentModels`. Only the stored item is exempt — the
-`reasoning_text` delta events carry no blob and still route to the summary channel, so the live
-expandable trace is unchanged.
+`encrypted_content` blob. The blob is opaque, state-bearing provider data, so the item must
+round-trip unchanged unless that backend has an explicit replay contract permitting a rewrite.
+This defensively protects providers that issue blobs and later join the route through
+`preserveReasoningContentModels`. The rewrite's round trip was verified against DeepSeek, which is
+`statelessResponses` and issues no blob. Grok is unaffected in practice because it natively emits
+summary-channel reasoning and no `reasoning_text` events, so this content-to-summary item rewrite
+does not engage on its route. Only the stored item is exempt — `reasoning_text` delta events carry
+no blob and still route to the summary channel, so the live expandable trace is unchanged.
 
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential
