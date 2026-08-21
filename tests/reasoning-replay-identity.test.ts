@@ -26,9 +26,11 @@ function scope(
     current: {
       providerName: "provider-a",
       providerDestinationIdentity: "destination:provider-a",
+      providerDestinationDurableIdentity: "destination:durable-provider-a",
       adapterName: "openai-chat",
       modelId: "deepseek-v4-flash",
       credentialIdentity: "key:physical-a",
+      credentialDurableIdentity: "credential:durable-slot-a",
       ...overrides,
     },
   };
@@ -70,23 +72,63 @@ describe("reasoning replay provider and credential identity", () => {
     }
   });
 
-  test("serving identity comparison reports only known model or destination changes", () => {
-    expect(updateReasoningReplayServingIdentity(scope())).toBe(false);
-    expect(updateReasoningReplayServingIdentity(scope())).toBe(false);
+  test("serving identity ignores credential generation but reports durable route changes", () => {
+    expect(updateReasoningReplayServingIdentity(scope({
+      credentialIdentity: "oauth:slot-a-generation-a",
+    }))).toBe(false);
+    expect(updateReasoningReplayServingIdentity(scope({
+      credentialIdentity: "oauth:slot-a-generation-b",
+    }))).toBe(false);
 
-    const changedModel = scope({ modelId: "deepseek-v4" });
+    const changedModel = scope({
+      modelId: "deepseek-v4",
+      credentialIdentity: "oauth:slot-a-generation-b",
+    });
     expect(updateReasoningReplayServingIdentity(changedModel)).toBe(true);
     expect(updateReasoningReplayServingIdentity(changedModel)).toBe(false);
+
+    const changedCredential = scope({
+      modelId: "deepseek-v4",
+      credentialIdentity: "oauth:slot-b-generation-a",
+      credentialDurableIdentity: "credential:durable-slot-b",
+    });
+    expect(updateReasoningReplayServingIdentity(changedCredential)).toBe(true);
+    expect(updateReasoningReplayServingIdentity(changedCredential)).toBe(false);
 
     const changedDestination = scope({
       modelId: "deepseek-v4",
       providerDestinationIdentity: "destination:provider-b",
+      providerDestinationDurableIdentity: "destination:durable-provider-b",
+      credentialIdentity: "oauth:slot-b-generation-a",
+      credentialDurableIdentity: "credential:durable-slot-b",
     });
     expect(updateReasoningReplayServingIdentity(changedDestination)).toBe(true);
     expect(updateReasoningReplayServingIdentity(changedDestination)).toBe(false);
 
     expect(updateReasoningReplayServingIdentity(undefined)).toBe(false);
     expect(updateReasoningReplayServingIdentity({ clientThreadId: "thread-unknown" })).toBe(false);
+  });
+
+  test("serving identity refuses to record when durable dimensions are unavailable", () => {
+    const clientThreadId = "thread-without-durable-identity";
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ credentialDurableIdentity: undefined }),
+      clientThreadId,
+    })).toBe(false);
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ modelId: "different-model" }),
+      clientThreadId,
+    })).toBe(false);
+
+    const destinationThreadId = "thread-without-durable-destination";
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ providerDestinationDurableIdentity: undefined }),
+      clientThreadId: destinationThreadId,
+    })).toBe(false);
+    expect(updateReasoningReplayServingIdentity({
+      ...scope({ modelId: "different-model" }),
+      clientThreadId: destinationThreadId,
+    })).toBe(false);
   });
 
   test("expired serving identity is unknown rather than a backend change", () => {

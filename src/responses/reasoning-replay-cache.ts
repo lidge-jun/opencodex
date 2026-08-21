@@ -91,6 +91,25 @@ function tupleForIdentity(
   ];
 }
 
+function tupleForServingIdentity(
+  identity: Readonly<OcxReasoningReplayIdentity> | undefined,
+): ReasoningReplayIdentityTuple | undefined {
+  if (
+    !nonEmpty(identity?.providerName)
+    || !nonEmpty(identity?.providerDestinationDurableIdentity)
+    || !nonEmpty(identity?.adapterName)
+    || !nonEmpty(identity?.modelId)
+    || !nonEmpty(identity?.credentialDurableIdentity)
+  ) return undefined;
+  return [
+    identity.providerName,
+    identity.providerDestinationDurableIdentity,
+    identity.adapterName,
+    identity.modelId,
+    identity.credentialDurableIdentity,
+  ];
+}
+
 function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
   const identity = tupleForIdentity(scope?.current);
   if (!nonEmpty(callId) || !nonEmpty(scope?.clientThreadId) || !identity) return undefined;
@@ -119,14 +138,16 @@ function sweepExpiredServingIdentities(at: number): void {
  * record the current route. A live mismatch means replayed opaque reasoning was minted by
  * another backend and must not be forwarded to this one.
  *
- * Missing, expired, or evicted state is deliberately unknown rather than a mismatch. This
- * store is process-local, so a backend switch spanning a proxy restart is not detected.
+ * Serving provenance uses restart-stable destination and credential dimensions so token
+ * generations and other volatile credential material cannot create false route changes. Missing
+ * durable identity, expired, or evicted state is deliberately unknown rather than a mismatch.
+ * This store is process-local, so a backend switch spanning a proxy restart is not detected.
  */
 export function updateReasoningReplayServingIdentity(
   scope: OcxReasoningReplayScopeRef | undefined,
 ): boolean {
   const threadId = scope?.clientThreadId;
-  const identityTuple = tupleForIdentity(scope?.current);
+  const identityTuple = tupleForServingIdentity(scope?.current);
   if (!nonEmpty(threadId) || !identityTuple) return false;
   const identity = JSON.stringify(identityTuple);
 
