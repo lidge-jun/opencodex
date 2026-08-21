@@ -51,9 +51,30 @@ function reducedTransparencyBlock(css: string): string {
   throw new Error("unclosed prefers-reduced-transparency block");
 }
 
+/** Every `background` / `background-color` value in the rule, in source order. */
+function backgroundDeclarations(body: string): string[] {
+  return [...body.matchAll(/(?:^|;)\s*(?:background-color|background)\s*:\s*([^;]+)/g)].map(
+    (match) => match[1]!.trim(),
+  );
+}
+
+/**
+ * The winning fill must stay `var(--surface)`. Checking the complete set
+ * rejects a later translucent override (`rgb(… / a)`, `rgba()`, `hsl()`,
+ * `hsla()`, `transparent`, `color-mix(…)`) that would still match an earlier
+ * `background: var(--surface)`.
+ */
+function expectOpaqueSurfaceBackgrounds(body: string): void {
+  const backgrounds = backgroundDeclarations(body);
+  expect(backgrounds.length).toBeGreaterThan(0);
+  for (const value of backgrounds) {
+    expect(value).toBe("var(--surface)");
+  }
+}
+
 test("select-dropdown fill is opaque surface, not a translucent canvas mix", async () => {
   const body = selectDropdownBody(await styles());
-  expect(body).toMatch(/background:\s*var\(--surface\)/);
+  expectOpaqueSurfaceBackgrounds(body);
   expect(body).not.toMatch(/color-mix\s*\(/);
   expect(body).not.toMatch(/transparent/);
 });
@@ -61,12 +82,11 @@ test("select-dropdown fill is opaque surface, not a translucent canvas mix", asy
 test("select-dropdown keeps solid fallbacks when blur is missing or unwanted", async () => {
   const css = await styles();
   const noBlur = selectDropdownBody(supportsNoBlurBlock(css));
-  expect(noBlur).toMatch(/background:\s*var\(--surface\)/);
-  expect(noBlur).not.toMatch(/(?:background|background-color):[^;}]*(transparent|color-mix\s*\()/);
+  expectOpaqueSurfaceBackgrounds(noBlur);
 
   const reduced = selectDropdownBody(reducedTransparencyBlock(css));
-  expect(reduced).toMatch(/background:\s*var\(--surface\)/);
-  expect(reduced).not.toMatch(/(?:background|background-color):[^;}]*(transparent|color-mix\s*\()/);
+  expectOpaqueSurfaceBackgrounds(reduced);
   // Declaration boundary so `-webkit-backdrop-filter` cannot satisfy this.
   expect(reduced).toMatch(/(?:^|;)\s*backdrop-filter:\s*none\s*;/);
+  expect(reduced).toMatch(/(?:^|;)\s*-webkit-backdrop-filter:\s*none\s*;/);
 });
