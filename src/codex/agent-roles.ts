@@ -6,6 +6,7 @@
  * spawn; this module never inspects spawn task text.
  */
 import { isCodexReasoningEffort } from "../reasoning-effort";
+import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import type { OcxConfig, OcxSubagentRole } from "../types";
 
 export const SUBAGENT_ROLE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -13,6 +14,7 @@ export const SUBAGENT_ROLE_MAX_COUNT = 8;
 export const SUBAGENT_ROLE_MAX_UNIQUE_MODELS = 5;
 export const SUBAGENT_ROLE_DESCRIPTION_MAX = 240;
 export const SUBAGENT_ROLE_INSTRUCTIONS_MAX = 8000;
+export const SUBAGENT_ROLE_MODEL_MAX = 128;
 
 export type SubagentRoleParseResult =
   | { ok: true; role: OcxSubagentRole }
@@ -51,8 +53,12 @@ export function parseSubagentRole(value: unknown, index?: number): SubagentRoleP
     return { ok: false, error: `${prefix}.description must be a string of 1..${SUBAGENT_ROLE_DESCRIPTION_MAX} characters`, index };
   }
   const model = typeof row.model === "string" ? row.model.trim() : "";
-  if (!model) {
-    return { ok: false, error: `${prefix}.model must be a non-empty string`, index };
+  if (!model || model.length > SUBAGENT_ROLE_MODEL_MAX) {
+    return {
+      ok: false,
+      error: `${prefix}.model must be a non-empty string of at most ${SUBAGENT_ROLE_MODEL_MAX} characters`,
+      index,
+    };
   }
   let effort: string | undefined;
   if (row.effort !== undefined && row.effort !== null && row.effort !== "") {
@@ -165,6 +171,24 @@ export function renderRolesCatalog(
   return parts.join("; ");
 }
 
+/** Shorten, then drop trailing roles, then omit the catalog so it fits `budget`. */
+export function compactRolesCatalog(
+  roles: readonly OcxSubagentRole[],
+  budget: number,
+): string {
+  if (budget <= 0) return "";
+  const enabled = enabledSubagentRoles(roles);
+  if (enabled.length === 0) return "";
+  for (const descBudget of [undefined, 80, 40, 0] as const) {
+    const options = descBudget === undefined ? {} : { maxDescriptionChars: descBudget };
+    for (let count = enabled.length; count > 0; count--) {
+      const text = renderRolesCatalog(enabled.slice(0, count), options);
+      if (text.length <= budget) return text;
+    }
+  }
+  return "";
+}
+
 export function unionRoleModelsIntoRoster(
   existing: string[] | undefined,
   roles: readonly OcxSubagentRole[],
@@ -174,7 +198,7 @@ export function unionRoleModelsIntoRoster(
   for (const role of enabled) {
     if (!roleModels.includes(role.model)) roleModels.push(role.model);
   }
-  const base = existing ?? [];
+  const base = [...new Set(existing ?? [])];
   const rest = base.filter(model => !roleModels.includes(model));
   const combined = [...roleModels, ...rest];
   const models = combined.slice(0, SUBAGENT_ROLE_MAX_UNIQUE_MODELS);
@@ -183,20 +207,21 @@ export function unionRoleModelsIntoRoster(
   return { models, droppedRoleIds };
 }
 
-/** Slash models that are not account-qualified native ChatGPT rows. */
-export function isRoutedRoleModel(model: string): boolean {
+/** Slash models that are not a configured Codex account-qualified native row. */
+export function isRoutedRoleModel(model: string, namespaces?: unknown): boolean {
   const slash = model.indexOf("/");
   if (slash <= 0) return false;
-  const rest = model.slice(slash + 1);
-  return !rest.startsWith("gpt-");
+  return !codexAccountNamespaceForModel(namespaces, model);
 }
 
 export function routedOnV2Warnings(
   roles: readonly OcxSubagentRole[],
-  config: Pick<OcxConfig, "multiAgentMode" | "keepNativeChatGptOnV1">,
+  config: Pick<OcxConfig, "multiAgentMode" | "keepNativeChatGptOnV1" | "codexAccountNamespaces">,
 ): string[] {
   if (config.multiAgentMode !== "v2" || config.keepNativeChatGptOnV1 === true) return [];
-  const routed = enabledSubagentRoles(roles).filter(role => isRoutedRoleModel(role.model));
+  const routed = enabledSubagentRoles(roles).filter(role =>
+    isRoutedRoleModel(role.model, config.codexAccountNamespaces),
+  );
   if (routed.length === 0) return [];
   const ids = routed.map(role => role.id).join(", ");
   return [

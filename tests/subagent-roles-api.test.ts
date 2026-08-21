@@ -137,4 +137,28 @@ describe("/api/subagent-roles atomic validation", () => {
     expect(config.subagentModels).toEqual(["m-1", "m-2", "m-3", "m-4", "m-5"]);
     expect(body.warnings.some(warning => warning.includes("f"))).toBe(true);
   });
+
+  test("PUT remove deletes one id from the live catalog without a client snapshot", async () => {
+    isolatedHome();
+    const explorer = { ...sampleRole, id: "explorer", description: "search" };
+    const config = makeConfig({ subagentRoles: [sampleRole, explorer] });
+    const res = await put(config, { remove: "reviewer" });
+    expect(res.status).toBe(200);
+    expect(config.subagentRoles).toEqual([expect.objectContaining({ id: "explorer" })]);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      roles: [expect.objectContaining({ id: "explorer" })],
+    });
+  });
+
+  test("PUT openrouter/gpt-* on v2 records the routed warning", async () => {
+    isolatedHome();
+    const config = makeConfig({ multiAgentMode: "v2" });
+    const res = await put(config, {
+      roles: [{ ...sampleRole, model: "openrouter/gpt-5.4" }],
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { warnings: string[] };
+    expect(body.warnings.some(warning => /routed|v2|#92/i.test(warning))).toBe(true);
+  });
 });

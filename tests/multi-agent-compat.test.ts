@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace, V2_GUIDANCE_CHAR_BUDGET } from "../src/server/responses";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../src/codex/catalog";
@@ -779,6 +779,116 @@ describe("multiAgentGuidanceText", () => {
     expect(text).toContain("anthropic/claude-sonnet-5");
     expect(text).toContain("named specialist");
     expect(text).toContain("fork_turns");
+  });
+
+  test("omits a role whose model is outside the v2 candidate window", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [
+          {
+            id: "reviewer",
+            description: "PR review",
+            model: "anthropic/claude-sonnet-5",
+            effort: "high",
+            developerInstructions: "Review the diff.",
+            enabled: true,
+          },
+          {
+            id: "explorer",
+            description: "read-only search",
+            model: "kimi/k3",
+            developerInstructions: "Search the tree.",
+            enabled: true,
+          },
+        ],
+      },
+    );
+    expect(text).toContain("reviewer");
+    expect(text).not.toContain("explorer");
+    expect(text).not.toContain("kimi/k3");
+  });
+
+  test("omits a role whose effort is not supported on the resolved model", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium"],
+    }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          effort: "high",
+          developerInstructions: "Review the diff.",
+          enabled: true,
+        }],
+      },
+    );
+    expect(text).not.toContain("reviewer");
+    expect(text).not.toContain("named specialist");
+  });
+
+  test("built-in eight-role catalog stays within the v2 guidance budget", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    const models = Array.from({ length: 8 }, (_, i) => ({
+      slug: `provider-${i}/model-${"m".repeat(80)}`,
+      efforts: ["high"],
+    }));
+    catalogFixture(dir, models);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: models[0]!.slug,
+        subagentRoles: models.map((model, i) => ({
+          id: `role-${i}`,
+          description: "when to use this specialist for a long task description",
+          model: model.slug,
+          developerInstructions: "Do the specialist work.",
+          enabled: true,
+        })),
+      },
+    );
+    expect(text).toContain("<multi_agent_mode>");
+    expect(text!.length).toBeLessThanOrEqual(V2_GUIDANCE_CHAR_BUDGET + "<multi_agent_mode></multi_agent_mode>".length);
+    expect(text).toContain("fork_turns");
+  });
+
+  test("custom {{roles}} substitution stays within the catalog budget", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    const models = Array.from({ length: 8 }, (_, i) => ({
+      slug: `provider-${i}/model-${"m".repeat(80)}`,
+      efforts: ["high"],
+    }));
+    catalogFixture(dir, models);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: models[0]!.slug,
+        injectionPrompt: "ROLES={{roles}}",
+        subagentRoles: models.map((model, i) => ({
+          id: `role-${i}`,
+          description: "when to use this specialist for a long task description",
+          model: model.slug,
+          developerInstructions: "Do the specialist work.",
+          enabled: true,
+        })),
+      },
+    );
+    expect(text).not.toContain("{{roles}}");
+    const inner = text!.replace(/^<multi_agent_mode>/, "").replace(/<\/multi_agent_mode>$/, "");
+    const roles = inner.slice("ROLES=".length);
+    expect(roles.length).toBeLessThanOrEqual(V2_GUIDANCE_CHAR_BUDGET);
   });
 
   test("custom injectionPrompt without {{roles}} does not leak the catalog", async () => {

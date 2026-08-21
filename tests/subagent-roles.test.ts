@@ -8,10 +8,13 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { handleAgentCommand } from "../src/cli/agent";
 import {
+  isRoutedRoleModel,
   parseSubagentRole,
   parseSubagentRoles,
   renderRolesCatalog,
   salvageSubagentRoles,
+  compactRolesCatalog,
+  SUBAGENT_ROLE_MODEL_MAX,
   unionRoleModelsIntoRoster,
 } from "../src/codex/agent-roles";
 import type { OcxSubagentRole } from "../src/types";
@@ -60,6 +63,16 @@ describe("parseSubagentRoles", () => {
       ok: false,
       error: expect.stringContaining("8"),
     });
+  });
+
+  test("rejects a model id longer than the bound", () => {
+    const parsed = parseSubagentRole({
+      id: "reviewer",
+      description: "PR review",
+      model: `p/${"m".repeat(SUBAGENT_ROLE_MODEL_MAX)}`,
+      developerInstructions: "Review.",
+    });
+    expect(parsed).toMatchObject({ ok: false, error: expect.stringContaining("model") });
   });
 });
 
@@ -135,6 +148,42 @@ describe("unionRoleModelsIntoRoster", () => {
     const result = unionRoleModelsIntoRoster([], roles);
     expect(result.models).toEqual(["m-1", "m-2", "m-3", "m-4", "m-5"]);
     expect(result.droppedRoleIds).toEqual(["f"]);
+  });
+
+  test("deduplicates existing roster entries before filling the five-slot window", () => {
+    const result = unionRoleModelsIntoRoster(
+      ["a", "a", "b", "c", "d"],
+      [role({ id: "r", model: "role-model" })],
+    );
+    expect(result.models).toEqual(["role-model", "a", "b", "c", "d"]);
+  });
+});
+
+describe("isRoutedRoleModel", () => {
+  test("treats openrouter/gpt-* as routed even though the model id starts with gpt-", () => {
+    expect(isRoutedRoleModel("openrouter/gpt-5.4", { work: "acct-1" })).toBe(true);
+  });
+
+  test("treats a configured account-qualified gpt-* row as native", () => {
+    expect(isRoutedRoleModel("work/gpt-5.4", { work: "acct-1" })).toBe(false);
+  });
+
+  test("treats a bare native gpt-* id as not routed", () => {
+    expect(isRoutedRoleModel("gpt-5.4", { work: "acct-1" })).toBe(false);
+  });
+});
+
+describe("compactRolesCatalog", () => {
+  test("fits eight max-length role models into a 700-character budget", () => {
+    const longModel = `p/${"m".repeat(SUBAGENT_ROLE_MODEL_MAX - 2)}`;
+    const roles = Array.from({ length: 8 }, (_, i) => role({
+      id: `role-${i}`,
+      model: longModel,
+      description: "x".repeat(240),
+    }));
+    const text = compactRolesCatalog(roles, 700);
+    expect(text.length).toBeLessThanOrEqual(700);
+    expect(text.length).toBeGreaterThan(0);
   });
 });
 
@@ -218,23 +267,13 @@ describe("ocx agent roles CLI", () => {
     }]);
   });
 
-  test("remove PUTs the catalog without the named id", async () => {
-    const existing = [
-      role({ id: "reviewer" }),
-      role({ id: "explorer" }),
-    ];
-    const runtime = fakeRuntime((req, body) => {
-      if (new URL(req.url).pathname === "/api/subagent-roles" && req.method === "GET") {
-        return { roles: existing };
-      }
-      return { ok: true, roles: (body as { roles?: unknown }).roles ?? [] };
-    });
+  test("remove PUTs an atomic remove id rather than a whole-catalog snapshot", async () => {
+    const runtime = fakeRuntime();
     expect(await handleAgentCommand(["roles", "remove", "reviewer", "--json"], runtime.deps)).toBe(0);
-    expect(runtime.requests[0]).toEqual({ path: "/api/subagent-roles", method: "GET", body: null });
-    expect(runtime.requests[1]).toEqual({
+    expect(runtime.requests).toEqual([{
       path: "/api/subagent-roles",
       method: "PUT",
-      body: { roles: [role({ id: "explorer" })] },
-    });
+      body: { remove: "reviewer" },
+    }]);
   });
 });

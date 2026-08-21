@@ -690,7 +690,26 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
       return jsonResponse({ error: "body must be a JSON object" }, 400);
     }
-    const body = parsedBody as { roles?: unknown };
+    const body = parsedBody as { roles?: unknown; remove?: unknown };
+    if ("remove" in body) {
+      if ("roles" in body) return jsonResponse({ error: "body.remove cannot be combined with body.roles" }, 400);
+      if (typeof body.remove !== "string" || body.remove.trim().length === 0) {
+        return jsonResponse({ error: "body.remove must be a non-empty role id" }, 400);
+      }
+      const id = body.remove.trim();
+      config.subagentRoles = (config.subagentRoles ?? []).filter(role => role.id !== id);
+      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+      save(config);
+      const catalogRefresh = await convergeCodexCatalog();
+      await syncClaudeAgentDefsBestEffort();
+      await autoApplyDesktopBestEffort();
+      return jsonResponse({
+        ok: true,
+        roles: config.subagentRoles,
+        warnings: [],
+        catalogRefresh,
+      });
+    }
     if (!("roles" in body)) return jsonResponse({ error: "body.roles is required" }, 400);
     const parsed = parseSubagentRoles(body.roles);
     if (!parsed.ok) return jsonResponse({ error: parsed.error, index: parsed.index }, 400);

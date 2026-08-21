@@ -245,7 +245,7 @@ export interface OcxSubagentRole {
   id: string;
   /** 1..240 chars; parent "when to use" this specialist. */
   description: string;
-  /** Bare native or `provider/model`. */
+  /** Bare native or `provider/model`, at most 128 characters. */
   model: string;
   /** Codex reasoning ladder; optional. */
   effort?: string;

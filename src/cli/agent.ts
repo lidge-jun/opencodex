@@ -175,9 +175,10 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const id = args.shift();
   if (!id) throw new CliUsageError("role id is required", USAGE);
   rejectArgs(args, USAGE);
-  const current = await runtimeRequest("/api/subagent-roles", {}, deps) as { roles?: Array<{ id?: string }> };
-  const next = (current.roles ?? []).filter(role => role.id !== id);
-  const result = await runtimeRequest("/api/subagent-roles", { method: "PUT", body: JSON.stringify({ roles: next }) }, deps);
+  const result = await runtimeRequest("/api/subagent-roles", {
+    method: "PUT",
+    body: JSON.stringify({ remove: id }),
+  }, deps);
   printData(result, wantsJson, [`Removed role ${id}.`]);
 }
 

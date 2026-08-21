@@ -62,7 +62,7 @@ import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, ty
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { subagentFallbackGuidanceText } from "../../codex/subagent-model-fallback";
-import { renderRolesCatalog } from "../../codex/agent-roles";
+import { compactRolesCatalog, enabledSubagentRoles } from "../../codex/agent-roles";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -365,16 +365,27 @@ export async function multiAgentGuidanceText(
         .join(", ")}`);
     }
     const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
-    const rolesText = renderRolesCatalog(subagentRoles ?? []);
-    if (!injectionModel && roster === "" && fallbackGuidance === "" && rolesText === "") return null;
+    const visibleRoles = enabledSubagentRoles(subagentRoles).filter((role) => {
+      const match = effective.candidates.find(candidate =>
+        slugsEquivalent(candidate.model, role.model) || candidate.model === role.model,
+      );
+      if (!match) return false;
+      const matchesPreferred = Boolean(injectionModel)
+        && (slugsEquivalent(match.model, injectionModel!) || match.model === injectionModel);
+      if (!withinCandidateWindow(match) || (!allowedForCurrentRoute(match) && !matchesPreferred)) return false;
+      if (role.effort && !match.efforts.includes(role.effort)) return false;
+      return true;
+    });
+    const customRolesText = compactRolesCatalog(visibleRoles, V2_GUIDANCE_CHAR_BUDGET);
+    if (!injectionModel && roster === "" && fallbackGuidance === "" && customRolesText === "") return null;
     if (injectionPrompt) {
       // Bare ids must resolve to a unique/current-route candidate. Preserve the legacy raw
       // fallback only for explicit routed/account-qualified ids.
       const promptModel = preferred?.model
         ?? (injectionModel?.includes("/") ? injectionModel : undefined);
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance, rolesText)}</multi_agent_mode>`;
+      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance, customRolesText)}</multi_agent_mode>`;
     }
-    if (!preferred && roster === "" && fallbackGuidance === "" && rolesText === "") return null;
+    if (!preferred && roster === "" && fallbackGuidance === "" && customRolesText === "") return null;
     const preamble = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
       + "When setting either override, set fork_turns to \"none\" "
@@ -388,16 +399,20 @@ export async function multiAgentGuidanceText(
     }
     const specialist = (catalog: string): string =>
       catalog ? ` When spawning, use a named specialist: ${catalog}.` : "";
+    const rolesBudget = (withRoster: boolean): number => {
+      const wrapper = specialist("x").length - 1;
+      return V2_GUIDANCE_CHAR_BUDGET
+        - preamble.length
+        - preferredText.length
+        - fallbackGuidance.length
+        - (withRoster ? roster.length : 0)
+        - wrapper;
+    };
+    let rolesText = compactRolesCatalog(visibleRoles, Math.max(0, rolesBudget(true)));
     let text = preamble + preferredText + fallbackGuidance + specialist(rolesText) + roster;
     if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
+      rolesText = compactRolesCatalog(visibleRoles, Math.max(0, rolesBudget(false)));
       text = preamble + preferredText + fallbackGuidance + specialist(rolesText);
-    }
-    if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
-      for (const descBudget of [80, 40, 0]) {
-        const shortened = renderRolesCatalog(subagentRoles ?? [], { maxDescriptionChars: descBudget });
-        text = preamble + preferredText + fallbackGuidance + specialist(shortened);
-        if (text.length <= V2_GUIDANCE_CHAR_BUDGET) break;
-      }
     }
     return `<multi_agent_mode>${text}</multi_agent_mode>`;
   }
