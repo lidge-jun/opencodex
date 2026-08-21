@@ -165,6 +165,15 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
     return { ...(isObj(raw) ? raw : {}), type: "object" };
   };
   const pushFn = (t: Record<string, unknown>, namespace?: string) => {
+    // Hosted image_generation already installed the synthetic root tool. A later
+    // ordinary root `image_gen` must not create a second un-namespaced identity.
+    if (
+      !namespace
+      && t.name === IMAGE_GEN_TOOL_NAME
+      && out.some(tool => tool.name === IMAGE_GEN_TOOL_NAME && !tool.namespace && tool.imageGeneration)
+    ) {
+      return;
+    }
     const tool: OcxTool = {
       name: t.name as string,
       description: (t.description as string) ?? "",
