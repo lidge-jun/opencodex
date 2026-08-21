@@ -1331,6 +1331,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelSupportsVerbosity: Object.fromEntries(KIRO_MODELS.map(id => [id, false])),
   },
   {
+    id: "workbuddy",
+    label: "WorkBuddy (experimental)",
+    adapter: "workbuddy",
+    baseUrl: "https://www.codebuddy.cn/console/as/chat/completions",
+    authKind: "oauth",
+    oauthId: "workbuddy",
+    featured: false,
+    note: "Experimental WorkBuddy bridge. Import-first: sign in to the WorkBuddy desktop app, then run `ocx login workbuddy` to reuse its OAuth session and daily credits via the console proxy (not TokenHub API keys). Uses streaming upstream only.",
+    models: ["workbuddy/deepseek-v4-flash", "workbuddy/glm-5.3", "workbuddy/kimi-k3", "workbuddy/auto"],
+    defaultModel: "workbuddy/deepseek-v4-flash",
+    liveModels: false,
+  },
+  {
     // Nous Portal — Nous Research subscription gateway (same backend Hermes Agent
     // uses). OAuth is a device grant (src/oauth/nous.ts): the access token IS the
     // per-request inference JWT (scope inference:invoke), refresh tokens are
