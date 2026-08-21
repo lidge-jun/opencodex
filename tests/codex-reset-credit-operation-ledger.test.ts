@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +17,7 @@ import {
   markResetCreditOperationAmbiguous,
   openManualResetCreditOperation,
   openResetCreditOperation,
+  setResetCreditOperationMigrationFaultForTests,
   settleManualResetCreditOperation,
   settleResetCreditOperation,
   type ManualResetCreditOperationIdentity,
@@ -175,6 +176,57 @@ function seedRejectedMigration(
   }
 }
 
+function seedValidMigration(kind: "legacy" | "prior"): Record<string, unknown>[] {
+  const database = new Database(databasePath(), { create: true });
+  try {
+    database.exec(kind === "legacy" ? LEGACY_OPERATION_SCHEMA_SQL : PRIOR_OPERATION_SCHEMA_SQL);
+    const key = createHash("sha256").update(`valid-migration-${kind}`).digest("hex");
+    const operationId = fixtureOperationId(kind === "legacy" ? 0x24100 : 0x24101);
+    if (kind === "legacy") {
+      database.prepare(`
+        INSERT INTO reset_credit_operations VALUES (?, ?, ?, ?, 'ambiguous', NULL, 100, 200)
+      `).run(key, GENERATION.credentialGeneration, GENERATION.exhaustionGeneration, operationId);
+    } else {
+      database.prepare(`
+        INSERT INTO reset_credit_operations VALUES (
+          ?, 'manual', NULL, NULL, ?, 'ambiguous', NULL, 100, 200
+        )
+      `).run(key, operationId);
+    }
+    return database.query<Record<string, unknown>, []>(
+      "SELECT * FROM reset_credit_operations ORDER BY account_key",
+    ).all();
+  } finally {
+    database.close();
+  }
+}
+
+function appendTerminalManualHistory(startIndex: number, count: number): void {
+  const database = new Database(databasePath());
+  try {
+    const insert = database.prepare(`
+      INSERT INTO reset_credit_manual_operation_ids (
+        operation_id, account_key, canonical_operation_id,
+        terminal_code, created_at, updated_at
+      ) VALUES (?, ?, ?, 'no_credit', 1, 1)
+    `);
+    database.exec("BEGIN IMMEDIATE");
+    for (let offset = 0; offset < count; offset += 1) {
+      const operationId = fixtureOperationId(startIndex + offset);
+      const key = createHash("sha256")
+        .update(`synthetic-terminal-manual-history-${startIndex + offset}`)
+        .digest("hex");
+      insert.run(operationId, key, operationId);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* preserve the fixture error */ }
+    throw error;
+  } finally {
+    database.close();
+  }
+}
+
 async function waitForPath(path: string): Promise<void> {
   const deadline = Date.now() + CHILD_READY_TIMEOUT_MS;
   while (!existsSync(path)) {
@@ -238,6 +290,10 @@ beforeEach(() => {
     `);
   }
   finally { database.close(); }
+});
+
+afterEach(() => {
+  setResetCreditOperationMigrationFaultForTests(null);
 });
 
 describe("Codex reset-credit operation ledger", () => {
@@ -513,6 +569,37 @@ describe("Codex reset-credit operation ledger", () => {
   });
 
   for (const fixture of MIGRATION_REJECTION_FIXTURES) {
+    test(`rolls back ${fixture.label} migration after the first schema write`, () => {
+      const before = seedValidMigration(fixture.kind);
+      setResetCreditOperationMigrationFaultForTests("after_first_write");
+      const result = fixture.kind === "legacy"
+        ? openResetCreditOperation({ ...GENERATION, accountId: "pool-migration-fault" }, 300)
+        : openManualResetCreditOperation({
+            accountId: "pool-migration-fault",
+            chatgptAccountId: "chatgpt-migration-fault",
+            operationId: fixtureOperationId(0x24102),
+          }, 300);
+      expect(result).toEqual({ kind: "unavailable" });
+
+      const verifier = new Database(databasePath(), { readonly: true });
+      try {
+        expect(schemaHash(verifier.query<{ sql: string }, []>(`
+          SELECT sql FROM main.sqlite_schema
+           WHERE type = 'table' AND name = 'reset_credit_operations'
+        `).get()?.sql)).toBe(schemaHash(fixture.schema));
+        expect(verifier.query<Record<string, unknown>, []>(
+          "SELECT * FROM reset_credit_operations ORDER BY account_key",
+        ).all()).toEqual(before);
+        expect(verifier.query<{ name: string }, []>(`
+          SELECT name FROM main.sqlite_schema
+           WHERE type = 'table' AND name LIKE 'reset_credit_%'
+           ORDER BY name
+        `).all()).toEqual([{ name: "reset_credit_operations" }]);
+      } finally {
+        verifier.close();
+      }
+    });
+
     for (const rejection of MIGRATION_REJECTION_CASES) {
       test(`refuses ${fixture.label} migration with ${rejection} without rewriting state`, () => {
         const before = seedRejectedMigration(fixture.kind, rejection);
@@ -1191,6 +1278,87 @@ describe("Codex reset-credit operation ledger", () => {
       expect(verifier.query<{ count: number }, []>(
         "SELECT COUNT(*) AS count FROM reset_credit_manual_operation_ids",
       ).get()?.count).toBe(MAX_MANUAL_RESET_CREDIT_OPERATION_IDS);
+    } finally {
+      verifier.close();
+    }
+  });
+
+  test("refuses a new alias for an active manual operation when identity history is full", () => {
+    const canonical = {
+      accountId: "pool-manual-active-cap",
+      chatgptAccountId: "chatgpt-manual-active-cap",
+      operationId: fixtureOperationId(0x27000),
+    };
+    expect(openManualResetCreditOperation(canonical, 100)).toEqual({
+      kind: "execute",
+      operationId: canonical.operationId,
+      resumed: false,
+    });
+    appendTerminalManualHistory(0x28000, MAX_MANUAL_RESET_CREDIT_OPERATION_IDS - 1);
+
+    expect(openManualResetCreditOperation(canonical, 200)).toEqual({
+      kind: "execute",
+      operationId: canonical.operationId,
+      resumed: true,
+    });
+    const alias = { ...canonical, operationId: fixtureOperationId(0x27001) };
+    expect(openManualResetCreditOperation(alias, 300)).toEqual({ kind: "capacity" });
+
+    const verifier = new Database(databasePath(), { readonly: true });
+    try {
+      expect(verifier.query<{ count: number }, []>(
+        "SELECT COUNT(*) AS count FROM reset_credit_manual_operation_ids",
+      ).get()?.count).toBe(MAX_MANUAL_RESET_CREDIT_OPERATION_IDS);
+      expect(verifier.query<{ count: number }, [string]>(`
+        SELECT COUNT(*) AS count FROM reset_credit_manual_operation_ids WHERE operation_id = ?
+      `).get(alias.operationId)?.count).toBe(0);
+      expect(verifier.query<{ joined_operation_id: string | null; updated_at: number }, []>(`
+        SELECT joined_operation_id, updated_at FROM reset_credit_operations
+      `).get()).toEqual({ joined_operation_id: null, updated_at: 100 });
+    } finally {
+      verifier.close();
+    }
+    expect(settleManualResetCreditOperation(canonical, "reset", 400)).toEqual({ kind: "updated" });
+  });
+
+  test("fails closed without rewriting manual identity history at max plus one", () => {
+    const manual = {
+      accountId: "pool-manual-over-cap",
+      chatgptAccountId: "chatgpt-manual-over-cap",
+      operationId: fixtureOperationId(0x29000),
+    };
+    expect(openManualResetCreditOperation(manual, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(manual, "reset", 200)).toEqual({ kind: "updated" });
+    const recoveryGeneration = { ...GENERATION, accountId: "pool-recovery-over-manual-cap" };
+    expect(openResetCreditOperation(recoveryGeneration, 300))
+      .toMatchObject({ kind: "execute", resumed: false });
+
+    const before = new Database(databasePath(), { readonly: true });
+    let operationRows: Record<string, unknown>[];
+    try {
+      operationRows = before.query<Record<string, unknown>, []>(
+        "SELECT * FROM reset_credit_operations ORDER BY account_key",
+      ).all();
+    } finally {
+      before.close();
+    }
+    appendTerminalManualHistory(0x2a000, MAX_MANUAL_RESET_CREDIT_OPERATION_IDS);
+
+    expect(openManualResetCreditOperation(manual, 400)).toEqual({ kind: "unavailable" });
+    expect(openResetCreditOperation(recoveryGeneration, 500)).toEqual({ kind: "unavailable" });
+
+    const verifier = new Database(databasePath(), { readonly: true });
+    try {
+      expect(verifier.query<{ count: number }, []>(
+        "SELECT COUNT(*) AS count FROM reset_credit_manual_operation_ids",
+      ).get()?.count).toBe(MAX_MANUAL_RESET_CREDIT_OPERATION_IDS + 1);
+      expect(verifier.query<Record<string, unknown>, []>(
+        "SELECT * FROM reset_credit_operations ORDER BY account_key",
+      ).all()).toEqual(operationRows);
+      expect(schemaHash(verifier.query<{ sql: string }, []>(`
+        SELECT sql FROM main.sqlite_schema
+         WHERE type = 'table' AND name = 'reset_credit_manual_operation_ids'
+      `).get()?.sql)).toBe(CURRENT_MANUAL_ID_SCHEMA_SHA256);
     } finally {
       verifier.close();
     }
