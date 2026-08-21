@@ -156,7 +156,18 @@ test("image response byte reader enforces the stream cap when Content-Length is 
   expect(tailPulled).toBe(false);
 });
 
-test("POST /v1/images/generations relays to xAI Imagine when the image bridge is enabled", async () => {
+function xaiBridgeConfig(): OcxConfig {
+  return {
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
+    },
+  } as OcxConfig;
+}
+
+function stubXaiImagine(payload: unknown): CapturedRequest[] {
   const captured: CapturedRequest[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -170,18 +181,16 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     });
     if (parsed.hostname === "api.x.ai") {
-      return Response.json({ data: [{ b64_json: "dHJhaW4=" }] });
+      return Response.json(payload);
     }
     throw new Error(`unexpected upstream ${parsed.host}`);
   }) as typeof fetch;
-  saveConfig({
-    ...forwardConfig(),
-    images: { bridgeEnabled: true },
-    providers: {
-      ...forwardConfig().providers,
-      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
-    },
-  } as OcxConfig);
+  return captured;
+}
+
+test("POST /v1/images/generations relays to xAI Imagine when the image bridge is enabled", async () => {
+  const captured = stubXaiImagine({ data: [{ b64_json: "dHJhaW4=" }] });
+  saveConfig(xaiBridgeConfig());
 
   const server = startServer(0);
   try {
@@ -206,27 +215,8 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
 });
 
 test("POST /v1/images/edits with no image URL does not call xAI generation", async () => {
-  const captured: CapturedRequest[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.includes("api.x.ai")) {
-      captured.push({
-        path: new URL(url).pathname,
-        headers: new Headers(init?.headers),
-        body: init?.body ? JSON.parse(String(init.body)) : undefined,
-      });
-      return Response.json({ data: [{ b64_json: "dHJhaW4=" }] });
-    }
-    return originalFetch(input, init);
-  }) as typeof fetch;
-  saveConfig({
-    ...forwardConfig(),
-    images: { bridgeEnabled: true },
-    providers: {
-      ...forwardConfig().providers,
-      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
-    },
-  } as OcxConfig);
+  const captured = stubXaiImagine({ data: [{ b64_json: "dHJhaW4=" }] });
+  saveConfig(xaiBridgeConfig());
 
   const server = startServer(0);
   try {
@@ -243,31 +233,6 @@ test("POST /v1/images/edits with no image URL does not call xAI generation", asy
     await server.stop(true);
   }
 });
-
-function xaiBridgeConfig(): OcxConfig {
-  return {
-    ...forwardConfig(),
-    images: { bridgeEnabled: true },
-    providers: {
-      ...forwardConfig().providers,
-      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
-    },
-  } as OcxConfig;
-}
-
-function stubXaiImagine(payload: unknown) {
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const parsed = new URL(url);
-    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
-      return originalFetch(input, init);
-    }
-    if (parsed.hostname === "api.x.ai") {
-      return Response.json(payload);
-    }
-    throw new Error(`unexpected upstream ${parsed.host}`);
-  }) as typeof fetch;
-}
 
 test("POST /v1/images/generations rejects xAI batches that exceed the aggregate output budget", async () => {
   stubXaiImagine({

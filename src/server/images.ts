@@ -559,10 +559,14 @@ async function tryXaiImageRelay(
       ? (err as { status: number }).status
       : 502;
     const message = err instanceof Error ? err.message : String(err);
+    const safeMessage = sanitizeUpstreamErrorText(message).replace(
+      /https?:\/\/[^\s"'<>]+/gi,
+      "[upstream-url]",
+    );
     return formatErrorResponse(
       status >= 400 && status < 600 ? status : 502,
       "upstream_error",
-      `xAI image ${endpoint} failed: ${message}`,
+      `xAI image ${endpoint} failed: ${safeMessage}`,
     );
   } finally {
     linkedSignal.cleanup();

@@ -296,6 +296,35 @@ function pickPinnedAddress(addresses: PinnedAddress[]): PinnedAddress {
 }
 
 /**
+ * HTTPS-only destination check, public-address resolution, and pinned connect.
+ * Callers own the !ok / 3xx policy so image vs video error text can stay distinct.
+ */
+async function connectPublicHttps(
+  url: string,
+  options: {
+    context: string;
+    signal?: AbortSignal;
+    pinnedDownload?: PinnedDownloadFn;
+    maxBytes?: number;
+  },
+): Promise<Response> {
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error(`${options.context} URL is not valid`); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`${options.context} URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  const assessment = assessUrlDestination(url);
+  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
+    throw new Error(`${options.context} URL targets ${assessment.detail}`);
+  }
+  const resolved = await resolvePublicAddresses(url, options.context);
+  const pinned = pickPinnedAddress(resolved.addresses);
+  const download = options.pinnedDownload ?? ((resource, peer, signal) =>
+    pinnedHttpsGet(resource, peer, signal, { maxBytes: options.maxBytes }));
+  return download(url, pinned, options.signal);
+}
+
+/**
  * Fetch a provider-returned image URL after destination-policy + pinned HTTPS.
  * Redirects are not followed (`pinnedHttpsGet` treats 3xx as failure). Throws a
  * message that names the class of failure (scheme / destination kind / download)
@@ -309,20 +338,12 @@ export async function fetchPublicHttpsImage(
     maxBytes?: number;
   },
 ): Promise<Response> {
-  let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
-  }
-  const assessment = assessUrlDestination(url);
-  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
-    throw new Error(`image URL targets ${assessment.detail}`);
-  }
-  const resolved = await resolvePublicAddresses(url);
-  const pinned = pickPinnedAddress(resolved.addresses);
-  const download = options?.pinnedDownload ?? ((resource, peer, signal) =>
-    pinnedHttpsGet(resource, peer, signal, { maxBytes: options?.maxBytes }));
-  const resp = await download(url, pinned, options?.signal);
+  const resp = await connectPublicHttps(url, {
+    context: "image",
+    signal: options?.signal,
+    pinnedDownload: options?.pinnedDownload,
+    maxBytes: options?.maxBytes,
+  });
   if (!resp.ok || (resp.status >= 300 && resp.status < 400)) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }
     throw new Error("image download failed");
@@ -449,19 +470,11 @@ export async function downloadVideoToArtifact(
     return dest;
   }
 
-  // SSRF protection: same validation as downloadImageToArtifact
-  let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { throw new Error("video URL is not valid"); }
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error(`video URL must use HTTPS, got ${parsedUrl.protocol}`);
-  }
-  const assessment = assessUrlDestination(url);
-  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
-    throw new Error(`video URL targets ${assessment.detail}`);
-  }
-  const resolved = await resolvePublicAddresses(url, "video");
-  const pinned = pickPinnedAddress(resolved.addresses);
-  const resp = await pinnedHttpsGet(url, pinned, signal, { maxBytes: MAX_VIDEO_DOWNLOAD_BYTES });
+  const resp = await connectPublicHttps(url, {
+    context: "video",
+    signal,
+    maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+  });
   if (!resp.ok) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }
     throw new Error("video download failed: " + resp.status);
