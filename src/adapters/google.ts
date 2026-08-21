@@ -397,6 +397,79 @@ function googlePartTextEvent(part: GoogleResponsePart): AdapterEvent | undefined
     : { type: "text_delta", text: part.text };
 }
 
+interface InvalidGoogleShapeDiagnostic {
+  reason:
+    | "candidates_not_array"
+    | "candidate_not_object"
+    | "content_not_object"
+    | "parts_not_array"
+    | "part_not_object";
+  partIndex?: number;
+  valueType: string;
+}
+
+function isGoogleRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function googleStructuralValueType(value: unknown): string {
+  if (value === null) return "null";
+  return Array.isArray(value) ? "array" : typeof value;
+}
+
+/**
+ * A candidate's `content` is claimed model output inside a well-formed frame, so it is governed by
+ * the #1332 nested-shape rule (fail closed) rather than #1240's root-frame padding rule (skip).
+ *
+ * Absence stays legal, and so does one encoding of it: an empty array is how a JSON writer with no
+ * distinct empty-object form spells an empty `content`, and it already behaves as "no parts". A
+ * NON-empty array is the opposite case — `content?.parts` silently reads `undefined` from it, so a
+ * candidate shaped `content: [{ parts: [...] }]` dropped its own text and completed as an empty
+ * turn.
+ */
+function diagnoseGoogleContent(content: unknown): InvalidGoogleShapeDiagnostic | undefined {
+  if (content === undefined || content === null || isGoogleRecord(content)) return undefined;
+  if (Array.isArray(content) && content.length === 0) return undefined;
+  return { reason: "content_not_object", valueType: googleStructuralValueType(content) };
+}
+
+/**
+ * `content.parts` sits one rung below the candidate guard added in #1332, and both parsers
+ * consumed it unchecked: `for (const part of {})` throws `{} is not iterable`, and a `[null]`
+ * element throws on `part.thoughtSignature`. A `parts` that is absent or `null` keeps its existing
+ * skip — only a present, non-null container is validated.
+ */
+function diagnoseGoogleParts(parts: unknown): InvalidGoogleShapeDiagnostic | undefined {
+  if (!Array.isArray(parts)) {
+    return { reason: "parts_not_array", valueType: googleStructuralValueType(parts) };
+  }
+  for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+    const part: unknown = parts[partIndex];
+    if (!isGoogleRecord(part)) {
+      return { reason: "part_not_object", partIndex, valueType: googleStructuralValueType(part) };
+    }
+  }
+  return undefined;
+}
+
+function invalidGoogleShapeEvent(
+  diagnostic: InvalidGoogleShapeDiagnostic,
+): Extract<AdapterEvent, { type: "error" }> {
+  const at = diagnostic.partIndex !== undefined ? `; partIndex=${diagnostic.partIndex}` : "";
+  // The subject names the rung that failed, so an operator reading a log can tell a broken
+  // candidate list from a well-formed candidate whose parts are broken. The candidate subject keeps
+  // the exact wording #1332 introduced as its prefix, so an existing grep still matches.
+  const subject = diagnostic.reason === "candidates_not_array" || diagnostic.reason === "candidate_not_object"
+    ? "candidates"
+    : diagnostic.reason === "content_not_object"
+      ? "content"
+      : "content parts";
+  return {
+    type: "error",
+    message: `google response contained invalid ${subject} (${diagnostic.reason}${at}; valueType=${diagnostic.valueType})`,
+  };
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
@@ -709,22 +782,34 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           sawTerminalSignal = true;
         }
         const rawCandidates = root.candidates;
-        if (rawCandidates === undefined) return "continue";
+        // `null` is an absence encoding, not corruption, and terminating on it is the #1219
+        // failure mode one rung in: a `{"candidates":null}` frame arriving between a content
+        // delta and the finish chunk killed a turn whose answer had already fully arrived. An
+        // absent key and an empty array are already skipped here; `null` joins them. A non-null
+        // non-array container is still claimed structure the parser cannot read, and stays
+        // terminal.
+        if (rawCandidates === undefined || rawCandidates === null) return "continue";
         if (!Array.isArray(rawCandidates)) {
-          yield { type: "error", message: "google response contained invalid candidates" };
+          yield invalidGoogleShapeEvent({
+            reason: "candidates_not_array",
+            valueType: googleStructuralValueType(rawCandidates),
+          });
           return "terminate";
         }
         if (rawCandidates.length === 0) return "continue";
         const rawCandidate = rawCandidates[0];
-        if (rawCandidate === null || typeof rawCandidate !== "object" || Array.isArray(rawCandidate)) {
+        if (!isGoogleRecord(rawCandidate)) {
           // Unlike a root `data: null` keepalive, this is a claimed response candidate. Treat it
           // as terminal protocol corruption so the turn cannot complete after silently losing
           // a candidate or tool call (#1325).
-          yield { type: "error", message: "google response contained invalid candidates" };
+          yield invalidGoogleShapeEvent({
+            reason: "candidate_not_object",
+            valueType: googleStructuralValueType(rawCandidate),
+          });
           return "terminate";
         }
         const candidate = rawCandidate as {
-          content?: { parts?: unknown[] };
+          content?: unknown;
           finishReason?: string;
         };
 
@@ -733,7 +818,24 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           sawTerminalSignal = true;
         }
 
-        const parts = candidate.content?.parts as GoogleResponsePart[] | undefined;
+        // One rung below the candidate guard above, same rule: this is claimed content, not
+        // padding, so it fails closed rather than being iterated or silently dropped (#1325).
+        const rawContent: unknown = candidate.content;
+        const invalidContent = diagnoseGoogleContent(rawContent);
+        if (invalidContent) {
+          yield invalidGoogleShapeEvent(invalidContent);
+          return "terminate";
+        }
+        const rawParts: unknown = isGoogleRecord(rawContent) ? rawContent.parts : undefined;
+        let parts: GoogleResponsePart[] | undefined;
+        if (rawParts !== undefined && rawParts !== null) {
+          const invalidParts = diagnoseGoogleParts(rawParts);
+          if (invalidParts) {
+            yield invalidGoogleShapeEvent(invalidParts);
+            return "terminate";
+          }
+          parts = rawParts as GoogleResponsePart[];
+        }
         // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
         // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
         const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
@@ -972,22 +1074,52 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const json = raw;
       const events: AdapterEvent[] = [];
 
-      const candidates = json.candidates as { content?: { parts?: GoogleResponsePart[] }; finishReason?: string }[] | undefined;
+      const rawCandidates: unknown = json.candidates;
+      // Parity with the streaming path, which has rejected a non-array `candidates` since #1332.
+      // Buffered accepted `"abc"` outright (`"abc".length` is 3, so the emptiness check below
+      // passed and `candidates[0]` was the character `"a"`), and reported `{}`/`5` as an absent
+      // candidate list rather than a malformed one.
+      if (rawCandidates !== undefined && rawCandidates !== null && !Array.isArray(rawCandidates)) {
+        return finish([invalidGoogleShapeEvent({
+          reason: "candidates_not_array",
+          valueType: googleStructuralValueType(rawCandidates),
+        })]);
+      }
+      const candidates = rawCandidates as { finishReason?: string }[] | undefined;
       if (!candidates?.length) {
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
+      const rawCandidate: unknown = candidates[0];
+      if (!isGoogleRecord(rawCandidate)) {
+        // The streaming parser already treats this as terminal protocol corruption (#1325/#1332).
+        // Buffered returned a bare `done`, so a claimed-but-malformed candidate was reported to
+        // the caller as a successful empty turn.
+        return finish([invalidGoogleShapeEvent({
+          reason: "candidate_not_object",
+          valueType: googleStructuralValueType(rawCandidate),
+        })]);
+      }
+      const candidate = rawCandidate as { content?: unknown; finishReason?: string };
       let toolCallsStarted = 0;
       const imageBudget = createImageBudget();
-      if (candidates?.[0]?.content?.parts) {
+      const rawContent: unknown = candidate.content;
+      const invalidContent = diagnoseGoogleContent(rawContent);
+      if (invalidContent) return finish([invalidGoogleShapeEvent(invalidContent)]);
+      const rawParts: unknown = isGoogleRecord(rawContent) ? rawContent.parts : undefined;
+      if (rawParts !== undefined && rawParts !== null) {
+        const invalidParts = diagnoseGoogleParts(rawParts);
+        if (invalidParts) return finish([invalidGoogleShapeEvent(invalidParts)]);
+        const parts = rawParts as GoogleResponsePart[];
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = vertexReplayModel;
-        const replaySession = vertexReplaySession;
-        if (provider.googleMode === "vertex" && replayModel && replaySession) {
-          observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
+        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+          && replayModel && replaySession) {
+          observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
         }
         let pendingThoughtSig: string | undefined;
-        for (const part of candidates[0].content.parts) {
+        for (const part of parts) {
           const sig = part.thoughtSignature ?? part.thought_signature;
           if (part.thought === true && sig && isLikelyRealThoughtSignature(sig)) {
             pendingThoughtSig = sig;
@@ -1025,9 +1157,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if (provider.googleMode === "vertex"
-        && isVertexTruncatedTurn(candidates?.[0]?.finishReason, toolCallsStarted)) {
-        return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
+      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+        && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
+        return finish([{ type: "error", message: vertexTruncationErrorMessage(candidate.finishReason) }]);
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
@@ -1035,7 +1167,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // must carry its stop reason, or the bridge sees a clean `done` and reports the truncated
       // turn as completed — and, on a compaction turn, installs the half-written summary as
       // replacement history (#422).
-      const finishReason = candidates?.[0]?.finishReason as string | undefined;
+      const finishReason = candidate.finishReason as string | undefined;
       const stopReason = finishReason === "MAX_TOKENS"
         ? "max_tokens"
         : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(finishReason ?? "")
