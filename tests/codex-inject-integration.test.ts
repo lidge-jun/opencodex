@@ -130,6 +130,94 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(second).toBe(first);
   });
 
+  test.each([
+    'model_catalog_json = "custom-catalog.json" # user catalog',
+    '"model_catalog_json" = "custom-catalog.json" # user catalog',
+  ])(
+    "preserves a commented user catalog assignment without duplicating it: %s",
+    (assignment) => {
+      writeFileSync(join(codexHome, "config.toml"), [
+        assignment,
+        "",
+        "[features]",
+        "fast_mode = true",
+        "",
+      ].join("\n"), "utf8");
+
+      const result = runInject(codexHome, ocxHome);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).success).toBe(true);
+
+      const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(
+        config.match(/^(?:model_catalog_json|"model_catalog_json"|'model_catalog_json')\s*=/gm)?.length,
+      ).toBe(1);
+      expect(config).toContain(assignment);
+      expect(() => Bun.TOML.parse(config)).not.toThrow();
+
+      const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+      expect(profile).toContain('model_catalog_json = "custom-catalog.json"');
+    },
+  );
+
+  test("repairs an owned duplicate without replacing a commented user catalog", () => {
+    const userAssignment = 'model_catalog_json = "custom-catalog.json" # user catalog';
+    writeFileSync(join(codexHome, "config.toml"), [
+      userAssignment,
+      'model_catalog_json = "opencodex-catalog.json"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config.match(/^model_catalog_json\s*=/gm)?.length).toBe(1);
+    expect(config).toContain(userAssignment);
+    expect(config).not.toContain('model_catalog_json = "opencodex-catalog.json"');
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).toContain('model_catalog_json = "custom-catalog.json"');
+  });
+
+  test("removes a stale OpenCodex catalog assignment with a trailing comment", () => {
+    writeFileSync(
+      join(codexHome, "config.toml"),
+      'model_catalog_json = "opencodex-catalog.json" # stale catalog\n',
+      "utf8",
+    );
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).not.toContain("model_catalog_json");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+  });
+
+  test("does not strip a catalog-shaped assignment from a user table", () => {
+    const nestedAssignment = '"model_catalog_json" = "opencodex-catalog.json" # user table value';
+    writeFileSync(join(codexHome, "config.toml"), [
+      "[user_metadata]",
+      nestedAssignment,
+      "",
+    ].join("\n"), "utf8");
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain(nestedAssignment);
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+  });
+
   test("fastMode=false forces fast_mode=false in both config and profile", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
