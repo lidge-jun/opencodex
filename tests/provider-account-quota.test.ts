@@ -608,4 +608,133 @@ describe("fetchProviderAccountQuotas", () => {
     const quota = await fetchAntigravityUsageQuota("token", "project-1");
     expect(quota).toBeNull();
   });
+  test("destination-bound cache isolates quota across baseUrl changes and prevents cross-endpoint contamination", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-1",
+      refresh: "refresh-agy-1",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      if (requestedUrl.includes("dest-1.example.com")) {
+        return new Response(JSON.stringify({
+          models: {
+            "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.9, resetTime: "2026-07-05T14:00:00Z" } },
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.2, resetTime: "2026-07-05T14:00:00Z" } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    // 1. Probe dest-1 (10% used)
+    const rows1 = await fetchProviderAccountQuotas("google-antigravity", true, "https://dest-1.example.com");
+    expect(rows1[0]!.quota?.customWindows?.find(w => w.label === "Gem")?.percent).toBe(10);
+
+    // 2. Non-forced probe to dest-2 must NOT return dest-1 cached value (80% used)
+    const rows2 = await fetchProviderAccountQuotas("google-antigravity", false, "https://dest-2.example.com");
+    expect(rows2[0]!.quota?.customWindows?.find(w => w.label === "Gem")?.percent).toBe(80);
+  });
+
+  test("rejects invalid destination policy targets before sending bearer tokens", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-1",
+      refresh: "refresh-agy-1",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+
+    let fetchCalled = false;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return new Response("ok");
+    }) as typeof fetch;
+
+    // Probe blocked metadata endpoint 169.254.169.254
+    const rows = await fetchProviderAccountQuotas("google-antigravity", true, "http://169.254.169.254");
+    expect(rows[0]!.unavailable).toBe(true);
+    expect(fetchCalled).toBe(false);
+  });
+
+  test("destination-bound in-flight promise and stale writer rejection on baseUrl change", async () => {
+    const { saveCredential } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-1",
+      refresh: "refresh-agy-1",
+      expires: Date.now() + 3600_000,
+      projectId: "project-1",
+      accountId: "acct-agy-1",
+      email: "agy1@example.com",
+    });
+
+    let resolveDest1: (value: Response) => void;
+    const dest1Promise = new Promise<Response>(resolve => {
+      resolveDest1 = resolve;
+    });
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("dest-1.example.com")) {
+        return dest1Promise;
+      }
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.5, resetTime: "2026-07-05T14:00:00Z" } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    // Start probe to dest-1 (in flight)
+    const probe1 = fetchProviderAccountQuotas("google-antigravity", true, "https://dest-1.example.com");
+
+    // Immediately start probe to dest-2 (must not join probe 1)
+    const probe2 = fetchProviderAccountQuotas("google-antigravity", true, "https://dest-2.example.com");
+    const rows2 = await probe2;
+    expect(rows2[0]!.quota?.customWindows?.find(w => w.label === "Gem")?.percent).toBe(50);
+
+    // Resolve dest-1
+    resolveDest1!(new Response(JSON.stringify({
+      models: {
+        "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.9, resetTime: "2026-07-05T14:00:00Z" } },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    const rows1 = await probe1;
+    expect(rows1[0]!.quota?.customWindows?.find(w => w.label === "Gem")?.percent).toBe(10);
+  });
+
+  test("fail-closed redirect handling: rejected destination or redirect yields null without following", async () => {
+    const { fetchAntigravityUsageQuota } = await import("../src/providers/quota");
+
+    let redirectTargetCalled = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("redirect-sink.example.com")) {
+        redirectTargetCalled = true;
+        return new Response("sink", { status: 200 });
+      }
+      // If fetch honors redirect: error, fetch will throw or fail on 302
+      if (init?.redirect === "error") {
+        throw new TypeError("Failed to fetch: redirect");
+      }
+      return new Response("", { status: 302, headers: { Location: "https://redirect-sink.example.com" } });
+    }) as typeof fetch;
+
+    const quota = await fetchAntigravityUsageQuota("token", "project-1", "https://redirecting.example.com");
+    expect(quota).toBeNull();
+    expect(redirectTargetCalled).toBe(false);
+  });
+
 });
