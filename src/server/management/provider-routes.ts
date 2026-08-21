@@ -118,6 +118,7 @@ function applyProviderPatchFields(
   const next: OcxProviderConfig = { ...provider };
   let touched = false;
   let headersTouched = false;
+  let baseUrlChanged = false;
 
   if (Object.hasOwn(rawBody, "disabled")) {
     if (typeof rawBody.disabled !== "boolean") return { error: "disabled must be a boolean" };
@@ -134,7 +135,9 @@ function applyProviderPatchFields(
   }
   if (Object.hasOwn(rawBody, "baseUrl")) {
     if (typeof rawBody.baseUrl !== "string" || !rawBody.baseUrl.trim()) return { error: "baseUrl must be a non-empty string" };
-    next.baseUrl = rawBody.baseUrl.trim();
+    const nextBaseUrl = rawBody.baseUrl.trim();
+    baseUrlChanged = nextBaseUrl !== provider.baseUrl;
+    next.baseUrl = nextBaseUrl;
     touched = true;
   }
   if (Object.hasOwn(rawBody, "defaultModel")) {
@@ -187,6 +190,12 @@ function applyProviderPatchFields(
     }
     next.allowEncryptedV2AgentTasks = rawBody.allowEncryptedV2AgentTasks;
     touched = true;
+  }
+  // Encrypted V2 trust is destination-specific. A URL-only edit must not carry
+  // the approval for the previous endpoint into the new destination. An explicit
+  // capability field in the same PATCH is the management API's fresh approval.
+  if (baseUrlChanged && !Object.hasOwn(rawBody, "allowEncryptedV2AgentTasks")) {
+    delete next.allowEncryptedV2AgentTasks;
   }
   if (Object.hasOwn(rawBody, "liveModels")) {
     if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };

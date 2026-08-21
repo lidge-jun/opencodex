@@ -530,6 +530,51 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(forwardedBodies[0]).toContain(FERNET_TASK);
   });
 
+  test("skips an openai-chat virtual alias when its base model has no override", async () => {
+    const config = mixedComboConfig();
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-openai-key",
+      allowEncryptedV2AgentTasks: true,
+      modelAdapters: { "gpt-5.6-sol-pro": "openai-chat" },
+    };
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    config.combos!.mixed!.targets = [
+      { provider: "openai-apikey", model: "gpt-5.6-sol-pro" },
+      { provider: "relay", model: "gpt-5.6-luna" },
+    ];
+    const fetchedUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      fetchedUrls.push(String(input));
+      return Response.json({
+        id: "resp_combo_alias_skip",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.6-luna",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/mixed", agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]));
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toContain("relay.example.test");
+    expect(fetchedUrls[0]).not.toContain("api.openai.com");
+  });
+
   test("uses the request inbound wire when preflighting encrypted combo targets", async () => {
     const config = mixedComboConfig();
     config.providers.deepseek = {

@@ -2,6 +2,7 @@ import { createRegisteredAdapter } from "../adapters/registry";
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { resolveOpenAiVirtualModel } from "../providers/openai-virtual-models";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
 
 /**
@@ -45,6 +46,26 @@ export function resolveWireProtocolOverride(
     return { ...providerConfig, adapter: requested };
   }
   return providerConfig;
+}
+
+/**
+ * Resolve the adapter that final route normalization will use for a selected
+ * model. A virtual alias settles its own override before becoming a wire model;
+ * that resolved wire model may then apply a second override. Capability preflight
+ * and native fallback must mirror both stages so an alias-level Chat override is
+ * never hidden by the provider-wide Responses adapter.
+ */
+export function resolveFinalWireProtocolOverride(
+  providerName: string,
+  selectedModelId: string,
+  providerConfig: OcxProviderConfig,
+  inbound: InboundWire = "responses",
+): OcxProviderConfig {
+  const selectedProvider = resolveWireProtocolOverride(providerName, selectedModelId, providerConfig, inbound);
+  const virtual = resolveOpenAiVirtualModel(providerName, selectedModelId);
+  return virtual
+    ? resolveWireProtocolOverride(providerName, virtual.wireModelId, selectedProvider, inbound)
+    : selectedProvider;
 }
 
 /** Build the provider adapter for a resolved provider config. */

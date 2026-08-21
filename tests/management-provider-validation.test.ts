@@ -2677,6 +2677,21 @@ describe("provider management validation", () => {
     expect(encryptedV2?.status).toBe(200);
     expect(liveConfig.providers.relay.allowEncryptedV2AgentTasks).toBe(true);
     expect(loadConfig().providers.relay.allowEncryptedV2AgentTasks).toBe(true);
+
+    // Destination trust is specific to the URL that was explicitly approved. A
+    // baseUrl-only edit must revoke the old opt-in unless the same PATCH carries a
+    // fresh explicit approval for the new destination.
+    const changedDestination = await patch("relay", { baseUrl: "https://relay2.example.test/v1" });
+    expect(changedDestination?.status).toBe(200);
+    expect(liveConfig.providers.relay.allowEncryptedV2AgentTasks).toBeUndefined();
+    expect(loadConfig().providers.relay.allowEncryptedV2AgentTasks).toBeUndefined();
+    const reapprovedDestination = await patch("relay", {
+      baseUrl: "https://relay3.example.test/v1",
+      allowEncryptedV2AgentTasks: true,
+    });
+    expect(reapprovedDestination?.status).toBe(200);
+    expect(liveConfig.providers.relay.allowEncryptedV2AgentTasks).toBe(true);
+    expect(liveConfig.providers.relay.baseUrl).toBe("https://relay3.example.test/v1");
     const listReq = new Request("http://127.0.0.1/api/providers");
     const listed = await handleManagementAPI(listReq, new URL(listReq.url), liveConfig);
     expect(listed?.status).toBe(200);

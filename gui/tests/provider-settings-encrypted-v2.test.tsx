@@ -210,3 +210,51 @@ test("confirmed encrypted V2 opt-in survives a successful provider refresh", asy
   expect(container.querySelector(".pwi-settings-sticky-bar")).toBeNull();
   await act(async () => { root.unmount(); });
 });
+
+test("changing a Responses destination clears the saved encrypted V2 trust opt-in", async () => {
+  const item: WorkspaceItem = {
+    name: "relay",
+    adapter: "openai-responses",
+    baseUrl: "https://relay.example.test/v1",
+    authMode: "key",
+    allowEncryptedV2AgentTasks: true,
+  };
+  const patches: ProviderUpdatePatch[] = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><ProviderSettings
+      item={item}
+      onUpdateProvider={async (_name, patch) => { patches.push(patch); return { ok: true }; }}
+    /></LanguageProvider>);
+  });
+
+  const checkbox = [...container.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("encrypted V2 agent tasks"))
+    ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(checkbox?.checked).toBe(true);
+  const baseUrlInput = [...container.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Base URL"))
+    ?.querySelector<HTMLInputElement>("input");
+  expect(baseUrlInput).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(baseUrlInput, "https://relay2.example.test/v1");
+    baseUrlInput!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  expect(checkbox?.checked).toBe(false);
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(patches).toHaveLength(1);
+  expect(patches[0]).toMatchObject({
+    baseUrl: "https://relay2.example.test/v1",
+    allowEncryptedV2AgentTasks: false,
+  });
+  await act(async () => { root.unmount(); });
+});

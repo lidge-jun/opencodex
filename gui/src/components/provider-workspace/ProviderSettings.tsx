@@ -236,6 +236,13 @@ export default function ProviderSettings({
   // On fetch error, keep it editable so allowBaseUrlOverride providers are not trapped.
   const plainBaseUrlLocked = isPreset && choicesStatus !== "error";
 
+  const changeBaseUrl = (nextBaseUrl: string): void => {
+    // The encrypted-V2 approval is bound to the destination that was reviewed.
+    // Any local endpoint edit therefore requires a fresh explicit confirmation.
+    if (nextBaseUrl !== baseUrl) setAllowEncryptedV2AgentTasks(false);
+    setBaseUrl(nextBaseUrl);
+  };
+
   const save = async (): Promise<boolean> => {
     if (!onUpdateProvider) { setMsg({ ok: false, text: t("pws.updatesUnavailable") }); return false; }
     if (modeSaving) return false;
@@ -374,7 +381,7 @@ export default function ProviderSettings({
               onChange={e => {
                 const id = e.target.value;
                 setEndpointChoice(id);
-                setBaseUrl(baseUrlForChoice(baseUrlChoices, id, baseUrl));
+                changeBaseUrl(baseUrlForChoice(baseUrlChoices, id, baseUrl));
               }}
             >
               {baseUrlChoices!.map(c => (
@@ -385,14 +392,14 @@ export default function ProviderSettings({
           {endpointChoice === "custom" && (
             <label className="pwi-settings-field">
               <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
-              <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
+              <input className="input" value={baseUrl} onChange={e => changeBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
             </label>
           )}
         </>
       ) : (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("modal.baseUrl")}</span>
-          <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={plainBaseUrlLocked} disabled={plainBaseUrlLocked} />
+          <input className="input" value={baseUrl} onChange={e => changeBaseUrl(e.target.value)} readOnly={plainBaseUrlLocked} disabled={plainBaseUrlLocked} />
         </label>
       )}
       {adapter.trim() === "cursor" && (

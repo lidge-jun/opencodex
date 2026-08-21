@@ -12,6 +12,8 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
 } from "../src/providers/openai-tiers";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
+import { selectAvailableSubagentModel } from "../src/codex/subagent-model-fallback";
+import type { OcxConfig } from "../src/types";
 import { OPENAI_PROVIDER_TIER_VERSION } from "../src/types";
 
 describe("OpenAI single-provider option foundation", () => {
@@ -137,6 +139,45 @@ describe("OpenAI single-provider option foundation", () => {
     const resolved = resolveWireProtocolOverride("relay", "gpt-5.6-luna", provider);
     expect(resolved.adapter).toBe("openai-chat");
     expect(canReceiveEncryptedV2AgentTasks(resolved)).toBe(false);
+  });
+
+  test("native fallback skips a Chat virtual alias before choosing a trusted Responses target", () => {
+    const config = {
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "xai-test",
+        },
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "openai-test",
+          allowEncryptedV2AgentTasks: true,
+          modelAdapters: { "gpt-5.6-sol-pro": "openai-chat" },
+        },
+        relay: {
+          adapter: "openai-responses",
+          baseUrl: "https://relay.example.test/v1",
+          authMode: "key",
+          apiKey: "relay-test",
+          allowEncryptedV2AgentTasks: true,
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const selection = selectAvailableSubagentModel(
+      "xai/grok-4.5",
+      config,
+      ["openai-apikey/gpt-5.6-sol-pro", "relay/gpt-5.6-luna"],
+      undefined,
+      Date.now(),
+      true,
+    );
+    expect(selection.model).toBe("relay/gpt-5.6-luna");
+    expect(selection.skipped).toContain("openai-apikey/gpt-5.6-sol-pro");
   });
 
   test("publishes one Codex-login registry, preset, init, and default row", () => {
