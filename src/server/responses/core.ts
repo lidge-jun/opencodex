@@ -24,7 +24,7 @@ import {
   updateReasoningReplayServingIdentity,
 } from "../../responses/reasoning-replay-cache";
 import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
-import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
+import { buildCompactV1Output, COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, extractCompactUserMessages, isCompactionItemType } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
   expandPreviousResponseInput,
@@ -419,6 +419,124 @@ function bindRouteReasoningReplayScope(args: {
   if (updateReasoningReplayServingIdentity(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
   }
+}
+
+const OPAQUE_RESPONSES_INPUT_TYPES = new Set([
+  "reasoning",
+  "compaction",
+  "compaction_summary",
+  "context_compaction",
+]);
+
+function outboundResponsesBodyCarriesOpaqueBlob(bodyText: string | undefined): boolean {
+  if (!bodyText) return false;
+  try {
+    const body = JSON.parse(bodyText) as unknown;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+    const input = (body as { input?: unknown }).input;
+    if (!Array.isArray(input)) return false;
+    return input.some(item => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const candidate = item as { type?: unknown; encrypted_content?: unknown };
+      return typeof candidate.type === "string"
+        && OPAQUE_RESPONSES_INPUT_TYPES.has(candidate.type)
+        && typeof candidate.encrypted_content === "string"
+        && candidate.encrypted_content.length > 0;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
+  try {
+    const payload = JSON.parse(bodyText) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as { code?: unknown; error?: unknown };
+
+    if (record.error && typeof record.error === "object" && !Array.isArray(record.error)) {
+      const error = record.error as { type?: unknown; code?: unknown };
+      if (error.type === "invalid_request_error" && error.code === "invalid_encrypted_content") {
+        return true;
+      }
+    }
+
+    if (record.code !== "invalid-argument" || typeof record.error !== "string") return false;
+    return record.error.startsWith("Could not decode the compaction blob")
+      || record.error.startsWith("Could not decrypt the provided encrypted_content");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an upstream Responses 4xx authoritatively rejected opaque replay state.
+ *
+ * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
+ * compaction blob that the adapter already lowered, in which case a replay would be byte-identical.
+ * OpenAI exposes a dedicated nested code. xAI's code is generic, so its two concrete decoder error
+ * identities are also required; unrelated invalid-argument prose must never gain a hidden resend.
+ */
+export function shouldAttemptOpaqueBlobRecovery(args: {
+  status: number;
+  adapterName: string;
+  outboundBody?: string;
+  errorBody: string;
+  alreadyAttempted: boolean;
+}): boolean {
+  return args.status >= 400
+    && args.status < 500
+    && args.adapterName === "openai-responses"
+    && !args.alreadyAttempted
+    && outboundResponsesBodyCarriesOpaqueBlob(args.outboundBody)
+    && isSelfIdentifiedOpaqueBlobRejection(args.errorBody);
+}
+
+async function opaqueBlobRejectionBodyForRecovery(
+  response: Response,
+  outboundBody: string | undefined,
+  adapterName: string,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (
+    response.status < 400
+    || response.status >= 500
+    || adapterName !== "openai-responses"
+    || alreadyAttempted
+    || !outboundResponsesBodyCarriesOpaqueBlob(outboundBody)
+  ) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return body.displaySafe && !body.truncated ? body.text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
+  parsed._stripReasoningEncryptedContent = true;
+  const body = parsed._rawBody;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return;
+  const input = (body as { input?: unknown }).input;
+  if (!Array.isArray(input)) return;
+  let changed = false;
+  const recoveredInput = input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const candidate = item as { type?: unknown; encrypted_content?: unknown };
+    if (!isCompactionItemType(candidate.type) || typeof candidate.encrypted_content !== "string") {
+      return item;
+    }
+    changed = true;
+    return {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: compactionItemToText(candidate.encrypted_content) }],
+    };
+  });
+  // Mutate only the raw input carrier so the adapter rebuild sees the same degradation as its
+  // ordinary compaction scrub. Keeping the body object preserves non-enumerable persistence marks.
+  if (changed) (body as { input: unknown[] }).input = recoveredInput;
 }
 
 function nonEmptyProviderApiKey(provider: OcxProviderConfig): string | undefined {
@@ -2578,14 +2696,17 @@ async function handleResponsesInner(
     // with no tools and Copilot answers with a `custom_tool_call` for `apply_patch`. Policing an
     // empty catalog truncates that turn. An unreadable body lands here too, since it yields no
     // names either.
-    const outboundRequestBody = (() => {
+    const parseOutboundRequestBody = (bodyText: string): Record<string, unknown> | undefined => {
       try {
-        const body = JSON.parse(request.body) as unknown;
-        return body && typeof body === "object" && !Array.isArray(body) ? body : undefined;
+        const body = JSON.parse(bodyText) as unknown;
+        return body && typeof body === "object" && !Array.isArray(body)
+          ? body as Record<string, unknown>
+          : undefined;
       } catch {
         return undefined;
       }
-    })();
+    };
+    let outboundRequestBody = parseOutboundRequestBody(request.body);
     const declaredWireToolNames = collectDeclaredWireToolNames(outboundRequestBody);
     // Union with the caller's own catalog, because the outbound body is not always a complete
     // record of it: hosted-tool preference REPLACES a client tool with its hosted form, so a
@@ -2667,7 +2788,7 @@ async function handleResponsesInner(
       }
       hostAdmissionLease = null;
     };
-    const passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
+    let passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
       ? request.usageLog.inputTokens
       : undefined;
     if (passthroughEstimate !== undefined) {
@@ -2754,11 +2875,87 @@ async function handleResponsesInner(
       request.releaseBodyObservation?.();
     }
 
+    let opaqueBlobRecoveryAttempted = false;
+    let oauth401ReplayAttempted = false;
+    const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
+    let rateLimitRetries = 0;
+    const rebuildAndRefetch = async (
+      recovery: AttemptRecoveryKind,
+    ): Promise<Response | { failed: Response }> => {
+      const retryAdapter = resolveAdapter(
+        resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+        config.cacheRetention,
+      );
+      if (!("passthrough" in retryAdapter) || !retryAdapter.passthrough) {
+        upstream.abort();
+        return { failed: formatErrorResponse(502, "upstream_error", "Recovery changed the provider wire unexpectedly") };
+      }
+      try {
+        request = await retryAdapter.buildRequest(parsed, {
+          headers: selectedForwardHeaders,
+          translatorBudget,
+        });
+        recordAdapterReasoning(logCtx, request);
+        recordAdapterTier(logCtx, request);
+      } catch (err) {
+        upstream.abort();
+        if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
+        const msg = err instanceof Error ? err.message : String(err);
+        return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
+      }
+      passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
+        ? request.usageLog.inputTokens
+        : undefined;
+      if (passthroughEstimate !== undefined) logCtx.usageLogInputTokens = passthroughEstimate;
+      outboundRequestBody = parseOutboundRequestBody(request.body);
+      logCtx.providerAdapter = retryAdapter.name;
+      sealRequestAttemptIdentity(
+        logCtx.activeAttempt,
+        logCtx.provider,
+        retryAdapter.name,
+        logCtx.accountLogLabel,
+      );
+      try {
+        return await fetchWithTransientRetry(
+          innerRecovery => {
+            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);
+            return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
+              method: request.method,
+              headers: request.headers,
+              body: request.body,
+            }, innerRecovery), upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
+              route.provider.authMode === "forward")
+              .then(response => {
+                settleObservedHostResponse();
+                return response;
+              });
+          },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        );
+      } catch (err) {
+        return { failed: transportFailureResponse(err) };
+      } finally {
+        request.releaseBodyObservation?.();
+      }
+    };
+
+    passthroughRecovery: for (;;) {
+
     // Native Responses providers return before the generic adapter recovery loop below. Keep
     // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one
     // rebuilt replay. xAI's current subscription models use this branch now that their official
     // Grok CLI catalog declares the Responses backend.
-    if (upstreamResponse.status === 401 && isOAuth401ReplayProvider && sentOAuthSnapshot) {
+    if (
+      upstreamResponse.status === 401
+      && isOAuth401ReplayProvider
+      && sentOAuthSnapshot
+      && !oauth401ReplayAttempted
+    ) {
+      oauth401ReplayAttempted = true;
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       let refreshed: OAuthAccessSnapshot;
       try {
@@ -2852,8 +3049,6 @@ async function handleResponsesInner(
     // immediately with no same-key replay. Pre-stream only — nothing has been relayed yet, so
     // the replay is lossless (same invariant as the recovery loop). Forward/OAuth providers
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
-    const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
-    let rateLimitRetries = 0;
     while (
       upstreamResponse.status === 429
       && rateLimitPolicy !== null
@@ -2950,6 +3145,39 @@ async function handleResponsesInner(
           subagentFallbackAccountId = retry.authCtx.accountId;
         }
       }
+    }
+    // The deterministic route record cannot classify history it never observed (restart, expiry,
+    // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
+    // Responses body still carries opaque state, then rebuild once through the ordinary adapter
+    // sanitation path. A second rejection falls through unchanged because the guard stays armed.
+    const opaqueBlobErrorBody = await opaqueBlobRejectionBodyForRecovery(
+      upstreamResponse,
+      request.body,
+      adapter.name,
+      opaqueBlobRecoveryAttempted,
+      upstream.signal,
+    );
+    if (opaqueBlobErrorBody !== undefined && shouldAttemptOpaqueBlobRecovery({
+      status: upstreamResponse.status,
+      adapterName: adapter.name,
+      outboundBody: request.body,
+      errorBody: opaqueBlobErrorBody,
+      alreadyAttempted: opaqueBlobRecoveryAttempted,
+    })) {
+      opaqueBlobRecoveryAttempted = true;
+      prepareOpaqueBlobRecovery(parsed);
+      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      const result = await rebuildAndRefetch("opaque-blob-rejection");
+      if ("failed" in result) return result.failed;
+      upstreamResponse = result;
+      continue passthroughRecovery;
+    }
+    break;
+    }
+    // Binding normally records before the first send. Repeat it only after a successful recovery
+    // so an eviction during the extra round trip cannot leave the next cross-route turn cold.
+    if (opaqueBlobRecoveryAttempted && upstreamResponse.ok) {
+      updateReasoningReplayServingIdentity(parsed._reasoningReplayScope);
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();
@@ -4008,12 +4236,14 @@ async function handleResponsesInner(
   // main request clear a 413 must not be forgotten on the very next continuation build.
   let imageTierBias = 0;
   if (!upstreamResponse.ok) {
-    // Recovery loop: multi-key 429 failover + at most ONE anthropic 413 tightened retry
+    // Recovery loop: multi-key 429 failover + at most ONE opaque-state rebuild and ONE
+    // anthropic 413 tightened retry
     // (devlog/260714_image_normalization_pipeline/030). One mutable activeAdapter serves
     // both paths so a 429→413 sequence never rebuilds against a stale pre-rotation
     // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
     // 413→429 rotation cannot silently undo the tightening.
     let imageRetryAttempted = false;
+    let opaqueBlobRecoveryAttempted = false;
     let oauth401ReplayAttempted = false;
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
@@ -4246,6 +4476,34 @@ async function handleResponsesInner(
           break;
         }
       }
+      // Unknown provenance is deliberately fail-soft in pre-flight: after a restart, TTL expiry,
+      // or LRU eviction, a valid same-backend blob must survive. A decoder's own 4xx identity is
+      // the missing authoritative signal. Rebuild once through the same sanitation path used by a
+      // known route switch; invalidating is mandatory because `parsed` mutates in place and the
+      // same-target cache would otherwise replay the rejected bytes verbatim.
+      const opaqueBlobErrorBody = await opaqueBlobRejectionBodyForRecovery(
+        upstreamResponse,
+        sameTargetRequest?.body,
+        activeAdapter.name,
+        opaqueBlobRecoveryAttempted,
+        upstream.signal,
+      );
+      if (opaqueBlobErrorBody !== undefined && shouldAttemptOpaqueBlobRecovery({
+        status: upstreamResponse.status,
+        adapterName: activeAdapter.name,
+        outboundBody: sameTargetRequest?.body,
+        errorBody: opaqueBlobErrorBody,
+        alreadyAttempted: opaqueBlobRecoveryAttempted,
+      })) {
+        opaqueBlobRecoveryAttempted = true;
+        prepareOpaqueBlobRecovery(parsed);
+        invalidateSameTargetRequest();
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        const result = await rebuildAndRefetch("opaque-blob-rejection");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue recovery;
+      }
       // Anthropic 413 request_too_large: rebuild once with every image one tier lower
       // (spiral guard: single attempt). The biased response re-enters the 429 check above.
       if (shouldAttemptImageTierRetry({
@@ -4264,6 +4522,11 @@ async function handleResponsesInner(
         continue recovery;
       }
       break;
+    }
+    // Binding normally records before the first send. Repeat it only after a successful recovery
+    // so an eviction during the extra round trip cannot leave the next cross-route turn cold.
+    if (opaqueBlobRecoveryAttempted && upstreamResponse.ok) {
+      updateReasoningReplayServingIdentity(parsed._reasoningReplayScope);
     }
     if (!upstreamResponse.ok) {
       if (options.comboAttempt) {

@@ -138,6 +138,31 @@ describe("usage log", () => {
     expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["empty-completion"]);
   });
 
+  test("persists the opaque-blob rejection recovery kind on attempts", () => {
+    const entry: PersistedUsageEntry = {
+      requestId: "ocx-opaque-blob-kind",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "reported",
+      attempts: [{
+        ordinal: 1,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        adapter: "openai-responses",
+        status: 200,
+        durationMs: 4,
+        sendCount: 2,
+        recoveryKinds: ["opaque-blob-rejection", "opaque-blob-rejection"],
+        usageStatus: "reported",
+      }],
+    };
+    appendUsageEntry(entry);
+    expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["opaque-blob-rejection"]);
+  });
+
   /** Build one minimal persisted-usage JSONL line for the given request id. */
   const persistedLine = (requestId: string) => JSON.stringify({
     requestId,
