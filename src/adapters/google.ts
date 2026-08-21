@@ -318,6 +318,8 @@ function messagesToGeminiFormat(
         break;
       }
       case "toolResult": {
+        // repairGoogleToolPairs drops orphan results; only standalone matched results reach here.
+        if (!messages.some(m => m === msg)) break;
         // A standalone functionResponse is invalid without an immediately preceding matching
         // functionCall batch. Preserve the result as explicit user text (plus any representable
         // image siblings) rather than manufacturing a successful call or sending a 400-prone shape.
@@ -1271,10 +1273,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (invalidFunctionCall) return finish([invalidGoogleFunctionCallEvent(invalidFunctionCall)]);
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-          && replayModel && replaySession) {
+        const replayModel = vertexReplayModel;
+        const replaySession = vertexReplaySession;
+        if (provider.googleMode === "vertex" && replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
         }
         let pendingThoughtSig: string | undefined;
@@ -1317,7 +1318,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+      if (provider.googleMode === "vertex"
         && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidate.finishReason) }]);
       }
