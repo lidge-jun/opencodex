@@ -7,6 +7,8 @@ import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
+  displayLabelRecordConfigError,
+  MAX_MODEL_DISPLAY_NAMES,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
@@ -40,6 +42,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import { isValidDisplayLabel } from "./codex/catalog/display-labels";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -503,6 +506,25 @@ const providerConfigSchema = z.object({
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
+  // Display-only labels for discovered models, keyed by native model id — the same
+  // key space as `modelAdapters`. Declared rather than left to `.passthrough()`
+  // below, for the reason the `codexToolMode` comment gives: an undeclared key is
+  // accepted, persisted, and then silently ignored (#2106).
+  //
+  // Salvaged entry by entry rather than validated strictly, following `apiKeys`:
+  // one hand-edited label must not send the whole config through the
+  // backup-and-defaults repair path, and must not take the operator's other
+  // labels down with it. Writes go through displayLabelRecordConfigError instead,
+  // so an invalid label is a 400 at the API and a dropped entry on load.
+  modelDisplayNames: z.unknown().optional().transform(value => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "object" || Array.isArray(value)) return undefined;
+    const kept = Object.entries(value as Record<string, unknown>)
+      .filter(([id, label]) => id.trim().length > 0 && isValidDisplayLabel(label))
+      .slice(0, MAX_MODEL_DISPLAY_NAMES)
+      .map(([id, label]) => [id.trim(), (label as string).trim()] as const);
+    return kept.length > 0 ? Object.fromEntries(kept) : undefined;
+  }),
   preserveResponsesReasoningContent: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
@@ -536,6 +558,8 @@ export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 export {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
+  displayLabelRecordConfigError,
+  MAX_MODEL_DISPLAY_NAMES,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,

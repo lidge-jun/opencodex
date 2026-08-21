@@ -1,4 +1,4 @@
-import { booleanRecordConfigError } from "../../config/provider-validation";
+import { booleanRecordConfigError, displayLabelRecordConfigError } from "../../config/provider-validation";
 import type { OcxConfig } from "../../types";
 
 /**
@@ -13,6 +13,25 @@ export function providerServiceTierConfigError(name: unknown, provider: unknown)
   const error = booleanRecordConfigError(
     (provider as { modelSupportsServiceTier?: unknown }).modelSupportsServiceTier,
     "modelSupportsServiceTier",
+  );
+  return error ? `provider ${name} ${error}` : null;
+}
+
+/**
+ * Reject an invalid `modelDisplayNames` edit at the API instead of letting it land.
+ *
+ * The load path drops a bad entry and carries on, so without this an operator could
+ * PATCH a slash-bearing label, get 200, and then find the label silently absent —
+ * the config would be valid and the request would look accepted. Failing the write
+ * is what makes the two behaviours coherent.
+ */
+export function providerDisplayNamesConfigError(name: unknown, provider: unknown): string | null {
+  if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
+    return null;
+  }
+  const error = displayLabelRecordConfigError(
+    (provider as { modelDisplayNames?: unknown }).modelDisplayNames,
+    "modelDisplayNames",
   );
   return error ? `provider ${name} ${error}` : null;
 }

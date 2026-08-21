@@ -1,3 +1,4 @@
+import { MAX_DISPLAY_LABEL_LENGTH, isValidDisplayLabel } from "../codex/catalog/display-labels";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { modelRecordValue } from "../reasoning-effort";
 import {
@@ -119,6 +120,48 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
   for (const [key, entry] of Object.entries(value)) {
     if (!key.trim()) return `${field} keys must be nonblank model ids`;
     if (typeof entry !== "boolean") return `${field}.${key} must be a boolean`;
+  }
+  return null;
+}
+
+/**
+ * Bound on how many labels one provider may carry. A display map is a convenience,
+ * not a catalogue, so an unbounded hand-edited map is a mistake rather than a use
+ * case — and every entry is walked on each convergence.
+ */
+export const MAX_MODEL_DISPLAY_NAMES = 512;
+
+/**
+ * Strict diagnostic for `providers[<name>].modelDisplayNames`, mirroring
+ * `booleanRecordConfigError`.
+ *
+ * This is the *write* rule, used by the provider editor so a bad label is a 400
+ * rather than something that lands on disk. The load path is deliberately more
+ * forgiving — see the schema entry, which drops a bad entry instead of failing —
+ * because the two paths answer different questions: "is this a valid edit?" and
+ * "can this file still be served?".
+ *
+ * `null` is accepted as an explicit clear, matching `upstreamHttpVersion`: the
+ * management API says null means "remove this", so rejecting it here would refuse
+ * the documented way to take a label back off.
+ */
+export function displayLabelRecordConfigError(value: unknown, field = "modelDisplayNames"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_MODEL_DISPLAY_NAMES) {
+    return `${field} must hold at most ${MAX_MODEL_DISPLAY_NAMES} entries`;
+  }
+  for (const [key, label] of entries) {
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (label === null) continue;
+    if (typeof label !== "string") return `${field}.${key} must be a string`;
+    if (!isValidDisplayLabel(label)) {
+      return `${field}.${key} must be a nonblank single-line label of at most `
+        + `${MAX_DISPLAY_LABEL_LENGTH} characters, and must not contain '/'`;
+    }
   }
   return null;
 }

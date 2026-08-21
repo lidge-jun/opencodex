@@ -76,7 +76,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { providerServiceTierConfigError } from "./provider-capability-config";
+import { providerDisplayNamesConfigError, providerServiceTierConfigError } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -547,6 +547,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (providerError) return jsonResponse({ error: providerError }, 400);
     const serviceTierError = providerServiceTierConfigError(name, body.provider);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+    const displayNamesError = providerDisplayNamesConfigError(name, body.provider);
+    if (displayNamesError) return jsonResponse({ error: displayNamesError }, 400);
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
     // PATCH already clears on null; POST persisted the body as submitted, so a `null` here
     // reached disk and the next loadConfig() refused it. Canonicalize to absent, which is what
@@ -722,6 +724,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (!canonicalBudgetOnly) {
         const serviceTierError = providerServiceTierConfigError(name, next);
         if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+        // Inside the same guard as the service-tier check: a canonical budget-only
+        // PATCH never carries a label, so validating the persisted map here would
+        // reject an unrelated edit for a value the request did not touch.
+        const displayNamesError = providerDisplayNamesConfigError(name, next);
+        if (displayNamesError) return jsonResponse({ error: displayNamesError }, 400);
         const resolvedError = await providerDestinationResolvedError(name, next);
         if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
       }
@@ -761,6 +768,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             replayError = serviceTierError;
             return;
           }
+        }
+        const displayNamesError = providerDisplayNamesConfigError(name, replay.next);
+        if (displayNamesError) {
+          replayError = displayNamesError;
+          return;
         }
       } else if (replay.enablingOpenAi && !isCanonicalOpenAiForwardProvider(replay.next)) {
         replayError = "provider openai must be the canonical built-in provider";
