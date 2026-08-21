@@ -219,7 +219,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("kiro"),
   },
   workbuddy: {
-    login: (ctrl, opts) => loginWorkBuddy(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
+    login: (ctrl) => loginWorkBuddy(ctrl),
     refresh: (rt, signal, credential) => refreshWorkBuddyToken(rt, signal, credential),
     providerConfig: oauthConfig("workbuddy"),
     defaultModel: oauthDefaultModel("workbuddy"),

@@ -15,6 +15,7 @@ import {
   refreshWorkBuddyToken,
   workBuddyNativeInputsForHome,
 } from "../src/oauth/workbuddy";
+import { OAUTH_PROVIDERS } from "../src/oauth/index";
 
 const SAMPLE_SESSION = {
   auth: {
@@ -87,6 +88,30 @@ describe("workbuddy auth parsing", () => {
       "X-Tenant-Id": "ent-001",
     });
   });
+
+  test("parseWorkBuddyAuthFile rejects malformed expiresAt values", () => {
+    const withoutExpires = {
+      ...SAMPLE_SESSION,
+      auth: {
+        accessToken: SAMPLE_SESSION.auth.accessToken,
+        refreshToken: SAMPLE_SESSION.auth.refreshToken,
+        domain: SAMPLE_SESSION.auth.domain,
+      },
+    };
+    expect(parseWorkBuddyAuthFile(JSON.stringify(withoutExpires))).toBeNull();
+    expect(parseWorkBuddyAuthFile(JSON.stringify({
+      ...SAMPLE_SESSION,
+      auth: { ...SAMPLE_SESSION.auth, expiresAt: "not-a-number" },
+    }))).toBeNull();
+    expect(parseWorkBuddyAuthFile(JSON.stringify({
+      ...SAMPLE_SESSION,
+      auth: { ...SAMPLE_SESSION.auth, expiresAt: 0 },
+    }))).toBeNull();
+    expect(parseWorkBuddyAuthFile(JSON.stringify({
+      ...SAMPLE_SESSION,
+      auth: { ...SAMPLE_SESSION.auth, expiresAt: Number.POSITIVE_INFINITY },
+    }))).toBeNull();
+  });
 });
 
 describe("workbuddy oauth login", () => {
@@ -123,6 +148,12 @@ describe("workbuddy oauth login", () => {
     });
     expect(cred.access).toBe("access-token-123");
     expect(messages).toContain("Imported WorkBuddy desktop session.");
+  });
+
+  test("registered forceLogin still imports the desktop session", async () => {
+    const cred = await OAUTH_PROVIDERS.workbuddy!.login({}, { forceLogin: true });
+    expect(cred.access).toBe("access-token-123");
+    expect(cred.accountId).toBe("user-uid-789");
   });
 
   test("refreshWorkBuddyToken re-reads the desktop session", async () => {
