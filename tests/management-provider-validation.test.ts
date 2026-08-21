@@ -476,6 +476,18 @@ describe("provider management validation", () => {
     expect(secretNameError).toContain("[REDACTED]");
   });
 
+  test("provider management redacts provider names from auto-compaction validation errors", () => {
+    const secretName = "sk-super-secret-9876";
+    const error = providerManagementConfigError(secretName, {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.test/v1",
+      modelAutoCompactTokenLimits: { model: 0 },
+    })!;
+    expect(error).toContain("modelAutoCompactTokenLimits");
+    expect(error).not.toContain(secretName);
+    expect(error).toContain("[REDACTED]");
+  });
+
   test("provider request pacing PATCH persists provider and model limits without catalog churn", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
