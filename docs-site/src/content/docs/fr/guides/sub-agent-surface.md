@@ -117,7 +117,8 @@ Les sondes de disponibilité sont mises en cache pendant `subagentModelFallbackP
 
 La solution de secours ne rend pas lisibles les tâches chiffrées incompatibles. Lorsque la tâche enfant est chiffrée pour
 ChatGPT, la sélection est restreinte aux cibles capables de recevoir ce chiffrage : les cibles ChatGPT natives
-canoniques ou un fournisseur Responses avec l’option explicite `allowEncryptedV2AgentTasks: true`.
+canoniques ou un fournisseur Responses avec l’option explicite `allowEncryptedV2AgentTasks: true`, lorsque le wire final
+reste `openai-responses`. Une surcharge `modelAdapters` qui résout le modèle vers `openai-chat` reste non admissible.
 
 ## Livraison de tâches v2 cryptées
 
@@ -128,10 +129,11 @@ limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
 
-- Une route directe non native renvoie HTTP 400 avec
+- Une route directe non native inéligible renvoie HTTP 400 avec
   `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré.
 - Un combo considère uniquement les cibles ChatGPT natives canoniques et les cibles Responses explicitement approuvées pour
-  cette tâche, y compris les tentatives. Si aucune n'est disponible, il renvoie la même erreur 400.
+  cette tâche lorsque leur wire final reste `openai-responses`, y compris les tentatives. Si aucune n'est disponible, il
+  renvoie la même erreur 400.
 - Une tâche lisible en texte clair conserve la route normale et le comportement de repli.
 
 Les options de récupération consistent à sélectionner un enfant ChatGPT natif, à ajouter une cible ChatGPT native au combo, à utiliser

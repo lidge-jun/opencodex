@@ -2744,6 +2744,70 @@ describe("provider management validation", () => {
     expect((await patch("extra", { bogus: 1 }))?.status).toBe(400);
   });
 
+  test("provider PATCH rejects capability-only replay after a concurrent destination change", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "relay",
+      providers: {
+        relay: {
+          adapter: "openai-responses",
+          baseUrl: "https://relay.example.test/v1",
+          authMode: "key",
+          apiKey: "sk-relay",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    let probeCalls = 0;
+    const destinationProbe = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockImplementation(async () => {
+        probeCalls += 1;
+        if (probeCalls === 1) {
+          liveConfig.providers.relay = {
+            ...liveConfig.providers.relay!,
+            baseUrl: "https://relay-concurrent.example.test/v1",
+          };
+        }
+        return null;
+      });
+    const patch = async (body: unknown) => {
+      const req = new Request("http://127.0.0.1/api/providers?name=relay", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+      });
+    };
+
+    try {
+      const racedEnable = await patch({ allowEncryptedV2AgentTasks: true });
+      expect(racedEnable?.status).toBe(409);
+      expect(await racedEnable?.json()).toMatchObject({
+        error: "provider destination changed during validation; retry with an explicit baseUrl",
+      });
+      expect(liveConfig.providers.relay?.baseUrl).toBe("https://relay-concurrent.example.test/v1");
+      expect(liveConfig.providers.relay?.allowEncryptedV2AgentTasks).toBeUndefined();
+
+      const explicitDestination = await patch({
+        baseUrl: "https://relay-explicit.example.test/v1",
+        allowEncryptedV2AgentTasks: true,
+      });
+      expect(explicitDestination?.status).toBe(200);
+      expect(liveConfig.providers.relay).toMatchObject({
+        baseUrl: "https://relay-explicit.example.test/v1",
+        allowEncryptedV2AgentTasks: true,
+      });
+    } finally {
+      destinationProbe.mockRestore();
+    }
+  });
+
   test("provider management exposes and persists context-window hints for Models GUI (#1073)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

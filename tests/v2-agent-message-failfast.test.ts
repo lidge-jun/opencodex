@@ -4,6 +4,7 @@ import {
   hasUnreadableEncryptedAgentTask,
 } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import type { RequestLogContext } from "../src/server/request-log";
 
 const originalFetch = globalThis.fetch;
 
@@ -590,7 +591,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
     config.combos!.mixed!.targets = [
       { provider: "deepseek", model: "deepseek-v4-flash" },
     ];
-    const logCtx = { model: "", provider: "" };
+    const logCtx: RequestLogContext = { model: "", provider: "" };
     let fetchCalls = 0;
     globalThis.fetch = (async () => {
       fetchCalls += 1;

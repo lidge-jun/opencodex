@@ -671,6 +671,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const applied = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
     if ("error" in applied) return jsonResponse({ error: applied.error }, 400);
     const next = applied.next;
+    // The destination probe below is asynchronous. Capture the exact destination
+    // that was validated so a capability-only replay cannot silently approve a
+    // different destination if another PATCH wins the mutation lock meanwhile.
+    const validatedBaseUrl = next.baseUrl;
 
     const pacingOnly = keys.every(key => key === "requestPacing");
     if (applied.editorTouched && !pacingOnly) {
@@ -699,6 +703,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // later save clobbering the earlier snapshot.
     let replayError: string | undefined;
     withConfigMutationLockSync(() => {
+      const currentProvider = config.providers[name]!;
+      const destinationChangedDuringValidation = currentProvider.baseUrl !== validatedBaseUrl;
+      if (
+        destinationChangedDuringValidation
+        && rawBody.allowEncryptedV2AgentTasks === true
+        && !Object.hasOwn(rawBody, "baseUrl")
+      ) {
+        replayError = "provider destination changed during validation; retry with an explicit baseUrl";
+        return;
+      }
       const replay = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
       if ("error" in replay) {
         replayError = replay.error;

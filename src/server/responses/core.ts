@@ -1453,7 +1453,7 @@ function unreadableEncryptedAgentTaskResponse(): Response {
 
 function routeCanReceiveEncryptedV2AgentTasks(
   route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
-  inboundWire: InboundWire = "responses",
+  inboundWire: InboundWire,
 ): boolean {
   const resolvedProvider = resolveFinalWireProtocolOverride(
     route.providerName,

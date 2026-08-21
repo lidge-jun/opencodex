@@ -87,6 +87,7 @@ opencodex 会安全失败，而不是转发空任务或不可读任务：
 恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在你控制调用方时将任务作为明文 v2 `agent_message` 内容重新发送。
 
 实验性的 `agentTaskRecovery` 默认关闭。显式启用后，它可以通过向固定 ChatGPT 端点发送额外的认证请求来恢复这种格式，但会消耗配额、增加延迟，并依赖非公开的后端行为。任何失败都会保留原有的 `unreadable_encrypted_agent_task` 错误。详见[英文配置参考](/reference/configuration/agents/#encrypted-v2-task-recovery)。
+对于已启用 opaque passthrough 的路由，opencodex 会跳过 `agentTaskRecovery`；不透明中继和恢复是两种不同的信任模式。
 
 ## 更改模式
 

@@ -135,7 +135,9 @@ probları `subagentModelFallbackPollMs` (varsayılan olarak 60 saniye) boyunca
 Geri dönüş, uyumsuz şifrelenmiş görevleri okunabilir kılmaz. Çocuk görevi
 ChatGPT için şifrelendiğinde seçim, bu şifreli yükü alabilen hedeflerle sınırlıdır:
 kurallı yerel ChatGPT hedefleri veya `allowEncryptedV2AgentTasks: true` açıkça
-etkinleştirilmiş bir Responses sağlayıcısı.
+etkinleştirilmiş bir Responses sağlayıcısı; ancak seçilen modelin nihai wire'ı
+`openai-responses` olarak kalmalıdır. `modelAdapters` geçersiz kılması
+`openai-chat`'e çözümleniyorsa hedef uygun değildir.
 
 ## Şifrelenmiş v2 görev teslimi
 
@@ -329,4 +331,3 @@ sabitler.
 
 Model bağlam sınırı alt ajan modundan bağımsızdır. Modeller sayfasında
 yapılandırın; yerel OpenAI modelleri gerçek bağlam pencerelerini korur.
-
