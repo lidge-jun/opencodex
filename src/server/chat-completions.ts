@@ -310,15 +310,17 @@ async function handleChatCompletionsWithBudget(
           : "invalid_request_error"),
       message,
     );
-    if (isCyberPolicyCode(upstreamCode)) {
-      classified.code = CYBER_POLICY_ERROR_CODE;
-      classified.type = "invalid_request_error";
-    } else if (upstreamCode === "model_not_found") {
-      // Structured model_not_found must win over classifyError's generic remaps.
-      classified.code = "model_not_found";
-      classified.type = "invalid_request_error";
-      if (settledRoute) warnRetainedModel404Once(settledRoute.providerName, settledRoute.modelId);
-    } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
+   if (settledRoute && (upstream.status === 404 || upstreamCode === "model_not_found")) {
+     warnRetainedModel404Once(settledRoute.providerName, settledRoute.modelId);
+   }
+   if (isCyberPolicyCode(upstreamCode)) {
+     classified.code = CYBER_POLICY_ERROR_CODE;
+     classified.type = "invalid_request_error";
+   } else if (upstreamCode === "model_not_found") {
+     // Structured model_not_found must win over classifyError's generic remaps.
+     classified.code = "model_not_found";
+     classified.type = "invalid_request_error";
+   } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400 : upstream.status;

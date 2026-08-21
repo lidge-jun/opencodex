@@ -4807,9 +4807,10 @@ async function handleResponsesInner(
       }
       break;
     }
-    if (!upstreamResponse.ok) {
-      if (options.comboAttempt) {
-        // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
+   if (!upstreamResponse.ok) {
+     if (upstreamResponse.status === 404) warnRetainedModel404Once(route.providerName, route.modelId);
+     if (options.comboAttempt) {
+       // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
