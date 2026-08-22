@@ -372,12 +372,12 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 6 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 7 + 6 + 2 + 4 convergence calls", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 7],
     ["model-routes.ts", 6],
     ["combo-routes.ts", 2],
-    ["agent-settings-routes.ts", 2],
+    ["agent-settings-routes.ts", 4],
   ].map(([file, expected]) => {
     const source = readFileSync(join(import.meta.dir, "..", "src", "server", "management", file as string), "utf8");
     const count = source.match(/await convergeCodexCatalog\(\)/g)?.length ?? 0;
@@ -389,7 +389,7 @@ test("the route inventory contains exactly the specified 7 + 6 + 2 + 2 convergen
     "provider-routes.ts": 7,
     "model-routes.ts": 6,
     "combo-routes.ts": 2,
-    "agent-settings-routes.ts": 2,
+    "agent-settings-routes.ts": 4,
   });
 });
 
@@ -411,4 +411,29 @@ test("the attested reload route converges the Codex catalog like the other write
   // The reload handler returns before the next route check; scope the search to its body.
   const handlerBody = source.slice(handlerStart, source.indexOf("url.pathname ===", handlerStart + 1));
   expect(handlerBody).toContain("await convergeCodexCatalog()");
+});
+
+/**
+ * Named role save/remove write the same catalog-visible config as the featured-roster
+ * PUT, so both branches must converge. A count bump from 2 to 4 would otherwise pass
+ * while one of these paths quietly dropped its call, or while some other route gained one.
+ */
+test("the attested subagent-roles write paths converge the Codex catalog", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "..", "src", "server", "management", "agent-settings-routes.ts"),
+    "utf8",
+  );
+  const handlerStart = source.indexOf("url.pathname === \"/api/subagent-roles\" && req.method === \"PUT\"");
+  expect(handlerStart).toBeGreaterThan(-1);
+  const handlerBody = source.slice(
+    handlerStart,
+    source.indexOf("url.pathname === \"/api/subagent-model-fallback\"", handlerStart + 1),
+  );
+  const removeStart = handlerBody.indexOf('"remove" in body');
+  const saveStart = handlerBody.indexOf('if (!("roles" in body))');
+  expect(removeStart).toBeGreaterThan(-1);
+  expect(saveStart).toBeGreaterThan(removeStart);
+  expect(handlerBody.slice(removeStart, saveStart)).toContain("await convergeCodexCatalog()");
+  expect(handlerBody.slice(saveStart)).toContain("await convergeCodexCatalog()");
+  expect(handlerBody.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(2);
 });
