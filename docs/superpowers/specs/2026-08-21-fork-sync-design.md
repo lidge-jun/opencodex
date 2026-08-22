@@ -1,7 +1,7 @@
 # Public OpenCodex fork: upstream sync and overlay — Design
 
 Date: 2026-08-21  
-Status: draft pending user review  
+Status: overlay/seam rules still apply; **daily-driver pin superseded** by `2026-08-21-fork-daily-main-pin-design.md` (`vendor/main` + `run/main`, not `vendor/dev` as the tree we run).  
 Scope: long-lived public fork of `lidge-jun/opencodex` that stays upgradeable while carrying local behavior that is hard to land upstream.
 
 This is a **fork-owned** document. It must not be opened as an upstream PR.
@@ -31,7 +31,7 @@ Success metric: `git log vendor/dev..main` is a short, named patch list (ideally
 - `upstream` → `https://github.com/lidge-jun/opencodex.git`
 - `origin` → `https://github.com/yansigit/opencodex.git` (public fork)
 
-Integration branch to track: **`dev`** (opencodex policy). `main` on upstream is release-only; do not sync the overlay from `upstream/main` unless cutting a release-shaped pin.
+Daily vendor pin is **`upstream/main`** (see `2026-08-21-fork-daily-main-pin-design.md`). Keep `vendor/dev` as a fast-forward of `upstream/dev` only to cut `feat/*` PRs. Do not merge `upstream/dev` into `origin/main`.
 
 ## Branch lanes
 
