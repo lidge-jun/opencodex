@@ -72,6 +72,7 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`");
     expect(note).toContain("Do not skip an available nested helper");
     expect(note).toContain("`*** Begin Patch`");
+    expect(note).toContain("`*** End Patch`");
     expect(note).toContain("no trailing `***`");
     expect(note).toContain("OpenCodex does not rewrite JavaScript inside exec");
     expect(note).toContain("Nested `tools.apply_patch(input)` is host-executed");
