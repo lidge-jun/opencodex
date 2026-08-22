@@ -43,7 +43,7 @@ REST via `fetch`, HMAC-SHA256 via `node:crypto`.
 `SyncEvent`, `CommandResult`, `CommandRunner`, `DetectOptions`,
 `detectLatestVTag`, `AllowedVendorRef`, `isAllowedVendorRef`,
 `PinOptions`, `pinVendorRefs`, notifier/coordinator interfaces and registries,
-GitHub issue client, and webhook options.
+GitHub issue client, `FetchImplementation`, and webhook options.
 
 - [ ] Write the approved design, constraints, security boundary, workflow
   contract, and focused test cases.

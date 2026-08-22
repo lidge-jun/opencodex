@@ -25,6 +25,11 @@ export type CommandRunner = (
   args: readonly string[],
 ) => Promise<CommandResult>;
 
+export type FetchImplementation = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface ForkSyncNotifier {
   id: string;
   notify(event: SyncEvent): Promise<void>;

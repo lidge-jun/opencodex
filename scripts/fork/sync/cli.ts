@@ -6,6 +6,7 @@ import { createGitHubIssueNotifier } from "./notifiers/github-issue";
 import type {
   CommandResult,
   CommandRunner,
+  FetchImplementation,
   GitHubIssuesClient,
   SyncEvent,
 } from "./types";
@@ -19,7 +20,7 @@ export interface CliOptions {
   stdin?: string;
   write?: (value: string) => void;
   githubClient?: GitHubIssuesClient;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchImplementation;
 }
 
 async function commandRunner(args: readonly string[]): Promise<CommandResult> {
@@ -40,7 +41,7 @@ async function commandRunner(args: readonly string[]): Promise<CommandResult> {
 
 function githubClient(
   env: Record<string, string | undefined>,
-  fetchImpl: typeof fetch,
+  fetchImpl: FetchImplementation,
 ): GitHubIssuesClient {
   const repository = env.GITHUB_REPOSITORY;
   const token = env.GITHUB_TOKEN;
