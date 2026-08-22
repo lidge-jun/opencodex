@@ -2188,10 +2188,21 @@ export function loadConfig(): OcxConfig {
   hardenExistingSecret(configPath);
   hardenExistingSecret(join(dir, "auth.json"));
   if (!existsSync(configPath)) {
+  // No file means the process is serving defaults, not the previously loaded bytes;
+  // a reload after deletion must not retain the old resident identity.
+  residentConfigSha256 = null;
     return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
-    const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
+    // Keep the pre-strip bytes: the resident identity must hash exactly what the
+    // process parsed, including a leading BOM, so it matches the admission digest.
+    // Hash the RAW bytes (not the decoded string): decoding can map malformed
+    // UTF-8 sequences onto replacement characters, which would make the digest
+    // disagree with the file's true byte SHA-256 and misreport divergence.
+    const fileBytes = readFileSync(configPath);
+    residentConfigSha256 = createHash("sha256").update(fileBytes).digest("hex");
+    const rawWithBom = fileBytes.toString("utf-8");
+    const raw = rawWithBom.replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
@@ -2257,9 +2268,11 @@ export function loadConfig(): OcxConfig {
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
+    residentConfigSha256 = null;
     return getDefaultConfig();
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
+    residentConfigSha256 = null;
     return getDefaultConfig();
   }
 }
@@ -2636,9 +2649,42 @@ export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
   };
 }
 
+export interface ConfigDivergenceStatus {
+  /** SHA-256 of the config bytes the running process last loaded or wrote. */
+  residentVersion: string | null;
+  /** SHA-256 of the current config.json bytes on disk (null when unreadable). */
+  diskVersion: string | null;
+  /** True only when a resident version exists and differs from the current disk bytes. */
+  diverged: boolean;
+}
+
+/**
+ * Compare the running process's resident config identity to the current file. A CLI
+ * process without an armed live config reports `residentVersion: null` and never claims
+ * divergence; only the proxy process can answer this truthfully.
+ */
+export function readConfigDivergenceStatus(): ConfigDivergenceStatus {
+  const admission = readConfigAdmissionSnapshot();
+  const diskVersion = admission.kind === "read" ? admission.contentSha256 : null;
+  return {
+    residentVersion: residentConfigSha256,
+    diskVersion,
+    diverged: residentConfigSha256 !== null && diskVersion !== null && residentConfigSha256 !== diskVersion,
+  };
+}
+ 
 const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 let warnedConfigMutationDirectoryAcl = false;
+// SHA-256 of the config bytes the running process last loaded or wrote (armed at server
+// start, refreshed on every changed in-process save). Compared to the current file digest
+// by `ocx status` / the dashboard to warn when config.json changed without a reload.
+let residentConfigSha256: string | null = null;
+
+/** Test-only seam: reset the resident identity so isolated test files cannot leak state. */
+export function setResidentConfigSha256ForTests(value: string | null): void {
+  residentConfigSha256 = value;
+}
 
 export class ConfigMutationLockError extends Error {
   readonly code = "CONFIG_MUTATION_LOCK_UNAVAILABLE";
@@ -2863,6 +2909,7 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
     return false;
   }
   atomicWriteFile(configPath, bytes);
+  residentConfigSha256 = createHash("sha256").update(bytes).digest("hex");
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
   refreshUserCostOverlays(persisted);
@@ -3014,6 +3061,10 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  // The resident digest is captured by loadConfig() from the exact bytes it parsed.
+  // Do NOT re-read config.json here: a file edit between that read and arming
+  // would otherwise be recorded as the resident identity while the live config
+  // still reflects the earlier bytes, producing a false divergence at startup.
 }
 
 /**

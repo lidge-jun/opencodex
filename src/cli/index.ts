@@ -875,6 +875,10 @@ async function handleStatus() {
     console.log(`   ⚠️  ${status.json.codexHome.warning}`);
     console.log(`      Action: ${status.json.codexHome.action}`);
   }
+  if (status.json.configDivergence.available && status.json.configDivergence.diverged) {
+    console.log("   ⚠️  config.json changed on disk after the running proxy loaded it; the proxy is still serving the older settings.");
+    console.log("      Action: restart the service to apply: 'ocx service restart'.");
+  }
   console.log(`   Catalog clamp: ${status.json.codexRuntime.catalogClamp.active ? "active" : "inactive"}`);
   if (status.json.codexRuntime.catalogClamp.removedEfforts.length > 0) {
     console.log(`   Removed efforts: ${status.json.codexRuntime.catalogClamp.removedEfforts.join(", ")}`);

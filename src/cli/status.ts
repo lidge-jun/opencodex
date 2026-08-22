@@ -1,5 +1,7 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics, readPid, readRuntimePort, type RuntimePortState } from "../config";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
@@ -52,6 +54,13 @@ export type CliStatusJson = {
   config: {
     source: "default" | "file" | "fallback";
     error: string | null;
+  };
+  configDivergence: {
+    /** True when the running proxy answered; false when it is down or unreadable. */
+    available: boolean;
+    residentVersion: string | null;
+    diskVersion: string | null;
+    diverged: boolean;
   };
   service: { summary: string };
   codexShim: { summary: string };
@@ -174,6 +183,42 @@ export async function collectStatus(): Promise<CliStatusView> {
       label: `${listen.healthUrl} ok (live)`,
     }
     : await checkProxyHealth(listen);
+  // The resident config identity lives only in the proxy process. Ask it directly via
+  // the loopback management-read capability; a down/unreadable proxy means "unknown",
+  // never a fabricated divergence claim.
+  const configDivergence = await (async () => {
+    const unavailable = { available: false, residentVersion: null, diskVersion: null, diverged: false };
+    if (!live) return unavailable;
+    try {
+      const read = await fetchBoundLocalManagementRead(
+        live,
+        LOCAL_MANAGEMENT_READ_PATHS.configStatus,
+        { timeoutMs: 4_000 },
+      );
+      if (read.kind !== "response" || !read.response.ok) return unavailable;
+      const body = await read.response.json() as {
+        residentVersion?: unknown;
+        diskVersion?: unknown;
+        diverged?: unknown;
+      };
+      const residentVersion = body.residentVersion ?? null;
+      const diskVersion = body.diskVersion ?? null;
+      const diverged = body.diverged;
+      if (
+        !(residentVersion === null || typeof residentVersion === "string")
+        || !(diskVersion === null || typeof diskVersion === "string")
+        || typeof diverged !== "boolean"
+      ) return unavailable;
+      return {
+        available: true,
+        residentVersion,
+        diskVersion,
+        diverged,
+      };
+    } catch {
+      return unavailable;
+    }
+  })();
   const bunRuntime = durableBunRuntime();
   const service = diagnoseService();
   // A service can be registered and still not serve: the manager reports the job
@@ -318,6 +363,7 @@ export async function collectStatus(): Promise<CliStatusView> {
         source: configDiagnostics.source,
         error: configDiagnostics.error,
       },
+      configDivergence,
       service: { summary: serviceSummary },
       codexShim: { summary: codexShimSummary },
       codexPlugins,

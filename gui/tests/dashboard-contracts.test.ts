@@ -179,6 +179,41 @@ test("fetchStartupHealth does not map abort into a sticky error status", async (
   }
 });
 
+test("dashboard config-divergence status is fetched from /api/config/status and wired into the hook", async () => {
+  const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
+  const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
+  const head = await Bun.file(new URL("../src/pages/dashboard-overview-head.tsx", import.meta.url)).text();
+  expect(core).toContain("/api/config/status");
+  expect(core).toContain("export async function fetchDashboardConfigStatus");
+  expect(hook).toContain("fetchDashboardConfigStatus(apiBase, signal)");
+  expect(hook).toContain("configStatusPoll");
+  expect(hook).toContain("configDivergence,");
+  expect(head).toContain("configDivergence?.available === true");
+  expect(head).toContain("dash.configDiverged");
+});
+
+test("fetchDashboardConfigStatus normalizes diverged and tolerates old servers", async () => {
+  const { fetchDashboardConfigStatus } = await import("../src/pages/dashboard-core-poll");
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diskVersion: "b", diverged: true })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({
+      configDivergence: { available: true, residentVersion: "a", diskVersion: "b", diverged: true },
+    });
+    globalThis.fetch = (async () => new Response("nope", { status: 404 })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+
+    // Malformed successful payloads must not be trusted as available data.
+    globalThis.fetch = (async () => Response.json({})) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diskVersion: "b", diverged: "yes" })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
 // The chip used to sit on the server's conservative placeholder until the next 30s tick, which is
 // why an unrelated action (refresh quota, tab hop) looked like the thing that fixed it. The probe
 // has to carry `stale` through so the caller can re-ask in seconds.
