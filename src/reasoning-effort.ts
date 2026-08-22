@@ -157,6 +157,16 @@ export function reasoningEffortMapFor(provider: OcxProviderConfig, modelId: stri
 }
 
 /**
+ * Sentinel wire value for `reasoningEffortMap` / `modelReasoningEffortMap`: mapping a Codex
+ * effort label to `"__omit__"` drops the reasoning field from the upstream request entirely,
+ * letting the upstream model's own default apply. Needed when every expressible wire value
+ * for a tier is rejected upstream — e.g. ollama >=0.32 normalizes xhigh/ultra/max to "max"
+ * before rendering a GGUF chat template, and templates like Qwen3.8's accept only
+ * xhigh/medium/low, with the xhigh default reachable only by omitting `reasoning_effort`.
+ */
+export const REASONING_EFFORT_OMIT = "__omit__";
+
+/**
  * Translate Codex's reasoning label into the provider's real wire value. Prefer identity labels
  * (`xhigh` stays `xhigh`, `max` stays `max`); provider maps are only for real upstream aliases.
  */
@@ -170,7 +180,10 @@ export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string,
   const boundary = requested === "ultra" ? "max" : requested;
 
   const wireMap = reasoningEffortMapFor(provider, modelId);
-  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, boundary)) return wireMap[boundary];
+  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, boundary)) {
+    const mapped = wireMap[boundary];
+    return mapped === REASONING_EFFORT_OMIT ? undefined : mapped;
+  }
 
   const supported = configuredReasoningEfforts(provider, modelId);
   const codexEffort = supported !== undefined ? clampToSupportedCodexEffort(boundary, supported) : requestToCodexEffort(boundary);
@@ -178,6 +191,9 @@ export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string,
 
   // Belt for the odd config where the supported ladder is ultra-only and the clamp lands on it.
   const wire = codexEffort === "ultra" ? "max" : codexEffort;
-  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, wire)) return wireMap[wire];
+  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, wire)) {
+    const mapped = wireMap[wire];
+    return mapped === REASONING_EFFORT_OMIT ? undefined : mapped;
+  }
   return wire;
 }
