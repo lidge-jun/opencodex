@@ -295,10 +295,59 @@ test("POST /v1/images/generations does not reach api.x.ai when OAuth token resol
       headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
       body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
     });
-    expect(response.status).not.toBe(200);
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toContain("ocx login xai");
     expect(captured.filter(call => call.path.includes("/images/"))).toHaveLength(0);
   } finally {
     await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations does not bill ChatGPT when Imagine is opted in without a Grok token", async () => {
+  const chatgptCaptured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(chatgptCaptured);
+  const innerFetch = globalThis.fetch;
+  const xaiCaptured: CapturedRequest[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const parsed = new URL(url);
+    if (parsed.hostname === "api.x.ai") {
+      xaiCaptured.push({
+        path: parsed.pathname,
+        headers: new Headers(init?.headers),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json({ data: [{ b64_json: CCA_TINY_PNG }] });
+    }
+    return innerFetch(input, init);
+  }) as typeof fetch;
+
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toContain("ocx login xai");
+    expect(json.error?.message).toContain("not forwarded to ChatGPT");
+    expect(xaiCaptured).toHaveLength(0);
+    expect(chatgptCaptured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
   }
 });
 

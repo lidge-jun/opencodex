@@ -54,7 +54,7 @@ ChatGPT bearer auth。由于注入的 `base_url` 指向 opencodex，proxy 会把
   `openai-responses` provider 的 id，该 endpoint 必须实现 OpenAI Images API。显式选择会失败即关闭，
   不会 fallback 到其他付费上游。这里不接受 registry 管理的 provider id；省略 `images.provider`
   即可使用内置的 OpenAI tiers。
-- **xAI Imagine（Grok OAuth）中继：** 当 `images.bridgeEnabled` 为 `true`，且 `xai` provider 有可用的 Grok CLI OAuth token（`ocx login xai`）或 API key 时，`/v1/images/generations` 和 `/v1/images/edits` 会带着该 token 发到 `https://api.x.ai/v1`。ChatGPT 凭据不会被转发。该中继会把 Codex 的 `size` / `aspect_ratio` 映射到 xAI Imagine 请求体，并返回同样的 `{created, data:[{b64_json}]}` 形状。整批（inline `b64_json` 与下载的 URL）解码字节与 base64 编码输出合计不超过 100 MiB；超出则返回 502。这与仍仅支持 API key 的 Responses Image Bridge 循环相互独立。
+- **xAI Imagine（Grok OAuth）中继：** 当 `images.bridgeEnabled` 为 `true`，且 `xai` provider 有可用的 Grok CLI OAuth token（`ocx login xai`）或 API key 时，`/v1/images/generations` 和 `/v1/images/edits` 会带着该 token 发到 `https://api.x.ai/v1`。ChatGPT 凭据不会被转发。若 token 缺失，代理返回 400，而不会向 ChatGPT 计费。该中继会把 Codex 的 `size` / `aspect_ratio` 映射到 xAI Imagine 请求体，并返回同样的 `{created, data:[{b64_json}]}` 形状。整批（inline `b64_json` 与下载的 URL）解码字节与 base64 编码输出合计不超过 100 MiB；超出则返回 502。这与仍仅支持 API key 的 Responses Image Bridge 循环相互独立。
 - **Google Antigravity（CCA）fallback：** 当既没有 OpenAI forward 候选，也没有已配置的 keyed
   provider 时，`/v1/images/generations`（不是 `/images/edits`）会 fallback 到 Antigravity
   **Cloud Code Assist** endpoint，并使用 `gemini-3.1-flash-image` 模型。该 fallback 也会在
