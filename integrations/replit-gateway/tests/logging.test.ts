@@ -5,12 +5,12 @@ describe("safe logging", () => {
   test("redacts AI integration secrets and gateway keys", () => {
     const input = [
       "AI_INTEGRATIONS_OPENAI_API_KEY=super-secret",
-      "Bearer gateway-key-01234567890123456789012",
+      "Bearer gw-test-key",
       "path=/v1/models status=200",
     ].join(" ");
     const redacted = redactGatewaySecrets(input);
     expect(redacted).not.toContain("super-secret");
-    expect(redacted).not.toContain("gateway-key-01234567890123456789012");
+    expect(redacted).not.toContain("gw-test-key");
     expect(redacted).toContain("/v1/models");
   });
 

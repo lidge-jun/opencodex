@@ -6,7 +6,7 @@ describe("createRelayHandoffRequest", () => {
     const original = new Request("https://gateway.test/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: "Bearer gateway-key-01234567890123456789012",
+        Authorization: "Bearer gw-test-key",
         "Content-Type": "application/json",
         "X-Custom": "keep-me",
       },

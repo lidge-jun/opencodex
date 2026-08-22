@@ -17,7 +17,7 @@ describe("origin validation", () => {
   });
 
   test("rejects origins with credentials or fragments", () => {
-    expect(isAllowedPublicOrigin("https://user:pass@my-app.replit.app")).toBe(false);
+    expect(isAllowedPublicOrigin("https://user:@my-app.replit.app")).toBe(false);
     expect(isAllowedPublicOrigin("https://my-app.replit.app#frag")).toBe(false);
   });
 
