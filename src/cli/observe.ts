@@ -19,7 +19,7 @@ const USAGE = `Usage:
   ocx logs explain <request-id> [--json]
   ocx logs rebuild-index
   ocx logs index-status
-  ocx observe usage [--range <today|7d|30d|all>] [--surface <all|codex|claude|grok>]
+  ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
       [--provider <name>] [--model <id>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
@@ -145,7 +145,12 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   rejectArgs(args, USAGE);
   const result = await runtimeRequest(`/api/usage${query({ range, surface, provider, model })}`, {}, deps);
-  printData(result, wantsJson, formatUsageReport(result as Parameters<typeof formatUsageReport>[0]));
+  // Built only when it will be printed: JavaScript evaluates arguments before
+  // the call, so passing formatUsageReport(...) inline would run the human
+  // renderer during --json and let its assumptions affect a path that is meant
+  // to bypass it entirely.
+  if (wantsJson) printData(result, true);
+  else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0]));
 }
 
 async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promise<void> {

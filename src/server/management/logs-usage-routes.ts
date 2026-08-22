@@ -205,7 +205,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       provider: url.searchParams.get("provider"),
       model: url.searchParams.get("model"),
     };
-    const project = <T extends UsageSummary>(summary: T) => projectUsageSummary(summary, filter);
+    const project = <T extends UsageSummary>(summary: T, entries?: PersistedUsageEntry[]) =>
+      projectUsageSummary(summary, filter, entries);
+    const filterRequested = Boolean(filter.provider ?? filter.model);
     const now = Date.now();
     try {
       const cacheKey = `${range}:${surface}`;
@@ -215,15 +217,21 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const observedSize = observed?.size ?? 0;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (cached
+        // A filtered response is re-summarised from entries, which a cached
+        // summary does not carry. Serving it from cache would mean projecting
+        // over collapsed breakdown rows again — the exact defect the
+        // re-summarisation replaced. The unfiltered cache stays warm either
+        // way; only the filtered caller pays for the read.
+        && !filterRequested
         && cached.identityKey === identityKey
         && cached.maxReadBytes === effectiveReadLimit
         && cached.overlayVersion === userCostOverlayVersion()
         && now < cached.freshUntil
         && now < cached.expiresAt
         && observedSize >= cached.lastSeenSize) {
-        return jsonResponse(project(refreshedUsageSummary(cached.summary, range, now)));
+        return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
-      if (cached) discardUsageSummaryCacheEntry(cacheKey);
+      if (cached && !filterRequested) discardUsageSummaryCacheEntry(cacheKey);
       // Capture the overlay version BEFORE reading/computing: the cache entry
       // must be stamped with the version the summary was priced under. Reading
       // it again at stamp time could cache an old-price summary as current,
@@ -247,7 +255,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         // summary may mix old and new prices. Serve it uncached: the next
         // request recomputes against the settled overlay instead of caching a
         // mixed-price entry under either version.
-        return jsonResponse(project(summary));
+        return jsonResponse(project(summary, snapshot.entries));
       }
       const freshUntil = now + 60_000;
       const snapshotIdentity = `${usageLogIdentityKey(snapshot.revision)}\0${effectiveReadLimit}`;
@@ -292,7 +300,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         effectiveReadLimit,
         now,
       );
-      return jsonResponse(project(summary));
+      return jsonResponse(project(summary, snapshot.entries));
     } catch {
       return jsonResponse({
         range,

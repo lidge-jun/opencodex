@@ -863,67 +863,59 @@ function normalizeFilterValue(input: string | null | undefined): string | null {
 export function projectUsageSummary<T extends UsageSummary>(
   summary: T,
   filter: { provider?: string | null; model?: string | null },
+  entries?: PersistedUsageEntry[],
 ): T & { filter?: UsageFilterEcho } {
   const provider = normalizeFilterValue(filter.provider);
   const model = normalizeFilterValue(filter.model);
   if (provider === null && model === null) return summary;
 
-  const keep = (row: { provider: string; model?: string }): boolean => {
-    if (provider !== null && row.provider.toLowerCase() !== provider) return false;
-    if (model !== null && (row.model ?? "").toLowerCase() !== model) return false;
+  // Re-summarise from the entries the summary was built from, rather than
+  // projecting over its rows.
+  //
+  // Projecting rows looked cheaper and was wrong in three ways that only show
+  // up together: breakdown rows past MAX_USAGE_MODEL_BREAKDOWN_ROWS are
+  // collapsed into a synthetic "other" row, so a provider living only in that
+  // tail is unfindable and reports matched:false despite real usage; a
+  // provider row is a whole-provider aggregate, so a model filter kept the
+  // provider's OTHER models in providers[] while models[] and the totals
+  // excluded them, contradicting itself inside one response; and a model row
+  // carries a single optional cost, so priced/unpriced/unmetered counts could
+  // only be guessed per model rather than counted per request.
+  //
+  // The entries are already in hand on every path that filters, so the honest
+  // computation is also the simple one.
+  const matches = (rowProvider: string, rowModel: string): boolean => {
+    if (provider !== null && baseProviderLabel(rowProvider).toLowerCase() !== provider) return false;
+    if (model !== null && rowModel.toLowerCase() !== model) return false;
     return true;
   };
 
-  const models = summary.models.filter(keep);
-  // A provider row carries no model, so a model filter cannot select one
-  // directly; derive the surviving providers from the retained model rows.
-  const providers = model === null
-    ? summary.providers.filter(keep)
-    : summary.providers.filter(row => models.some(m => m.provider === row.provider));
-
+  const source = entries ?? [];
   let comboOverlap = false;
-  const days = summary.days.map(day => {
-    const dayModels = day.models.filter(keep);
-    const requests = dayModels.reduce((acc, row) => acc + row.requests, 0);
-    const attempts = dayModels.reduce((acc, row) => acc + row.attemptCount, 0);
-    if (attempts > requests) comboOverlap = true;
-    return {
-      ...day,
-      models: dayModels,
-      requests,
-      totalTokens: dayModels.reduce((acc, row) => acc + row.totalTokens, 0),
-      estimatedCostUsd: dayModels.reduce((acc, row) => acc + row.estimatedCostUsd, 0),
-      // Measured/reported counts are per-request properties the row breakdown
-      // does not carry, so they cannot be re-derived here. Zero them rather
-      // than pass through a whole-window number beside filtered totals.
-      measuredRequests: 0,
-      reportedRequests: 0,
-    };
+  const filtered = source.filter(entry => {
+    const attributions = usageAttributions(entry);
+    const hits = attributions.filter(a => matches(a.provider, a.model));
+    if (hits.length === 0) return false;
+    if (attributions.length > 1) comboOverlap = true;
+    return true;
   });
 
-  const totals = blankTotals();
-  for (const row of models) {
-    totals.requests += row.requests;
-    totals.attemptCount += row.attemptCount;
-    totals.measuredRequests += row.measuredRequests;
-    totals.reportedRequests += row.reportedRequests;
-    totals.estimatedRequests += row.estimatedRequests;
-    totals.inputTokens += row.inputTokens;
-    totals.outputTokens += row.outputTokens;
-    totals.totalTokens += row.totalTokens;
-    totals.estimatedCostUsd += row.estimatedCostUsd ?? 0;
-    if (row.estimatedCostUsd !== undefined) totals.pricedRequests += row.requests;
-    else totals.unpricedRequests += row.requests;
-  }
-  finalizeCoverage(totals);
-
+  const projected = summarizeUsage(filtered, summary.range, summary.generatedAt, summary.surface);
+  // A combo entry survives the entry filter as a whole, so its non-matching
+  // attributions can still appear as rows. Drop those so every row in the
+  // response satisfies the filter the caller asked for.
+  const models = projected.models.filter(row => matches(row.provider, row.model));
+  const retainedProviders = new Set(models.map(row => row.provider));
   return {
     ...summary,
-    summary: totals,
-    days,
+    summary: projected.summary,
+    days: projected.days.map(day => ({ ...day, models: day.models.filter(row => matches(row.provider, row.model)) })),
     models,
-    providers,
+    providers: projected.providers.filter(row => retainedProviders.has(row.provider)),
+    // Account rows are not provider-partitioned in a way this projection could
+    // honestly re-derive, and unfiltered account totals sitting beside filtered
+    // model totals would invite exactly the wrong reading.
     accounts: [],
-    filter: { provider, model, matched: models.length > 0, comboOverlap },
+    filter: { provider, model, matched: filtered.length > 0, comboOverlap },
   };
 }

@@ -158,12 +158,80 @@ describe("day-level estimated cost", () => {
   });
 });
 
+import { projectUsageSummary } from "../src/usage/summary";
+
 describe("canonical range and surface constants", () => {
   test("the exported members match what the parsers accept", () => {
     expect([...USAGE_RANGES]).toEqual(["today", "7d", "30d", "all"]);
     expect([...USAGE_SURFACES]).toEqual(["all", "codex", "claude", "grok"]);
     for (const range of USAGE_RANGES) expect(parseRange(range)).toBe(range);
     for (const surface of USAGE_SURFACES) expect(parseUsageSurface(surface)).toBe(surface);
+  });
+});
+
+describe("projectUsageSummary", () => {
+  const at = Date.UTC(2026, 5, 28, 10, 0, 0);
+  const priced = { inputTokens: 1_000, outputTokens: 100 };
+
+  test("finds a provider that exists only past the breakdown cap", () => {
+    // Breakdown rows past MAX_USAGE_MODEL_BREAKDOWN_ROWS collapse into a
+    // synthetic "other" row. A projection over rows could not see through it,
+    // so a real provider reported matched:false with zero cost.
+    const total = MAX_USAGE_MODEL_BREAKDOWN_ROWS + 10;
+    const entries = Array.from({ length: total }, (_, i) => entry({
+      ts: at + i,
+      requestId: `row-${i}`,
+      provider: i === total - 1 ? "rare-provider" : "openai",
+      model: i === total - 1 ? "rare-model" : `m-${String(i).padStart(4, "0")}`,
+      usageStatus: "reported",
+      usage: priced,
+    }));
+    const summary = summarizeUsage(entries, "30d", at + total);
+    expect(summary.models.some(row => row.model === "other")).toBe(true);
+    expect(summary.models.some(row => row.provider === "rare-provider")).toBe(false);
+
+    const projected = projectUsageSummary(summary, { provider: "rare-provider" }, entries);
+    expect(projected.filter?.matched).toBe(true);
+    expect(projected.summary.requests).toBe(1);
+    expect(projected.models.map(row => row.model)).toEqual(["rare-model"]);
+  });
+
+  test("a model filter narrows the provider row to the retained model", () => {
+    // A provider row is a whole-provider aggregate. Passing it through a model
+    // filter left providers[] reporting the provider's OTHER models while
+    // models[] and the totals excluded them — one response contradicting
+    // itself.
+    const entries = [
+      entry({ ts: at, requestId: "a", provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: priced }),
+      entry({ ts: at + 1, requestId: "b", provider: "openai", model: "gpt-5.4", usageStatus: "reported", usage: { inputTokens: 5_000, outputTokens: 500 } }),
+    ];
+    const projected = projectUsageSummary(summarizeUsage(entries, "30d", at + 2), { model: "gpt-5.5" }, entries);
+    expect(projected.models.map(row => row.model)).toEqual(["gpt-5.5"]);
+    for (const row of projected.providers) {
+      expect(row.requests).toBe(projected.summary.requests);
+      expect(row.totalTokens).toBe(projected.summary.totalTokens);
+    }
+  });
+
+  test("unmetered and unpriced requests survive the projection", () => {
+    // Counted per request rather than inferred from a model row's single
+    // optional cost, which could not represent a model holding both priced and
+    // unpriced requests and always reported zero unmetered.
+    const entries = [
+      entry({ ts: at, requestId: "priced", provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: priced }),
+      entry({ ts: at + 1, requestId: "unmetered", provider: "openai", model: "gpt-5.5", usageStatus: "unreported" }),
+    ];
+    const unfiltered = summarizeUsage(entries, "30d", at + 2);
+    const projected = projectUsageSummary(unfiltered, { provider: "openai" }, entries);
+    expect(projected.summary.unmeteredRequests).toBe(unfiltered.summary.unmeteredRequests);
+    expect(projected.summary.unmeteredRequests).toBe(1);
+    expect(projected.summary.pricedRequests).toBe(unfiltered.summary.pricedRequests);
+  });
+
+  test("an unfiltered call is returned untouched", () => {
+    const entries = [entry({ ts: at, usageStatus: "reported", usage: priced })];
+    const summary = summarizeUsage(entries, "30d", at + 1);
+    expect(projectUsageSummary(summary, { provider: null, model: null }, entries)).toBe(summary);
   });
 });
 
