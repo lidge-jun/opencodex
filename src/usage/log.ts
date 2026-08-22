@@ -64,6 +64,8 @@ export type FailureStage =
   | "downstream_write"
   | "client_cancel"
   | "terminal_delivery";
+export type TransportPhase = "pre_headers" | "mid_stream" | "terminal_sse";
+export type TerminalSource = "upstream" | "synthetic";
 
 /**
  * Accepts EITHER label family. This is the predicate the persistence writers use, so widening
@@ -195,6 +197,8 @@ export interface PersistedUsageAttempt {
   streamTimeline?: StreamTimeline;
   failureSide?: FailureSide;
   failureStage?: FailureStage;
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
   /**
    * #4191: content-free stage record of a Codex WS upstream exchange that
    * served this attempt (frame size, counters, close code, versions). Absent
@@ -354,8 +358,8 @@ export interface PersistedUsageEntry {
   streamTimeline?: StreamTimeline;
   failureSide?: FailureSide;
   failureStage?: FailureStage;
-  transportPhase?: string;
-  terminalSource?: string;
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
   /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
    * selected. Additive field; old rows without it parse unchanged. Never
@@ -743,6 +747,12 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(typeof attempt.failureStage === "string" && KNOWN_FAILURE_STAGES.has(attempt.failureStage as FailureStage)
       ? { failureStage: attempt.failureStage as FailureStage }
       : {}),
+    ...(typeof attempt.transportPhase === "string" && KNOWN_TRANSPORT_PHASES.has(attempt.transportPhase as TransportPhase)
+      ? { transportPhase: attempt.transportPhase as TransportPhase }
+      : {}),
+    ...(typeof attempt.terminalSource === "string" && KNOWN_TERMINAL_SOURCES.has(attempt.terminalSource as TerminalSource)
+      ? { terminalSource: attempt.terminalSource as TerminalSource }
+      : {}),
     ...(codexWsStage ? { codexWsStage } : {}),
   };
 }
@@ -925,11 +935,11 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.failureStage === "string" && KNOWN_FAILURE_STAGES.has(entry.failureStage as FailureStage)
       ? { failureStage: entry.failureStage as FailureStage }
       : {}),
-    ...(typeof entry.transportPhase === "string" && entry.transportPhase
-      ? { transportPhase: capMetadataString(entry.transportPhase) }
+    ...(typeof entry.transportPhase === "string" && KNOWN_TRANSPORT_PHASES.has(entry.transportPhase as TransportPhase)
+      ? { transportPhase: entry.transportPhase as TransportPhase }
       : {}),
-    ...(typeof entry.terminalSource === "string" && entry.terminalSource
-      ? { terminalSource: capMetadataString(entry.terminalSource) }
+    ...(typeof entry.terminalSource === "string" && KNOWN_TERMINAL_SOURCES.has(entry.terminalSource as TerminalSource)
+      ? { terminalSource: entry.terminalSource as TerminalSource }
       : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
