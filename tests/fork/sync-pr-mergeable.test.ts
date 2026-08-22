@@ -12,6 +12,7 @@ describe("fork PR mergeable workflow", () => {
     expect(source).toMatch(/\bpull_request:/);
     expect(source).toMatch(/branches:\s*\n\s+- main/);
     expect(source).not.toContain("pull_request_target");
+    expect(source).toContain("ref: ${{ github.event.pull_request.head.sha }}");
   });
 
   test("uses read-only contents permission and a complete checkout", () => {
@@ -39,7 +40,7 @@ describe("fork PR mergeable workflow", () => {
     expect(source).toContain("origin/${{ github.base_ref }}");
     expect(source).toContain("HEAD");
     expect(source).toContain(
-      "Recovery: daily: merge `origin/main` into the sync branch; emergency: `-s ours` on `run/main` only.",
+      "Recovery: daily: merge \\`origin/main\\` into the sync branch; emergency: \\`-s ours\\` on \\`run/main\\` only.",
     );
     expect(source).toContain("GitHub's 3-way");
   });

@@ -6,6 +6,7 @@ import { runCli } from "../../scripts/fork/sync/cli";
 const TAG_SHA = "1111111111111111111111111111111111111111";
 const MAIN_SHA = "2222222222222222222222222222222222222222";
 const DEV_SHA = "3333333333333333333333333333333333333333";
+const DEFAULT_MAIN_SHA = "4444444444444444444444444444444444444444";
 
 function result(stdout: string, exitCode = 0, stderr = ""): CommandResult {
   return { stdout, exitCode, stderr };
@@ -134,8 +135,9 @@ describe("fork sync CLI", () => {
       result(""),
       result("", 1),
       result(""),
+      result(DEFAULT_MAIN_SHA),
       result(""),
-      result(TAG_SHA),
+      result(""),
       result(TAG_SHA),
       result(""),
       result(""),
@@ -153,6 +155,23 @@ describe("fork sync CLI", () => {
     });
     expect(calls).toContainEqual(["merge", "--ff-only", TAG_SHA]);
     expect(calls).toContainEqual(["merge", "--ff-only", "refs/remotes/upstream/dev"]);
+    expect(calls).toEqual([
+      ["ls-remote", "--tags", "--refs", "upstream", "v*"],
+      ["rev-parse", "refs/heads/vendor/main"],
+      ["rev-parse", "refs/heads/vendor/dev"],
+      ["merge-base", "--is-ancestor", TAG_SHA, "refs/remotes/upstream/main"],
+      ["merge-base", "--is-ancestor", TAG_SHA, MAIN_SHA],
+      ["merge-base", "--is-ancestor", MAIN_SHA, TAG_SHA],
+      ["rev-parse", "HEAD"],
+      ["switch", "vendor/main"],
+      ["merge", "--ff-only", TAG_SHA],
+      ["rev-parse", "refs/heads/vendor/main"],
+      ["switch", "vendor/dev"],
+      ["merge", "--ff-only", "refs/remotes/upstream/dev"],
+      ["rev-parse", "refs/heads/vendor/dev"],
+      ["merge-base", "--is-ancestor", TAG_SHA, DEFAULT_MAIN_SHA],
+      ["merge-base", "--all", DEFAULT_MAIN_SHA, TAG_SHA],
+    ]);
     const event = JSON.parse(output[0]!) as SyncEvent;
     expect(event.kind).toBe("pin-updated");
     expect(event.recommendedLane).toBe("daily-merge");
@@ -167,6 +186,7 @@ describe("fork sync CLI", () => {
       result(""),
       result("", 1),
       result("", 1),
+      result(DEFAULT_MAIN_SHA),
       result("", 1),
       result("base-sha\n"),
     ];
@@ -181,6 +201,30 @@ describe("fork sync CLI", () => {
     expect(event.kind).toBe("pin-diverged");
     expect(event.mergeBaseCount).toBe(1);
     expect(event.recommendedLane).toBeUndefined();
+  });
+
+  test("keeps a detect failure with no vendor main unchanged", async () => {
+    const calls: string[][] = [];
+    const output: string[] = [];
+    await runCli(["pin"], {
+      env: { FORK_SYNC_UPSTREAM_REPO: "upstream" },
+      runner: async args => {
+        calls.push([...args]);
+        if (calls.length === 1) return result(`${TAG_SHA} refs/tags/v2.29.0\n`);
+        return result("", 1, "missing vendor/main");
+      },
+      write: value => output.push(value),
+    });
+
+    const event = JSON.parse(output[0]!) as SyncEvent;
+    expect(event.kind).toBe("detect-failed");
+    expect(event.vendorMainSha).toBe("");
+    expect(event.vendorContainedInMain).toBeUndefined();
+    expect(event.mergeBaseCount).toBeUndefined();
+    expect(calls).toEqual([
+      ["ls-remote", "--tags", "--refs", "upstream", "v*"],
+      ["rev-parse", "refs/heads/vendor/main"],
+    ]);
   });
 
   test("emit selects env-registered plugins and never prints secret values", async () => {

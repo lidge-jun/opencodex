@@ -19,6 +19,7 @@ jobs:
       - name: Checkout PR history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Check GitHub mergeability
@@ -58,7 +59,7 @@ jobs:
           set -eu
           if ! git merge-base --is-ancestor "origin/${{ github.base_ref }}" HEAD; then
             echo "The pull request head is not a descendant of origin/${{ github.base_ref }}"
-            echo 'Recovery: daily: merge `origin/main` into the sync branch; emergency: `-s ours` on `run/main` only.'
+            echo "Recovery: daily: merge \`origin/main\` into the sync branch; emergency: \`-s ours\` on \`run/main\` only."
             echo "Never ask the human to resolve GitHub's 3-way of a disconnected rebuild."
             exit 1
           fi
