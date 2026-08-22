@@ -12,6 +12,9 @@ import {
   codexAutoStartEnabled,
   getConfigDir,
   loadConfig,
+  saveConfig,
+} from "../config";
+import {
   readPid,
   readPidFileValue,
   readRuntimePort,
@@ -19,10 +22,9 @@ import {
   removePidIfValueIs,
   removeRuntimePort,
   removeRuntimePortIfPidIs,
-  saveConfig,
   writePid,
   writeRuntimePort,
-} from "../config";
+} from "../config/process-state";
 import { collectStatus } from "./status";
 
 import {

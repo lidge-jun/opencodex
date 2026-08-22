@@ -2,7 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import { getConfigDir, loadConfig } from "../config";
+import { readPid, readRuntimePort } from "../config/process-state";
 import { npmInvocation } from "./npm-invocation.mjs";
 import {
   npmCachePreflightFailureMessage,

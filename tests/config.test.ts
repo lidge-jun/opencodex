@@ -2578,7 +2578,7 @@ describe("config.ts – Windows ACL hardening integration", () => {
 
 describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
   test("the production sync harden keys timeouts by destination", () => {
-    const source = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf-8");
+    const source = readFileSync(join(import.meta.dir, "..", "src", "config", "atomic-write.ts"), "utf-8");
     expect(source).toContain("hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
   });
 

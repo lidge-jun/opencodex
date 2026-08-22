@@ -9,7 +9,7 @@
  * (non-ocx, non-allowlisted) processes are never killed.
  */
 import { execFileSync } from "node:child_process";
-import { verifyPidIdentity } from "../config";
+import { verifyPidIdentity } from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { isPortAvailable, type WaitForPortOptions } from "./ports";
 import { dropWindowsTcpRowsForLocalPort } from "./windows-tcp-drop";

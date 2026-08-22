@@ -171,6 +171,32 @@ are consumed incrementally and at most 512 stale files are attempted per process
 
 ## Config surface
 
+### OpenCodex home and live process state
+
+`src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
+the config directory and `config.json` path and retains the existing cache rule: a relative home is
+resolved once for each distinct raw environment value, so a later working-directory change cannot
+silently move the active installation.
+
+`src/config/process-state.ts` derives `ocx.pid` and `runtime-port.json` from that resolved directory.
+It owns their byte-compatible writes, parsing, expected-PID filters, cheap liveness, full OCX command
+identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` remains optional,
+owner-only state and is validated before a record is returned. `src/config.ts` re-exports the same
+symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
+
+Both config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
+process-wide temp sequence, symlink target resolution, real-home test guard, owner manifest,
+Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
+must not replace it with a local temp-and-rename shortcut.
+
+[Decision Log]
+- 목적과 의도: Make persisted config, path resolution, atomic file publication, and live process state distinct ownership boundaries.
+- 기존 구현 및 제약 조건: All four concerns lived in `src/config.ts`; process-state extraction could not safely import the facade without a cycle and could not copy the atomic writer without creating two security/correctness contracts.
+- 검토한 주요 대안: Keep one file, tolerate the cycle, duplicate only PID/runtime writes, or extract the minimal dependency leaves.
+- 선택한 방식: Preserve one implementation per concern under `src/config/` and keep facade re-exports for downstream compatibility.
+- 다른 대안 대신 이 방식을 선택한 이유: The dependency graph stays acyclic and every existing path, serialized shape, error, identity probe, and cleanup guard remains reusable from one owner.
+- 장점, 단점 및 영향: Internal lifecycle imports become narrow and testable; review must still treat changes to `atomic-write.ts` and `process-state.ts` as shared cross-platform runtime changes.
+
 `src/types.ts` is the shape and `src/config.ts` is the loader; neither is reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 
