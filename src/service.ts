@@ -10,8 +10,8 @@ import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, posix, resolve, win32 } from "node:path";
-import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
-import { loadConfig } from "./config";
+import { expandUserPath, getConfigDir, loadConfig } from "./config";
+import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config/process-state";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "./codex/home";

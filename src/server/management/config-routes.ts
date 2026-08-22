@@ -490,7 +490,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../../codex/sync");
     const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
-    const { readRuntimePort, loadConfig } = await import("../../config");
+    const [{ readRuntimePort }, { loadConfig }] = await Promise.all([
+      import("../../config/process-state"),
+      import("../../config"),
+    ]);
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
     const runtime = readRuntimePort(process.pid);
