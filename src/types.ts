@@ -86,6 +86,7 @@ export type {
 export type {
   RefreshPolicy,
   OpenRouterProviderRouting,
+  VercelGatewayRouting,
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,
   ProviderCostOverlay,
