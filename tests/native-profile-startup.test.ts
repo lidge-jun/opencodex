@@ -881,6 +881,61 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     }
   });
 
+  test("startServer retries lifecycle preparation after a pinned home appears", async () => {
+    const f = await fixture("prepared", "source-exact", false, "direct");
+    const lateCodexHome = join(f.root, "late-codex-home");
+    process.env.CODEX_HOME = lateCodexHome;
+    process.env.OPENCODEX_HOME = f.configDir;
+    let answer: NativeCodexOwnership = "unknown";
+    let finishRecovery!: () => void;
+    const recoveryBarrier = new Promise<void>(resolve => { finishRecovery = resolve; });
+    const server = startServer(0, {
+      inspectNativeCodexOwnership: scope => ({
+        ownership: answer,
+        reason: scope.currentHomes?.codexHome === lateCodexHome
+          ? "pinned missing home test"
+          : "unexpected startup scope",
+      }),
+      nativeMainStartup: {
+        beforeRecovery: () => recoveryBarrier,
+        owner: { retryMs: 10, hardenPath: async () => {} },
+      },
+    });
+    try {
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "ownership-unknown",
+      });
+
+      answer = "owned";
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "ownership-unknown",
+      });
+
+      mkdirSync(lateCodexHome, { recursive: true });
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      const pending = nativeMainStartupGateSnapshot();
+      expect(pending).toMatchObject({ status: "blocked", reason: "recovery-pending" });
+      expect(pending.homeId).not.toBeNull();
+
+      finishRecovery();
+      expect(await waitForNativeMainStartupGate()).toEqual({
+        status: "ready",
+        homeId: pending.homeId,
+      });
+      const allowed = tryAcquireNativeMainProfileClaim();
+      expect(allowed).not.toBeNull();
+      allowed?.release();
+    } finally {
+      finishRecovery();
+      await server.stop(true);
+    }
+  });
+
   test("an owned activation failure keeps the fence and retry hook intact", () => {
     let activationFails = true;
     let activations = 0;

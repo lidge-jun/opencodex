@@ -772,33 +772,29 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     // enough to reopen native-main admission.
     return retryPreparedNativeMainLifecycle ? "owned" : "unknown";
   };
-  const ownershipRetryOptions = preparedNativeMainLifecycle || startupOwnershipHomes === null
-    ? {
-      reprobe: reprobeNativeOwnership,
-      expectedHomeId: () => retryPreparedNativeMainLifecycle?.homeId ?? null,
-      startOwnedLifecycle: () => {
-        if (!retryPreparedNativeMainLifecycle) {
-          throw new Error("Native-main ownership became known before its startup lifecycle was prepared.");
-        }
-        return retryPreparedNativeMainLifecycle.start();
-      },
-    }
-    : undefined;
+  const ownershipRetryOptions = {
+    reprobe: reprobeNativeOwnership,
+    expectedHomeId: () => retryPreparedNativeMainLifecycle?.homeId ?? null,
+    startOwnedLifecycle: () => {
+      if (!retryPreparedNativeMainLifecycle) {
+        throw new Error("Native-main ownership became known before its startup lifecycle was prepared.");
+      }
+      return retryPreparedNativeMainLifecycle.start();
+    },
+  };
   const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
     ? nativeOwnership.ownership === "owned"
       ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
       : nativeOwnership.ownership === "foreign"
         ? blockNativeMainStartupForUnownedServiceHome("foreign-ownership")
-        : ownershipRetryOptions
-          ? blockNativeMainStartupForUnownedServiceHome(
-            "ownership-unknown",
-            // #2108: an `unknown` verdict means the probe could not answer, not that this host
-            // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
-            // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
-            // verdict ignores this by design — that one is a fact, not a question.
-            ownershipRetryOptions,
-          )
-          : blockNativeMainStartupForUnownedServiceHome("ownership-unknown")
+        : blockNativeMainStartupForUnownedServiceHome(
+          "ownership-unknown",
+          // #2108: an `unknown` verdict means the probe could not answer, not that this host
+          // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
+          // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
+          // verdict ignores this by design — that one is a fact, not a question.
+          ownershipRetryOptions,
+        )
     : {
       homeId: null,
       settled: Promise.resolve({ status: "ready", homeId: null }),
