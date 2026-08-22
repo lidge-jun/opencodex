@@ -40,9 +40,22 @@ jobs:
             git remote add upstream https://github.com/lidge-jun/opencodex.git
           fi
           git fetch upstream main dev --tags --prune
-          git fetch origin \
-            refs/heads/vendor/main:refs/heads/vendor/main \
-            refs/heads/vendor/dev:refs/heads/vendor/dev
+          bootstrap_refs=()
+          if git ls-remote --exit-code origin refs/heads/vendor/main >/dev/null; then
+            git fetch origin refs/heads/vendor/main:refs/heads/vendor/main
+          else
+            git branch vendor/main upstream/main
+            bootstrap_refs+=(refs/heads/vendor/main:refs/heads/vendor/main)
+          fi
+          if git ls-remote --exit-code origin refs/heads/vendor/dev >/dev/null; then
+            git fetch origin refs/heads/vendor/dev:refs/heads/vendor/dev
+          else
+            git branch vendor/dev upstream/dev
+            bootstrap_refs+=(refs/heads/vendor/dev:refs/heads/vendor/dev)
+          fi
+          if [ "${#bootstrap_refs[@]}" -gt 0 ]; then
+            git push origin "${bootstrap_refs[@]}"
+          fi
 
       - name: Detect and pin vendor refs
         id: pin
