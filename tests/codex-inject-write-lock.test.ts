@@ -8,9 +8,14 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  resolveCodexCoordinatorDatabasePath,
+  resolveEffectiveUserIdentity,
+} from "../src/codex/user-identity";
+import { STABLE_ZERO_BYTE_COORDINATOR_AGE_MS } from "../src/codex/inject-coordination";
 
 const repoRoot = join(import.meta.dir, "..");
 const CHILD = join(repoRoot, "tests", "helpers", "codex-inject-race-child.ts");
@@ -20,6 +25,7 @@ let root = "";
 let codexHome = "";
 let opencodexHome = "";
 const cleanup: string[] = [];
+const coordinatorCleanup: string[] = [];
 
 function seedNative(): void {
   writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5"\n');
@@ -50,6 +56,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  while (coordinatorCleanup.length) {
+    const path = coordinatorCleanup.pop()!;
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+      rmSync(`${path}${suffix}`, { force: true });
+    }
+  }
   while (cleanup.length) {
     const dir = cleanup.pop()!;
     // `force` covers a missing path, not a locked one: a child that is still exiting
@@ -183,6 +195,35 @@ describe("homes the coordinator cannot adopt keep working", () => {
     const result = runInject(10100);
     expect(result.success).toBeTrue();
     expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("openai_base_url");
+  });
+
+  test("a zero-byte coordinator remnant does not wedge a pre-substrate routed home", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model_provider = "opencodex"',
+      'model = "gpt-5.5"',
+      "",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+    ].join("\n"));
+    const coordinatorPath = resolveCodexCoordinatorDatabasePath(
+      resolveEffectiveUserIdentity(),
+      realpathSync.native(codexHome),
+    );
+    coordinatorCleanup.push(coordinatorPath);
+    writeFileSync(coordinatorPath, "");
+    if (process.platform !== "win32") chmodSync(coordinatorPath, 0o600);
+    // Fresh zero-byte files remain on the coordinated path because they may
+    // belong to a live SQLite creator. This fixture represents an old remnant.
+    Bun.sleepSync(STABLE_ZERO_BYTE_COORDINATOR_AGE_MS + 100);
+
+    const result = runInject(10100);
+
+    expect(result.success).toBeTrue();
+    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("openai_base_url");
+    expect(readFileSync(coordinatorPath)).toHaveLength(0);
   });
 });
 

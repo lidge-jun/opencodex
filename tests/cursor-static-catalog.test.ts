@@ -120,3 +120,34 @@ describe("Cursor static Codex catalog", () => {
     }
   });
 });
+
+describe("Opus Fast catalog families (devlog 300, live-verified 260822)", () => {
+  test("all three -fast families are present with tier pickers", async () => {
+    const { CURSOR_STATIC_MODELS } = await import("../src/adapters/cursor/discovery");
+    for (const id of ["claude-opus-4-7-fast", "claude-opus-4-8-fast", "claude-opus-5-fast"]) {
+      const entry = CURSOR_STATIC_MODELS.find(model => model.id === id);
+      expect(entry, `${id} missing from static catalog`).toBeDefined();
+      expect(entry?.supportsReasoningEffort, `${id} must carry a tier picker — the bare wire id is not_found`).toBe(true);
+    }
+  });
+
+  test("tier ladders match the 260822 GetUsableModels dump", async () => {
+    const { cursorModelEffortLadder } = await import("../src/adapters/cursor/effort-map");
+    expect(cursorModelEffortLadder("claude-opus-4-7-fast")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cursorModelEffortLadder("claude-opus-4-8-fast")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cursorModelEffortLadder("claude-opus-5-fast")).toEqual(["low", "medium", "high"]);
+  });
+
+  test("wire-id derivation produces the live-verified suffixed forms and never a bare -fast id", async () => {
+    const { cursorWireModelIdWithEffort, cursorEffortSuffix } = await import("../src/adapters/cursor/effort-map");
+    expect(cursorWireModelIdWithEffort("claude-opus-4-8-fast", "high")).toBe("claude-opus-4-8-high-fast");
+    expect(cursorWireModelIdWithEffort("claude-opus-5-fast", "medium")).toBe("claude-opus-5-medium-fast");
+    expect(cursorWireModelIdWithEffort("claude-opus-4-7-fast", "max")).toBe("claude-opus-4-7-max-fast");
+    // No-effort requests must still resolve to a suffix (bare id is not_found on the wire).
+    for (const id of ["claude-opus-4-7-fast", "claude-opus-4-8-fast", "claude-opus-5-fast"]) {
+      expect(cursorEffortSuffix(id, undefined), `${id} must never send bare`).toBeTruthy();
+    }
+    // Out-of-ladder effort clamps within the family ladder (opus-5-fast has no xhigh).
+    expect(cursorEffortSuffix("claude-opus-5-fast", "xhigh")).toBe("high");
+  });
+});

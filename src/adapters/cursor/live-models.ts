@@ -14,6 +14,7 @@
  *   5-byte gRPC/Connect frame makes the server mis-parse it ("illegal tag: field no 0").
  */
 import http2 from "node:http2";
+import { cursorH2Pool } from "./h2-pool";
 import { fromBinary } from "@bufbuild/protobuf";
 import type { UpstreamHttpVersion } from "../../types";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
@@ -205,35 +206,29 @@ async function fetchCursorUsableModelsHttp2Once(opts: CursorUsableModelsOptions)
       resolve(value);
     };
 
-    let client: http2.ClientHttp2Session;
-    try {
-      client = http2.connect(baseUrl);
-    } catch {
-      return finish({ ok: false, error: "transport", detail: "HTTP/2 connection setup failed" });
-    }
 
-    const timer = setTimeout(() => {
-      finish({ ok: false, error: "timeout", detail: `No response within ${timeoutMs}ms` });
-      client.destroy();
-    }, timeoutMs);
-    const close = (value: CursorUsableModelsResult): void => {
-      clearTimeout(timer);
-      client.close();
-      finish(value);
-    };
+   const timer = setTimeout(() => {
+     // Cancel the borrowed pooled stream so it does not continue receiving
+     // body bytes after the caller has timed out (regression vs pre-pool behavior).
+     req?.destroy();
+     finish({ ok: false, error: "timeout", detail: `No response within ${timeoutMs}ms` });
+   }, timeoutMs);
+   const close = (value: CursorUsableModelsResult): void => {
+     clearTimeout(timer);
+     finish(value);
+   };
 
-    client.on("error", () => close({ ok: false, error: "transport", detail: "HTTP/2 session failed" }));
 
-    let req: http2.ClientHttp2Stream;
-    try {
-      req = client.request({
-        ":method": "POST",
-        ":path": CURSOR_GET_USABLE_MODELS_PATH,
-        ...cursorDiscoveryHeaders(opts),
-      });
-    } catch {
-      return close({ ok: false, error: "transport", detail: "HTTP/2 request setup failed" });
-    }
+   let req: http2.ClientHttp2Stream;
+   try {
+      req = cursorH2Pool.request(baseUrl, {
+       ":method": "POST",
+       ":path": CURSOR_GET_USABLE_MODELS_PATH,
+       ...cursorDiscoveryHeaders(opts),
+     });
+   } catch {
+     return close({ ok: false, error: "transport", detail: "HTTP/2 request setup failed" });
+   }
 
     let status = 0;
     const chunks: Buffer[] = [];

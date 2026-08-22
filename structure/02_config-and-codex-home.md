@@ -80,6 +80,27 @@ on proven absence, never on an unreadable path.
 - 다른 대안 대신 이 방식을 선택한 이유: Physical credential ownership remains cross-process safe, while an inert optional subsystem can no longer create the reported lock/recovery catch-22.
 - 장점, 단점 및 영향: Fresh installs avoid the SQLite profile lock; any present or uncertain stage state retains the existing locked fail-closed cleanup and recovery behavior.
 
+The native-write coordinator is keyed by the canonical `CODEX_HOME` in the effective-user runtime
+namespace. A pathname alone is not authority: SQLite can expose a zero-byte file before its first
+schema write, and a terminated process can leave that remnant behind. Eligibility treats the file
+as non-authoritative only after an immutable SQLite read proves version zero with no tables, the
+filesystem identity remains unchanged, and the file has been settled for at least one second; a
+fresh zero-byte creator stays on the coordinated path so its lock cannot be bypassed. `ocx doctor` inspects the
+coordinator with immutable read-only SQLite flags so diagnosis never creates WAL/SHM sidecars. It
+distinguishes absent, zero-byte, unversioned, rowless, valid, unsupported, changed, unsafe, and
+unreadable states and prints the exact path. Explicit recovery is available only after the proxy is
+stopped and only for a proven zero-byte state. The command revalidates the same private
+regular-file identity under a non-blocking SQLite write lock and moves it to a same-directory
+backup; it never deletes or auto-adopts legacy routed residue.
+
+[Decision Log]
+- 목적과 의도: Recover a crashed zero-byte coordinator without mistaking SQLite's normal creation window for stale authority.
+- 기존 구현 및 제약 조건: Eligibility treated every existing pathname as coordinated, while initialization correctly refused a missing row over routed residue; catalog sync could therefore succeed before config injection failed permanently.
+- 검토한 주요 대안: Delete zero-byte files automatically, initialize a new row over residue, require a manual filesystem command, or add observe-only classification plus explicit guarded quarantine.
+- 선택한 방식: Treat only a settled, identity-stable, immutably verified zero-byte database like the existing legacy-uncoordinated boundary; keep fresh creators coordinated, diagnose all other database states immutably, and expose an opt-in zero-byte-only same-directory backup move with identity, ownership, sidecar, liveness, and SQLite-lock checks.
+- 다른 대안 대신 이 방식을 선택한 이유: Automatic deletion or adoption can race a live creator or erase transition evidence; a guarded backup preserves evidence and makes the operator action reproducible.
+- 장점, 단점 및 영향: A stale zero-byte file no longer wedges sync, valid/unrecognized databases remain fail-closed, and recovery requires the proxy to be stopped before `ocx sync` retries injection.
+
 OpenCodex never overrides an explicit `CODEX_HOME`. On Windows, `ocx doctor` and `ocx status`
 nevertheless diagnose the high-confidence Orca dual-home case: both `CODEX_HOME` and
 `ORCA_CODEX_HOME` select Orca's `orca/codex-runtime-home/home`, while the ChatGPT/Codex app uses the

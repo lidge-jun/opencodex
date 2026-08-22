@@ -118,6 +118,20 @@ describe("#1735 thought signature survives history replay", () => {
       .toBe(SIGNATURE);
   });
 
+  test("a functionCall part with nested extra_content.google.thought_signature is read", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(firstTurn());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify(googleBody([
+      {
+        functionCall: { name: "shell_command", args: { command: "pwd" } },
+        extra_content: { google: { thought_signature: SIGNATURE } },
+      },
+    ]))));
+    const start = events.find((e: AdapterEvent) => e.type === "tool_call_start");
+    expect(start && "providerMetadata" in start ? start.providerMetadata?.google?.thoughtSignature : undefined)
+      .toBe(SIGNATURE);
+  });
+
   test("parallel calls each keep their own signature", async () => {
     const adapter = createGoogleAdapter(provider);
     await adapter.buildRequest(firstTurn());

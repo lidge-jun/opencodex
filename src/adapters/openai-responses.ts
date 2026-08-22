@@ -19,6 +19,7 @@ import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-co
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
+import { normalizeXaiResponsesWebSearch } from "./xai-web-search";
 import {
   createAdapterTierMetadata,
 } from "../providers/fastwire";
@@ -1503,17 +1504,55 @@ function stripUnsupportedHostedTools(body: unknown): unknown {
  * provider capability metadata; an unclassified upstream keeps the fields.
  */
 const OPENAI_ONLY_WEB_SEARCH_FIELDS = ["external_web_access", "search_context_size"] as const;
-export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
-  if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
+
+function stripOpenAiOnlyWebSearchFieldsFromTools(tools: unknown[]): {
+  tools: unknown[];
+  changed: boolean;
+} {
   let changed = false;
-  const tools = body.tools.map(t => {
-    if (!isPlainObject(t) || (t.type !== "web_search" && t.type !== "web_search_preview")) return t;
-    if (!OPENAI_ONLY_WEB_SEARCH_FIELDS.some(field => Object.hasOwn(t, field))) return t;
-    const { external_web_access: _access, search_context_size: _size, ...rest } = t;
+  const stripped = tools.map(tool => {
+    if (!isPlainObject(tool) || (tool.type !== "web_search" && tool.type !== "web_search_preview")) {
+      return tool;
+    }
+    if (!OPENAI_ONLY_WEB_SEARCH_FIELDS.some(field => Object.hasOwn(tool, field))) return tool;
+    const { external_web_access: _access, search_context_size: _size, ...rest } = tool;
     changed = true;
     return rest;
   });
-  return changed ? { ...body, tools } : body;
+  return { tools: changed ? stripped : tools, changed };
+}
+
+export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+
+  let next: Record<string, unknown> = body;
+  let changed = false;
+  if (Array.isArray(body.tools)) {
+    const stripped = stripOpenAiOnlyWebSearchFieldsFromTools(body.tools);
+    if (stripped.changed) {
+      next = { ...next, tools: stripped.tools };
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(body.input)) {
+    let inputChanged = false;
+    const input = body.input.map(item => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) {
+        return item;
+      }
+      const stripped = stripOpenAiOnlyWebSearchFieldsFromTools(item.tools);
+      if (!stripped.changed) return item;
+      inputChanged = true;
+      return { ...item, tools: stripped.tools };
+    });
+    if (inputChanged) {
+      next = { ...next, input };
+      changed = true;
+    }
+  }
+
+  return changed ? next : body;
 }
 
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
@@ -1692,17 +1731,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // that already recorded a single-query web_search_call replays it every turn, and
       // a strict parser rejects the whole request over it (#930).
       outBody = backfillWebSearchQueries(outBody);
-      // Same predicate as the routedCompaction gate in handleResponses(): an
-      // authMode check would let a noncanonical custom forward provider skip this
-      // rewrite while the server still routes it as a summarizer turn (#422).
-      if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
-        outBody = buildRoutedCompactionBody(outBody);
-      }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
-        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody);
+        const rewritten = rewriteRoutedCustomToolsForUpstream(
+          outBody,
+          provider.supportsResponsesCustomTools,
+        );
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
@@ -1712,12 +1748,6 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedToolSearchForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
-        // xAI rejects these OpenAI web_search extensions with HTTP 400. Keep them
-        // for OpenAI API-key traffic and unclassified gateways; only an explicit
-        // provider capability denial activates the compatibility transform.
-        if (provider.supportsOpenAiWebSearchToolFields === false) {
-          outBody = stripOpenAiOnlyWebSearchFields(outBody);
-        }
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         // Codex 0.147 emits private namespace tool groups, while public/third-party Responses
@@ -1726,8 +1756,24 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
+        // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
+        // generic capability fallback removes the private OpenAI fields.
+        outBody = normalizeXaiResponsesWebSearch(outBody, provider);
+        // xAI and explicitly classified compatible gateways reject these OpenAI web_search
+        // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
+        if (provider.supportsOpenAiWebSearchToolFields === false) {
+          outBody = stripOpenAiOnlyWebSearchFields(outBody);
+        }
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
+      }
+      // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
+      // let a noncanonical custom forward provider skip this rewrite while the server still routes
+      // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
+      // therefore be the last routed transform: anything before it may depend on the declarations;
+      // anything after it cannot.
+      if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
+        outBody = buildRoutedCompactionBody(outBody);
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(

@@ -47,57 +47,41 @@ Run that yourself in this repo. Agents must not run `git config`.
 
 ## Sync `origin/main` with an upstream release
 
-Fetch when working. Merge when **`upstream/main` moves** (a release), and
-immediately for security/auth changes on that branch. Do not chase daily
-`upstream/dev` movement into `origin/main`. When `main` already carries
-replayed `feat/*` patches, rebuild `run/main` and merge that into `main`
-instead of merging `vendor/main` directly onto the PR stack.
+The daily path is this merge-from-`main` flow. Fetch when working and merge
+when **`upstream/main` moves** (a release), with security/auth changes on that
+branch handled immediately. Do not chase daily `upstream/dev` movement into
+`origin/main`.
 
 ```bash
 git fetch upstream origin --prune
-git checkout vendor/main
+git switch vendor/main
 git merge --ff-only upstream/main
-git checkout vendor/dev
+git switch vendor/dev
 git merge --ff-only upstream/dev
-git checkout -b sync/upstream-$(date +%Y%m%d) origin/main
-git merge --no-ff vendor/main
+git switch -c sync/upstream-$(date +%Y%m%d) origin/main
+git merge --no-ff origin/vendor/main
 ```
 
 Resolve conflicts using [`OWNED.md`](./OWNED.md). Run focused tests (see the
-[daily pin design](../superpowers/specs/2026-08-21-fork-daily-main-pin-design.md)).
-Open a sync PR on the fork into `origin/main`. Drop overlay commits already on
-upstream.
+Open or update a draft PR on the fork from `sync/upstream-YYYYMMDD` into
+`main`, and leave it mergeable for a human. The human clicks **Create a merge
+commit** / **Merge pull request**. Never squash or rebase these sync PRs.
 
-Never `git merge -X ours` across the tree. If the merge is a disaster: abort, shrink overlay, retry.
-
-## Rebuild daily `main`
-
-Do not force-push `main`. Rebuild on disposable `run/main`, then merge that
-into `main` (first landing may be a fast-forward).
+If a disconnected rebuild is ever required, keep it as the emergency/catch-up
+recipe only. After the rebuild is reviewed, check out `run/main` first and
+record the old `main` parent with an ours merge, leaving the rebuild tree
+unchanged:
 
 ```bash
-git fetch upstream origin --prune
-git checkout vendor/main
-git merge --ff-only upstream/main
-git checkout -B run/main vendor/main
-# apply the overlay commits, in order:
-git cherry-pick $(git rev-list --reverse vendor/main..overlay)
-# merge selected feat/* PR heads, in order:
-git merge origin/feat/antigravity-quota-geoblock
-git merge origin/feat/antigravity-cca-wire
-git merge origin/feat/antigravity-host-failover
-git merge origin/feat/antigravity-account-cooldown
-git merge origin/feat/subagent-roles-config
-git merge origin/feat/subagent-roles-gui
-git merge origin/feat/subagent-roles-sync
-git push --force-with-lease origin run/main
-git checkout main
-git merge --no-ff origin/run/main
-git push origin main
+git switch run/main
+git merge --no-ff -s ours origin/main -m "Merge origin/main into run/main, keep rebuilt tree"
+git push origin run/main
 ```
 
-Stop including a `feat/*` once it is in `vendor/main`, not merely when it is
-in `vendor/dev`. Force-push `run/main` only—not `origin/main`.
+This catch-up `-s ours` is the documented exception to the no-whole-tree-ours
+rule, and is valid only while `run/main` is checked out. Do not recursively
+merge old `main` into the rebuild: that would reintroduce dropped commits
+(for example `macos-app`). Never force-push `main`.
 
 ## One-time split (mixed `dev`)
 
@@ -131,9 +115,9 @@ vendor ref creates an issue but does not start the coordinator; an
 The Action needs repository secrets `FORK_SYNC_CURSOR_WEBHOOK_URL` and
 `FORK_SYNC_CURSOR_WEBHOOK_SECRET`. Plugin IDs are selected with
 `FORK_SYNC_NOTIFIERS` and `FORK_SYNC_COORDINATORS`. The webhook starts the
-Cursor Automation described in the fork-sync skill; that agent rebuilds
-disposable `run/main`, opens a draft PR and decision table, then stops. A
-human reviews and merges `origin/main`.
+Cursor Automation described in the fork-sync skill; that agent creates the
+merge-from-`main` sync branch, opens or updates a draft PR and decision table,
+verifies it is mergeable, then stops. A human reviews and merges `origin/main`.
 
 ### Adding another coordinator
 

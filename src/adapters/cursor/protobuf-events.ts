@@ -11,6 +11,7 @@ import {
   isCodexShellBridgeToolName,
   isCursorStructuredEditToolName,
   normalizeCursorWireName,
+  normalizeCursorTextToolMarkers,
   OCX_RESPONSES_TOOL_PROVIDER,
   resolveShellBridgeAliasKey,
   responsesToolNameFromCursorWire,
@@ -1243,7 +1244,10 @@ export function mapCursorProtobufServerMessage(
   const update = serverMessage.message.value.message;
   switch (update.case) {
     case "textDelta":
-      return update.value.text ? [{ type: "text", text: update.value.text }] : [];
+      // #2305: fold Cursor display aliases inside textual pseudo tool-call markers back to
+      // the advertised wire name before any client sees the text. Real frames are already
+      // normalized structurally (mcpWireNameFromArgs above).
+      return update.value.text ? [{ type: "text", text: normalizeCursorTextToolMarkers(update.value.text) }] : [];
     case "thinkingDelta":
       return update.value.text ? [{ type: "thinking", thinking: update.value.text }] : [];
     case "toolCallStarted": {

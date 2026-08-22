@@ -125,6 +125,8 @@ export interface CatalogModel {
   supportsVerbosity?: boolean;
   /** Whether this exact routed model has a verified OpenAI-compatible service tier. */
   supportsServiceTier?: boolean;
+  /** Optional provider-specific copy for the advertised Fast tier. */
+  fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;
   /**
    * Codex tool calling mode for this routed model.

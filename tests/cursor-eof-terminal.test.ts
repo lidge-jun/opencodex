@@ -3,6 +3,7 @@ import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, test } from "bun:test";
 import {
   AgentServerMessageSchema,
+  ExecServerMessageSchema,
   InteractionUpdateSchema,
   McpArgsSchema,
   McpToolCallSchema,
@@ -63,6 +64,29 @@ function toolCallStartedFrame(callId: string, toolName: string): Uint8Array {
   return encodeConnectFrame(toBinary(AgentServerMessageSchema, message));
 }
 
+function clientToolArgsFrame(callId: string, toolName: string, argText: string): Uint8Array {
+  const message = create(AgentServerMessageSchema, {
+    message: {
+      case: "execServerMessage",
+      value: create(ExecServerMessageSchema, {
+        id: 1,
+        execId: `exec-${callId}`,
+        message: {
+          case: "mcpArgs",
+          value: create(McpArgsSchema, {
+            name: toolName,
+            toolName,
+            toolCallId: callId,
+            providerIdentifier: PROVIDER,
+            args: { text: new TextEncoder().encode(JSON.stringify(argText)) },
+          }),
+        },
+      }),
+    },
+  });
+  return encodeConnectFrame(toBinary(AgentServerMessageSchema, message));
+}
+
 function turnEndedFrame(): Uint8Array {
   const message = create(AgentServerMessageSchema, {
     message: {
@@ -77,6 +101,10 @@ function turnEndedFrame(): Uint8Array {
 
 function emptyFrame(): Uint8Array {
   return encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {})));
+}
+
+function cleanConnectEndFrame(): Uint8Array {
+  return encodeConnectFrame(new TextEncoder().encode("{}"), { endStream: true });
 }
 
 function runRequest(tools?: CursorRunRequest["tools"]): CursorRunRequest {
@@ -95,6 +123,17 @@ const APPLY_PATCH_TOOL = [{
   parameters: { type: "object", properties: { input: { type: "string" } }, required: ["input"] },
   freeform: true,
 }] as unknown as CursorRunRequest["tools"];
+
+const ECHO_TOOL = [{
+  name: "echo_a",
+  description: "echo text",
+  parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+}] as unknown as CursorRunRequest["tools"];
+
+const ECHO_AND_APPLY_PATCH_TOOLS = [
+  ...(ECHO_TOOL ?? []),
+  ...(APPLY_PATCH_TOOL ?? []),
+] as CursorRunRequest["tools"];
 
 async function drain(baseUrl: string, request: CursorRunRequest): Promise<{
   messages: CursorServerMessage[];
@@ -150,6 +189,80 @@ describe("Cursor clean-EOF terminal gate", () => {
 
       expect(failure).toBeUndefined();
       expect(messages.some(m => m.type === "done")).toBe(true);
+    });
+  });
+
+  test("clean Connect END_STREAM finishes before a held-open HTTP body (#2300)", async () => {
+    let fallback: ReturnType<typeof setTimeout> | undefined;
+    const startedAt = Date.now();
+    await withH2Server(stream => {
+      stream.on("error", () => {});
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.write(Buffer.from(turnEndedFrame()));
+      stream.write(Buffer.from(cleanConnectEndFrame()));
+      // Model Cursor's observed shape: the protocol has ended, but the HTTP body has not. The
+      // fallback keeps the pre-fix test bounded; correct code returns well before it fires.
+      fallback = setTimeout(() => {
+        try { stream.end(); } catch { /* transport already closed */ }
+      }, 500);
+    }, async baseUrl => {
+      const { messages, failure } = await drain(baseUrl, runRequest());
+      expect(failure).toBeUndefined();
+      expect(messages.filter(message => message.type === "done")).toHaveLength(1);
+    });
+    if (fallback) clearTimeout(fallback);
+    expect(Date.now() - startedAt).toBeLessThan(450);
+  });
+
+  test("clean Connect END_STREAM wins over an immediate abort-shaped body teardown (#2300)", async () => {
+    await withH2Server(stream => {
+      stream.on("error", () => {});
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.write(Buffer.from(turnEndedFrame()));
+      stream.write(Buffer.from(cleanConnectEndFrame()));
+      setImmediate(() => {
+        const abort = new Error("The operation was aborted");
+        abort.name = "AbortError";
+        stream.destroy(abort);
+      });
+    }, async baseUrl => {
+      const { messages, failure } = await drain(baseUrl, runRequest());
+      expect(failure).toBeUndefined();
+      expect(messages.filter(message => message.type === "done")).toHaveLength(1);
+      expect(messages.some(message => message.type === "error")).toBe(false);
+    });
+  });
+
+  test("clean Connect END_STREAM preserves a drained client-tool terminal before its grace timer", async () => {
+    await withH2Server(respondWith([
+      toolCallStartedFrame("call_client_1", "echo_a"),
+      clientToolArgsFrame("call_client_1", "echo_a", "A"),
+      cleanConnectEndFrame(),
+    ]), async baseUrl => {
+      const { messages, failure } = await drain(baseUrl, runRequest(ECHO_TOOL));
+
+      expect(failure).toBeUndefined();
+      expect(messages.filter(message => message.type === "tool_call_end")).toHaveLength(1);
+      expect(messages.filter(message => message.type === "done")).toHaveLength(1);
+      expect(messages.some(message => message.type === "error")).toBe(false);
+    });
+  });
+
+  test("clean Connect END_STREAM keeps a later open sibling fail-closed after a client-tool drain", async () => {
+    await withH2Server(respondWith([
+      toolCallStartedFrame("call_client_2", "echo_a"),
+      clientToolArgsFrame("call_client_2", "echo_a", "A"),
+      toolCallStartedFrame("call_open_2", "apply_patch"),
+      cleanConnectEndFrame(),
+    ]), async baseUrl => {
+      const { messages, failure } = await drain(baseUrl, runRequest(ECHO_AND_APPLY_PATCH_TOOLS));
+
+      expect(failure).toBeUndefined();
+      expect(messages.filter(message => message.type === "tool_call_end")).toHaveLength(1);
+      const terminal = messages.at(-1);
+      expect(terminal?.type).toBe("error");
+      expect((terminal as { message?: string }).message).toContain("call_open_2");
+      expect(messages.some(message => message.type === "done")).toBe(false);
     });
   });
 

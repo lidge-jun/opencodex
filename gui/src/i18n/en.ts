@@ -782,7 +782,7 @@ export const en = {
   "logs.detail.estimate.cache_detail_missing": "Cache details were unavailable; input is an upper-bound estimate.",
   "logs.detail.estimate.expected_price_overlay": "A verified expected list price was used.",
   "logs.detail.estimate.provider_cost_overlay": "A provider-configured price overlay was used.",
-  "logs.detail.estimate.priority_lower_bound": "The confirmed OpenRouter priority price is unavailable; the displayed standard-price estimate is a known lower bound.",
+  "logs.detail.estimate.priority_lower_bound": "The confirmed Priority price is unavailable; the displayed estimate is a known lower bound.",
   "logs.col.error": "Error",
   "logs.col.upstreamReason": "Upstream reason",
   "logs.col.duration": "Duration",

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createAdapterTierMetadata } from "../src/providers/fastwire";
 import {
   calculateCost,
   estimateAttemptCost,
@@ -12,8 +13,10 @@ import {
 import {
   EXPECTED_PRICE_OVERLAYS,
   PRIORITY_MULTIPLIERS,
+  PRIORITY_PRICING_RULES,
   CONTEXT_TIERS,
   findExpectedPriceOverlay,
+  findPriorityPricingRule,
   resolvePriorityMultiplier,
   type ExpectedPriceOverlay,
 } from "../src/usage/expected-prices";
@@ -561,6 +564,169 @@ describe("priority (Fast) service tier multiplier", () => {
     expect(base!.cost.total).toBeCloseTo(1.6, 9);
     expect(fast!.cost.total).toBeCloseTo(3.2, 9);
     expect(fast!.priorityMultiplier).toBe(2);
+  });
+});
+
+describe("xAI Priority Processing pricing", () => {
+  const usage = {
+    inputTokens: 100_000,
+    outputTokens: 10_000,
+    cacheReadInputTokens: 20_000,
+  };
+
+  function outcome(responseServiceTier?: string) {
+    const tracker = createAdapterTierMetadata(
+      {
+        capability: true,
+        eligibility: "eligible",
+        fastWire: {
+          kind: "service-tier",
+          canonicalToWire: { priority: "priority" },
+          foreignCallerTiers: "verbatim",
+        },
+        demandDecision: "force-fast",
+      },
+      { kind: "set", value: "priority" },
+      "service-tier",
+      "priority",
+    )!;
+    if (responseServiceTier !== undefined) tracker.observeResponseServiceTier(responseServiceTier);
+    return tracker.outcome;
+  }
+
+  function estimate(tierOutcome: ReturnType<typeof outcome>, requestUsage = usage) {
+    return estimateAttemptCost({
+      ordinal: 1,
+      provider: "xai",
+      model: "grok-4.6",
+      usageStatus: "reported",
+      usage: requestUsage,
+      tierOutcome,
+    })!;
+  }
+
+  test("xAI rules declare exact 2x premiums with official provenance", () => {
+    const xaiRules = PRIORITY_PRICING_RULES.filter(rule => rule.provider === "xai");
+    expect(xaiRules.map(rule => rule.modelId)).toEqual(["grok-4.5", "grok-4.6"]);
+    expect(xaiRules.every(rule => rule.multiplier === 2)).toBe(true);
+    expect(xaiRules.every(rule => rule.requiresResponseConfirmation === true)).toBe(true);
+    expect(xaiRules.every(rule => rule.source === "https://docs.x.ai/developers/advanced-api-usage/priority-processing")).toBe(true);
+    expect(findPriorityPricingRule("xai", "grok-4.6")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("openrouter", "grok-4.6")).toBeUndefined();
+    expect(resolveMatchedPrice("openrouter", "grok-4.6")?.cost4).toEqual({
+      input: 2,
+      output: 6,
+      cacheRead: 0.3,
+      cacheWrite: 0,
+    });
+    expect(resolveMatchedPrice("cursor", "grok-4.6")?.cost4).toEqual({
+      input: 2,
+      output: 6,
+      cacheRead: 0.3,
+      cacheWrite: 0,
+    });
+  });
+
+  test("grok-4.6 standard and confirmed priority prices include the official cache rate", () => {
+    expect(resolveMatchedPrice("xai", "grok-4.6")?.cost4).toEqual({
+      input: 2,
+      output: 6,
+      cacheRead: 0.5,
+      cacheWrite: 0,
+    });
+    const confirmedOutcome = outcome("priority");
+    const confirmed = estimate(confirmedOutcome);
+    expect(confirmedOutcome).toMatchObject({
+      canonical: "priority",
+      fastOutcome: "applied",
+      confirmation: "confirmed",
+    });
+    expect(confirmed.cost.total).toBeCloseTo(0.46, 9);
+    expect(confirmed.cost.cacheRead).toBeCloseTo(0.02, 9);
+    expect(confirmed.priorityMultiplier).toBe(2);
+  });
+
+  test("an assumed priority outcome stays at the standard price", () => {
+    const assumedOutcome = outcome();
+    const assumed = estimate(assumedOutcome);
+    expect(assumedOutcome).toMatchObject({
+      canonical: "priority",
+      fastOutcome: "applied",
+      confirmation: "assumed",
+    });
+    expect(assumed.cost.total).toBeCloseTo(0.23, 9);
+    expect(assumed.priorityMultiplier).toBeUndefined();
+  });
+
+  test("missing provenance and a requested tier do not prove the xAI premium", () => {
+    for (const serviceTier of [
+      "priority",
+      { requestedServiceTier: "priority" },
+      { configuredServiceTier: "priority" },
+    ] as const) {
+      const unconfirmed = estimateRequestCost({
+        provider: "xai",
+        model: "grok-4.6",
+        usageStatus: "reported",
+        usage,
+        serviceTier,
+      })!;
+      expect(unconfirmed.cost.total).toBeCloseTo(0.23, 9);
+      expect(unconfirmed.priorityMultiplier).toBeUndefined();
+    }
+  });
+
+  test("an echoed default records a downgrade and bills the standard price", () => {
+    const downgradedOutcome = outcome("default");
+    const downgraded = estimate(downgradedOutcome);
+    expect(downgradedOutcome).toMatchObject({
+      fastOutcome: "downgraded",
+      fastDowngradeReason: "response-declined",
+      confirmation: "downgraded",
+      responseServiceTier: "default",
+    });
+    expect(downgradedOutcome).not.toHaveProperty("canonical");
+    expect(downgraded.cost.total).toBeCloseTo(0.23, 9);
+    expect(downgraded.priorityMultiplier).toBeUndefined();
+  });
+
+  test("confirmed priority at 200k uses the long-context price as a marked lower bound", () => {
+    const long = estimate(outcome("priority"), {
+      inputTokens: 200_000,
+      outputTokens: 10_000,
+      cacheReadInputTokens: 50_000,
+    });
+    expect(long.contextTier).toBe("long");
+    expect(long.priorityMultiplier).toBeUndefined();
+    expect(long.priorityLowerBound).toBe(true);
+    expect(long.cost).toMatchObject({
+      input: 0.6,
+      cacheRead: 0.05,
+      output: 0.12,
+    });
+    expect(long.cost.total).toBeCloseTo(0.77, 9);
+  });
+
+  test("a combo is a lower bound only when every priced attempt is a lower bound", () => {
+    const confirmed = outcome("priority");
+    const lowerBoundAttempt = {
+      ordinal: 1,
+      provider: "xai",
+      model: "grok-4.6",
+      usageStatus: "reported" as const,
+      usage: { inputTokens: 200_000, outputTokens: 10_000 },
+      tierOutcome: confirmed,
+    };
+    const ordinaryAttempt = {
+      ordinal: 2,
+      provider: "xai",
+      model: "grok-4.6",
+      usageStatus: "reported" as const,
+      usage,
+    };
+
+    expect(estimateComboCost([lowerBoundAttempt, { ...lowerBoundAttempt, ordinal: 2 }])?.priorityLowerBound).toBe(true);
+    expect(estimateComboCost([lowerBoundAttempt, ordinaryAttempt])?.priorityLowerBound).toBeUndefined();
   });
 });
 

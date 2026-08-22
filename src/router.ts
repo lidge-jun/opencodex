@@ -366,6 +366,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       && registryEntry.supportsOpenAiWebSearchToolFields !== undefined
       ? { supportsOpenAiWebSearchToolFields: registryEntry.supportsOpenAiWebSearchToolFields }
       : {}),
+    ...(provider.supportsResponsesCustomTools === undefined && registryEntry.supportsResponsesCustomTools !== undefined
+      ? { supportsResponsesCustomTools: registryEntry.supportsResponsesCustomTools }
+      : {}),
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
       : {}),

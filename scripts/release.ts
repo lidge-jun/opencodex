@@ -169,9 +169,50 @@ function sshTargetFromOrigin(originUrl: string): string | undefined {
   return undefined;
 }
 
-/** `ssh://host/owner/repo` or the scp-like `user@host:owner/repo`. Used for both derivation and override validation. */
+/**
+ * `ssh://host/owner/repo` or the scp-like `user@host:owner/repo`.
+ *
+ * This check is also a log boundary: the accepted value is printed before the push and appears in
+ * the failure command. Parse URL userinfo instead of treating any `ssh://` string as safe, and
+ * reject the scp-like `user:password@host:path` lookalike before either sink can observe it.
+ */
 function isSshRemote(value: string): boolean {
-  return /^ssh:\/\/[^/]+\/.+$/.test(value) || /^[^@\s/]+@[^:\s/]+:.+$/.test(value);
+  const trimmed = value.trim();
+  if (!trimmed || /[\u0000-\u001f\u007f]/.test(trimmed)) return false;
+
+  if (trimmed.startsWith("ssh://")) {
+    // WHATWG URL collapses an empty password ("git:@host" -> password ""), so the parsed fields
+    // cannot distinguish it from a credential-free principal. Reject any ':' in the raw userinfo
+    // segment instead: a colon there is always credential-shaped.
+    const authority = trimmed.slice("ssh://".length);
+    const userinfoEnd = authority.indexOf("@");
+    if (userinfoEnd !== -1 && authority.slice(0, userinfoEnd).includes(":")) return false;
+    try {
+      const parsed = new URL(trimmed);
+      let decodedUsername: string;
+      try {
+        decodedUsername = decodeURIComponent(parsed.username);
+      } catch {
+        return false;
+      }
+      return parsed.protocol === "ssh:"
+        && parsed.hostname.length > 0
+        && parsed.pathname.length > 1
+        && parsed.password === ""
+        // The release deploy key uses GitHub's fixed SSH principal. Treat any other userinfo as
+        // credential-shaped rather than trying to distinguish a harmless username from a token.
+        && (decodedUsername === "" || decodedUsername === SSH_USER)
+        && parsed.search === ""
+        && parsed.hash === "";
+    } catch {
+      return false;
+    }
+  }
+
+  // scp-like syntax has no parser-level query/fragment boundary. Reject those delimiters and any
+  // second '@' in the host segment rather than allowing a credential-shaped suffix to reach the
+  // target log or failed-command output.
+  return /^git@[^:@\s/?#]+:[^?#]+$/.test(trimmed);
 }
 
 /** Split out so the scp-like SSH target is assembled rather than written as an address literal. */
@@ -185,7 +226,7 @@ async function releasePushCommand(branch: string): Promise<{ command: string[]; 
   // silently retarget a production release. Check the shape, and print the resolved target either
   // way so the destination is visible before the push rather than inferred afterwards.
   if (configured && !isSshRemote(configured)) {
-    console.error("✗ OCX_RELEASE_SSH_REPO is not an ssh:// or user@host:owner/repo remote; refusing to push.");
+    console.error("✗ OCX_RELEASE_SSH_REPO is not a credential-free ssh:// or git@host:owner/repo remote; refusing to push.");
     process.exit(1);
   }
   const slug = configured || sshTargetFromOrigin(await capture(["git", "remote", "get-url", "origin"]));

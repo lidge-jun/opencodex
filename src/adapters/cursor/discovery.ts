@@ -236,10 +236,15 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "claude-4.6-opus", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-4.6-sonnet", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-4-7", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  // opus-4-7-fast: effort-suffix tiers unverified -> no tier picker; sent bare like live-only ids.
-  { id: "claude-opus-4-7-fast", contextWindow: CONTEXT_200K },
+  // Opus Fast families: live GetUsableModels (260822) lists ONLY effort-suffixed wire ids
+  // ({base-without-fast}-{effort}-fast; the bare id returns not_found), so every entry
+  // carries a tier picker. Live-verified: claude-opus-4-8-high-fast completed a turn.
+  // Tiers per the 260822 dump (devlog 260822_senpi_cursor_transfer/300).
+  { id: "claude-opus-4-7-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-opus-4-8-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-4-8", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-opus-5-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-fable-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
 
   { id: "composer-1", contextWindow: CONTEXT_200K },

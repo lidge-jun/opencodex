@@ -340,10 +340,12 @@ describe("GitHub Actions hardening", () => {
     // `ci.yml` therefore carries no base filter at all. `service-lifecycle.yml`
     // keeps its list: it gates the release service path, not review.
     const gate = await readText(".github/workflows/enforce-pr-target.yml");
-    const allowed = gate.match(/const ALLOWED_BASES = \[([^\]]*)\];/);
+    const allowed = gate.match(
+      /const ALLOWED_BASES\s*=\s*context\.repo\.owner === "lidge-jun"\s*\? \["dev"\]\s*:\s*\["dev", "main"\]/,
+    );
     expect(allowed).not.toBeNull();
-    const bases = [...(allowed?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
-    expect(bases).toEqual(["dev"]);
+    expect(allowed?.[0]).toContain('["dev"]');
+    expect(allowed?.[0]).toContain('["dev", "main"]');
 
     // The gate itself must stay unfiltered by base, or the stacked exemption it
     // implements would never be evaluated for the branches it exempts.
@@ -1216,10 +1218,11 @@ describe("GitHub Actions hardening", () => {
     expect(script).toContain("PR head moved while listing changed files");
     expect(script).toContain("github.rest.repos.getCollaboratorPermissionLevel");
     expect(script).toContain("github.rest.repos.compareCommitsWithBasehead");
-    // The allow-list is the gate's whole policy, so it is pinned by value and
-    // not just by shape: a widened list is the one edit that opens every base
-    // at once while every behavioural scenario below still passes.
-    expect(script).toMatch(/const ALLOWED_BASES = \["dev"\];/);
+    // The allow-list is fork-aware: upstream stays dev-only while the public
+    // fork also permits merge-from-main sync PRs.
+    expect(script).toMatch(
+      /const ALLOWED_BASES\s*=\s*context\.repo\.owner === "lidge-jun"\s*\? \["dev"\]\s*:\s*\["dev", "main"\]/,
+    );
     expect(script).toMatch(/const DEFAULT_BASE = "dev";/);
 
     // The read-only resolver is the single authority for PR identity. The

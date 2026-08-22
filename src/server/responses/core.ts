@@ -117,6 +117,7 @@ import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenA
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
+  codexPoolAffinityKey,
   CodexAccountCooldownError,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
@@ -145,6 +146,7 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-m
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
   computeQuotaCooldown,
+  codexQuotaScopeForModel,
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
@@ -334,11 +336,10 @@ export function adapterNeedsForcedContinuation(name: string): boolean {
 export function sidecarOutcomeRecorder(
   config: OcxConfig,
   authCtx: CodexAuthContext,
-  threadId?: string | null,
 ): ((outcome: CodexUpstreamOutcome) => void) | undefined {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"
     ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-      threadId,
+      threadId: authCtx.affinityKey,
       fixedAccount: authCtx.fixedAccount,
       probeLeaseId: authCtx.probeLeaseId,
       probeQuotaScope: authCtx.probeQuotaScope,
@@ -952,7 +953,7 @@ async function retryCodexPoolOnAlternateAccount(
   const recordFirstOutcome = (): void => {
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
       ...quotaMeta,
-      threadId: req.headers.get("x-codex-parent-thread-id"),
+      threadId: firstAuthCtx.affinityKey,
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
@@ -1087,7 +1088,6 @@ export function codexForwardTerminalOutcomeRecorder(
   provider: OcxProviderConfig,
   modelId?: string,
   logCtx?: RequestLogContext,
-  threadId?: string | null,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
   if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
   return (status, httpStatusOverride) => {
@@ -1096,7 +1096,7 @@ export function codexForwardTerminalOutcomeRecorder(
       // request. Don't penalize account health; record success to clear any
       // prior soft-avoid so a healthy account isn't stuck avoided.
       recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
-        threadId,
+        threadId: authCtx.affinityKey,
         fixedAccount: authCtx.fixedAccount,
         modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
@@ -1118,7 +1118,7 @@ export function codexForwardTerminalOutcomeRecorder(
       ? 200
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-      threadId,
+      threadId: authCtx.affinityKey,
       fixedAccount: authCtx.fixedAccount,
       modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
@@ -2193,6 +2193,27 @@ async function handleResponsesInner(
     if (inboundClientThreadId) {
       parsed._clientThreadId = inboundClientThreadId;
       parsed._reasoningReplayScope = { clientThreadId: inboundClientThreadId };
+    } else if (
+      options.inboundWire === "anthropic"
+      && options.promptCacheKeyIsSharedCohort !== true
+      && typeof parsed.options.promptCacheKey === "string"
+      && parsed.options.promptCacheKey.trim().length > 0
+    ) {
+      // Claude Code has no Codex parent-thread header, but its metadata.user_id is
+      // translated into a stable per-session prompt_cache_key. Use it as the replay
+      // thread identity so Gemini thought signatures are remembered by call_id for
+      // Anthropic Messages clients too (#1735/#1926). Keep `_clientThreadId` unset so
+      // existing provider session-id derivation (first-user-text fallback) is unchanged.
+      // Normalize through anthropicSessionKeyFromParts so overlong keys are hashed and
+      // trimming matches the affinity/session-key path exactly (no raw >128-char ids).
+      const normalizedCacheKey = anthropicSessionKeyFromParts({
+        promptCacheKey: parsed.options.promptCacheKey,
+        // The enclosing branch already proves this is not the shared cohort.
+        promptCacheKeyIsSharedCohort: false,
+      });
+      if (normalizedCacheKey) {
+        parsed._reasoningReplayScope = { clientThreadId: normalizedCacheKey };
+      }
     }
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
@@ -2294,6 +2315,7 @@ async function handleResponsesInner(
   let subagentFallbackPreviewAccountId: string | null | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
+  const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
 
   try {
     if (
@@ -2309,12 +2331,15 @@ async function handleResponsesInner(
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
   // tokens — auth is resolved only after the final route is selected.
   if (threadSpawn && !options.comboAttempt && route.codexAccountId === undefined) {
-    const threadId = req.headers.get("x-codex-parent-thread-id");
+    // The final resolveCodexAuthContext binds under codexQuotaScopeForModel(route.modelId),
+    // so the preview must read the same scope slot — an undefined scope would map to the
+    // "legacy" affinity bucket and never find a binding made under "shared" or a native
+    // model scope, making the preview diverge from the account that actually authenticates.
     const previewAccountId = previewCodexAccountForRequest(
-      threadId,
+      poolAffinityKey,
       config,
       Date.now(),
-      undefined,
+      codexQuotaScopeForModel(route.modelId),
       previewSelectionOptions,
     );
     subagentFallbackPreviewAccountId = previewAccountId;
@@ -3058,7 +3083,7 @@ async function handleResponsesInner(
       }
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-          threadId: req.headers.get("x-codex-parent-thread-id"),
+          threadId: authCtx.affinityKey,
           fixedAccount: authCtx.fixedAccount,
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
@@ -3441,7 +3466,6 @@ async function handleResponsesInner(
       route.provider,
       route.modelId,
       logCtx,
-      req.headers.get("x-codex-parent-thread-id"),
     );
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
@@ -3482,7 +3506,7 @@ async function handleResponsesInner(
       )) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
           ...quotaMeta,
-          threadId: req.headers.get("x-codex-parent-thread-id"),
+          threadId: authCtx.affinityKey,
           fixedAccount: authCtx.fixedAccount,
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),

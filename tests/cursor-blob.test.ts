@@ -913,6 +913,47 @@ describe("Cursor blob handshake", () => {
     const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
 
     expect(run?.action?.action.case).toBe("resumeAction");
+    const roots = decodeRootMessages(bytes) as Array<{ role?: string; content?: unknown }>;
+    const serialized = JSON.stringify(roots);
+    expect(serialized).toContain("read a file");
+    expect(serialized).not.toContain("[Tool Result]");
+    expect(serialized).not.toContain("[tool_result]");
+  });
+
+  test("native Auto Intelligence omits assistant-role [Tool Result] root replay", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "auto-intelligence",
+      conversationId: "c-auto-intel",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: read_file\nis_error: false\noutput:\ncontents" }],
+      rawMessages: [
+        { role: "user", content: "read a file", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/auto-intelligence",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+        },
+        { role: "toolResult", toolCallId: "call_1", toolName: "read_file", content: "contents", isError: false, timestamp: 3 },
+      ],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("resumeAction");
+    const roots = decodeRootMessages(bytes) as Array<{ role?: string; content?: unknown }>;
+    const serialized = JSON.stringify(roots);
+    expect(roots.some(root => root.role === "assistant")).toBe(false);
+    expect(serialized).not.toContain("[Tool Result]");
+    expect(serialized).not.toContain("[tool_result]");
+    expect(serialized).toContain("read a file");
+    const turnIds = run?.conversationState?.turns ?? [];
+    expect(turnIds).toHaveLength(1);
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnIds[0]!));
+    expect(turn.turn.case).toBe("agentConversationTurn");
+    const steps = turn.turn.case === "agentConversationTurn" ? turn.turn.value.steps : [];
+    expect(steps).toHaveLength(1);
+    const step = fromBinary(ConversationStepSchema, blobData(steps[0]!));
+    expect(step.message.case).toBe("toolCall");
   });
 
   test("drives composer-2.5 tool-result continuations as userMessageAction", () => {

@@ -353,6 +353,12 @@ export interface OcxProviderConfig {
    */
   supportsOpenAiWebSearchToolFields?: boolean;
   /**
+   * Whether the Responses upstream accepts native custom tools and custom_tool_call items.
+   * Set false only for a provider whose native contract rejects them; absence preserves
+   * apply_patch passthrough compatibility for OpenAI and unclassified gateways.
+   */
+  supportsResponsesCustomTools?: boolean;
+  /**
    * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
    * fields or closing events (#893). Disabled by default and applied only to client-facing
    * SSE/JSON; raw inspection state remains authoritative.

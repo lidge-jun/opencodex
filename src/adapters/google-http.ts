@@ -344,6 +344,12 @@ async function fetchGoogleWithRetryInternal(
         headers: activeRequest.headers,
         body: activeRequest.body,
       }, timeoutMs, ctx.abortSignal, ctx.stream, executor);
+      if (label === "Antigravity") {
+        const cooldownRecorded = await recordAntigravityHttpCooldown(res, ctx.accountId);
+        if (cooldownRecorded) {
+          return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+        }
+      }
       if (antigravityHosts.length > 1 && antigravityHostIndex === 0) {
         const shouldTryPeer = res.status === 404 || isUnavailableResponse(res);
         if (shouldTryPeer) {
@@ -351,12 +357,6 @@ async function fetchGoogleWithRetryInternal(
           antigravityHostIndex = 1;
           activeRequest = requestForHost(activeRequest, antigravityHosts[antigravityHostIndex]!);
           continue;
-        }
-      }
-      if (label === "Antigravity") {
-        const cooldownRecorded = await recordAntigravityHttpCooldown(res, ctx.accountId);
-        if (cooldownRecorded) {
-          return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
         }
       }
       if (label === "Antigravity" && isAntigravitySseRequest(activeRequest) && res.ok) {

@@ -203,6 +203,31 @@ Routed catalog entries also get their GPT-5 identity rewritten to the real upstr
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
 
+### Coordinator diagnosis and recovery
+
+Native config/history writes use a per-user SQLite coordinator keyed by the canonical `CODEX_HOME`.
+If a process terminates in SQLite's initial creation window, a zero-byte coordinator can remain even
+though it contains no authoritative transition row. `ocx doctor` reports the exact coordinator path
+and distinguishes zero-byte, unversioned, rowless, valid, unsafe, and unreadable states without
+creating SQLite sidecars. Automatic sync tolerates only an identity-stable zero-byte file that has
+settled for at least one second and whose immutable SQLite snapshot has version zero with no tables;
+a newly created zero-byte file remains on the locked coordinator path.
+
+For a state that doctor proves is a zero-byte creation remnant, stop the OpenCodex proxy/service
+and run:
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+Recovery moves the still-identical zero-byte file to a same-directory `.zero-byte-backup-*` path;
+it does not delete the evidence or adopt legacy routed state. It refuses a running proxy, lock
+contention, symlinks/reparse points, foreign ownership, changed files, every non-empty database,
+and any coordinator that already has an authoritative row. Desktop renderer filtering is a
+separate layer: a correct catalog and coordinator do not by themselves bypass the Codex App model
+allowlist.
+
 ### Routed local tools
 
 Non-native routed catalog rows use `tool_mode: "code_mode_only"`. This lets Codex expose its official

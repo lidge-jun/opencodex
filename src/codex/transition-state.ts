@@ -37,7 +37,7 @@ import {
   samePathIdentity,
 } from "./user-identity";
 
-const COORDINATOR_SCHEMA_VERSION = 1;
+export const CODEX_COORDINATOR_SCHEMA_VERSION = 1;
 const DURABLE_HISTORY_STATUSES = new Set(["converged", "pending", "running", "blocked", "unknown"]);
 const DURABLE_HISTORY_REASONS = new Set([
   "db-busy",
@@ -241,7 +241,7 @@ function rowToState(row: TransitionRow | null): CodexTransitionState {
   };
 }
 
-function readState(database: Database): CodexTransitionState {
+export function readCodexCoordinatorState(database: Database): CodexTransitionState {
   const row = database.query<TransitionRow, []>(SELECT_TRANSITION_ROW).get();
   return rowToState(row);
 }
@@ -282,7 +282,7 @@ function assertInitialStateCanBeCreated(): void {
 
 function initialize(database: Database, databaseWasAbsent: boolean): void {
   const version = database.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
-  if (version !== 0 && version !== COORDINATOR_SCHEMA_VERSION) {
+  if (version !== 0 && version !== CODEX_COORDINATOR_SCHEMA_VERSION) {
     throw new CodexCoordinatorTransactionError("The coordinator database schema version is unsupported.");
   }
   if (!databaseWasAbsent && version === 0) {
@@ -301,8 +301,8 @@ function initialize(database: Database, databaseWasAbsent: boolean): void {
     assertInitialStateCanBeCreated();
     database.query(INITIALIZE_TRANSITION_ROW).run(new Date().toISOString());
   }
-  if (version === 0) database.exec(`PRAGMA user_version = ${COORDINATOR_SCHEMA_VERSION}`);
-  readState(database);
+  if (version === 0) database.exec(`PRAGMA user_version = ${CODEX_COORDINATOR_SCHEMA_VERSION}`);
+  readCodexCoordinatorState(database);
 }
 
 function createCapability(
@@ -336,7 +336,7 @@ function createCapability(
         expected.nativeGeneration,
         expected.currentTxId,
       );
-      const state = readState(database);
+      const state = readCodexCoordinatorState(database);
       const update: TransitionStateUpdate = result.changes === 1
         ? { kind: "updated", state }
         : { kind: "conflict", current: state };
@@ -451,7 +451,7 @@ export function openCodexCoordinatorTransaction(finalDatabasePath: string): Code
     capability,
     expectation() {
       requireOpen();
-      const state = readState(db);
+      const state = readCodexCoordinatorState(db);
       return {
         nativeBefore: state.nativeGeneration,
         nativeAfter: state.nativeGeneration + 1,
@@ -460,7 +460,7 @@ export function openCodexCoordinatorTransaction(finalDatabasePath: string): Code
     },
     version() {
       requireOpen();
-      const state = readState(db);
+      const state = readCodexCoordinatorState(db);
       return { nativeGeneration: state.nativeGeneration, currentTxId: state.currentTxId };
     },
     assertPublished(expectation) {
@@ -468,7 +468,7 @@ export function openCodexCoordinatorTransaction(finalDatabasePath: string): Code
       if (lastResult?.kind !== "updated") {
         throw new CodexCoordinatorTransactionError("The coordinator transition was not published.");
       }
-      const state = readState(db);
+      const state = readCodexCoordinatorState(db);
       if (state.nativeGeneration !== expectation.nativeAfter || state.currentTxId !== expectation.txId) {
         throw new CodexCoordinatorTransactionError("The coordinator published a different transition.");
       }
@@ -540,7 +540,7 @@ function readCommittedState(): TransitionStateRead {
   try {
     database = new Database(path, { readonly: true });
     database.exec("PRAGMA busy_timeout = 0");
-    return { kind: "ready", state: readState(database) };
+    return { kind: "ready", state: readCodexCoordinatorState(database) };
   } catch (error) {
     return mapUnavailable(error);
   } finally {
@@ -577,7 +577,7 @@ export const updateCodexHistoryTransition: UpdateCodexHistoryTransition = (expec
     database = new Database(currentCoordinatorDatabasePath(), { readwrite: true, create: false });
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
-    const current = readState(database);
+    const current = readCodexCoordinatorState(database);
     if (current.nativeGeneration > 0 && current.historySchedule === null) {
       throw new CodexCoordinatorTransactionError("A positive transition cannot lose its direction.");
     }
@@ -594,7 +594,7 @@ export const updateCodexHistoryTransition: UpdateCodexHistoryTransition = (expec
       expected.currentTxId,
       expected.currentTxId,
     );
-    const state = readState(database);
+    const state = readCodexCoordinatorState(database);
     database.exec("COMMIT");
     transactionOpen = false;
     return result.changes === 1

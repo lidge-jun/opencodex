@@ -234,6 +234,10 @@ describe("service backend CLI parsing", () => {
     expect(parseServiceArgs([])).toEqual({ sub: "install", backend: null, invalid: [] });
   });
 
+  test("restart aliases the existing no-admin repair path", () => {
+    expect(parseServiceArgs(["restart"])).toEqual({ sub: "repair", backend: null, invalid: [] });
+  });
+
   test("--scheduler and unknown flags are recognized separately", () => {
     expect(parseServiceArgs(["install", "--scheduler"]).backend).toBe("scheduler");
     expect(parseServiceArgs(["install", "--bogus"]).invalid).toEqual(["--bogus"]);

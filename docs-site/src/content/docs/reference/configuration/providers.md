@@ -87,7 +87,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `modelMaxInputTokens?` | `Record<string, number>` | Positive per-model max input limits used for catalog auto-compaction hints. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
-| `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → jawcode catalog → expected-price overlay → model-level vendor fallback, and an all-zero entry falls through to the next source in that sequence. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
+| `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an all-zero entry falls through to the next source in that sequence. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Exact model-id overrides that replace the provider-wide OpenRouter preference. |
@@ -151,6 +151,25 @@ contract; existing configurations see these migration deltas:
    dropped caller tiers.
 
 Explicit capability `false` and Responses caller-tier forwarding retain their existing contracts.
+
+### xAI Priority Processing
+
+The built-in `xai` preset advertises and injects Fast only when its effective transport uses
+`authMode: "key"`. API-key mode targets `https://api.x.ai/v1` through the `openai-chat` adapter and
+sends `service_tier: "priority"` through Chat Completions. `ocx login xai`
+instead stores OAuth credentials for the separate Grok CLI subscription-gateway flow, so OAuth
+remains unclassified: its catalog rows do not advertise Fast and the proxy does not inject a tier.
+
+xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
+reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium
+only when xAI's response confirms `service_tier: "priority"`. A missing or unparsed response tier is
+not confirmation, and an echoed `default` is a downgrade; all three stay at the standard price.
+
+For `grok-4.6`, the standard rate per 1M tokens is $2.00 input, $0.50 cached input, and $6.00
+output. A prompt of at least 200,000 tokens reprices the whole request at $4.00 / $1.00 / $12.00.
+xAI has not published how that long-context band combines with Priority Processing. When a
+long-context response confirms `priority`, the dashboard therefore shows the published long-context
+cost with a `≥` marker and a lower-bound explanation; it never invents a stacked multiplier.
 
 ### OpenRouter Fast
 

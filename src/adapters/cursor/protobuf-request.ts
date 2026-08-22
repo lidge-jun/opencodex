@@ -188,10 +188,12 @@ function assistantRootText(
 }
 
 // Cursor builds the actual model prompt from rootPromptMessagesJson (turns[] is UI/display metadata),
-// so prior history — including assistant tool calls and tool results — must be replayed here or a
-// ResumeAction has nothing model-visible to continue from. The active user message is excluded
-// because it travels in the action. Tool results are assistant-role text with a [Tool Result]
-// or [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Each entry is a SHA-256 blob ID.
+// so prior history must be replayed here or a ResumeAction has nothing model-visible to continue from.
+// The active user message is excluded because it travels in the action. When the continuation cannot
+// rely on native MCP turn state, tool results stay assistant-role text with a [Tool Result] /
+// [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Native resume models
+// already carry the paired MCP result on turns[], so that marker is omitted from root replay — Auto
+// few-shot-mimics it as chat text otherwise. Each entry is a SHA-256 blob ID.
 function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobRequestScopeToken): {
   ids: Uint8Array[];
   byteLength: number;
@@ -212,6 +214,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
   }
 
   const externalModel = isCursorExternalWireModel(request.modelId);
+  const echoToolResultInRoot = cursorNeedsExternalToolContinuation(request.modelId);
   const lastRawIsToolResult = messages.at(-1)?.role === "toolResult";
   const activeUserIndex = lastRawIsToolResult ? -1 : lastActionIndex(messages);
 
@@ -243,6 +246,10 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       }
       // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
     } else if (message.role === "toolResult") {
+      // Native resume models already receive the paired MCP result through turns[]. Replaying
+      // the same payload as assistant-role "[Tool Result]" / "[tool_result]" text teaches Auto
+      // to echo that envelope as chat instead of continuing from the structured result.
+      if (!echoToolResultInRoot) continue;
       // #1920: the prefix must reflect the NORMALIZED error state (an empty
       // node_repl result is an error even when the runtime said isError=false).
       const prefix = normalizedToolResult(message, contentToText(message.content)).isError ? "[Tool Error]" : "[Tool Result]";

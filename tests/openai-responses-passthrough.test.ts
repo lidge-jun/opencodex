@@ -3,6 +3,7 @@ import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterP
 import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { routeModel } from "../src/router";
 import { handleResponses, sanitizeEncryptedContentInPlace } from "../src/server/responses";
 import {
   encodeCompactionSummary,
@@ -245,6 +246,369 @@ describe("DeepSeek Responses endpoint contract", () => {
     const custom = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", responsesPath: "/custom/responses" } as Parameters<typeof enrichProviderFromRegistry>[1];
     enrichProviderFromRegistry("deepseek", custom);
     expect(custom.responsesPath).toBe("/custom/responses");
+  });
+});
+
+describe("Responses custom-tool destination capability", () => {
+  test("xAI explicitly denies native custom tools and registry enrichment preserves an override", () => {
+    const entry = getProviderRegistryEntry("xai")!;
+    expect(entry.supportsResponsesCustomTools).toBe(false);
+
+    const inherited = {
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+    } as Parameters<typeof enrichProviderFromRegistry>[1];
+    enrichProviderFromRegistry("xai", inherited);
+    expect(inherited.supportsResponsesCustomTools).toBe(false);
+
+    const explicit = {
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+      supportsResponsesCustomTools: true,
+    } as Parameters<typeof enrichProviderFromRegistry>[1];
+    enrichProviderFromRegistry("xai", explicit);
+    expect(explicit.supportsResponsesCustomTools).toBe(true);
+
+    const routed = routeModel({
+      port: 0,
+      defaultProvider: "xai",
+      providers: {
+        xai: { adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: "oauth" },
+      },
+    } as OcxConfig, "xai/grok-4.6");
+    expect(routed.provider.supportsResponsesCustomTools).toBe(false);
+  });
+
+  test("noncanonical forward destinations that deny custom tools lower apply_patch", () => {
+    const rawBody = {
+      model: "routed-model",
+      input: [
+        { type: "custom_tool_call", id: "ctc_patch", call_id: "c1", name: "apply_patch", input: "noop" },
+      ],
+      tools: [
+        { type: "custom", name: "apply_patch", description: "Apply a patch", format: { type: "grammar", syntax: "lark" } },
+      ],
+    };
+    const parsed = {
+      modelId: "routed-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    };
+    const request = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "forward",
+      headers: { authorization: "Bearer provider-static" },
+      supportsResponsesCustomTools: false,
+    }).buildRequest(parsed, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+    const body = JSON.parse(request.body) as {
+      tools: Array<Record<string, unknown>>;
+      input: Array<Record<string, unknown>>;
+    };
+
+    expect(request.headers.authorization).toBe("Bearer provider-static");
+    expect(body.tools[0]).toMatchObject({ type: "function", name: "apply_patch" });
+    expect(body.input[0]).toMatchObject({
+      type: "function_call",
+      call_id: "c1",
+      name: "apply_patch",
+      arguments: JSON.stringify({ input: "noop" }),
+    });
+    expect([...(request.convertedRoutedCustomToolNames ?? [])]).toEqual(["apply_patch"]);
+  });
+
+  test("the canonical Codex forward surface never lowers custom tools, even with an explicit denial", () => {
+    const rawBody = {
+      model: "gpt-5.6-sol",
+      stream: true,
+      input: [
+        { type: "custom_tool_call", id: "ctc_patch", call_id: "c1", name: "apply_patch", input: "noop" },
+      ],
+      tools: [
+        { type: "custom", name: "apply_patch", description: "Apply a patch", format: { type: "grammar", syntax: "lark" } },
+      ],
+    };
+    const parsed = {
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    };
+    const request = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      // Exact canonical Codex forward base URL: isCanonicalOpenAiForwardProvider is true,
+      // so the lowering gate must be unreachable regardless of the capability flag.
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      headers: { authorization: "Bearer provider-static" },
+      supportsResponsesCustomTools: false,
+    }).buildRequest(parsed, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+    const body = JSON.parse(request.body) as {
+      tools: Array<Record<string, unknown>>;
+      input: Array<Record<string, unknown>>;
+    };
+
+    expect(body.tools[0]).toMatchObject({ type: "custom", name: "apply_patch" });
+    expect(body.input[0]).toMatchObject({ type: "custom_tool_call", call_id: "c1", name: "apply_patch" });
+    expect(request.convertedRoutedCustomToolNames ?? []).toEqual([]);
+  });
+});
+
+describe("routed compaction lowering order", () => {
+  const baseInput = [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "earlier turn" },
+        { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+      ],
+    },
+    { type: "custom_tool_call", call_id: "c1", name: "apply_patch", input: "noop" },
+    { type: "custom_tool_call_output", call_id: "c1", output: "ok" },
+    {
+      type: "tool_search_call",
+      call_id: "c2",
+      execution: "client",
+      arguments: { query: "database" },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "c2",
+      execution: "client",
+      status: "completed",
+      tools: [{
+        type: "function",
+        name: "loaded_tool",
+        defer_loading: true,
+        parameters: { type: "object" },
+      }],
+    },
+    {
+      type: "function_call",
+      call_id: "c3",
+      namespace: "collaboration",
+      name: "spawn_agent",
+      arguments: "{}",
+    },
+    { type: "function_call_output", call_id: "c3", output: "done" },
+    {
+      type: "additional_tools",
+      role: "developer",
+      tools: [{
+        type: "function",
+        name: "extra",
+        defer_loading: true,
+        parameters: { type: "object" },
+      }],
+    },
+  ];
+  const rawBody = (compaction: boolean) => ({
+    model: "routed-model",
+    stream: false,
+    input: [
+      ...baseInput,
+      ...(compaction ? [{ type: "compaction_trigger" }] : []),
+    ],
+    tools: [
+      {
+        type: "custom",
+        name: "apply_patch",
+        description: "Apply patch",
+        format: { type: "text" },
+      },
+      {
+        type: "function",
+        name: "tool_search",
+        description: "Ordinary collision",
+        parameters: { type: "object" },
+      },
+      {
+        type: "tool_search",
+        execution: "client",
+        description: "Find tools",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+      {
+        type: "namespace",
+        name: "collaboration",
+        tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object" } }],
+      },
+    ],
+    tool_choice: "auto",
+    parallel_tool_calls: true,
+    text: { format: { type: "json_object" } },
+  });
+  const loweredReplay = [
+    {
+      type: "function_call",
+      call_id: "c1",
+      name: "apply_patch",
+      arguments: JSON.stringify({ input: "noop" }),
+    },
+    { type: "function_call_output", call_id: "c1", output: "ok" },
+    {
+      type: "function_call",
+      call_id: "c2",
+      name: "opencodex_tool_search",
+      arguments: JSON.stringify({ query: "database" }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "c2",
+      output: JSON.stringify({
+        tools: [{
+          type: "function",
+          name: "loaded_tool",
+          defer_loading: true,
+          parameters: { type: "object" },
+        }],
+        status: "completed",
+      }),
+    },
+    {
+      type: "function_call",
+      call_id: "c3",
+      name: "collaboration__spawn_agent",
+      arguments: "{}",
+    },
+    { type: "function_call_output", call_id: "c3", output: "done" },
+  ];
+  const loweredTools = [
+    {
+      type: "function",
+      name: "apply_patch",
+      description: "Apply patch",
+      parameters: {
+        type: "object",
+        properties: {
+          input: {
+            type: "string",
+            description: "Raw input for this client-executed custom tool.",
+          },
+        },
+        required: ["input"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "tool_search",
+      description: "Ordinary collision",
+      parameters: { type: "object" },
+    },
+    {
+      type: "function",
+      description: "Find tools",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      name: "opencodex_tool_search",
+    },
+    {
+      type: "function",
+      name: "collaboration__spawn_agent",
+      parameters: { type: "object" },
+    },
+    { type: "function", name: "loaded_tool", parameters: { type: "object" } },
+  ];
+
+  function build(compaction: boolean) {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "key",
+      apiKey: "test-key",
+      supportsResponsesCustomTools: false,
+    });
+    return adapter.buildRequest({
+      modelId: "routed-model",
+      context: { messages: [] },
+      stream: false,
+      options: {},
+      _rawBody: rawBody(compaction),
+      ...(compaction ? { _compactionRequest: true } : {}),
+    }, { headers: new Headers() });
+  }
+
+  test("lowers replayed calls before removing the compaction tool surface", () => {
+    const built = build(true);
+    const body = JSON.parse(built.body) as Record<string, unknown> & {
+      input: Array<Record<string, unknown>>;
+    };
+
+    expect(body.input.slice(0, -1)).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "earlier turn" },
+          { type: "input_text", text: "[image omitted for compaction]" },
+        ],
+      },
+      ...loweredReplay,
+    ]);
+    expect(body.input.at(-1)).toEqual({
+      type: "message",
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: expect.stringContaining("CONTEXT CHECKPOINT COMPACTION"),
+      }],
+    });
+
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("tool_choice");
+    expect(body).not.toHaveProperty("parallel_tool_calls");
+    expect(body).not.toHaveProperty("text");
+    expect(body.input.some(item => item.type === "compaction_trigger")).toBe(false);
+    expect(body.input.some(item => item.type === "additional_tools")).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("input_image");
+    expect(JSON.stringify(body)).not.toContain("data:image/png");
+    expect(body.input.find(item => item.call_id === "c3")).not.toHaveProperty("namespace");
+
+    expect([...(built.convertedRoutedCustomToolNames ?? [])]).toEqual(["apply_patch"]);
+    expect([...(built.convertedRoutedToolSearchNames ?? [])]).toEqual(["opencodex_tool_search"]);
+    expect([...(built.convertedRoutedNamespaceToolAliases ?? new Map()).entries()]).toEqual([
+      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent" }],
+    ]);
+  });
+
+  test("leaves the non-compaction serialized body byte-identical", () => {
+    const built = build(false);
+    expect(built.body).toBe(JSON.stringify({
+      model: "routed-model",
+      stream: false,
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "earlier turn" },
+            { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+          ],
+        },
+        ...loweredReplay,
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [{ type: "function", name: "extra", parameters: { type: "object" } }],
+        },
+      ],
+      tools: loweredTools,
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+      text: { format: { type: "json_object" } },
+    }));
   });
 });
 
@@ -976,7 +1340,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.tools[0]).toMatchObject({ type: "image_generation" });
   });
 
- test("drops ChatGPT's external_web_access hint but keeps routed web search", () => {
+ test("normalizes xAI top-level and additional web search without stale tool choice", () => {
    const adapter = createResponsesPassthroughAdapter({
      adapter: "openai-responses",
      baseUrl: "https://api.x.ai/v1",
@@ -998,21 +1362,18 @@ describe("OpenAI Responses passthrough sanitization", () => {
           tools: [{ type: "web_search", external_web_access: true, search_context_size: "medium" }],
         }],
         tools: [{ type: "web_search", external_web_access: false, filters: { allowed_domains: ["example.com"] } }],
+        tool_choice: { type: "web_search" },
       },
     }, { headers: new Headers() });
     const body = JSON.parse(request.body) as {
-      tools: Record<string, unknown>[];
+      tools?: Record<string, unknown>[];
       input: Array<{ type: string; tools: Record<string, unknown>[] }>;
+      tool_choice: Record<string, unknown>;
     };
 
-    expect(body.tools).toEqual([{
-      type: "web_search",
-      filters: { allowed_domains: ["example.com"] },
-    }]);
-    expect(body.input[0]?.tools).toEqual([{
-      type: "web_search",
-      search_context_size: "medium",
-    }]);
+    expect(body.tools).toBeUndefined();
+    expect(body.input[0]?.tools).toEqual([{ type: "web_search" }]);
+    expect(body.tool_choice).toEqual({ type: "web_search" });
   });
 
   test("preserves external_web_access on the canonical OpenAI forward route", () => {
@@ -1070,7 +1431,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       input: Array<{ tools: Record<string, unknown>[] }>;
     };
 
-    expect(body.tools[0]).toEqual({ type: "web_search_preview" });
+    expect(body.tools[0]).toEqual({ type: "web_search" });
     expect(body.tools[1]).toMatchObject({ type: "function", name: "workspace__read" });
     expect(body.tools[1]).not.toHaveProperty("defer_loading");
     expect(body.input[0].tools[0]).not.toHaveProperty("defer_loading");

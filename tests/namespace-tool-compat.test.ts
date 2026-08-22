@@ -198,9 +198,8 @@ describe("Responses namespace tool compatibility", () => {
     expect(flatten([functionsGroup], [bare])).toEqual([bare]);
   });
 
-  // The routed compaction turn strips the whole tool surface before this runs, and a catalog can
-  // change mid-session — but the client is still replaying items this layer's own restoration
-  // stamped with a private `namespace`.
+  // A catalog can be absent or change mid-session, but the client can still replay items this
+  // layer's own restoration stamped with a private `namespace`.
   test("lowers replayed calls even when this turn declares no namespace", () => {
     const body = rewriteRoutedNamespaceToolsForUpstream({
       input: [

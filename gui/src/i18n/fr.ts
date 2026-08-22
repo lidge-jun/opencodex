@@ -763,7 +763,7 @@ export const fr: Record<TKey, string> = {
   "logs.detail.estimate.cache_detail_missing": "Les détails du cache n’étaient pas disponibles ; l’entrée est une estimation de la limite supérieure.",
   "logs.detail.estimate.expected_price_overlay": "Un tarif catalogue attendu et vérifié a été utilisé.",
   "logs.detail.estimate.provider_cost_overlay": "Un remplacement de tarif configuré pour le fournisseur a été utilisé.",
-  "logs.detail.estimate.priority_lower_bound": "Le tarif Priority OpenRouter confirmé n’est pas disponible ; l’estimation au tarif standard affichée est une borne inférieure connue.",
+  "logs.detail.estimate.priority_lower_bound": "Le tarif Priority confirmé n’est pas disponible ; l’estimation affichée est une borne inférieure connue.",
   "logs.col.error": "Erreur",
   "logs.col.upstreamReason": "Motif en amont",
   "logs.col.duration": "Durée",

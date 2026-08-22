@@ -5,10 +5,11 @@
  * sequence it is, rather than doubling in length around the lock.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 
 import { atomicWriteFile } from "../config";
 import type { CodexWriteLockResult } from "./codex-write-lock";
+import { inspectCodexCoordinatorPath } from "./coordinator-doctor";
 import { JOURNAL_PATH } from "./journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 import {
@@ -43,21 +44,51 @@ export type CodexWriteCoordinationEligibility =
   | { kind: "legacy-uncoordinated"; reason: string }
   | { kind: "refused"; reason: string };
 
+/**
+ * A live SQLite creator exposes a zero-byte pathname before BEGIN IMMEDIATE.
+ * Requiring a settled filesystem age makes that scheduling window remain on
+ * the coordinated path while old crash remnants can use the legacy boundary.
+ */
+export const STABLE_ZERO_BYTE_COORDINATOR_AGE_MS = 1_000;
+
 export function codexWriteCoordinationEligibility(deps: {
   coordinatorPath: () => string;
   residue: () => { kind: string };
   integrationRecord: () => { kind: string };
+  nowMs?: () => number;
 }): CodexWriteCoordinationEligibility {
   let coordinatorExists: boolean;
+  let coordinatorIsStableZeroByte = false;
   try {
-    coordinatorExists = existsSync(deps.coordinatorPath());
+    const path = deps.coordinatorPath();
+    coordinatorExists = existsSync(path);
+    if (coordinatorExists) {
+      const entry = lstatSync(path);
+      if (entry.isFile() && !entry.isSymbolicLink() && entry.size === 0) {
+        const diagnostic = inspectCodexCoordinatorPath(path);
+        if (diagnostic.kind === "zero-byte") {
+          const lastIdentityChange = Math.max(diagnostic.identity.mtimeMs, diagnostic.identity.ctimeMs);
+          coordinatorIsStableZeroByte = (deps.nowMs?.() ?? Date.now()) - lastIdentityChange
+            >= STABLE_ZERO_BYTE_COORDINATOR_AGE_MS;
+        }
+      }
+    }
   } catch (error) {
     return { kind: "refused", reason: `the coordinator path could not be resolved: ${String(error)}` };
   }
 
-  // An existing coordinator is authoritative, and the lock owns validating it —
-  // including the unversioned and rowless cases it must refuse rather than adopt.
-  if (coordinatorExists) return { kind: "coordinated" };
+  // Every existing coordinator remains authoritative unless it is proven to be
+  // an old, immutable SQLite-empty remnant. The age gate is part of that proof:
+  // a live creator exposes the same zero-byte pathname briefly before taking N,
+  // and sending that fresh file down the legacy path would bypass its lock.
+  // Non-empty, fresh, unsafe, changed, unversioned, and rowless files therefore
+  // stay coordinated and are validated/refused by the transaction owner.
+  //
+  // We do NOT initialize or adopt it here. Clean homes still enter the
+  // coordinated path, whose SQLite transaction safely initializes it. Routed
+  // or indeterminate legacy homes keep the same uncoordinated compatibility
+  // boundary they would have had if the remnant pathname were absent.
+  if (coordinatorExists && !coordinatorIsStableZeroByte) return { kind: "coordinated" };
 
   const record = deps.integrationRecord();
   if (record.kind === "invalid") {
@@ -83,7 +114,9 @@ export function codexWriteCoordinationEligibility(deps: {
    */
   return {
     kind: "legacy-uncoordinated",
-    reason: residue.kind === "residue"
+    reason: coordinatorIsStableZeroByte
+      ? "the coordinator is a zero-byte non-authoritative remnant and this routed home has not been adopted yet"
+      : residue.kind === "residue"
       ? "this home was routed before write coordination existed and has not been adopted yet"
       : "the existing native Codex state could not be classified, so it cannot seed a coordinator row",
   };

@@ -444,12 +444,25 @@ interface GoogleResponsePart {
   thought?: boolean;
   thoughtSignature?: string;
   thought_signature?: string;
+  extra_content?: { google?: { thought_signature?: unknown } };
   functionCall?: unknown;
 }
 
 interface GoogleFunctionCall {
   name: string;
   args?: unknown;
+}
+
+/**
+ * Read a Gemini/Antigravity thought signature from a response part. Antigravity can place it
+ * either directly on the part (`thoughtSignature` / `thought_signature`) or inside the same
+ * nested `extra_content.google.thought_signature` shape used on the Responses wire.
+ */
+function googlePartThoughtSignature(part: GoogleResponsePart): string | undefined {
+  const direct = part.thoughtSignature ?? part.thought_signature;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const nested = part.extra_content?.google?.thought_signature;
+  return typeof nested === "string" && nested.length > 0 ? nested : undefined;
 }
 
 /**
@@ -461,7 +474,7 @@ function googleToolCallMetadataFromPart(
   part: GoogleResponsePart,
   fallbackSignature?: string,
 ): { providerMetadata: OcxProviderOpaqueToolCallMetadata } | undefined {
-  const signature = part.thoughtSignature ?? part.thought_signature ?? fallbackSignature;
+  const signature = googlePartThoughtSignature(part) ?? fallbackSignature;
   if (!isLikelyRealThoughtSignature(signature)) return undefined;
   return { providerMetadata: { google: { thoughtSignature: signature } } };
 }
@@ -1012,7 +1025,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         if (parts) {
           for (const part of parts) {
-            const sig = part.thoughtSignature ?? part.thought_signature;
+            const sig = googlePartThoughtSignature(part);
             if (part.thought === true && sig && isLikelyRealThoughtSignature(sig)) {
               pendingStreamThoughtSig = sig;
             }
@@ -1299,7 +1312,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         let pendingThoughtSig: string | undefined;
         for (const part of parts) {
-          const sig = part.thoughtSignature ?? part.thought_signature;
+          const sig = googlePartThoughtSignature(part);
           if (part.thought === true && sig && isLikelyRealThoughtSignature(sig)) {
             pendingThoughtSig = sig;
           }

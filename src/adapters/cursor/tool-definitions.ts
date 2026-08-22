@@ -336,6 +336,26 @@ export function normalizeCursorWireName(name: string): string {
   return name.startsWith(CURSOR_MCP_DISPLAY_PREFIX) ? name.slice(CURSOR_MCP_DISPLAY_PREFIX.length) : name;
 }
 
+/**
+ * #2305: some models emit a TEXTUAL pseudo tool call ("[TOOL_CALL]name[ARGS]{...}")
+ * instead of a real frame, using Cursor's display alias as the name. Text-mode clients
+ * (Pi) parse that text and then cannot dispatch the undeclared display name. Rewrite the
+ * display alias to the advertised wire name ONLY inside the marker pair — prose that
+ * merely mentions the alias stays untouched, and the scope guard is the exact
+ * `mcp_${OCX_RESPONSES_TOOL_PROVIDER}_` prefix, never generic `mcp_`.
+ * Known limit (recorded in devlog 230): a marker split across two streaming deltas is
+ * not rewritten; tail-buffering is deferred until a live trace shows split markers.
+ */
+const CURSOR_TEXT_TOOL_MARKER = new RegExp(
+  String.raw`\[TOOL_CALL\](${CURSOR_MCP_DISPLAY_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\[\]]+)\[ARGS\]`,
+  "g",
+);
+
+export function normalizeCursorTextToolMarkers(text: string): string {
+  if (!text.includes(CURSOR_MCP_DISPLAY_PREFIX)) return text;
+  return text.replace(CURSOR_TEXT_TOOL_MARKER, (_match, name: string) => `[TOOL_CALL]${normalizeCursorWireName(name)}[ARGS]`);
+}
+
 export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?: ReadonlyMap<string, string>): string {
   const normalized = normalizeCursorWireName(name);
   if (!cursorToolNameMap) return normalized;

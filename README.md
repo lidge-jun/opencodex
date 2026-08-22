@@ -208,7 +208,7 @@ Qwen Cloud, SiliconFlow, and more. Full list: `ocx init` or the
 ocx init                       # interactive setup (writes config, wires Codex, offers the shim)
 ocx start [--port 10100]       # start the proxy in the foreground
 ocx stop                       # stop + restore native Codex
-ocx service [install|start|stop|status|uninstall|remove]  # background service
+ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # background service
 ocx codex-shim install         # start the proxy on demand whenever `codex` launches
 ocx health [--json]            # check immediate proxy liveness
 ocx ready [--json] [--wait [--timeout <seconds>]]  # check post-sync readiness

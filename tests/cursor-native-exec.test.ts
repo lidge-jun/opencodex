@@ -253,12 +253,39 @@ describe("Cursor native exec bridge", () => {
     }
   });
 
-  test("unknown exec cases return empty reply instead of throwing (#116 hardening)", async () => {
+  test("unknown exec cases reply with ExecClientThrow + streamClose instead of silence (T05)", async () => {
     const result = await handleCursorNativeExec(execMessage({
       case: undefined,
       value: undefined,
     }));
-    expect(result).toEqual([]);
+    // T05 (senpi contract): a frame that cannot be answered gets a typed in-band error
+    // + stream-close so the server unblocks with a known failure. #116 was about an
+    // unhandled throw propagating to failAndClear and killing the whole gRPC connection;
+    // a typed ExecClientThrow does not do that.
+    expect(result).toHaveLength(2);
+
+    // Control messages use a different top-level case; decode them directly from the wire.
+    const throwMsg = fromBinary(AgentClientMessageSchema, result[0]);
+    const closeMsg = fromBinary(AgentClientMessageSchema, result[1]);
+    expect(throwMsg.message.case).toBe("execClientControlMessage");
+    if (throwMsg.message.case === "execClientControlMessage") {
+      expect(throwMsg.message.value.message.case).toBe("throw");
+      if (throwMsg.message.value.message.case === "throw") {
+        expect(throwMsg.message.value.message.value.error).toContain("Unknown exec message variant");
+      }
+    }
+    expect(closeMsg.message.case).toBe("execClientControlMessage");
+    if (closeMsg.message.case === "execClientControlMessage") {
+      expect(closeMsg.message.value.message.case).toBe("streamClose");
+    }
+  });
+
+  test("unknown exec cases do NOT kill the gRPC connection (#116 hardening preserved)", async () => {
+    // The T05 typed reply must not propagate into failAndClear. The transport-level
+    // contract is that handleCursorNativeExec returns bytes (not throws), which is
+    // what live-transport writes back. This test pins that boundary.
+    const replies = await handleCursorNativeExec(execMessage({ case: undefined, value: undefined }));
+    expect(replies.length).toBeGreaterThan(0);
   });
 
   test("rejects native write and delete when apply_patch is available", async () => {

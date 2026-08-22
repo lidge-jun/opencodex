@@ -766,7 +766,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.estimate.cache_detail_missing": "Детализация кэша недоступна; входные токены оценены по верхней границе.",
   "logs.detail.estimate.expected_price_overlay": "Использована подтверждённая ожидаемая цена из прайс-листа.",
   "logs.detail.estimate.provider_cost_overlay": "Использован ценовой оверлей провайдера.",
-  "logs.detail.estimate.priority_lower_bound": "Подтверждённая цена OpenRouter Priority недоступна; показанная оценка по стандартной цене является известной нижней границей.",
+  "logs.detail.estimate.priority_lower_bound": "Подтверждённая цена Priority недоступна; показанная оценка является известной нижней границей.",
   "logs.col.error": "Ошибка",
   "logs.col.upstreamReason": "Причина от провайдера",
   "logs.col.duration": "Длительность",

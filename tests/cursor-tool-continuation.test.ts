@@ -39,7 +39,7 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
     { role: "toolResult", toolCallId: "call_1", toolName: "read_file", toolNamespace: "mcp__fs", content: "FILE CONTENTS HERE", isError: false, timestamp: 3 },
   ];
 
-  test("tool result text is present in rootPromptMessagesJson, not only in turns[]", () => {
+  test("external-continuation tool result text is present in rootPromptMessagesJson, not only in turns[]", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "composer-2.5",
       conversationId: "c1",
@@ -49,12 +49,27 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
     });
     const roots = decodeRoots(bytes);
     const serialized = JSON.stringify(roots);
-    // The model prompt (rootPromptMessagesJson) MUST carry the tool result, or ResumeAction has
-    // nothing model-visible to resume from. Reference: danger-pi buildRootPromptMessagesJson.
+    // composer-2.5 still continues as userMessageAction, so the model prompt must carry the
+    // tool result. Reference: danger-pi buildRootPromptMessagesJson.
     expect(serialized).toContain("FILE CONTENTS HERE");
     expect(serialized).toContain("call_1");
     // The prior user turn must also be replayed (not system-only).
     expect(serialized).toContain("read a file");
+  });
+
+  test("native resume models keep tool results on turns[], not as assistant-role root text", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "auto-intelligence",
+      conversationId: "c-auto",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nFILE CONTENTS HERE" }],
+      rawMessages,
+    });
+    const serialized = JSON.stringify(decodeRoots(bytes));
+    expect(serialized).toContain("read a file");
+    expect(serialized).not.toContain("[Tool Result]");
+    expect(serialized).not.toContain("[tool_result]");
+    expect(serialized).not.toContain("FILE CONTENTS HERE");
   });
 
   test("rootPromptMessagesJson still leads with the system prompt blob", () => {
@@ -82,10 +97,24 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
     // "[Tool Call]" text. The model few-shot-mimics that marker and emits later parallel/mixed tool
     // calls as inert text instead of real tool frames (halting multi-tool continuations).
     expect(serialized).not.toContain("[Tool Call]");
-    // ...but the tool's model-visible continuation context (call id + output) must still survive via
-    // the paired tool RESULT echo, so the model can continue from it.
+    // composer-2.5 still needs the paired tool RESULT echo in the model-visible prompt.
     expect(serialized).toContain("FILE CONTENTS HERE");
     expect(serialized).toContain("call_1");
+  });
+
+  test("native resume models do not few-shot [Tool Result] as assistant chat", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5-fast",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nFILE CONTENTS HERE" }],
+      rawMessages,
+    });
+    const serialized = JSON.stringify(decodeRoots(bytes));
+    expect(serialized).not.toContain("[Tool Call]");
+    expect(serialized).not.toContain("[Tool Result]");
+    expect(serialized).not.toContain("[tool_result]");
+    expect(serialized).toContain("read a file");
   });
 });
 

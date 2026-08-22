@@ -70,11 +70,22 @@ function buildFastPolicyAuthority(
   capabilityProvider: ServiceTierCapabilityProvider = provider,
 ): FastPolicyAuthority {
   const registry = registryTransportMatch ? getProviderRegistryEntry(providerName) : undefined;
+  const authTransport = resolveProviderAuthTransport(
+    provider.adapter,
+    provider.authMode ?? registry?.authKind ?? "key",
+    provider.apiKeyTransport,
+  );
+  const keyAuthDefaults = registry?.allowKeyAuthOverride === true
+    && (authTransport === "authorization_bearer" || authTransport === "x_api_key")
+    ? registry.keyAuthServiceTier
+    : undefined;
   const registryModelCapabilities = registry
     && registryModelServiceTierCapabilityApplies(registry, capabilityProvider)
     ? registry.modelSupportsServiceTier
     : undefined;
-  const providerCapability = capabilityProvider.supportsServiceTier ?? registry?.supportsServiceTier;
+  const providerCapability = capabilityProvider.supportsServiceTier
+    ?? keyAuthDefaults?.supportsServiceTier
+    ?? registry?.supportsServiceTier;
   const authority: FastPolicyAuthority = Object.freeze({
     providerAdapter: provider.adapter,
     providerAuthMode: provider.authMode ?? registry?.authKind ?? "key",
@@ -82,19 +93,23 @@ function buildFastPolicyAuthority(
       provider.fastWire !== undefined ? provider.fastWire : registry?.fastWire,
       { freeze: true },
     ),
+    ...(registry?.fastTierDescription !== undefined
+      ? { fastTierDescription: registry.fastTierDescription }
+      : {}),
     modelWireOverrideAllowed: !isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig),
-    authTransport: resolveProviderAuthTransport(
-      provider.adapter,
-      provider.authMode ?? registry?.authKind ?? "key",
-      provider.apiKeyTransport,
-    ),
+    authTransport,
     capability: Object.freeze({
       ...(providerCapability !== undefined ? { provider: providerCapability } : {}),
       models: Object.freeze({
         ...(registryModelCapabilities ?? {}),
+        ...(keyAuthDefaults?.modelSupportsServiceTier ?? {}),
         ...(capabilityProvider.modelSupportsServiceTier ?? {}),
       }),
-      ...(provider.chatServiceTier !== undefined ? { chatServiceTier: provider.chatServiceTier } : {}),
+      ...(provider.chatServiceTier !== undefined
+        ? { chatServiceTier: provider.chatServiceTier }
+        : keyAuthDefaults?.chatServiceTier !== undefined
+          ? { chatServiceTier: keyAuthDefaults.chatServiceTier }
+          : {}),
     }),
     modelAdapters: Object.freeze({ ...(provider.modelAdapters ?? {}) }),
     hardPins: captureWireAdapterHardPins(providerName),

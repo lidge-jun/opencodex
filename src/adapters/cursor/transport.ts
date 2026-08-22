@@ -30,6 +30,16 @@ export interface CursorTransportFactoryInput {
   /** Grace (ms) between close() and the force-destroy fallback after a first-frame timeout. Defaults to 1s. */
   timeoutDestroyGraceMs?: number;
   /**
+   * T04 watchdog: maximum inbound decoded-frame silence (ms) after the first frame before the
+   * turn is failed. Defaults to 30s.
+   */
+  streamSilenceFailMs?: number;
+  /**
+   * T04 watchdog: maximum heartbeat/checkpoint-only traffic (ms) without turn progress before
+   * the turn is failed. Defaults to 90s.
+   */
+  streamHeartbeatOnlyFailMs?: number;
+  /**
    * Grace window (ms) before a drained client-tool turn is finalized, so a sibling tool call
    * announced in a later receive chunk can revoke a premature finalize. Defaults to 50ms.
    */

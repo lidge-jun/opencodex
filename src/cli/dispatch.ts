@@ -172,9 +172,9 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   doctor: async deps => {
     const doctorArgs = deps.args.slice(1);
-    const { runDoctor } = await import("./doctor");
+    const { RECOVER_ZERO_BYTE_COORDINATOR_FLAG, runDoctor } = await import("./doctor");
     await runDoctor(doctorArgs);
-    if (!doctorArgs.includes("--fix-codex-runtime")) {
+    if (!doctorArgs.includes("--fix-codex-runtime") && !doctorArgs.includes(RECOVER_ZERO_BYTE_COORDINATOR_FLAG)) {
       console.log("");
       const { printCodexLogGuardDoctor } = await import("./codex-log-guard-doctor");
       printCodexLogGuardDoctor();

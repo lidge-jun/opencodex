@@ -95,6 +95,31 @@ describe("GET /api/logs display metrics", () => {
     expect(dto!.displayMetrics.cost.estimateReasons).toContain("cache_detail_missing");
   });
 
+  test("confirmed xAI priority plus long context is exposed as a cost lower bound", async () => {
+    addRequestLog(baseEntry({
+      provider: "xai",
+      model: "grok-4.6",
+      usage: {
+        inputTokens: 200_000,
+        outputTokens: 10_000,
+        cacheReadInputTokens: 50_000,
+      },
+      tierOutcome: {
+        canonical: "priority",
+        wireKind: "service-tier",
+        wireValue: "priority",
+        fastOutcome: "applied",
+        confirmation: "confirmed",
+        responseServiceTier: "priority",
+      },
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.cost.kind).toBe("value");
+    expect(dto!.displayMetrics.cost.estimate.priorityLowerBound).toBe(true);
+    expect(dto!.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.77, 9);
+    expect(dto!.displayMetrics.cost.estimateReasons).toContain("priority_lower_bound");
+  });
+
   test("unmatched price is unavailable instead of zero", async () => {
     addRequestLog(baseEntry({
       provider: "no-such-provider",

@@ -725,7 +725,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.estimate.cache_detail_missing": "キャッシュの詳細が利用できませんでした; 入力は上限の推定です。",
   "logs.detail.estimate.expected_price_overlay": "検証済みの予想定価が使用されました。",
   "logs.detail.estimate.provider_cost_overlay": "プロバイダー設定の価格オーバーレイが使用されました。",
-  "logs.detail.estimate.priority_lower_bound": "確認済みの OpenRouter Priority 価格は取得できないため、表示される標準価格の見積もりは既知の下限です。",
+  "logs.detail.estimate.priority_lower_bound": "確認済みの Priority 価格を利用できないため、表示される見積もりは既知の下限です。",
   "logs.col.error": "エラー",
   "logs.col.upstreamReason": "上流の理由",
   "logs.col.duration": "所要時間",

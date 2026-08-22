@@ -268,9 +268,8 @@ export function rewriteRoutedNamespaceToolsForUpstream(body: unknown): {
   const groups = collectResponsesToolGroups(body);
   const plan = buildRewritePlan(groups);
 
-  // Deliberately not gated on the plan being non-empty: a turn whose catalog is gone still replays
-  // call items carrying a private `namespace`, and the routed compaction turn strips the whole tool
-  // surface before this runs.
+  // Deliberately not gated on the plan being non-empty: a turn whose catalog is absent can still
+  // replay call items carrying a private `namespace`.
   const emitted = new Set<string>();
   const tools = Array.isArray(body.tools) ? rewriteToolList(body.tools, plan, emitted) : body.tools;
 

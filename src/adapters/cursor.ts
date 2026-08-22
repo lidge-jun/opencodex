@@ -3,8 +3,8 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErrorMessage } from "./cursor/cursor-errors";
-import { cursorCheckpointModelAffinityId, isCursorExternalWireModel } from "./cursor/discovery";
+import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import {
@@ -25,6 +25,7 @@ import {
   invalidateCursorCheckpoint,
 } from "./cursor/checkpoint-store";
 import { debugProviderDiagnostic } from "../lib/debug";
+import { estimateTokens } from "../lib/token-estimate";
 import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import {
@@ -53,14 +54,27 @@ export interface CursorAdapterDeps {
   rekeyContextUsage?: (fromConversationId: string, toConversationId: string) => void;
 }
 
-function safeCursorTransportError(err: unknown): string {
+function safeCursorTransportError(err: unknown, sizeContext?: CursorSizeContext): string {
   if (err instanceof CursorTransportDisabledError) return CURSOR_TRANSPORT_DISABLED_MESSAGE;
   if (err instanceof CursorMissingCredentialError) {
     return "Cursor live transport is enabled, but no Cursor access token is configured. Set provider.apiKey or OPENCODEX_CURSOR_TEST_TOKEN.";
   }
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
-  if (message) return safeCursorErrorMessage(message);
+  if (message) return safeCursorErrorMessage(message, sizeContext);
   return "Cursor upstream error: transport failed before completion.";
+}
+
+/**
+ * Size prior for bare resource_exhausted classification (devlog 260): a rough input
+ * estimate over the outgoing text vs the model's context window. Only used to keep
+ * SMALL requests on the 429 class — unknown/large stays on the overflow mapping.
+ */
+function cursorRequestSizeContext(request: { modelId: string; system: string[]; messages: { content: string }[] }): CursorSizeContext {
+  const text = [...request.system, ...request.messages.map(message => message.content)].join("\n");
+  return {
+    estimatedInputTokens: estimateTokens(text, request.modelId),
+    contextWindow: inferCursorContextWindow(request.modelId),
+  };
 }
 
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
@@ -88,6 +102,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         emit({ type: "error", message: "Cursor turn was aborted before start." });
         return;
       }
+      // Captured after createCursorRequest so the catch block can apply the bare-RE
+      // size prior (devlog 260) even though `request` is scoped inside the try.
+      let requestSizeContext: CursorSizeContext | undefined;
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
@@ -110,6 +127,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
         let request = createCursorRequest(_parsed);
+        requestSizeContext = cursorRequestSizeContext(request);
         // The builder may derive a stable provider id from the client thread when Responses state
         // is unavailable. Rekey only existing state; there is nothing to migrate on a fresh turn,
         // and isolated helper/compaction turns must never inherit or donate the parent's usage state.
@@ -292,7 +310,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           type: "error",
           message: isTranslatorBudgetExceededError(err)
             ? "upstream translation buffer exceeded the safe limit"
-            : safeCursorTransportError(err),
+            : safeCursorTransportError(err, requestSizeContext),
           ...(isTranslatorBudgetExceededError(err)
             ? { status: 502, errorType: "upstream_error", code: "translation_buffer_limit" }
             : {}),

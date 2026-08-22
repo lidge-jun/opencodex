@@ -773,7 +773,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.estimate.cache_detail_missing": "Önbellek detayları eksik.",
   "logs.detail.estimate.expected_price_overlay": "Doğrulanmış liste fiyatı kullanıldı.",
   "logs.detail.estimate.provider_cost_overlay": "Kullanıcı tarafından yapılandırılan bir sağlayıcı fiyat katmanı kullanıldı.",
-  "logs.detail.estimate.priority_lower_bound": "Doğrulanan OpenRouter Priority fiyatı kullanılamıyor; gösterilen standart fiyat tahmini bilinen bir alt sınırdır.",
+  "logs.detail.estimate.priority_lower_bound": "Doğrulanan Priority fiyatı kullanılamıyor; gösterilen tahmin bilinen bir alt sınırdır.",
   "logs.col.error": "Hata",
   "logs.col.upstreamReason": "Yukarı akış nedeni",
   "logs.col.duration": "Süre",

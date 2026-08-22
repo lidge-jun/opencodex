@@ -193,7 +193,7 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 
 ## 백그라운드 서비스
 
-### `ocx service [install|repair|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 로그인 관리형 백그라운드 서비스로 opencodex를 실행합니다(macOS **launchd**, Linux **systemd** 사용자
 유닛, Windows **Task Scheduler**). 로그인 시 자동 시작하고 충돌 시 자동 재시작합니다. 서비스 실행은
@@ -201,9 +201,10 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 
 | 하위 명령 | 동작 |
 | --- | --- |
-| 없음 | 서비스를 생성/업데이트하고 시작합니다. |
+| 없음 | 서비스가 없으면 설치하고 시작하며, 이미 있으면 재등록하지 않고 새로 고쳐 재시작합니다. |
 | `install` | 서비스를 생성하고 시작합니다. |
 | `repair` | 설치된 서비스를 다시 등록하지 않고 제자리에서 새로 고친 뒤 재시작합니다. |
+| `restart` | `repair`의 별칭입니다. |
 | `start` | 설치된 서비스를 시작합니다. |
 | `stop` | 서비스를 중지하고 기본 Codex를 복원합니다. |
 | `status` | 서비스와 프록시 진단, 로그 경로를 보고합니다. |
@@ -214,9 +215,14 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 ocx service
 ocx service install
 ocx service repair
+ocx service restart
 ocx service status
 ocx service uninstall
 ```
+
+Windows에서는 bare `ocx service`가 Task Scheduler와 WinSW 양쪽 모두 부재가 입증된 후에만 설치
+경로를 실행합니다. 상태 조회 중 하나라도 불확실하면 아무것도 등록하지 않고 `ocx service status`
+실행을 안내합니다. 부재를 확인한 뒤에만 명시적인 `ocx service install`을 사용하세요.
 
 Windows에서는 `ocx service status`가 Task Scheduler 등록 상태를 ID가 검증된 OpenCodex 프록시
 도달 가능성과 별도로 보고합니다. 로컬라이즈된 `schtasks` 표는 출력하지 않으므로, 요약은 Windows

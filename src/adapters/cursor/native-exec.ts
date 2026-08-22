@@ -50,7 +50,7 @@ import {
   recordScreenExec,
   type CursorNativeToolDeps,
 } from "./native-exec-tools";
-import { clientBytes, execBytes } from "./native-exec-common";
+import { clientBytes, execBytes, execStreamCloseBytes, execThrowBytes } from "./native-exec-common";
 import type { McpToolDefinition } from "./gen/agent_pb";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 
@@ -603,10 +603,15 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     }))];
   }
   // Unknown exec case — Cursor added a new native exec type that our protobuf definition does not
-  // include yet. Return an empty reply so the stream stays alive instead of throwing (which kills
-  // the entire gRPC connection via failAndClear). Same class of bug as #116.
+  // include yet. T05 (senpi contract): reply with ExecClientThrow + stream-close so the server
+  // unblocks with a known failure. Previously this returned an empty reply (silence), which is
+  // the stall class senpi explicitly refused (#116 was about throwing into failAndClear and
+  // killing the whole connection; a typed in-band throw does not do that).
   debugProviderDiagnostic("cursor", "unknown-exec-case", { execCase: execCase ?? "unknown", execId: execMsg.execId });
-  return [];
+  return [
+    execThrowBytes(execMsg, "Unknown exec message variant; this client does not implement it."),
+    execStreamCloseBytes(execMsg),
+  ];
 }
 
 

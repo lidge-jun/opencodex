@@ -3274,6 +3274,7 @@ export async function serviceStatusReport(
 }
 
 export function normalizeServiceSubcommand(sub?: string): string {
+  if (sub === "restart") return "repair";
   return sub ?? "install";
 }
 
@@ -3281,6 +3282,119 @@ export interface ParsedServiceArgs {
   sub: string;
   backend: ServiceBackend | null;
   invalid: string[];
+}
+
+export type ServiceInstallationState = "installed" | "absent" | "unknown";
+
+export interface ServiceInstallationProbe {
+  state: ServiceInstallationState;
+  detail?: string;
+}
+
+export interface ServiceInstallationProbeHooks {
+  platform?: NodeJS.Platform;
+  exists?: (path: string) => boolean;
+  probeWindowsTask?: () => WindowsSchedulerTaskProbe;
+  nativeStatus?: () => WinswStatus;
+}
+
+/**
+ * Read only enough registration state to choose between install and repair.
+ * Windows must keep query failure distinct from proven absence: treating an
+ * unreadable scheduler/SCM as absent would send a bare command into the
+ * elevated registration path and recreate the original #2287 failure.
+ */
+export function probeServiceInstallation(
+  hooks: ServiceInstallationProbeHooks = {},
+): ServiceInstallationProbe {
+  const platform = hooks.platform ?? process.platform;
+  const exists = hooks.exists ?? existsSync;
+  if (platform === "darwin") {
+    return { state: exists(plistPath()) ? "installed" : "absent" };
+  }
+  if (platform === "linux") {
+    return { state: exists(unitPath()) ? "installed" : "absent" };
+  }
+  if (platform !== "win32") return { state: "absent" };
+
+  let scheduler: WindowsSchedulerTaskProbe;
+  try {
+    scheduler = (hooks.probeWindowsTask ?? probeWindowsSchedulerTask)();
+  } catch (cause) {
+    scheduler = { status: "unknown", detail: schtasksErrorDetail(cause) };
+  }
+  let native: WinswStatus;
+  try {
+    native = (hooks.nativeStatus ?? statusWinswRaw)();
+  } catch {
+    native = "unknown";
+  }
+
+  if (scheduler.status === "present" || native === "started" || native === "stopped") {
+    return { state: "installed" };
+  }
+  if (scheduler.status === "unknown" || native === "unknown") {
+    const parts = [
+      scheduler.status === "unknown" ? `Task Scheduler: ${scheduler.detail}` : null,
+      native === "unknown" ? "WinSW status could not be determined" : null,
+    ].filter((part): part is string => Boolean(part));
+    return { state: "unknown", detail: parts.join("; ") };
+  }
+  return { state: "absent" };
+}
+
+/**
+ * A bare invocation is an idempotent "make the installed service current"
+ * operation. First-time setup still installs, but an existing registration must
+ * use the repair path so Windows does not re-run the elevated `schtasks /create`.
+ * Backend flags remain an explicit install request because they select which
+ * registration mechanism to create.
+ */
+export function selectServiceSubcommand(
+  parsed: ParsedServiceArgs,
+  options: { hasExplicitSubcommand: boolean; installed: boolean },
+): string {
+  if (!options.hasExplicitSubcommand && parsed.backend === null && options.installed) return "repair";
+  return parsed.sub;
+}
+
+export type ServiceCommandPlan =
+  | { ok: true; parsed: ParsedServiceArgs; command: string }
+  | { ok: false; message: string };
+
+export function planServiceCommand(
+  args: string[],
+  options: { platform?: NodeJS.Platform; probeInstallation?: () => ServiceInstallationProbe } = {},
+): ServiceCommandPlan {
+  const parsed = parseServiceArgs(args);
+  if (parsed.invalid.length > 0) {
+    return { ok: false, message: `Unknown service option: ${parsed.invalid.join(" ")}` };
+  }
+  if (parsed.backend && parsed.sub !== "install") {
+    return { ok: false, message: "--native/--scheduler apply to `ocx service install` only; other subcommands use the installed backend." };
+  }
+  if (parsed.backend === "native" && (options.platform ?? process.platform) !== "win32") {
+    return { ok: false, message: "--native (WinSW) is Windows-only." };
+  }
+
+  const hasExplicitSubcommand = args.some(arg => !arg.startsWith("--"));
+  let installed = false;
+  if (!hasExplicitSubcommand && parsed.backend === null) {
+    const probe = (options.probeInstallation ?? probeServiceInstallation)();
+    if (probe.state === "unknown") {
+      const suffix = probe.detail ? ` (${probe.detail})` : "";
+      return {
+        ok: false,
+        message: `Could not safely determine whether the service is installed${suffix}. Run 'ocx service status' and retry; use explicit 'ocx service install' only after confirming it is absent.`,
+      };
+    }
+    installed = probe.state === "installed";
+  }
+  return {
+    ok: true,
+    parsed,
+    command: selectServiceSubcommand(parsed, { hasExplicitSubcommand, installed }),
+  };
 }
 
 /**
@@ -3308,20 +3422,13 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
 }
 
 export async function serviceCommand(...args: (string | undefined)[]): Promise<void> {
-  const parsed = parseServiceArgs(args.filter((a): a is string => Boolean(a)));
-  const command = parsed.sub;
-  if (parsed.invalid.length > 0) {
-    console.error(`Unknown service option: ${parsed.invalid.join(" ")}`);
+  const filteredArgs = args.filter((a): a is string => Boolean(a));
+  const plan = planServiceCommand(filteredArgs);
+  if (!plan.ok) {
+    console.error(plan.message);
     process.exit(1);
   }
-  if (parsed.backend && command !== "install") {
-    console.error("--native/--scheduler apply to `ocx service install` only; other subcommands use the installed backend.");
-    process.exit(1);
-  }
-  if (parsed.backend === "native" && process.platform !== "win32") {
-    console.error("--native (WinSW) is Windows-only.");
-    process.exit(1);
-  }
+  const { parsed, command } = plan;
   if (command === "repair") {
     assertServiceEnvironmentMatchesInstall();
     assertServiceAuthEnvironment();
@@ -3458,9 +3565,10 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|repair|start|stop|status|uninstall|remove] [--native|--scheduler]");
-      console.error("       With no subcommand, installs/updates and starts the background service.");
+      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("       With no subcommand, installs when absent or repairs/restarts an existing service.");
       console.error("       repair: refresh assets and restart an already-installed service (no admin re-prompt).");
+      console.error("       restart: alias of repair.");
       console.error("       --native (Windows only): register a real SCM service via WinSW instead of Task Scheduler.");
       process.exit(1);
   }

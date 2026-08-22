@@ -32,6 +32,13 @@ Upstream and overlay both touch wire protocol or core request path. Serialize me
 
 Keep upstream control flow; re-fit fork behavior. Never “accept all ours” on these files.
 
+The established shared-hotspot defaults are:
+
+- `src/adapters/google-http.ts`: apply account cooldown first, then host
+  failover.
+- `src/server/responses/core.ts`: try the Antigravity 429 carousel first, then
+  recover the opaque blob.
+
 ### `upstream-owned` — default take theirs
 
 Everything not listed above. Re-apply fork intent as a **new small commit** only if still needed after taking upstream.
