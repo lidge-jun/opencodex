@@ -5469,5 +5469,31 @@ describe("auto_review_model configuration (#1225)", () => {
     const { readConfiguredAutoReviewModel } = require("../src/codex/catalog/parsing");
     expect(typeof readConfiguredAutoReviewModel).toBe("function");
   });
+
+  test("writeRetainedCatalogSync stamps auto_review_model_override into persisted catalog", () => {
+    const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
+    const { readConfiguredAutoReviewModel } = require("../src/codex/catalog/parsing");
+
+    // Simulate a config-driven write path: entries are regenerated from a template,
+    // then the override is stamped before serialization.
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: null },
+      { slug: "opencode-go/glm-5.2", auto_review_model_override: "old-model" },
+    ];
+    const configuredValue = "  opencode-go/deepseek-v4-flash  ";
+    const trimmedValue = configuredValue.trim();
+
+    expect(typeof readConfiguredAutoReviewModel).toBe("function");
+
+    // Absent value: no override is written.
+    applyAutoReviewModelOverride(entries, null);
+    expect(entries[0].auto_review_model_override).toBeNull();
+    expect(entries[1].auto_review_model_override).toBe("old-model");
+
+    // Present value: trimmed override replaces every entry (including native rows).
+    applyAutoReviewModelOverride(entries, configuredValue);
+    expect(entries[0].auto_review_model_override).toBe(trimmedValue);
+    expect(entries[1].auto_review_model_override).toBe(trimmedValue);
+  });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
