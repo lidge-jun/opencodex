@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -2738,6 +2738,8 @@ function configMutationDatabasePath(): string {
 
 let configMutationLockDepth = 0;
 let configMutationDatabase: Database | null = null;
+/** Marker deletion is deferred until the surrounding transaction commits. */
+let pendingConfigMutationAuditCleanup = false;
 
 /**
  * Serialize synchronous config and Codex credential-generation commits across processes with an
@@ -2789,16 +2791,22 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     const value = fn();
     database.exec("COMMIT");
     transactionOpen = false;
+    if (pendingConfigMutationAuditCleanup) {
+      pendingConfigMutationAuditCleanup = false;
+      deletePendingConfigMutationAudit();
+    }
     return value;
   } catch (error) {
     if (transactionOpen) {
       try { database.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
       transactionOpen = false;
     }
+    pendingConfigMutationAuditCleanup = false;
     throw error;
   } finally {
     configMutationLockDepth = 0;
     configMutationDatabase = null;
+    pendingConfigMutationAuditCleanup = false;
     try { database.close(); } catch { /* the OS lock is released with the handle */ }
   }
 }
@@ -2887,7 +2895,15 @@ function configMutationPendingAuditPath(): string {
 }
 
 function writePendingConfigMutationAudit(payload: PendingConfigMutationAudit): void {
-  atomicWriteFile(configMutationPendingAuditPath(), JSON.stringify(payload));
+  const path = configMutationPendingAuditPath();
+  atomicWriteFile(path, JSON.stringify(payload));
+  // Order the marker ahead of the config.json rename across power loss, not just
+  // across process termination. Directory fsync is best-effort: some platforms
+  // refuse it, and process crashes are already covered by the page cache.
+  try {
+    const dir = openSync(getConfigDir(), "r");
+    try { fsyncSync(dir); } finally { closeSync(dir); }
+  } catch { /* best-effort */ }
 }
 
 function deletePendingConfigMutationAudit(): void {
@@ -2944,7 +2960,9 @@ function reconcilePendingConfigMutationAudit(database: Database): void {
       pending.after,
     );
   }
-  deletePendingConfigMutationAudit();
+  // The unlink cannot participate in the transaction, so schedule it for the
+  // post-COMMIT step. A marker that survives a ROLLBACK is replayed next time.
+  pendingConfigMutationAuditCleanup = true;
 }
 
 /** Record the row described by the marker inside the CURRENT open transaction, then remove it. */
@@ -2960,7 +2978,7 @@ function recordPendingConfigMutationAuditNow(): void {
     pending.before,
     pending.after,
   );
-  deletePendingConfigMutationAudit();
+  pendingConfigMutationAuditCleanup = true;
 }
 
 /** Best-effort read-path recovery: replay an orphaned marker when the DB already exists. */
@@ -2973,7 +2991,14 @@ function reconcilePendingConfigMutationAuditOnRead(path: string): void {
     } finally {
       writable.close();
     }
+    // The implicit autocommit committed before close; only now is the marker
+    // deletion safe (a failed insert leaves the marker for the next write).
+    if (pendingConfigMutationAuditCleanup) {
+      pendingConfigMutationAuditCleanup = false;
+      deletePendingConfigMutationAudit();
+    }
   } catch {
+    pendingConfigMutationAuditCleanup = false;
     // A concurrent writer may hold the SQLite lock; the next mutation reconciles.
   }
 }
@@ -3353,7 +3378,10 @@ export function mutatePersistedConfig<T>(
         confirmedConfig,
       );
       const persisted = persistConfigUnlocked(projected, {
-        before: commitBase.diagnostics.config,
+        // The exact persisted document, matching saveConfig and
+        // saveConfigPreservingClaudeCode. The parsed config carries schema
+        // defaults and degraded fields that were never on disk.
+        before: readRawConfigJson(),
         source,
       });
       if (persisted) bumpGenerationForCooperatingConfigWrite();
