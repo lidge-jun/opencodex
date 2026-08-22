@@ -70,6 +70,7 @@ import {
   type ProviderCostOverlay,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import { modelAutoCompactTokenLimitsConfigError } from "./providers/auto-compact-budget";
 import { fastWireDeclarationError, hasFastWireCapabilityConflict } from "./providers/fastwire";
 import {
   getProviderRegistryEntry,
@@ -1495,6 +1496,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelMaxInputTokens"],
         message: maxInputError,
+      });
+    }
+    const autoCompactError = modelAutoCompactTokenLimitsConfigError(
+      (provider as { modelAutoCompactTokenLimits?: unknown }).modelAutoCompactTokenLimits,
+      { requireNativeIds: name === OPENAI_CODEX_PROVIDER_ID },
+    );
+    if (autoCompactError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelAutoCompactTokenLimits"],
+        message: autoCompactError,
       });
     }
     const reasoningSummariesError = booleanRecordConfigError(

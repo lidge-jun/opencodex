@@ -275,6 +275,11 @@ export interface OcxProviderConfig {
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   /**
+   * Per-model soft compaction budgets. Values may only lower the effective
+   * context/max-input envelope; they never raise hard admission limits.
+   */
+  modelAutoCompactTokenLimits?: Record<string, number>;
+  /**
    * Provider-wide fallback for chat-completions `max_tokens` when the caller omits
    * Responses `max_output_tokens`. Adapters still let an explicit request win.
    */
