@@ -24,3 +24,36 @@ export interface CommandResult {
 export type CommandRunner = (
   args: readonly string[],
 ) => Promise<CommandResult>;
+
+export interface ForkSyncNotifier {
+  id: string;
+  notify(event: SyncEvent): Promise<void>;
+}
+
+export interface ForkSyncCoordinator {
+  id: string;
+  start(event: SyncEvent): Promise<void>;
+}
+
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  labels: Array<{ name?: string } | string>;
+}
+
+export interface GitHubIssuesClient {
+  listOpen(options: { label: string }): Promise<GitHubIssue[]>;
+  create(options: {
+    title: string;
+    body: string;
+    labels: string[];
+  }): Promise<void>;
+  update(options: {
+    issueNumber: number;
+    title: string;
+    body: string;
+    labels: string[];
+  }): Promise<void>;
+}
