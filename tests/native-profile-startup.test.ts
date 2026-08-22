@@ -807,6 +807,37 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     }
   });
 
+  test("startServer rejects initially owned activation after the inspected homes drift", async () => {
+    const inspected = await fixture("prepared", "source-exact", false, "direct");
+    process.env.CODEX_HOME = inspected.codexHome;
+    process.env.OPENCODEX_HOME = inspected.configDir;
+    let inspections = 0;
+    let started: ReturnType<typeof startServer> | undefined;
+    try {
+      expect(() => {
+        started = startServer(0, {
+          inspectNativeCodexOwnership: scope => {
+            inspections += 1;
+            expect(scope.currentHomes).toEqual({
+              codexHome: inspected.codexHome,
+              opencodexHome: inspected.configDir,
+            });
+            expect(scope.statePaths?.[0]).toBe(join(inspected.configDir, "service-state.json"));
+            return { ownership: "owned", reason: "initially owned pinned scope test" };
+          },
+          nativeMainStartup: {
+            manager: inspected.manager,
+            currentHomeId: () => null,
+            owner: { retryMs: 10, hardenPath: async () => {} },
+          },
+        });
+      }).toThrow("The native-main startup home changed after ownership inspection.");
+    } finally {
+      await started?.stop(true);
+    }
+    expect(inspections).toBe(2);
+  });
+
   test("startServer keeps a retry when service homes are initially unavailable", async () => {
     const f = await fixture("prepared", "source-exact", false, "direct");
     process.env.CODEX_HOME = f.codexHome;
@@ -841,6 +872,7 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     });
     try {
       expect(homeResolutions).toBe(1);
+      expect(scopes).toHaveLength(0);
       expect(nativeMainStartupGateSnapshot()).toEqual({
         status: "blocked",
         homeId: null,

@@ -178,7 +178,6 @@ import {
   blockNativeMainStartupForUnownedServiceHome,
   prepareNativeMainStartupLifecycle,
   releaseNativeMainStartupLifecycle,
-  startNativeMainStartupLifecycle,
   type NativeMainStartupGateDeps,
   type NativeMainStartupLifecycle,
 } from "../codex/native-profile-startup";
@@ -462,17 +461,14 @@ function inspectStartupOwnership(
   statePaths: readonly string[] | null,
 ): OwnershipInspection {
   try {
-    if (deps.inspectNativeCodexOwnership) {
-      return deps.inspectNativeCodexOwnership({
-        ...(currentHomes ? { currentHomes } : {}),
-        ...(statePaths ? { statePaths } : {}),
-      });
-    }
     if (currentHomes === null || statePaths === null) {
       return {
         ownership: "unknown",
         reason: "startup service-home resolution failed",
       };
+    }
+    if (deps.inspectNativeCodexOwnership) {
+      return deps.inspectNativeCodexOwnership({ currentHomes, statePaths });
     }
     return inspectNativeCodexOwnership({ currentHomes, statePaths });
   } catch {
@@ -737,7 +733,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Re-probe here instead of trusting the earlier cache decision: startup work
   // between the two sites must not widen the service-install race.
   const nativeOwnership = inspectStartupOwnership(deps, startupOwnershipHomes, startupOwnershipStatePaths);
-  const preparedNativeMainLifecycle = nativeOwnership.ownership === "unknown"
+  const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null
     ? prepareNativeMainStartupLifecycle(
       deps.nativeMainStartup,
@@ -784,7 +780,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   };
   const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
     ? nativeOwnership.ownership === "owned"
-      ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
+      ? preparedNativeMainLifecycle
+        ? preparedNativeMainLifecycle.start()
+        : blockNativeMainStartupForUnownedServiceHome(
+          "ownership-unknown",
+          ownershipRetryOptions,
+        )
       : nativeOwnership.ownership === "foreign"
         ? blockNativeMainStartupForUnownedServiceHome("foreign-ownership")
         : blockNativeMainStartupForUnownedServiceHome(
