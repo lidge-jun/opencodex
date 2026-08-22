@@ -73,11 +73,8 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-sol`、
 `gpt-5.6-terra`、`gpt-5.6-luna`）；账号具备相应权限时才能实际调用。
 
-对于加密的 V2 子任务，规范 ChatGPT 透传会被隐式信任。非规范的 `openai-responses` 提供商只有在
-确认上游能够原样消费或中继不透明密文后，才能设置 `allowEncryptedV2AgentTasks: true`。该选项
-默认关闭，只在模型的最终 wire 为 `openai-responses` 时生效；如果 `modelAdapters` 解析为
-`openai-chat`，该路由仍不具备资格。opencodex 不会解密、翻译或恢复 payload，不合格路由会以
-`unreadable_encrypted_agent_task` fail closed。
+对于加密的 V2 子任务，规范 ChatGPT 透传会被隐式信任。非规范 Responses 提供商的目标绑定 opt-in、
+最终 wire 资格和 fail-closed 行为，请参阅[提供商配置参考](/zh-cn/reference/configuration/providers/)。
 
 ## 2. 账号登录（OAuth）
 

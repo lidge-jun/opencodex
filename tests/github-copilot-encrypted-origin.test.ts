@@ -42,6 +42,31 @@ function config(provider: OcxProviderConfig): OcxConfig {
   return { providers: { "github-copilot": provider } } as unknown as OcxConfig;
 }
 
+function comboConfig(): OcxConfig {
+  return {
+    providers: {
+      "github-copilot": copilotProvider({ authMode: "oauth" }),
+      relay: {
+        adapter: "openai-responses",
+        baseUrl: "https://relay.example.test",
+        authMode: "key",
+        apiKey: "relay-key-fixture",
+        allowEncryptedV2AgentTasks: true,
+      },
+    },
+    combos: {
+      trusted: {
+        strategy: "failover",
+        targets: [
+          { provider: "github-copilot", model: "gpt-5.6-luna" },
+          { provider: "relay", model: "relay-model" },
+        ],
+      },
+    },
+    agentTaskRecovery: { enabled: true },
+  } as unknown as OcxConfig;
+}
+
 async function seedCredential(apiBaseUrl: string): Promise<void> {
   await saveCredential("github-copilot", {
     access: "access-fixture",
@@ -112,5 +137,31 @@ describe("encrypted Copilot tasks stay bound to the approved origin", () => {
     expect(response.status).toBe(400);
     expect((await response.json()).error?.code).toBe("unreadable_encrypted_agent_task");
     expect(urls).toEqual([]);
+  });
+
+  test("a stale Copilot origin is skipped before a later trusted combo fallback", async () => {
+    await seedCredential("https://api.individual.githubcopilot.com");
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response("data: [DONE]\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/trusted",
+        input: encryptedAgentInput(),
+        stream: true,
+      }),
+    }), comboConfig(), { model: "", provider: "" });
+
+    expect(response.status).toBe(200);
+    expect(urls).toEqual(["https://relay.example.test/responses"]);
+    expect(urls.some(url => url.includes("api.individual.githubcopilot.com"))).toBe(false);
   });
 });

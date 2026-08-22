@@ -87,12 +87,9 @@ what powers the [web-search and vision sidecars](/guides/sidecars/).
 The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna slugs
 (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) for accounts that can use them.
 
-For encrypted V2 child tasks, canonical ChatGPT forwarding is trusted implicitly. A non-canonical
-`openai-responses` provider may opt in with `allowEncryptedV2AgentTasks: true` only after its
-upstream has been verified to consume or relay the opaque ciphertext unchanged. The option is
-disabled by default, is evaluated against the model's final wire, and does not apply when a
-`modelAdapters` override resolves to `openai-chat`. OpenCodex never decrypts, translates, or
-recovers this payload; ineligible routes fail closed with `unreadable_encrypted_agent_task`.
+For encrypted V2 child tasks, canonical ChatGPT forwarding is trusted implicitly. The
+destination-bound opt-in, final-wire eligibility, and fail-closed behavior for non-canonical
+Responses providers are defined in the [provider configuration reference](/reference/configuration/providers/).
 
 ## 2. Account login (OAuth)
 
