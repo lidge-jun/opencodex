@@ -1014,4 +1014,91 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
     expect(input.some(item => item.call_id === "call_orphan")).toBe(false);
     expect(input.some(item => item.type === "message")).toBe(true);
   });
+
+  describe("Custom provider Responses terminal repair escape hatch (#1809)", () => {
+    test("custom provider opts into default 500ms terminal repair via modelResponsesCompatibility", () => {
+      const customProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: {
+          "my-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "my-model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MY-MODEL")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "other-model")).toBeUndefined();
+    });
+
+    test("custom provider specifies explicit graceMs via modelResponsesTerminalRepair", () => {
+      const customProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "model-num": 1500,
+          "model-obj": { graceMs: 2000 },
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-num")).toEqual({ graceMs: 1500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-obj")).toEqual({ graceMs: 2000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "unconfigured")).toBeUndefined();
+    });
+
+    test("custom provider specifies provider-level responsesTerminalRepair", () => {
+      const customProvString = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: "terminal-repair" as const,
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProvString, "any-model")).toEqual({ graceMs: 500 });
+
+      const customProvNumber = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProvNumber, "any-model")).toEqual({ graceMs: 750 });
+    });
+
+    test("rejects repair for non-responses wires even when compatibility is set", () => {
+      const chatProv = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: {
+          "my-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", chatProv, "my-model")).toBeUndefined();
+    });
+
+    test("respects per-model modelAdapters overrides", () => {
+      const hybridProv = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelAdapters: {
+          "responses-model": "openai-responses",
+        },
+        modelResponsesCompatibility: {
+          "responses-model": "terminal-repair" as const,
+          "chat-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hybridProv, "responses-model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hybridProv, "chat-model")).toBeUndefined();
+    });
+
+    test("fails closed on non-positive or invalid grace values", () => {
+      const invalidProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "zero-grace": 0,
+          "neg-grace": -500,
+          "nan-grace": NaN,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "zero-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "neg-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "nan-grace")).toBeUndefined();
+    });
+  });
 });

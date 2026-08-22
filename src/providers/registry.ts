@@ -2877,15 +2877,52 @@ export function providerModelResponsesUpstreamStreaming(
   return entry.modelResponsesUpstreamStreaming[modelId.trim().toLowerCase()];
 }
 
-/** Resolve a registry-only terminal-repair policy for native Responses streams. */
+/**
+ * Resolve terminal-repair policy for native Responses streams (supports registry presets
+ * and custom-provider configuration overrides, issue #1809).
+ */
 export function providerModelResponsesTerminalRepair(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode" | "modelAdapters" | "modelResponsesCompatibility" | "modelResponsesTerminalRepair" | "responsesTerminalRepair">>,
   modelId: string,
 ): ResponsesTerminalRepairPolicy | undefined {
+  const modelKey = modelId.trim().toLowerCase();
+  const effectiveAdapter = provider.modelAdapters?.[modelId] ?? provider.modelAdapters?.[modelKey] ?? provider.adapter;
+
+  // Custom provider opt-in: effective wire must be openai-responses
+  if (effectiveAdapter === "openai-responses") {
+    // 1. Check explicit modelResponsesCompatibility
+    const compat = provider.modelResponsesCompatibility?.[modelId] ?? provider.modelResponsesCompatibility?.[modelKey];
+    if (compat === "terminal-repair") {
+      const raw = provider.modelResponsesTerminalRepair?.[modelId] ?? provider.modelResponsesTerminalRepair?.[modelKey];
+      const grace = typeof raw === "number" ? raw : (typeof raw === "object" && raw ? raw.graceMs : 500);
+      const graceMs = Math.floor(grace ?? 500);
+      return { graceMs: Number.isFinite(graceMs) && graceMs > 0 ? graceMs : 500 };
+    }
+
+    // 2. Check explicit modelResponsesTerminalRepair
+    const rawModel = provider.modelResponsesTerminalRepair?.[modelId] ?? provider.modelResponsesTerminalRepair?.[modelKey];
+    if (rawModel !== undefined) {
+      const grace = typeof rawModel === "number" ? rawModel : (typeof rawModel === "object" && rawModel ? rawModel.graceMs : undefined);
+      const graceMs = Math.floor(grace ?? 0);
+      if (Number.isFinite(graceMs) && graceMs > 0) return { graceMs };
+    }
+
+    // 3. Check provider-level responsesTerminalRepair
+    if (provider.responsesTerminalRepair !== undefined) {
+      if (provider.responsesTerminalRepair === "terminal-repair") return { graceMs: 500 };
+      const grace = typeof provider.responsesTerminalRepair === "number"
+        ? provider.responsesTerminalRepair
+        : (typeof provider.responsesTerminalRepair === "object" && provider.responsesTerminalRepair ? provider.responsesTerminalRepair.graceMs : undefined);
+      const graceMs = Math.floor(grace ?? 0);
+      if (Number.isFinite(graceMs) && graceMs > 0) return { graceMs };
+    }
+  }
+
+  // Fall back to registry-defined policy
   const entry = getProviderRegistryEntry(id);
   if (!entry?.modelResponsesTerminalRepair || !providerMatchesRegistryTransport(id, provider)) return undefined;
-  const policy = entry.modelResponsesTerminalRepair[modelId.trim().toLowerCase()];
+  const policy = entry.modelResponsesTerminalRepair[modelKey];
   const graceMs = Math.floor(policy?.graceMs ?? 0);
   if (!Number.isFinite(graceMs) || graceMs <= 0) return undefined;
   return { graceMs };
