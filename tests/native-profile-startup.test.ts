@@ -807,6 +807,80 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     }
   });
 
+  test("startServer keeps a retry when service homes are initially unavailable", async () => {
+    const f = await fixture("prepared", "source-exact", false, "direct");
+    process.env.CODEX_HOME = f.codexHome;
+    process.env.OPENCODEX_HOME = f.configDir;
+    let homesReady = false;
+    let homeResolutions = 0;
+    let answer: NativeCodexOwnership = "unknown";
+    let finishRecovery!: () => void;
+    const recoveryBarrier = new Promise<void>(resolve => { finishRecovery = resolve; });
+    const scopes: Array<{
+      currentHomes?: { codexHome: string; opencodexHome: string };
+      statePaths?: readonly string[];
+    }> = [];
+    const server = startServer(0, {
+      resolveServiceHomes: () => {
+        homeResolutions += 1;
+        if (!homesReady) throw new Error("service homes are not mounted yet");
+        return { codexHome: f.codexHome, opencodexHome: f.configDir };
+      },
+      inspectNativeCodexOwnership: (scope = {}) => {
+        scopes.push({
+          currentHomes: scope.currentHomes ? { ...scope.currentHomes } : undefined,
+          statePaths: scope.statePaths ? [...scope.statePaths] : undefined,
+        });
+        return { ownership: answer, reason: "deferred startup scope test" };
+      },
+      nativeMainStartup: {
+        manager: f.manager,
+        beforeRecovery: () => recoveryBarrier,
+        owner: { retryMs: 10, hardenPath: async () => {} },
+      },
+    });
+    try {
+      expect(homeResolutions).toBe(1);
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "ownership-unknown",
+      });
+
+      homesReady = true;
+      answer = "owned";
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      expect(homeResolutions).toBe(2);
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: f.manager.context.homeId,
+        reason: "recovery-pending",
+      });
+
+      const pinnedScopes = scopes.filter(scope => scope.currentHomes !== undefined);
+      expect(pinnedScopes.length).toBeGreaterThanOrEqual(1);
+      for (const scope of pinnedScopes) {
+        expect(scope.currentHomes).toEqual({
+          codexHome: f.codexHome,
+          opencodexHome: f.configDir,
+        });
+        expect(scope.statePaths?.[0]).toBe(join(f.configDir, "service-state.json"));
+      }
+
+      finishRecovery();
+      expect(await waitForNativeMainStartupGate()).toEqual({
+        status: "ready",
+        homeId: f.manager.context.homeId,
+      });
+      const allowed = tryAcquireNativeMainProfileClaim();
+      expect(allowed).not.toBeNull();
+      allowed?.release();
+    } finally {
+      finishRecovery();
+      await server.stop(true);
+    }
+  });
+
   test("an owned activation failure keeps the fence and retry hook intact", () => {
     let activationFails = true;
     let activations = 0;

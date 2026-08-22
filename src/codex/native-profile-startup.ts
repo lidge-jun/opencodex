@@ -370,7 +370,7 @@ const serviceOwnershipReprobes = new Map<NativeMainServiceOwnershipBlockReason, 
 
 interface ServiceOwnershipReprobe {
   readonly probe: () => NativeCodexOwnership;
-  readonly expectedHomeId: string;
+  readonly expectedHomeId: () => string | null;
   readonly activate: () => NativeMainStartupLifecycle;
   readonly adopt: (lifecycle: NativeMainStartupLifecycle) => boolean;
   readonly discard: (lifecycle: NativeMainStartupLifecycle) => void;
@@ -415,10 +415,13 @@ function reprobeServiceOwnership(reason: NativeMainServiceOwnershipBlockReason):
   if (entry.attempts >= NATIVE_MAIN_OWNERSHIP_RETRY_LIMIT) return false;
   entry.attempts += 1;
   let activated: NativeMainStartupLifecycle | undefined;
+  let expectedHomeId: string | null = null;
   entry.activating = true;
   try {
     const answer = entry.probe();
     if (answer !== "owned") return false;
+    expectedHomeId = entry.expectedHomeId();
+    if (expectedHomeId === null) return false;
     // Ownership becoming knowable is not itself startup completion. Install the
     // normal owner/recovery lifecycle while this fence is still held, so native
     // traffic cannot get ahead of owner registration, journal recovery, auth-temp
@@ -434,7 +437,7 @@ function reprobeServiceOwnership(reason: NativeMainServiceOwnershipBlockReason):
   if (
     !activated
     || activated.homeId === null
-    || activated.homeId !== entry.expectedHomeId
+    || activated.homeId !== expectedHomeId
     || typeof activated.release !== "function"
   ) {
     if (activated && typeof activated.release === "function") entry.discard(activated);
@@ -476,7 +479,7 @@ export function blockNativeMainStartupForUnownedServiceHome(
   reason: NativeMainServiceOwnershipBlockReason,
   options?: {
     reprobe: () => NativeCodexOwnership;
-    expectedHomeId: string;
+    expectedHomeId: string | (() => string | null);
     startOwnedLifecycle: () => NativeMainStartupLifecycle;
   },
 ): NativeMainStartupLifecycle {
@@ -520,9 +523,12 @@ export function blockNativeMainStartupForUnownedServiceHome(
   // fence installs its own hook — a server started after an earlier probe must not be left
   // needing `ocx restart`, which is the very symptom this exists to remove.
   if (options && reason === "ownership-unknown" && !serviceOwnershipReprobes.has(reason)) {
+    const expectedHomeId = options.expectedHomeId;
     serviceOwnershipReprobes.set(reason, {
       probe: options.reprobe,
-      expectedHomeId: options.expectedHomeId,
+      expectedHomeId: typeof expectedHomeId === "function"
+        ? expectedHomeId
+        : () => expectedHomeId,
       activate: options.startOwnedLifecycle,
       adopt: activated => {
         if (releaseFlight !== undefined || fenceSpent || ownedLifecycle !== undefined) return false;

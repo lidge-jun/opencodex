@@ -27,6 +27,7 @@ import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../servi
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import {
   inspectNativeCodexOwnership,
+  type NativeCodexOwnership,
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
@@ -445,6 +446,8 @@ export interface StartServerDeps {
   nativeMainStartup?: NativeMainStartupGateDeps;
   /** Test-only ownership evidence; production inspects the installed service state. */
   inspectNativeCodexOwnership?: typeof inspectNativeCodexOwnership;
+  /** Test-only service-home resolver; production resolves the current homes directly. */
+  resolveServiceHomes?: typeof currentServiceHomes;
   /** Test-only seam for an upstream that cannot complete its WebSocket close handshake. */
   liveSidebandWebSocketFactory?: LiveSidebandWebSocketFactory;
   /** Test-only seam; production derives a fresh local-attestation secret per process. */
@@ -558,8 +561,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // journal, or credential path. Both positive foreign evidence and an unprovable
   // ownership state are non-authority.
   startupCacheInvalidationWrote = false;
+  const resolveServiceHomes = deps.resolveServiceHomes ?? currentServiceHomes;
   let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
-  try { startupOwnershipHomes = currentServiceHomes(); } catch { /* inspection below stays unknown */ }
+  try { startupOwnershipHomes = resolveServiceHomes(); } catch { /* inspection below stays unknown */ }
   const startupOwnershipStatePaths = startupOwnershipHomes
     ? serviceStatePathsForOpenCodexHome(startupOwnershipHomes.opencodexHome)
     : null;
@@ -734,35 +738,65 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // between the two sites must not widen the service-install race.
   const nativeOwnership = inspectStartupOwnership(deps, startupOwnershipHomes, startupOwnershipStatePaths);
   const preparedNativeMainLifecycle = nativeOwnership.ownership === "unknown"
-    && (startupOwnershipHomes !== null || deps.nativeMainStartup?.manager)
+    && startupOwnershipHomes !== null
     ? prepareNativeMainStartupLifecycle(
       deps.nativeMainStartup,
-      startupOwnershipHomes
-        ? { codexHome: startupOwnershipHomes.codexHome, configDir: startupOwnershipHomes.opencodexHome }
-        : undefined,
+      { codexHome: startupOwnershipHomes.codexHome, configDir: startupOwnershipHomes.opencodexHome },
     )
     : null;
+  let retryOwnershipHomes = startupOwnershipHomes;
+  let retryOwnershipStatePaths = startupOwnershipStatePaths;
+  let retryPreparedNativeMainLifecycle = preparedNativeMainLifecycle;
+  const reprobeNativeOwnership = (): NativeCodexOwnership => {
+    // If startup could not resolve the homes at all, preserve a bounded retry
+    // without guessing an authority. The first successful resolution is pinned
+    // together with its service-state paths before ownership is inspected.
+    if (retryOwnershipHomes === null || retryOwnershipStatePaths === null) {
+      try {
+        const homes = resolveServiceHomes();
+        retryOwnershipHomes = homes;
+        retryOwnershipStatePaths = serviceStatePathsForOpenCodexHome(homes.opencodexHome);
+      } catch {
+        return "unknown";
+      }
+    }
+    const homes = retryOwnershipHomes;
+    const statePaths = retryOwnershipStatePaths;
+    const answer = inspectStartupOwnership(deps, homes, statePaths).ownership;
+    if (answer !== "owned") return answer;
+    retryPreparedNativeMainLifecycle ??= prepareNativeMainStartupLifecycle(
+      deps.nativeMainStartup,
+      { codexHome: homes.codexHome, configDir: homes.opencodexHome },
+    );
+    // An ownership verdict without a lifecycle bound to that same home is not
+    // enough to reopen native-main admission.
+    return retryPreparedNativeMainLifecycle ? "owned" : "unknown";
+  };
+  const ownershipRetryOptions = preparedNativeMainLifecycle || startupOwnershipHomes === null
+    ? {
+      reprobe: reprobeNativeOwnership,
+      expectedHomeId: () => retryPreparedNativeMainLifecycle?.homeId ?? null,
+      startOwnedLifecycle: () => {
+        if (!retryPreparedNativeMainLifecycle) {
+          throw new Error("Native-main ownership became known before its startup lifecycle was prepared.");
+        }
+        return retryPreparedNativeMainLifecycle.start();
+      },
+    }
+    : undefined;
   const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
     ? nativeOwnership.ownership === "owned"
       ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
       : nativeOwnership.ownership === "foreign"
         ? blockNativeMainStartupForUnownedServiceHome("foreign-ownership")
-        : preparedNativeMainLifecycle
+        : ownershipRetryOptions
           ? blockNativeMainStartupForUnownedServiceHome(
             "ownership-unknown",
             // #2108: an `unknown` verdict means the probe could not answer, not that this host
             // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
             // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
             // verdict ignores this by design — that one is a fact, not a question.
-            {
-              reprobe: () => inspectStartupOwnership(
-                deps,
-                startupOwnershipHomes,
-                startupOwnershipStatePaths,
-              ).ownership,
-              expectedHomeId: preparedNativeMainLifecycle.homeId,
-              startOwnedLifecycle: preparedNativeMainLifecycle.start,
-            },
+            ownershipRetryOptions,
           )
           : blockNativeMainStartupForUnownedServiceHome("ownership-unknown")
     : {
