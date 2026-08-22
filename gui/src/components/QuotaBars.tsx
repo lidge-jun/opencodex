@@ -349,10 +349,19 @@ function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
   );
 }
 
-function formatResetAt(resetAt: number | undefined, t: TFn, locale: Locale): { day: string; time: string } {
-  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return { day: "", time: "" };
+/** Normalize seconds-or-milliseconds epochs and reject values outside JavaScript Date's range. */
+function resetDate(resetAt: number | undefined): { date: Date; ms: number } | null {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return null;
   const ms = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
   const date = new Date(ms);
+  if (!Number.isFinite(date.getTime())) return null;
+  return { date, ms };
+}
+
+function formatResetAt(resetAt: number | undefined, t: TFn, locale: Locale): { day: string; time: string } {
+  const normalized = resetDate(resetAt);
+  if (!normalized) return { day: "", time: "" };
+  const { date } = normalized;
   const now = new Date();
   const tag = bcp47(locale);
   const time = new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
@@ -371,9 +380,9 @@ export function formatResetFuture(
   locale: Locale = "en",
   now = Date.now(),
 ): string {
-  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return "";
-  const ms = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
-  const date = new Date(ms);
+  const normalized = resetDate(resetAt);
+  if (!normalized) return "";
+  const { date, ms } = normalized;
   const tag = bcp47(locale);
   const time = new Intl.DateTimeFormat(tag, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
   const nowDate = new Date(now);
