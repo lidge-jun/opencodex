@@ -366,7 +366,9 @@ describe("Responses parser", () => {
 
     expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
     expect(parsed.options.toolChoice).toEqual({ name: "image_gen" });
-    expect(parsed.context.tools?.some(tool => tool.name === "image_gen")).toBe(true);
+    expect(parsed.context.tools?.some(
+      tool => tool.name === "image_gen" && tool.imageGeneration === true,
+    )).toBe(true);
   });
 
   test("namespaced ordinary image_gen does not suppress the synthetic root image tool", () => {

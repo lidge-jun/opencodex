@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { callXaiImages } from "../../src/images/xai-client";
+import { callXaiImages, resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
@@ -179,6 +179,13 @@ describe("callXaiImages", () => {
     const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
     expect(body.aspect_ratio).toBe("16:9");
     expect(body).not.toHaveProperty("size");
+  });
+
+  test("aspect_ratio literals come from the size-mapping table", () => {
+    expect(resolveXaiAspectRatioLiteral("3:4")).toBe("3:4");
+    expect(resolveXaiAspectRatioLiteral("4:3")).toBe("4:3");
+    expect(resolveXaiAspectRatioLiteral("auto")).toBeUndefined();
+    expect(resolveXaiAspectRatioLiteral("2:1")).toBeUndefined();
   });
 
   test("aspect_ratio auto and illegal values are dropped", async () => {
