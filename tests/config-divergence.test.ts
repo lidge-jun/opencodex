@@ -113,6 +113,23 @@ describe("config divergence status", () => {
     expect(status.diverged).toBe(true);
   });
 
+  test("resident digest hashes the raw file bytes, not the decoded string", () => {
+    // A malformed UTF-8 byte inside a JSON string value decodes to U+FFFD; the
+    // digest must still match the file's exact byte SHA-256.
+    const rawBytes = Buffer.concat([
+      Buffer.from('{"port":10100,"note":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]);
+    writeFileSync(getConfigPath(), rawBytes);
+    loadConfig();
+    const status = readConfigDivergenceStatus();
+    const byteDigest = createHash("sha256").update(rawBytes).digest("hex");
+    const decodedDigest = createHash("sha256").update(rawBytes.toString("utf-8")).digest("hex");
+    expect(byteDigest).not.toBe(decodedDigest);
+    expect(status.residentVersion).toBe(byteDigest);
+  });
+
   test("a save that preserves disk-only providers does not false-positive", async () => {
     // Start with only the existing provider; the disk-only row arrives as an EXTERNAL
     // edit after the process armed its resident identity.

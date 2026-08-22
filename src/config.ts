@@ -2196,9 +2196,13 @@ export function loadConfig(): OcxConfig {
   try {
     // Keep the pre-strip bytes: the resident identity must hash exactly what the
     // process parsed, including a leading BOM, so it matches the admission digest.
-    const rawWithBom = readFileSync(configPath, "utf-8");
+    // Hash the RAW bytes (not the decoded string): decoding can map malformed
+    // UTF-8 sequences onto replacement characters, which would make the digest
+    // disagree with the file's true byte SHA-256 and misreport divergence.
+    const fileBytes = readFileSync(configPath);
+    residentConfigSha256 = createHash("sha256").update(fileBytes).digest("hex");
+    const rawWithBom = fileBytes.toString("utf-8");
     const raw = rawWithBom.replace(/^\uFEFF/, "");
-    residentConfigSha256 = createHash("sha256").update(rawWithBom).digest("hex");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
