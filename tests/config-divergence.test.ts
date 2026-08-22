@@ -11,6 +11,7 @@ import {
   setResidentConfigSha256ForTests,
 } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
+import { reconcileUserCostOverlaysFromDisk } from "../src/usage/user-cost-overlay-reconciler";
 import type { OcxConfig } from "../src/types";
 
 let testRoot = "";
@@ -50,6 +51,23 @@ describe("config divergence status", () => {
     writeFileSync(getConfigPath(), JSON.stringify(config(), null, 2) + "\n");
     const status = readConfigDivergenceStatus();
     expect(status.residentVersion).toBeNull();
+    expect(status.diskVersion).not.toBeNull();
+    expect(status.diverged).toBe(false);
+  });
+
+  test("deleting the config clears the resident identity instead of retaining stale bytes", async () => {
+    const bytes = JSON.stringify(config(), null, 2) + "\n";
+    writeFileSync(getConfigPath(), bytes);
+    const loaded = loadConfig();
+    armClaudeCodeBaseline(loaded);
+    expect(readConfigDivergenceStatus().residentVersion).not.toBeNull();
+    rmSync(getConfigPath());
+    loadConfig();
+    expect(readConfigDivergenceStatus().residentVersion).toBeNull();
+    // Restoring the original bytes must not resurrect a stale divergence claim: with
+    // no resident identity the process cannot assert the file differs from it.
+    writeFileSync(getConfigPath(), bytes);
+    const status = readConfigDivergenceStatus();
     expect(status.diskVersion).not.toBeNull();
     expect(status.diverged).toBe(false);
   });
@@ -95,23 +113,30 @@ describe("config divergence status", () => {
     expect(status.diverged).toBe(true);
   });
 
-  test("a save that preserves disk-only providers does not false-positive", () => {
-    const onDisk = JSON.stringify({
-      ...config(),
-      defaultProvider: "diskOnly",
-      providers: {
-        diskOnly: { adapter: "openai-chat", baseUrl: "https://disk.example/v1", apiKey: "sk-disk" },
-      },
-    }, null, 2) + "\n";
-    writeFileSync(getConfigPath(), onDisk);
+  test("a save that preserves disk-only providers does not false-positive", async () => {
+    // Start with only the existing provider; the disk-only row arrives as an EXTERNAL
+    // edit after the process armed its resident identity.
+    writeFileSync(getConfigPath(), JSON.stringify(config(), null, 2) + "\n");
     const loaded = loadConfig();
     armClaudeCodeBaseline(loaded);
+    writeFileSync(getConfigPath(), JSON.stringify({
+      ...config(),
+      providers: {
+        ...(config().providers as Record<string, unknown>),
+        diskOnly: { adapter: "openai-chat", baseUrl: "https://disk.example/v1", apiKey: "sk-disk" },
+      },
+    }, null, 2) + "\n");
+    // The production server notices the external edit via its cost-overlay reconciler
+    // poll; drive that same step so the save below preserves the disk-only row.
+    reconcileUserCostOverlaysFromDisk(loaded);
     // Live edit adds a provider; persistConfigUnlocked preserves the disk-only row.
     loaded.providers.live = { adapter: "openai-chat", baseUrl: "https://live.example/v1", apiKey: "sk-live" };
     saveConfig(loaded);
     const status = readConfigDivergenceStatus();
     expect(status.diverged).toBe(false);
     expect(status.residentVersion).toBe(status.diskVersion);
+    const persisted = JSON.parse(await Bun.file(getConfigPath()).text()) as { providers: Record<string, unknown> };
+    expect(persisted.providers.diskOnly).toBeDefined();
   });
 
   test("GET /api/config/status exposes resident and disk versions", async () => {

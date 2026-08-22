@@ -2188,6 +2188,9 @@ export function loadConfig(): OcxConfig {
   hardenExistingSecret(configPath);
   hardenExistingSecret(join(dir, "auth.json"));
   if (!existsSync(configPath)) {
+  // No file means the process is serving defaults, not the previously loaded bytes;
+  // a reload after deletion must not retain the old resident identity.
+  residentConfigSha256 = null;
     return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
