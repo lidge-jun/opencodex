@@ -138,6 +138,13 @@ export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
  */
 export type CodexQuotaScope = "shared" | "spark";
 
+/** Probe ownership reserved before final Codex authentication. */
+export type CodexQuotaProbeReservation = Readonly<{
+  accountId: string;
+  leaseId: string;
+  quotaScope?: CodexQuotaScope;
+}>;
+
 export type CodexQuotaRecoveryProbeClaim = {
   accountId: string;
   scope?: CodexQuotaScope;
@@ -612,6 +619,15 @@ export function tryAcquireCodexQuotaScopeProbeLease(
   return probeLeaseId;
 }
 
+/** Side-effect-free check for a confirmed model-specific quota probe. */
+export function canAcquireCodexQuotaScopeProbeLease(
+  accountId: string,
+  scope: CodexQuotaScope,
+  now = Date.now(),
+): boolean {
+  return canAcquireQuotaProbeLease(scopedHealthFor(accountId, scope), now);
+}
+
 /**
  * Hand a probe lease back without recording an upstream outcome. Used by paths
  * that take a lease and then fail before any request reaches upstream.
@@ -632,6 +648,34 @@ export function releaseCodexQuotaScopeProbeLease(
   const health = scopedHealthFor(accountId, scope);
   if (!health || health.probeLeaseId !== leaseId) return;
   setScopedHealth(accountId, scope, withProbeLeaseReleased(health, now));
+}
+
+/** Verify that a pre-auth reservation still owns the current cooldown generation. */
+export function isCodexQuotaProbeReservationActive(
+  reservation: CodexQuotaProbeReservation,
+): boolean {
+  const health = reservation.quotaScope
+    ? scopedHealthFor(reservation.accountId, reservation.quotaScope)
+    : upstreamHealth.get(reservation.accountId);
+  return health?.probeLeaseId === reservation.leaseId
+    && (health.probeLeaseGeneration ?? 0) === (health.cooldownGeneration ?? 0);
+}
+
+/** Return a pre-auth reservation that never reached upstream. */
+export function releaseCodexQuotaProbeReservation(
+  reservation: CodexQuotaProbeReservation,
+  now = Date.now(),
+): void {
+  if (reservation.quotaScope) {
+    releaseCodexQuotaScopeProbeLease(
+      reservation.accountId,
+      reservation.quotaScope,
+      reservation.leaseId,
+      now,
+    );
+  } else {
+    releaseCodexQuotaProbeLease(reservation.accountId, reservation.leaseId, now);
+  }
 }
 
 /**

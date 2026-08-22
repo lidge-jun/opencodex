@@ -15,12 +15,14 @@ import { CODEX_HOME, getCodexHome } from "./paths";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import {
   canAcquireCodexQuotaProbeLease,
+  canAcquireCodexQuotaScopeProbeLease,
   codexQuotaScopeForModel,
   computeCodexUsageScore,
   getCodexQuotaHealthSnapshot,
   getEffectiveActiveCodexAccountId,
   getPoolAccountPlan,
-  isCodexAccountInCooldown,
+  type CodexQuotaProbeReservation,
+  type CodexQuotaScope,
 } from "./routing";
 import {
   isCodexAccountUsable,
@@ -38,6 +40,7 @@ import {
 import { routeModel, type RouteResult } from "../router";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import {
   getUpstreamHostHealth,
   normalizeUpstreamHostCircuitThreshold,
@@ -48,6 +51,29 @@ export const DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS = 60_000;
 const CODEX_FORWARD_ORIGIN = new URL(CODEX_FORWARD_BASE_URL).origin.toLowerCase();
 
 type SubagentQuotaPrimeFn = (config: OcxConfig, reason: string) => Promise<void>;
+/** Side-effect-free pool account preview for one resolved candidate model. */
+export type SubagentPoolAccountPreview = (
+  modelId: string | undefined,
+  now: number,
+  modelEligibleAccountIds?: ReadonlySet<string>,
+) => string | null;
+export type SubagentModelEligibleAccountIds = (
+  modelId: string | undefined,
+) => ReadonlySet<string> | undefined;
+export type SubagentQuotaProbeReserver = (
+  accountId: string,
+  quotaScope: CodexQuotaScope | undefined,
+  now: number,
+) => CodexQuotaProbeReservation | null;
+export type AppliedSubagentModelFallback = {
+  from?: string;
+  to?: string;
+  skipped?: string[];
+  quotaProbeReservation?: CodexQuotaProbeReservation;
+} | null;
+export type SubagentFallbackEntitlementBoundaryResult =
+  | { kind: "complete"; fallback: AppliedSubagentModelFallback }
+  | { kind: "entitlements-required" };
 let subagentQuotaPrimeForTests: SubagentQuotaPrimeFn | null = null;
 let quotaPrimeInFlight: Promise<void> | null = null;
 
@@ -177,8 +203,15 @@ function resolveRouteFallbackAccountId(
   route: RouteResult | null,
   config: OcxConfig,
   accountId?: string | null,
+  now = Date.now(),
+  poolAccountPreview?: SubagentPoolAccountPreview,
+  modelEligibleAccountIds?: ReadonlySet<string>,
 ): string | null {
-  return route?.codexAccountId ?? resolvePoolFallbackAccountId(config, accountId);
+  if (route?.codexAccountId !== undefined) return route.codexAccountId;
+  if (route && isPoolCodexRoute(route) && poolAccountPreview) {
+    return poolAccountPreview(route.modelId, now, modelEligibleAccountIds);
+  }
+  return resolvePoolFallbackAccountId(config, accountId);
 }
 
 function isRoutableFallbackModel(model: string, config: OcxConfig): boolean {
@@ -231,39 +264,76 @@ export function isModelHealthBlocked(
   return !!health && health.unavailableUntil > now;
 }
 
+/**
+ * Check one fallback candidate against the pool account its resolved model scope would use.
+ * The optional preview must not bind affinity, move an account cursor, or acquire a probe lease.
+ */
 export function isSubagentModelUnavailable(
   model: string,
   config: OcxConfig,
   accountId?: string | null,
   now = Date.now(),
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
+  poolAccountPreview?: SubagentPoolAccountPreview,
+  modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
+  quotaProbeReserver?: SubagentQuotaProbeReserver,
+  onQuotaProbeReserved?: (reservation: CodexQuotaProbeReservation) => void,
 ): boolean {
   if (isDisabledFallbackModel(model, config)) return true;
   if (!isRoutableFallbackModel(model, config)) return true;
   const route = tryRouteFallbackModel(config, model);
   if (!route || route.provider.disabled === true) return true;
-  if (isModelHealthBlocked(model, config, accountId, now)) return true;
+  const candidateAccountUsabilityOptions = modelEligibleAccountIdsForModel
+    ? {
+        ...accountUsabilityOptions,
+        modelEligibleAccountIds: modelEligibleAccountIdsForModel(route.modelId),
+      }
+    : accountUsabilityOptions;
+  const resolvedAccountId = resolveRouteFallbackAccountId(
+    route,
+    config,
+    accountId,
+    now,
+    poolAccountPreview,
+    candidateAccountUsabilityOptions?.modelEligibleAccountIds,
+  );
+  if (isModelHealthBlocked(model, config, resolvedAccountId, now)) return true;
   if (!isPoolCodexRoute(route)) return false;
 
   // Pool candidates need a usable account. Derive requirement from the resolved
   // route (canonical openai defaults to pool even when codexAccountMode is omitted).
-  const resolvedAccountId = resolveRouteFallbackAccountId(route, config, accountId);
   if (!resolvedAccountId) return true;
   if (isCodexAccountPaused(config, resolvedAccountId)) return true;
-  if (!isCodexAccountUsable(config, resolvedAccountId, accountUsabilityOptions)) return true;
+  if (!isCodexAccountUsable(config, resolvedAccountId, candidateAccountUsabilityOptions)) return true;
   if (route.codexAccountId !== undefined) {
     // An account-qualified route is pinned and cannot consume Pool's recovery-probe
     // escape hatch. Honor both account-wide and model-scoped cooldowns so fallback
     // advances instead of selecting a candidate that exact auth will reject.
     const quotaScope = codexQuotaScopeForModel(route.modelId);
     if (getCodexQuotaHealthSnapshot(resolvedAccountId, quotaScope, now) !== null) return true;
-  } else if (
-    isCodexAccountInCooldown(resolvedAccountId, now)
-    && !canAcquireCodexQuotaProbeLease(resolvedAccountId, now)
-  ) {
-    return true;
+  } else {
+    if (isNativeModelQuotaExhausted(model, config, resolvedAccountId, now)) return true;
+    const quotaScope = codexQuotaScopeForModel(route.modelId);
+    const cooldown = getCodexQuotaHealthSnapshot(resolvedAccountId, quotaScope, now);
+    if (cooldown !== null) {
+      if (quotaProbeReserver) {
+        const reservation = quotaProbeReserver(
+          resolvedAccountId,
+          cooldown.quotaScope,
+          now,
+        );
+        if (!reservation) return true;
+        onQuotaProbeReserved?.(reservation);
+      } else {
+        const probeAvailable = cooldown.quotaScope
+          ? canAcquireCodexQuotaScopeProbeLease(resolvedAccountId, cooldown.quotaScope, now)
+          : canAcquireCodexQuotaProbeLease(resolvedAccountId, now);
+        if (!probeAvailable) return true;
+      }
+    }
+    return false;
   }
-  return isNativeModelQuotaExhausted(model, config, accountId, now);
+  return isNativeModelQuotaExhausted(model, config, resolvedAccountId, now);
 }
 
 export function selectAvailableSubagentModel(
@@ -275,10 +345,20 @@ export function selectAvailableSubagentModel(
   nativeFallbackOnly = false,
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
   trailingFallback: readonly string[] = [],
-): { model: string; rewritten: boolean; skipped: string[] } {
-  const chain = normalizedChain(primary, config, extraFallback, trailingFallback);
+  poolAccountPreview?: SubagentPoolAccountPreview,
+  modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
+  resolvedChain?: readonly string[],
+  quotaProbeReserver?: SubagentQuotaProbeReserver,
+): {
+  model: string;
+  rewritten: boolean;
+  skipped: string[];
+  quotaProbeReservation?: CodexQuotaProbeReservation;
+} {
+  const chain = resolvedChain ?? normalizedChain(primary, config, extraFallback, trailingFallback);
   const skipped: string[] = [];
   for (const candidate of chain) {
+    let quotaProbeReservation: CodexQuotaProbeReservation | undefined;
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
       if (!route || !isCanonicalOpenAiForwardProvider(route.provider)) {
@@ -286,13 +366,54 @@ export function selectAvailableSubagentModel(
         continue;
       }
     }
-    if (isSubagentModelUnavailable(candidate, config, accountId, now, accountUsabilityOptions)) {
+    if (isSubagentModelUnavailable(
+      candidate,
+      config,
+      accountId,
+      now,
+      accountUsabilityOptions,
+      poolAccountPreview,
+      modelEligibleAccountIdsForModel,
+      quotaProbeReserver,
+      (reservation) => { quotaProbeReservation = reservation; },
+    )) {
       skipped.push(candidate);
       continue;
     }
-    return { model: candidate, rewritten: !slugsEquivalent(candidate, primary), skipped };
+    return {
+      model: candidate,
+      rewritten: !slugsEquivalent(candidate, primary),
+      skipped,
+      ...(quotaProbeReservation ? { quotaProbeReservation } : {}),
+    };
   }
   return { model: primary, rewritten: false, skipped };
+}
+
+function applySelectedSubagentModelFallback(
+  parsed: OcxParsedRequest,
+  selection: ReturnType<typeof selectAvailableSubagentModel>,
+): AppliedSubagentModelFallback {
+  if (!selection.rewritten) return selection.skipped.length > 0 || selection.quotaProbeReservation
+    ? {
+        from: parsed.modelId,
+        to: parsed.modelId,
+        skipped: selection.skipped,
+        ...(selection.quotaProbeReservation
+          ? { quotaProbeReservation: selection.quotaProbeReservation }
+          : {}),
+      }
+    : null;
+  const from = parsed.modelId;
+  rewriteParsedModel(parsed, selection.model);
+  return {
+    from,
+    to: selection.model,
+    skipped: selection.skipped,
+    ...(selection.quotaProbeReservation
+      ? { quotaProbeReservation: selection.quotaProbeReservation }
+      : {}),
+  };
 }
 
 export function noteSubagentModelFailure(
@@ -418,10 +539,27 @@ export function resolveAgentModelFallbackForPrimary(
   return merged;
 }
 
-function subagentQuotaPrimeBlockedByHostCircuit(config: OcxConfig): boolean {
-  if (normalizeUpstreamHostCircuitThreshold(config.upstreamHostCircuitThreshold) === 0) return false;
+/**
+ * Whether subagent-side ChatGPT reads must defer to the logical request that
+ * owns the host circuit admission. An expired cooldown still counts here: the
+ * next request must acquire the single half-open probe before any credential-
+ * bearing quota or entitlement discovery reaches the same origin.
+ */
+export type SubagentChatGptHostCircuitState = "closed" | "cooldown" | "probe-due";
+
+export function subagentChatGptHostCircuitState(
+  config: OcxConfig,
+  now = Date.now(),
+): SubagentChatGptHostCircuitState {
+  if (normalizeUpstreamHostCircuitThreshold(config.upstreamHostCircuitThreshold) === 0) return "closed";
   const key = upstreamHostHealthKey(OPENAI_CODEX_PROVIDER_ID, CODEX_FORWARD_ORIGIN);
-  return getUpstreamHostHealth(key)?.cooldownUntil !== undefined;
+  const cooldownUntil = getUpstreamHostHealth(key)?.cooldownUntil;
+  if (cooldownUntil === undefined) return "closed";
+  return cooldownUntil > now ? "cooldown" : "probe-due";
+}
+
+export function isSubagentChatGptHostCircuitBlocked(config: OcxConfig): boolean {
+  return subagentChatGptHostCircuitState(config) !== "closed";
 }
 
 /**
@@ -469,7 +607,7 @@ export function maybePrimeSubagentQuota(
   options: { nativeMainReadsForbidden?: boolean } = {},
 ): Promise<void> {
   if (options.nativeMainReadsForbidden) return Promise.resolve();
-  if (subagentQuotaPrimeBlockedByHostCircuit(config)) return Promise.resolve();
+  if (isSubagentChatGptHostCircuitBlocked(config)) return Promise.resolve();
   if (quotaPrimeInFlight) return quotaPrimeInFlight;
   if (!shouldPrimeSubagentQuota(config, now)) return Promise.resolve();
 
@@ -477,7 +615,7 @@ export function maybePrimeSubagentQuota(
     try {
       // Re-check after claiming single-flight ownership so a circuit opened by
       // a concurrent request cannot race us into a fresh usage-probe pass.
-      if (subagentQuotaPrimeBlockedByHostCircuit(config)) return;
+      if (isSubagentChatGptHostCircuitBlocked(config)) return;
       if (subagentQuotaPrimeForTests) {
         await subagentQuotaPrimeForTests(config, "subagent-spawn");
       } else {
@@ -515,8 +653,133 @@ export function applySubagentModelFallback(
   now = Date.now(),
   nativeFallbackOnly = false,
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
-): { from?: string; to?: string; skipped?: string[] } | null {
+  poolAccountPreview?: SubagentPoolAccountPreview,
+  modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
+  resolvedFallbackChain?: readonly string[] | null,
+  quotaProbeReserver?: SubagentQuotaProbeReserver,
+): AppliedSubagentModelFallback {
   if (!isThreadSpawnRequest(headers)) return null;
+  const fallbackChain = resolvedFallbackChain === undefined
+    ? resolveSubagentFallbackChain(parsed, config)
+    : resolvedFallbackChain;
+  if (!fallbackChain) return null;
+  const selection = selectAvailableSubagentModel(
+    parsed.modelId,
+    config,
+    [],
+    accountId,
+    now,
+    nativeFallbackOnly,
+    accountUsabilityOptions,
+    [],
+    poolAccountPreview,
+    modelEligibleAccountIdsForModel,
+    fallbackChain,
+    quotaProbeReserver,
+  );
+  return applySelectedSubagentModelFallback(parsed, selection);
+}
+
+function subagentFallbackEntitlementBoundaryIndex(
+  fallbackChain: readonly string[] | null,
+  config: OcxConfig,
+): number {
+  if (!fallbackChain) return -1;
+  return fallbackChain.findIndex((candidate) => {
+    const route = tryRouteFallbackModel(config, candidate);
+    return !!route
+      && isPoolCodexRoute(route)
+      && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId);
+  });
+}
+
+/**
+ * Apply fallback only through the candidates that precede the first
+ * account-gated Pool model. Reaching that boundary asks the caller to resolve
+ * entitlement evidence before restarting selection from the full chain.
+ */
+export function applySubagentModelFallbackUntilEntitlementBoundary(
+  parsed: OcxParsedRequest,
+  headers: Headers,
+  config: OcxConfig,
+  accountId: string | null | undefined,
+  now: number,
+  nativeFallbackOnly: boolean,
+  accountUsabilityOptions: CodexAccountUsabilityOptions | undefined,
+  poolAccountPreview: SubagentPoolAccountPreview,
+  resolvedFallbackChain: readonly string[] | null,
+  quotaProbeReserver?: SubagentQuotaProbeReserver,
+): SubagentFallbackEntitlementBoundaryResult {
+  if (!isThreadSpawnRequest(headers) || !resolvedFallbackChain) {
+    return {
+      kind: "complete",
+      fallback: applySubagentModelFallback(
+        parsed,
+        headers,
+        config,
+        accountId,
+        now,
+        nativeFallbackOnly,
+        accountUsabilityOptions,
+        poolAccountPreview,
+        undefined,
+        resolvedFallbackChain,
+        quotaProbeReserver,
+      ),
+    };
+  }
+  const entitlementBoundary = subagentFallbackEntitlementBoundaryIndex(
+    resolvedFallbackChain,
+    config,
+  );
+  if (entitlementBoundary < 0) {
+    return {
+      kind: "complete",
+      fallback: applySubagentModelFallback(
+        parsed,
+        headers,
+        config,
+        accountId,
+        now,
+        nativeFallbackOnly,
+        accountUsabilityOptions,
+        poolAccountPreview,
+        undefined,
+        resolvedFallbackChain,
+        quotaProbeReserver,
+      ),
+    };
+  }
+
+  const prefix = resolvedFallbackChain.slice(0, entitlementBoundary);
+  const selection = selectAvailableSubagentModel(
+    parsed.modelId,
+    config,
+    [],
+    accountId,
+    now,
+    nativeFallbackOnly,
+    accountUsabilityOptions,
+    [],
+    poolAccountPreview,
+    undefined,
+    prefix,
+    quotaProbeReserver,
+  );
+  if (selection.skipped.length === prefix.length) {
+    return { kind: "entitlements-required" };
+  }
+  return {
+    kind: "complete",
+    fallback: applySelectedSubagentModelFallback(parsed, selection),
+  };
+}
+
+/** Resolve the effective fallback chain once for one logical spawn request. */
+export function resolveSubagentFallbackChain(
+  parsed: OcxParsedRequest,
+  config: OcxConfig,
+): readonly string[] | null {
   const tomlRoleFallback = resolveAgentModelFallbackForPrimary(
     parsed.modelId,
     getCodexHome(),
@@ -527,22 +790,15 @@ export function applySubagentModelFallback(
   const configuredFallback = resolveConfiguredModelFallbackForPrimary(parsed.modelId, config);
   const globalFallback = config.subagentModelFallback ?? [];
   if (globalFallback.length === 0 && configuredFallback.length === 0 && tomlRoleFallback.length === 0) return null;
-  const selection = selectAvailableSubagentModel(
-    parsed.modelId,
-    config,
-    configuredFallback,
-    accountId,
-    now,
-    nativeFallbackOnly,
-    accountUsabilityOptions,
-    tomlRoleFallback,
-  );
-  if (!selection.rewritten) return selection.skipped.length > 0
-    ? { from: parsed.modelId, to: parsed.modelId, skipped: selection.skipped }
-    : null;
-  const from = parsed.modelId;
-  rewriteParsedModel(parsed, selection.model);
-  return { from, to: selection.model, skipped: selection.skipped };
+  return normalizedChain(parsed.modelId, config, configuredFallback, tomlRoleFallback);
+}
+
+/** Whether this request's configured fallback chain contains an account-gated native model. */
+export function subagentFallbackNeedsModelEntitlements(
+  fallbackChain: readonly string[] | null,
+  config: OcxConfig,
+): boolean {
+  return subagentFallbackEntitlementBoundaryIndex(fallbackChain, config) >= 0;
 }
 
 export function subagentFallbackGuidanceText(config: OcxConfig): string {

@@ -134,6 +134,7 @@ import {
   invalidateCodexModelEntitlementsForAccount,
   resolveCodexModelEntitlements,
 } from "../../codex/model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
@@ -142,6 +143,10 @@ import {
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
+  releaseCodexQuotaProbeReservation,
+  tryAcquireCodexQuotaProbeLease,
+  tryAcquireCodexQuotaScopeProbeLease,
+  type CodexQuotaProbeReservation,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
@@ -201,8 +206,15 @@ import { supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
   applySubagentModelFallback,
+  applySubagentModelFallbackUntilEntitlementBoundary,
+  isSubagentChatGptHostCircuitBlocked,
   maybePrimeSubagentQuota,
   recordSubagentQuotaFailureForThreadSpawn,
+  resolveSubagentFallbackChain,
+  subagentChatGptHostCircuitState,
+  type SubagentModelEligibleAccountIds,
+  type SubagentPoolAccountPreview,
+  type SubagentQuotaProbeReserver,
 } from "../../codex/subagent-model-fallback";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
@@ -753,6 +765,188 @@ export function preAuthUpstreamHostCircuitKey(
   return upstreamHostHealthKey(route.providerName, safeOriginLabel(route.provider.baseUrl ?? ""));
 }
 
+const NO_ELIGIBLE_CODEX_ACCOUNTS: ReadonlySet<string> = new Set<string>();
+
+type SubagentFallbackModelEligibilityResolution = Readonly<{
+  modelEligibleAccountIds: SubagentModelEligibleAccountIds;
+  preservePrimaryForHostProbe: boolean;
+  preAuthHostAdmissionLease?: UpstreamHostAdmissionLease;
+}>;
+
+/**
+ * Resolve account-gated fallback eligibility without bypassing ChatGPT host
+ * admission. While the circuit is open, fail closed only for gated native
+ * models so an unrelated routed primary (for example xAI) can still proceed.
+ */
+async function resolveSubagentFallbackModelEligibleAccountIds(
+  config: OcxConfig,
+  resolver: typeof resolveCodexModelEntitlements,
+  primaryRoute: RouteResult,
+  excludeAccountIds?: ReadonlySet<string>,
+): Promise<SubagentFallbackModelEligibilityResolution> {
+  const circuitFencedResolution = (
+    hostCircuitState: Exclude<ReturnType<typeof subagentChatGptHostCircuitState>, "closed">,
+  ): SubagentFallbackModelEligibilityResolution => {
+    const preAuthHostKey = hostCircuitState === "probe-due"
+      && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(primaryRoute.modelId)
+      ? preAuthUpstreamHostCircuitKey(primaryRoute, config)
+      : null;
+    if (preAuthHostKey) {
+      // Reserve the single half-open probe atomically with the preservation
+      // decision. A read-only health snapshot cannot distinguish another
+      // request acquiring the lease between selection and final admission.
+      const admission = acquireUpstreamHostAdmission(
+        preAuthHostKey,
+        config.upstreamHostCircuitThreshold,
+      );
+      if (admission.kind === "admitted" && admission.lease) {
+        return {
+          preservePrimaryForHostProbe: true,
+          preAuthHostAdmissionLease: admission.lease,
+          modelEligibleAccountIds: (modelId) => modelId
+            && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)
+            ? NO_ELIGIBLE_CODEX_ACCOUNTS
+            : undefined,
+        };
+      }
+    }
+    return {
+      preservePrimaryForHostProbe: false,
+      modelEligibleAccountIds: (modelId) => modelId
+        && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)
+        ? NO_ELIGIBLE_CODEX_ACCOUNTS
+        : undefined,
+    };
+  };
+  const hostCircuitState = subagentChatGptHostCircuitState(config);
+  if (hostCircuitState !== "closed") {
+    return circuitFencedResolution(hostCircuitState);
+  }
+  const entitlementSnapshot = await resolver(config, {
+    excludeAccountIds,
+    // Credential snapshots may await disk/token work. Re-check synchronously
+    // inside the resolver immediately before every new roster fetch so a
+    // circuit opened during that gap still fences network I/O.
+    allowNetworkFetch: () => !isSubagentChatGptHostCircuitBlocked(config),
+  });
+  const settledHostCircuitState = subagentChatGptHostCircuitState(config);
+  if (settledHostCircuitState !== "closed") {
+    return circuitFencedResolution(settledHostCircuitState);
+  }
+  return {
+    preservePrimaryForHostProbe: false,
+    modelEligibleAccountIds: (modelId) => {
+      const entitledAccountIds = entitledCodexAccountIdsForModel(entitlementSnapshot, modelId);
+      return entitledAccountIds
+        ? new Set([...entitledAccountIds].filter(accountId => !excludeAccountIds?.has(accountId)))
+        : undefined;
+    },
+  };
+}
+
+type LazySubagentFallbackApplication = Readonly<{
+  fallback: ReturnType<typeof applySubagentModelFallback>;
+  previewAccountId: string | null;
+  preAuthHostAdmissionLease?: UpstreamHostAdmissionLease;
+  preAuthQuotaProbeReservation?: CodexQuotaProbeReservation;
+}>;
+
+async function applySubagentModelFallbackLazily(options: {
+  parsed: OcxParsedRequest;
+  headers: Headers;
+  config: OcxConfig;
+  route: RouteResult;
+  poolAffinityKey: string | null;
+  selectionOptions: { nativeMainSelectionOnly: boolean };
+  fallbackChain: readonly string[] | null;
+  nativeMainReadsForbidden: boolean;
+  nativeFallbackOnly: boolean;
+  resolver: typeof resolveCodexModelEntitlements;
+}): Promise<LazySubagentFallbackApplication> {
+  const accountPreview: SubagentPoolAccountPreview = (modelId, previewNow, eligibleAccountIds) =>
+    previewCodexAccountForRequest(
+      options.poolAffinityKey,
+      options.config,
+      previewNow,
+      codexQuotaScopeForModel(modelId),
+      { ...options.selectionOptions, modelEligibleAccountIds: eligibleAccountIds },
+    );
+  const reserveQuotaProbe: SubagentQuotaProbeReserver = (accountId, quotaScope, reserveNow) => {
+    const leaseId = quotaScope
+      ? tryAcquireCodexQuotaScopeProbeLease(accountId, quotaScope, reserveNow)
+      : tryAcquireCodexQuotaProbeLease(accountId, reserveNow);
+    return leaseId
+      ? { accountId, leaseId, ...(quotaScope ? { quotaScope } : {}) }
+      : null;
+  };
+  const preselectionNow = Date.now();
+  const previewAccountId = options.route.codexAccountId ?? accountPreview(
+    options.route.modelId,
+    preselectionNow,
+  );
+  const preselection = applySubagentModelFallbackUntilEntitlementBoundary(
+    options.parsed,
+    options.headers,
+    options.config,
+    previewAccountId,
+    preselectionNow,
+    options.nativeFallbackOnly,
+    options.selectionOptions,
+    accountPreview,
+    options.fallbackChain,
+    reserveQuotaProbe,
+  );
+  if (preselection.kind === "complete") {
+    return {
+      fallback: preselection.fallback,
+      previewAccountId,
+      preAuthQuotaProbeReservation: preselection.fallback?.quotaProbeReservation,
+    };
+  }
+
+  const excludeAccountIds = options.nativeMainReadsForbidden
+    ? new Set([MAIN_CODEX_ACCOUNT_ID])
+    : undefined;
+  const entitlementResolution = await resolveSubagentFallbackModelEligibleAccountIds(
+    options.config,
+    options.resolver,
+    options.route,
+    excludeAccountIds,
+  );
+  // Entitlement discovery is an async boundary. Restart the full selection with
+  // a fresh clock so cooldown/health changes during discovery cannot make the
+  // preselection authoritative.
+  const settledNow = Date.now();
+  const entitledPreviewAccountId = options.route.codexAccountId ?? accountPreview(
+    options.route.modelId,
+    settledNow,
+    entitlementResolution.preservePrimaryForHostProbe
+      ? undefined
+      : entitlementResolution.modelEligibleAccountIds(options.route.modelId),
+  );
+  const fallback = entitlementResolution.preservePrimaryForHostProbe
+    ? null
+    : applySubagentModelFallback(
+        options.parsed,
+        options.headers,
+        options.config,
+        entitledPreviewAccountId,
+        settledNow,
+        options.nativeFallbackOnly,
+        options.selectionOptions,
+        accountPreview,
+        entitlementResolution.modelEligibleAccountIds,
+        options.fallbackChain,
+        reserveQuotaProbe,
+      );
+  return {
+    previewAccountId: entitledPreviewAccountId,
+    preAuthHostAdmissionLease: entitlementResolution.preAuthHostAdmissionLease,
+    fallback,
+    preAuthQuotaProbeReservation: fallback?.quotaProbeReservation,
+  };
+}
+
 export function upstreamHostCircuitOpenResponse(retryAfterSeconds: number): Response {
   return formatErrorResponse(
     503,
@@ -1227,6 +1421,8 @@ export interface HandleResponsesOptions {
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
+  /** Internal deterministic seam for account-gated native fallback tests. */
+  resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
   recordTerminalOutcomes?: boolean;
   setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined) => void;
   onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
@@ -1483,6 +1679,7 @@ async function resolveResponsesCodexAuth(
   config: OcxConfig,
   route: RouteResult,
   options: HandleResponsesOptions,
+  preAcquiredQuotaProbeReservation?: CodexQuotaProbeReservation,
 ): Promise<ResponsesAuthResolution> {
   try {
     // #1686: a caller that proved admission with a BEARER presented one of our own secrets.
@@ -1516,8 +1713,10 @@ async function resolveResponsesCodexAuth(
       authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
         accountId: route.codexAccountId,
         modelId: route.modelId,
+        preAcquiredQuotaProbeReservation,
         substituteMainCredentialForDirect: substituteMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        resolveCodexModelEntitlements: options.resolveCodexModelEntitlements,
       });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
@@ -2152,6 +2351,7 @@ async function handleResponsesInner(
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
 ): Promise<Response> {
   let pendingHostAdmissionLease: UpstreamHostAdmissionLease | null = null;
+  let pendingQuotaProbeReservation: CodexQuotaProbeReservation | null = null;
   let authCtx: CodexAuthContext = { kind: "main", accountId: null };
   try {
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
@@ -2352,7 +2552,7 @@ async function handleResponsesInner(
   // also fail closed without polling quota upstream. Cached fallback state can still select a
   // provider with native continuation support below.
   const threadSpawn = isThreadSpawnRequest(req.headers);
-  const previewSelectionAdmission = threadSpawn && route.codexAccountId === undefined
+  const previewSelectionAdmission = threadSpawn && !options.comboAttempt
     ? codexAccountSelectionForTurn(options.turnAdmissionLease)?.()
     : undefined;
   const nativeMainRecoveryBlocked = isNativeMainTrafficBlocked();
@@ -2364,12 +2564,16 @@ async function handleResponsesInner(
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
-  let subagentFallbackPreviewAccountId: string | null | undefined;
+  let subagentFallbackChain: readonly string[] | null = null;
+  let subagentFallbackApplication: LazySubagentFallbackApplication | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
   const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
 
   try {
+    subagentFallbackChain = threadSpawn && !options.comboAttempt
+      ? resolveSubagentFallbackChain(parsed, config)
+      : null;
     if (
       threadSpawn
       && route.codexAccountId === undefined
@@ -2378,33 +2582,36 @@ async function handleResponsesInner(
       await maybePrimeSubagentQuota(config, Date.now(), { nativeMainReadsForbidden });
     }
 
+    if (threadSpawn && !options.comboAttempt) {
+      subagentFallbackApplication = await applySubagentModelFallbackLazily({
+        parsed,
+        headers: req.headers,
+        config,
+        route,
+        poolAffinityKey,
+        selectionOptions: previewSelectionOptions,
+        fallbackChain: subagentFallbackChain,
+        nativeMainReadsForbidden,
+        nativeFallbackOnly: unreadableEncryptedAgentTask,
+        resolver: options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements,
+      });
+      pendingHostAdmissionLease = subagentFallbackApplication.preAuthHostAdmissionLease ?? null;
+      pendingQuotaProbeReservation = subagentFallbackApplication.preAuthQuotaProbeReservation ?? null;
+    }
+
   // Subagent fallback must settle the final model/provider BEFORE route-dependent
   // normalization (virtual models, effort caps, service tier, wire protocol).
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
   // tokens — auth is resolved only after the final route is selected.
-  if (threadSpawn && !options.comboAttempt && route.codexAccountId === undefined) {
+  if (threadSpawn && !options.comboAttempt) {
+    // An account-qualified primary remains pinned to its exact account. Later pooled
+    // fallback candidates still need a candidate-scoped preview, so construct the
+    // side-effect-free preview independently of the primary route ownership.
     // The final resolveCodexAuthContext binds under codexQuotaScopeForModel(route.modelId),
-    // so the preview must read the same scope slot — an undefined scope would map to the
-    // "legacy" affinity bucket and never find a binding made under "shared" or a native
-    // model scope, making the preview diverge from the account that actually authenticates.
-    const previewAccountId = previewCodexAccountForRequest(
-      poolAffinityKey,
-      config,
-      Date.now(),
-      codexQuotaScopeForModel(route.modelId),
-      previewSelectionOptions,
-    );
-    subagentFallbackPreviewAccountId = previewAccountId;
-    subagentFallbackAccountId = previewAccountId ?? config.activeCodexAccountId ?? null;
-    const fallback = applySubagentModelFallback(
-      parsed,
-      req.headers,
-      config,
-      previewAccountId,
-      Date.now(),
-      unreadableEncryptedAgentTask,
-      previewSelectionOptions,
-    );
+    // so each pooled preview must read the same scope slot.
+    const selection = subagentFallbackApplication!;
+    subagentFallbackAccountId = selection.previewAccountId ?? config.activeCodexAccountId ?? null;
+    const fallback = selection.fallback;
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
@@ -2414,7 +2621,7 @@ async function handleResponsesInner(
     }
     subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
 
-    if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+    if (fallback?.to && fallback.from && !slugsEquivalent(fallback.to, fallback.from)) {
       try {
         route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
         logCtx.routeDecision = route.routeDecision;
@@ -2486,15 +2693,42 @@ async function handleResponsesInner(
           // The ciphertext-only pass intentionally excludes routed candidates. Once recovery
           // makes the assignment readable, run selection again with the full configured chain
           // and keep the route in sync with any newly selected fallback.
-          const fallback = applySubagentModelFallback(
-            parsed,
-            req.headers,
-            config,
-            subagentFallbackPreviewAccountId,
-            Date.now(),
-            false,
-            previewSelectionOptions,
-          );
+          const recoverySelectionAdmission = codexAccountSelectionForTurn(options.turnAdmissionLease)?.();
+          let fallback: ReturnType<typeof applySubagentModelFallback>;
+          try {
+            const recoveryNativeMainBlocked = isNativeMainTrafficBlocked();
+            const recoveryNativeMainReadsForbidden = recoveryNativeMainBlocked
+              || recoverySelectionAdmission?.mainProfileDraining === true;
+            const recoverySelectionOptions = {
+              nativeMainSelectionOnly: !recoveryNativeMainBlocked
+                && recoverySelectionAdmission?.mainProfileDraining === true,
+            };
+            const recoverySelection = await applySubagentModelFallbackLazily({
+              parsed,
+              headers: req.headers,
+              config,
+              route,
+              poolAffinityKey,
+              selectionOptions: recoverySelectionOptions,
+              fallbackChain: subagentFallbackChain,
+              nativeMainReadsForbidden: recoveryNativeMainReadsForbidden,
+              nativeFallbackOnly: false,
+              resolver: options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements,
+            });
+            pendingHostAdmissionLease = recoverySelection.preAuthHostAdmissionLease
+              ?? pendingHostAdmissionLease;
+            const recoveredProbeReservation = recoverySelection.preAuthQuotaProbeReservation ?? null;
+            if (
+              pendingQuotaProbeReservation
+              && pendingQuotaProbeReservation.leaseId !== recoveredProbeReservation?.leaseId
+            ) {
+              releaseCodexQuotaProbeReservation(pendingQuotaProbeReservation);
+            }
+            pendingQuotaProbeReservation = recoveredProbeReservation;
+            fallback = recoverySelection.fallback;
+          } finally {
+            recoverySelectionAdmission?.release();
+          }
           if (fallback) {
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
@@ -2504,7 +2738,7 @@ async function handleResponsesInner(
           }
           subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
 
-          if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+          if (fallback?.to && fallback.from && !slugsEquivalent(fallback.to, fallback.from)) {
             try {
               route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
               logCtx.routeDecision = route.routeDecision;
@@ -2596,7 +2830,11 @@ async function handleResponsesInner(
     }
   }
   const preAuthHostKey = preAuthUpstreamHostCircuitKey(route, config);
-  if (preAuthHostKey) {
+  if (pendingHostAdmissionLease && pendingHostAdmissionLease.key !== preAuthHostKey) {
+    releaseUpstreamHostAdmission(pendingHostAdmissionLease);
+    pendingHostAdmissionLease = null;
+  }
+  if (preAuthHostKey && !pendingHostAdmissionLease) {
     const admission = acquireUpstreamHostAdmission(
       preAuthHostKey,
       config.upstreamHostCircuitThreshold,
@@ -2609,9 +2847,22 @@ async function handleResponsesInner(
 
   let substituteMainCredential = false;
   {
-    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
+    const finalAuth = await resolveResponsesCodexAuth(
+      req,
+      config,
+      route,
+      options,
+      pendingQuotaProbeReservation ?? undefined,
+    );
     if (!finalAuth.ok) return finalAuth.response;
     authCtx = finalAuth.authCtx;
+    if (
+      pendingQuotaProbeReservation
+      && pendingQuotaProbeReservation.leaseId !== codexProbeLeaseId(authCtx)
+    ) {
+      releaseCodexQuotaProbeReservation(pendingQuotaProbeReservation);
+    }
+    pendingQuotaProbeReservation = null;
     selectedForwardHeaders = finalAuth.headers;
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
@@ -5409,6 +5660,9 @@ async function handleResponsesInner(
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");
   } finally {
+    if (pendingQuotaProbeReservation) {
+      releaseCodexQuotaProbeReservation(pendingQuotaProbeReservation);
+    }
     if (pendingHostAdmissionLease) {
       releaseUpstreamHostAdmission(pendingHostAdmissionLease);
       releaseCodexAuthContextProbeLease(authCtx);

@@ -40,6 +40,12 @@ export interface CodexModelEntitlementResolveOptions {
   readonly now?: number;
   /** Test-only credential seam; production callers enumerate local main + Pool credentials. */
   readonly credentials?: readonly CodexModelEntitlementCredentialSnapshot[];
+  /** Test-only seam for proving lifecycle exclusions happen before credential reads. */
+  readonly credentialSnapshot?: typeof accountCredentialSnapshot;
+  /** Accounts whose credentials must not be read while another lifecycle owns them. */
+  readonly excludeAccountIds?: ReadonlySet<string>;
+  /** Last-mile circuit fence checked synchronously before a new roster fetch starts. */
+  readonly allowNetworkFetch?: () => boolean;
 }
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
@@ -195,6 +201,7 @@ async function modelsForCredential(
   credential: CodexModelEntitlementCredentialSnapshot,
   fetcher: typeof fetch,
   now: number,
+  allowNetworkFetch?: () => boolean,
 ): Promise<CachedAccountModels> {
   const cached = accountModelsCache.get(credential.accountId);
   if (
@@ -204,6 +211,16 @@ async function modelsForCredential(
   ) return cached;
 
   const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}`;
+  if (allowNetworkFetch?.() === false) {
+    // Do not cache a circuit-fenced miss. The host circuit owns retry pacing;
+    // a local failure TTL would hide a grant after the circuit recovers.
+    return {
+      credentialIdentity: credential.credentialIdentity,
+      expiresAt: now,
+      models: new Set(),
+      confirmed: false,
+    };
+  }
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
   const flight = fetchAccountModels(credential, fetcher, now)
@@ -252,13 +269,16 @@ export async function resolveCodexModelEntitlements(
 ): Promise<CodexModelEntitlementSnapshot> {
   const now = options.now ?? Date.now();
   const fetcher = options.fetcher ?? fetch;
+  const allowedAccountIds = candidateAccountIds(config)
+    .filter(accountId => !options.excludeAccountIds?.has(accountId));
+  const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
   const credentials = options.credentials
-    ? [...options.credentials]
-    : (await Promise.all(candidateAccountIds(config).map(accountCredentialSnapshot)))
+    ? [...options.credentials].filter(credential => !options.excludeAccountIds?.has(credential.accountId))
+    : (await Promise.all(allowedAccountIds.map(credentialSnapshot)))
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
   const results = await Promise.all(credentials.map(async credential => ({
     credential,
-    result: await modelsForCredential(credential, fetcher, now),
+    result: await modelsForCredential(credential, fetcher, now, options.allowNetworkFetch),
   })));
   return {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),

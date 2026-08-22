@@ -61,6 +61,57 @@ describe("Codex account model entitlements", () => {
     expect(availableAccountGatedNativeModels(snapshot).size).toBe(0);
   });
 
+  test("checks the network fence after credential work without caching the fenced miss", async () => {
+    let networkAllowed = false;
+    let fetchCalls = 0;
+    const options = {
+      credentials: [credential("main")],
+      allowNetworkFetch: () => networkAllowed,
+      fetcher: (async () => {
+        fetchCalls += 1;
+        return roster(DAYBREAK);
+      }) as typeof fetch,
+      now: 1_000,
+    };
+
+    const fenced = await resolveCodexModelEntitlements({ codexAccounts: [] }, options);
+    expect(fetchCalls).toBe(0);
+    expect(fenced.confirmedAccountIds.size).toBe(0);
+
+    networkAllowed = true;
+    const recovered = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      ...options,
+      now: 1_001,
+    });
+    expect(fetchCalls).toBe(1);
+    expect(recovered.confirmedAccountIds.has("main")).toBe(true);
+    expect(entitledCodexAccountIdsForModel(recovered, DAYBREAK)?.has("main")).toBe(true);
+  });
+
+  test("does not read credentials excluded by a lifecycle owner", async () => {
+    const snapshotAccounts: string[] = [];
+    const seenAccounts: string[] = [];
+    const snapshot = await resolveCodexModelEntitlements({
+      codexAccounts: [{ id: "secondary", email: "secondary@example.test", isMain: false }],
+    }, {
+      excludeAccountIds: new Set(["__main__"]),
+      credentialSnapshot: async accountId => {
+        snapshotAccounts.push(accountId);
+        return credential(accountId);
+      },
+      fetcher: (async (_input, init) => {
+        seenAccounts.push(new Headers(init?.headers).get("chatgpt-account-id") ?? "");
+        return roster(DAYBREAK);
+      }) as typeof fetch,
+      now: 1_000,
+    });
+
+    expect(snapshotAccounts).toEqual(["secondary"]);
+    expect(seenAccounts).toEqual(["chatgpt-secondary"]);
+    expect(snapshot.modelsByAccount.has("__main__")).toBe(false);
+    expect(snapshot.modelsByAccount.has("secondary")).toBe(true);
+  });
+
   test("ignores hidden or API-disabled rows", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main")],
