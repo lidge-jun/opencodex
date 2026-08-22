@@ -111,6 +111,11 @@ describe("Cursor static Codex catalog", () => {
       ]);
     expect(entries.find(item => item.slug === "cursor/glm-5.2")?.supported_reasoning_levels)
       .toMatchObject([{ effort: "high" }, { effort: "max" }, { effort: "ultra" }]);
+    expect(entries.find(item => item.slug === "cursor/grok-4.6")?.supported_reasoning_levels)
+      .toMatchObject([{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }]);
+    expect(entries.find(item => item.slug === "cursor/grok-4.6")?.default_reasoning_level).toBe("high");
+    expect(entries.find(item => item.slug === "cursor/grok-4.6-fast")?.supported_reasoning_levels)
+      .toMatchObject([{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }]);
 
     for (const modelId of ["auto", "composer-2.5", "gpt-5.5", "gemini-3-pro"]) {
       expect(

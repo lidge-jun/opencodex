@@ -1024,7 +1024,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // default on `high`, the picker would send `high` explicitly, and the request builder's
     // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
     // routes (kimi, kimi-code, opencode-go).
-    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
+    modelDefaultReasoningEfforts: { "kimi-k3": "max", "grok-4.6": "high", "grok-4.6-fast": "high" },
     // Blind Cursor models (Auto routers, Composer, GLM-5.2, GLM-5.3) go through the vision sidecar;
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
@@ -1107,7 +1107,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high (no off tier, no xhigh).
     // grok-4.6 adds xhigh per docs.x.ai/developers/model-capabilities/text/reasoning;
-    // xAI documents high as the upstream default.
+    // xAI documents high as the upstream default. Catalog generation keeps this
+    // ladder exact (no synthetic max/ultra); incoming max still clamps to xhigh.
     modelReasoningEfforts: { "grok-4.6": ["low", "medium", "high", "xhigh"], "grok-4.5": ["low", "medium", "high"] },
     modelDefaultReasoningEfforts: { "grok-4.6": "high" },
     modelContextWindows: {
@@ -1364,11 +1365,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
+      "grok-4.6": ["low", "medium", "high", "xhigh"],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     },
-    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
+    modelDefaultReasoningEfforts: { "kimi-k3": "max", "grok-4.6": "high" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
     // the thinking-toggle map is a REAL wire alias (effort -> enabled/disabled) and stays.
     modelReasoningEffortMap: {

@@ -50,7 +50,7 @@ import {
   resetBundledCatalogCacheForTests,
 } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
-import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
+import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isExactGrok46ReasoningLadder, isGpt56NativeSlug } from "./effort";
 import {
   clearGatherRoutedModelsInflight,
   filterCatalogVisibleModels,
@@ -291,6 +291,7 @@ export function deriveEntry(
   contextCap?: NativeContextLimitsInput,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  const preserveExactReasoning = preserveExact || isExactGrok46ReasoningLadder(model?.id);
   const codexForwardNativeCapabilityAlias = model?.codexForwardNativeCapabilityAlias === true
     ? upstreamNativeEntry(model.id)
     : null;
@@ -335,7 +336,7 @@ export function deriveEntry(
         e,
         model?.reasoningEfforts,
         model?.defaultReasoningEffort,
-        preserveExact || codexForwardNativeCapabilityAlias !== null,
+        preserveExactReasoning || codexForwardNativeCapabilityAlias !== null,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -385,7 +386,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
