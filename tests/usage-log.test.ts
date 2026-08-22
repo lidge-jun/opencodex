@@ -882,4 +882,47 @@ describe("usage log", () => {
 
     expect(readRecentUsageEntries(1)).toEqual([]);
   }, STORE_BUDGET_MS);
+
+  test("normalizes and preserves streamTimeline and failure attribution (#1217)", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-timeline-test",
+      timestamp: Date.now(),
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 502,
+      durationMs: 61342,
+      firstOutputMs: 9107,
+      usageStatus: "unreported",
+      streamTimeline: {
+        upstreamDispatchMs: 12,
+        upstreamHeadersMs: 4410,
+        upstreamFirstByteMs: 4421,
+        upstreamFirstSemanticOutputMs: 9107,
+        downstreamFirstWriteMs: 4423,
+        upstreamEndMs: 61340,
+        downstreamEndMs: 61342,
+      },
+      failureSide: "upstream",
+      failureStage: "upstream_read",
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === "ocx-stream-timeline-test");
+    expect(row).toBeDefined();
+    expect(row?.streamTimeline).toEqual({
+      upstreamDispatchMs: 12,
+      upstreamHeadersMs: 4410,
+      upstreamFirstByteMs: 4421,
+      upstreamFirstSemanticOutputMs: 9107,
+      downstreamFirstWriteMs: 4423,
+      upstreamEndMs: 61340,
+      downstreamEndMs: 61342,
+    });
+    expect(row?.failureSide).toBe("upstream");
+    expect(row?.failureStage).toBe("upstream_read");
+    expect(row?.transportPhase).toBe("mid_stream");
+    expect(row?.terminalSource).toBe("synthetic");
+  });
 });

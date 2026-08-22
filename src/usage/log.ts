@@ -13,6 +13,30 @@ import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 export type CodexUsageAccountLogLabel = "main" | `p${string}`;
 
+/**
+ * Bounded stream timing breakdown in elapsed ms from request/attempt start (issue #1217).
+ * Best-effort correlation metrics for streaming observability.
+ */
+export interface StreamTimeline {
+  upstreamDispatchMs?: number;
+  upstreamHeadersMs?: number;
+  upstreamFirstByteMs?: number;
+  upstreamFirstSemanticOutputMs?: number;
+  downstreamFirstWriteMs?: number;
+  upstreamEndMs?: number;
+  downstreamEndMs?: number;
+}
+
+export type FailureSide = "upstream" | "relay" | "downstream" | "client" | "local";
+export type FailureStage =
+  | "pre_dispatch"
+  | "upstream_wait_headers"
+  | "upstream_read"
+  | "relay_transform"
+  | "downstream_write"
+  | "client_cancel"
+  | "terminal_delivery";
+
 export function isCodexUsageAccountLogLabel(value: unknown): value is CodexUsageAccountLogLabel {
   return value === "main" || (typeof value === "string" && CODEX_ACCOUNT_LOG_LABEL_RE.test(value));
 }
@@ -65,6 +89,10 @@ export interface PersistedUsageAttempt {
   reasoningWireValue?: string | number | boolean;
   /** Adapter-produced tier fact for this physical attempt; absent on pre-B0 rows. */
   tierOutcome?: AttemptTierOutcome;
+  /** Bounded streaming timeline for this attempt (issue #1217). */
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
 }
 
 export interface PersistedUsageEntry {
@@ -118,6 +146,14 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
+  /**
+   * Bounded streaming timeline and causal failure attribution (issue #1217).
+   */
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
+  transportPhase?: string;
+  terminalSource?: string;
   /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
    * selected. Additive field; old rows without it parse unchanged. Never
@@ -238,6 +274,38 @@ const TIER_CONFIRMATIONS = new Set<AttemptTierOutcome["confirmation"]>([
 const FAST_DOWNGRADE_REASONS = new Set<NonNullable<AttemptTierOutcome["fastDowngradeReason"]>>([
   "route-unsupported", "wire-unavailable", "response-declined",
 ]);
+const KNOWN_FAILURE_SIDES = new Set<FailureSide>([
+  "upstream", "relay", "downstream", "client", "local",
+]);
+const KNOWN_FAILURE_STAGES = new Set<FailureStage>([
+  "pre_dispatch",
+  "upstream_wait_headers",
+  "upstream_read",
+  "relay_transform",
+  "downstream_write",
+  "client_cancel",
+  "terminal_delivery",
+]);
+
+function normalizeStreamTimeline(raw: unknown): StreamTimeline | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const t = raw as Record<string, unknown>;
+  const out: StreamTimeline = {};
+  for (const key of [
+    "upstreamDispatchMs",
+    "upstreamHeadersMs",
+    "upstreamFirstByteMs",
+    "upstreamFirstSemanticOutputMs",
+    "downstreamFirstWriteMs",
+    "upstreamEndMs",
+    "downstreamEndMs",
+  ] as const) {
+    if (key in t && isNonNegativeFiniteNumber(t[key])) {
+      out[key] = t[key] as number;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 export function isLabRouteSubjectId(value: unknown): value is string {
   return typeof value === "string" && LAB_ROUTE_SUBJECT_ID_RE.test(value);
@@ -392,6 +460,15 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         : { reasoningWireValue: attempt.reasoningWireValue }
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
+    ...(normalizeStreamTimeline(attempt.streamTimeline)
+      ? { streamTimeline: normalizeStreamTimeline(attempt.streamTimeline)! }
+      : {}),
+    ...(typeof attempt.failureSide === "string" && KNOWN_FAILURE_SIDES.has(attempt.failureSide as FailureSide)
+      ? { failureSide: attempt.failureSide as FailureSide }
+      : {}),
+    ...(typeof attempt.failureStage === "string" && KNOWN_FAILURE_STAGES.has(attempt.failureStage as FailureStage)
+      ? { failureStage: attempt.failureStage as FailureStage }
+      : {}),
   };
 }
 
@@ -504,6 +581,21 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...(normalizeStreamTimeline(entry.streamTimeline)
+      ? { streamTimeline: normalizeStreamTimeline(entry.streamTimeline)! }
+      : {}),
+    ...(typeof entry.failureSide === "string" && KNOWN_FAILURE_SIDES.has(entry.failureSide as FailureSide)
+      ? { failureSide: entry.failureSide as FailureSide }
+      : {}),
+    ...(typeof entry.failureStage === "string" && KNOWN_FAILURE_STAGES.has(entry.failureStage as FailureStage)
+      ? { failureStage: entry.failureStage as FailureStage }
+      : {}),
+    ...(typeof entry.transportPhase === "string" && entry.transportPhase
+      ? { transportPhase: capMetadataString(entry.transportPhase) }
+      : {}),
+    ...(typeof entry.terminalSource === "string" && entry.terminalSource
+      ? { terminalSource: capMetadataString(entry.terminalSource) }
+      : {}),
     ...(routeDecision ? { routeDecision } : {}),
   };
 }
