@@ -18,7 +18,7 @@ describe("fork upstream sync workflow contract", () => {
       "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
     );
     expect(workflow).toContain("ref: ${{ github.event.repository.default_branch }}");
-    expect(workflow).toContain("persist-credentials: false");
+    expect(workflow).toContain("persist-credentials: true");
   });
 
   test("has only vendor and issue write permissions", () => {
@@ -38,5 +38,12 @@ describe("fork upstream sync workflow contract", () => {
     expect(workflow).toContain("concurrency:");
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).not.toMatch(/gh\s+pr\s+merge|git\s+push\s+.*--force|git\s+merge\s+-X/);
+  });
+
+  test("pushes only the two vendor refs after a successful pin", () => {
+    expect(workflow).toContain(
+      "git push origin refs/heads/vendor/main:refs/heads/vendor/main refs/heads/vendor/dev:refs/heads/vendor/dev",
+    );
+    expect(workflow).not.toMatch(/git\s+push\s+origin\s+(?:main|origin\/main)\b/);
   });
 });
