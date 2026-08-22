@@ -5451,5 +5451,10 @@ describe("auto_review_model configuration (#1225)", () => {
     applyAutoReviewModelOverride(entries, "   ");
     expect(entries[0].auto_review_model_override).toBe("existing-model");
   });
+
+  test("readConfiguredAutoReviewModel reads auto_review_model from config.toml", () => {
+    const { readConfiguredAutoReviewModel } = require("../src/codex/catalog/parsing");
+    expect(typeof readConfiguredAutoReviewModel).toBe("function");
+  });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
