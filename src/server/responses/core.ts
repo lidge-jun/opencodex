@@ -309,8 +309,10 @@ import {
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
 import {
+  collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
   createUndeclaredToolCallGuardBlockRewrite,
+  currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
   undeclaredToolCallMessage,
   undeclaredToolCallName,
@@ -2906,7 +2908,16 @@ async function handleResponsesInner(
     }
     // Preserve the caller's readable catalog boundary before provider-specific normalization can
     // remove an unsupported final entry (for example xAI cached-only web search).
-    const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(parsed._rawBody);
+    const replayedInputPrefixLength = parsed._replayPrefixLen ?? 0;
+    const clientToolAuthorizationBody = currentTurnWireToolCatalogBody(
+      parsed._rawBody,
+      replayedInputPrefixLength,
+    );
+    const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
+    const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
+    const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
+      clientToolAuthorizationBody,
+    );
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
@@ -2968,23 +2979,41 @@ async function handleResponsesInner(
     };
     let outboundRequestBody: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
+    const declaredNamelessClientCallTypes = new Set<string>();
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
       outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
       declaredWireToolNames.clear();
-      for (const name of collectDeclaredWireToolNames(outboundRequestBody)) {
-        declaredWireToolNames.add(name);
+      // With no replay prefix the full outbound body belongs to this turn and its normalized
+      // aliases are authoritative. A continuation's outbound body still contains historical
+      // catalogs (and may promote historical tool-search definitions), so it can never widen the
+      // current caller snapshot captured above.
+      if (replayedInputPrefixLength === 0) {
+        for (const name of collectDeclaredWireToolNames(outboundRequestBody)) {
+          declaredWireToolNames.add(name);
+        }
       }
-      // Union with the caller's own catalog, because the outbound body is not always a complete
-      // record of it: hosted-tool preference REPLACES a client tool with its hosted form, so a
-      // request declaring `image_gen.generate` ships `{type:"image_generation"}` upstream and gets
-      // the client's name back. Widening only ever makes the guard fire less; a name declared in
-      // neither place — #1700's `apply_patch` — is still refused.
-      for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
+      for (const name of clientDeclaredWireToolNames) declaredWireToolNames.add(name);
+      declaredNamelessClientCallTypes.clear();
+      if (replayedInputPrefixLength === 0) {
+        for (const callType of collectDeclaredNamelessClientCallTypes(outboundRequestBody)) {
+          declaredNamelessClientCallTypes.add(callType);
+        }
+      }
+      for (const callType of clientDeclaredNamelessCallTypes) {
+        declaredNamelessClientCallTypes.add(callType);
+      }
+      // On an ordinary request these maps capture caller-catalog identities that normalization may
+      // replace on the outbound wire (for example a client image tool becoming hosted). On replay,
+      // however, the parsed maps also contain historical catalog entries, so only the bounded
+      // current-turn wire snapshot above may authorize a call.
+      if (replayedInputPrefixLength === 0) {
+        for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
+      }
       undeclaredToolGuardActive = (
         declaredWireToolNames.size > 0
+        || clientDeclaredNamelessCallTypes.size > 0
         || clientExplicitWireToolCatalog
-        || hasExplicitWireToolCatalog(outboundRequestBody)
       ) && route.provider.authMode !== "forward";
     };
     refreshUndeclaredToolGuard(request);
@@ -3004,7 +3033,11 @@ async function handleResponsesInner(
       // provider) every name looks undeclared, and flipping this would stop recording continuation
       // state for exactly the passthrough traffic the guard deliberately stands down for.
       if (!undeclaredToolGuardActive || inspectionSawUndeclaredTool) return;
-      if (undeclaredToolCallName(payload, declaredWireToolNames) !== undefined) {
+      if (undeclaredToolCallName(
+        payload,
+        declaredWireToolNames,
+        declaredNamelessClientCallTypes,
+      ) !== undefined) {
         inspectionSawUndeclaredTool = true;
       }
     };
@@ -3013,7 +3046,11 @@ async function handleResponsesInner(
         if (inspectionSawUndeclaredTool) return;
         if (
           undeclaredToolGuardActive
-          && undeclaredToolCallNameInResponse(response, declaredWireToolNames) !== undefined
+          && undeclaredToolCallNameInResponse(
+            response,
+            declaredWireToolNames,
+            declaredNamelessClientCallTypes,
+          ) !== undefined
         ) {
           return;
         }
@@ -3659,7 +3696,10 @@ async function handleResponsesInner(
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
         undeclaredToolGuardActive
-          ? createUndeclaredToolCallGuardBlockRewrite(declaredWireToolNames)
+          ? createUndeclaredToolCallGuardBlockRewrite(
+            declaredWireToolNames,
+            declaredNamelessClientCallTypes,
+          )
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const clientBlockRewrite = blockRewrites.length > 0
@@ -3876,7 +3916,11 @@ async function handleResponsesInner(
       if (undeclaredToolGuardActive) {
         const undeclared = (() => {
           try {
-            return undeclaredToolCallNameInResponse(JSON.parse(clientJson), declaredWireToolNames);
+            return undeclaredToolCallNameInResponse(
+              JSON.parse(clientJson),
+              declaredWireToolNames,
+              declaredNamelessClientCallTypes,
+            );
           } catch {
             return undefined;
           }
