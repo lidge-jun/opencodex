@@ -48,7 +48,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 模型或 effort 覆蓋。因此指引會告訴 Codex 在傳遞 `model` 或 `reasoning_effort` 時使用
 `fork_turns: "none"`（或正數的部分回合數，例如 `"3"`），並讓任務訊息自足。
 
-自訂 `injectionPrompt` 文字可以使用全部四個佔位符：
+自訂 `injectionPrompt` 文字可以使用這些佔位符：
 
 | 佔位符 | 取代為 |
 | --- | --- |
@@ -56,6 +56,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 | `{{effort}}` | 設定的 `injectionEffort`，或空字串 |
 | `{{roster}}` | 解析出的 picker 可見、介面相容名冊 |
 | `{{fallback}}` | 設定的全域 fallback 指引 |
+| `{{roles}}` | 壓縮後的已啟用角色目錄（id、何時使用、模型、可選 effort），會依目前介面與 700 字元預算過濾 |
 
 內建 v2 指引有 700 字元的預算。若會超過預算，opencodex 會先丟掉名冊而不是截斷核心 spawn 指示。
 內建指引只在偏好模型、合格名冊或 fallback 鏈解析成功時觸發。設定了 `injectionModel` 就足以渲染

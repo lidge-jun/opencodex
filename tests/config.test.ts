@@ -394,6 +394,10 @@ describe("opencodex config defaults", () => {
       ok: false,
       error: expect.stringContaining("subagentRoles"),
     });
+    expect(validateConfigCandidate({ ...base, syncCodexAgentRoles: false })).toMatchObject({
+      ok: true,
+      config: { syncCodexAgentRoles: false },
+    });
   });
 
   test("malformed persisted subagentRoles are dropped with a warning without wiping config", () => {
@@ -433,6 +437,30 @@ describe("opencodex config defaults", () => {
     });
     expect(backupNames()).toEqual([]);
     expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test("malformed persisted syncCodexAgentRoles becomes false rather than default-on", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+      subagentRoles: [{
+        id: "reviewer",
+        description: "PR review",
+        model: "anthropic/claude-sonnet-5",
+        developerInstructions: "Review the diff.",
+      }],
+      syncCodexAgentRoles: "yes",
+    });
+
+    const config = loadConfig();
+    const diagnostics = readConfigDiagnostics();
+    expect(config.syncCodexAgentRoles).toBe(false);
+    expect(diagnostics.warnings?.some(warning => warning.includes("syncCodexAgentRoles"))).toBe(true);
+    expect(warnSpy.mock.calls.flat().join(" ")).toContain("syncCodexAgentRoles");
     warnSpy.mockRestore();
   });
 

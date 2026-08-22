@@ -69,7 +69,7 @@ hérite du modèle parent et rejette les remplacements de modèle ou d'effort. L
 utilisez `fork_turns: "none"` (ou un compte de tour partiel positif tel que `"3"`) lorsque vous dépassez `model` ou
 `reasoning_effort`, et de rendre le message de tâche autonome.
 
-Le texte personnalisé de `injectionPrompt` peut utiliser les quatre espaces réservés suivants :
+Le texte personnalisé de `injectionPrompt` peut utiliser les espaces réservés suivants :
 
 | Espace réservé | Remplacé par |
 | --- | --- |
@@ -77,6 +77,7 @@ Le texte personnalisé de `injectionPrompt` peut utiliser les quatre espaces ré
 | `{{effort}}` | Le `injectionEffort` configuré, ou une chaîne vide |
 | `{{roster}}` | La liste résolue, visible par le sélecteur et compatible avec la surface |
 | `{{fallback}}` | Les conseils de repli globaux configurés |
+| `{{roles}}` | Catalogue compact des rôles activés (id, quand l’utiliser, modèle, effort optionnel), filtré selon la surface courante et le budget de 700 caractères |
 
 Le guide v2 intégré dispose d’un budget de 700 caractères. S’il devait dépasser ce budget, opencodex réduit
 la liste d'abord plutôt que de tronquer les instructions d'apparition principales. Le guidage intégré déclenche uniquement

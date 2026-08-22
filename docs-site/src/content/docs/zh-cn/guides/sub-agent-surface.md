@@ -45,7 +45,7 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 
 这些是发给主代理的指令，不是 proxy 侧的 spawn 路由器。对于 v2，全历史 fork 会继承父模型，并拒绝模型或 effort 覆盖。因此，指引会要求 Codex 在传递 `model` 或 `reasoning_effort` 时使用 `fork_turns: "none"`（或者像 `"3"` 这样正向的部分 turn 数），并让任务消息保持自包含。
 
-自定义 `injectionPrompt` 文本可以使用全部四个占位符：
+自定义 `injectionPrompt` 文本可以使用这些占位符：
 
 | 占位符 | 替换为 |
 | --- | --- |
@@ -53,6 +53,7 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 | `{{effort}}` | 配置的 `injectionEffort`，或空字符串 |
 | `{{roster}}` | 解析后的、对 picker 可见且与界面兼容的 roster |
 | `{{fallback}}` | 配置的全局 fallback 指引 |
+| `{{roles}}` | 压缩后的已启用角色目录（id、何时使用、模型、可选 effort），会按当前界面和 700 字符预算过滤 |
 
 内置的 v2 指引有 700 字符预算。如果会超出预算，opencodex 会优先删除 roster，而不是截断核心 spawn 指令。内置指引仅在首选模型、可用 roster 或 fallback chain 解析成功时触发。只要配置了 `injectionModel`，自定义提示词就会触发；如果未限定的值无法唯一解析，`{{model}}` 会替换为空字符串。
 
@@ -95,7 +96,7 @@ opencodex 会安全失败，而不是转发空任务或不可读任务：
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
 - **Models** → 顶部一行的分段控件：选择相同的全局模式。
 - **Dashboard** → **Sub-agent delegation**：设置指引模型/effort，以及原生默认值启用项。
-- **Subagents**：选择并排序 roster，并配置全局 fallback chain。
+- **Subagents**：编辑具名角色、选择并排序 roster，并配置自定义父级指导与全局子代理说明。
 
 ### CLI
 

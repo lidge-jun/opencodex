@@ -26,6 +26,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const saveInFlight = useRef(false);
   const delegation = useSubagentDelegation(apiBase);
   const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
+  const [multiAgentMode, setMultiAgentMode] = useState<"v1" | "default" | "v2">("default");
+  const [keepNativeChatGptOnV1, setKeepNativeChatGptOnV1] = useState(false);
+  const [childInstructions, setChildInstructions] = useState("");
+  const [childInstructionsSaving, setChildInstructionsSaving] = useState(false);
   const [ultraSaving, setUltraSaving] = useState(false);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
@@ -45,11 +49,16 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     const data = await readJsonOrThrow<{
       enabled?: boolean;
       multiAgentMode?: "v1" | "default" | "v2";
+      keepNativeChatGptOnV1?: boolean;
       multiAgentModeHintText?: string | null;
+      subagentDeveloperInstructions?: string | null;
     }>(res, t("sub.ultraModeLoadFail"));
     if (!data) return false;
     if (signal?.aborted || generation !== ultraLoadGeneration.current || currentUltraApiBase.current !== apiBase) return false;
     setUltraLoadFailed(false);
+    setMultiAgentMode(data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default");
+    setKeepNativeChatGptOnV1(data.keepNativeChatGptOnV1 === true);
+    setChildInstructions(typeof data.subagentDeveloperInstructions === "string" ? data.subagentDeveloperInstructions : "");
     setUltraMode({
       enabled: data.enabled ?? false,
       hintText: data.multiAgentModeHintText ?? null,
@@ -96,6 +105,30 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
     } finally {
       setUltraSaving(false);
+    }
+  };
+
+  const saveChildInstructions = async (value: string | null) => {
+    if (childInstructionsSaving) return;
+    const requestApiBase = apiBase;
+    setChildInstructionsSaving(true);
+    setStatus("");
+    try {
+      const res = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subagentDeveloperInstructions: value }),
+      });
+      await readJsonOrThrow(res, t("sub.childInstructionsSaveFailed"));
+      if (currentUltraApiBase.current !== requestApiBase || !await loadUltraMode()) return;
+      setOk(true);
+      setStatus(t("sub.childInstructionsSaved"));
+    } catch (error) {
+      if (currentUltraApiBase.current !== requestApiBase) return;
+      setOk(false);
+      setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
+    } finally {
+      setChildInstructionsSaving(false);
     }
   };
 
@@ -158,6 +191,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       return next;
     });
   };
+
+  const setRoleStatus = useCallback((nextOk: boolean, message: string) => {
+    setOk(nextOk);
+    setStatus(message);
+  }, []);
 
   const save = async () => {
     if (busy || saveInFlight.current) return;
@@ -222,12 +260,35 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           guidanceEnabled: delegation.guidanceEnabled,
           syncCodexDefaults: delegation.syncCodexDefaults,
           saving: delegation.saving,
-          onSave: patch => { void delegation.save(patch); },
+          onSave: patch => {
+            void (async () => {
+              const result = await delegation.save(patch);
+              if ("prompt" in patch) {
+                if (result.ok) {
+                  setOk(true);
+                  setStatus(t("sub.injectionPromptSaved"));
+                } else {
+                  setOk(false);
+                  setStatus(result.error || t("sub.injectionPromptSaveFailed"));
+                }
+              }
+            })();
+          },
           ultraMode,
           ultraSaving,
           onUltraModeSave: patch => { void saveUltraMode(patch); },
           ultraLoadFailed,
           onUltraModeRetry: () => { void retryUltraMode(); },
+          prompt: delegation.prompt,
+          childInstructions,
+          childInstructionsSaving,
+          onChildInstructionsSave: value => { void saveChildInstructions(value); },
+        }}
+        roles={{
+          apiBase,
+          multiAgentMode,
+          keepNativeChatGptOnV1,
+          onStatus: setRoleStatus,
         }}
       />
     </>

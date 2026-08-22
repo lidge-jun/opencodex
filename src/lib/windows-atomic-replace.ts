@@ -31,6 +31,7 @@ export type ReplacePublisher =
   | "prompt-journal"
   | "config-ownership"
   | "claude-agents"
+  | "codex-agent-roles"
   | "lab-automation"
   | "lab-ledger"
   | "storage-cleanup"
