@@ -126,6 +126,26 @@ export interface UsageSummary {
   accounts: UsageAccount[];
 }
 
+/**
+ * Echo of an applied provider/model projection.
+ *
+ * Present only on a filtered response so a consumer can distinguish "no rows
+ * matched" from "no traffic in this window", and can tell that the totals it
+ * is reading are a projection rather than the whole window.
+ */
+export interface UsageFilterEcho {
+  provider: string | null;
+  model: string | null;
+  matched: boolean;
+  /**
+   * True when a retained row came from a combo attribution. Cost partitions
+   * cleanly across attempts, but a combo request is counted once per
+   * participating model, so a filtered REQUEST count can exceed the number of
+   * distinct requests. Cost is unaffected.
+   */
+  comboOverlap: boolean;
+}
+
 const DAY_MS = 86_400_000;
 export const MAX_USAGE_MODEL_BREAKDOWN_ROWS = 256;
 
@@ -811,5 +831,99 @@ export function summarizeUsage(
     models: buildModels(filteredEntries, totals.totalTokens),
     providers: buildProviders(filteredEntries, totals.totalTokens),
     accounts: buildAccounts(filteredEntries),
+  };
+}
+
+function normalizeFilterValue(input: string | null | undefined): string | null {
+  const trimmed = typeof input === "string" ? input.trim() : "";
+  return trimmed === "" ? null : trimmed.toLowerCase();
+}
+
+/**
+ * Narrow an already-summarised window to one provider and/or model.
+ *
+ * Deliberately a projection over a finished summary rather than a parameter to
+ * {@link summarizeUsage}. The management route caches summaries under
+ * `range:surface` and warms that key space as a cross-product; a filtered
+ * summary that reached either would be served to the next UNFILTERED caller,
+ * the dashboard included. Keeping the filter outside the producer makes that
+ * mistake unrepresentable rather than merely discouraged.
+ *
+ * Totals are recomputed from the retained rows. For combo traffic a request is
+ * counted once per participating model, so a filtered request count can exceed
+ * the number of distinct requests; `comboOverlap` reports when that is
+ * possible. Cost is unaffected — combo cost is attributed per attempt, so it
+ * partitions across models rather than repeating.
+ *
+ * `accounts` is emptied whenever a filter is active: account rows are not
+ * provider-partitioned in a way this projection could honestly re-derive, and
+ * unfiltered account totals sitting beside filtered model totals would invite
+ * exactly the wrong reading.
+ */
+export function projectUsageSummary<T extends UsageSummary>(
+  summary: T,
+  filter: { provider?: string | null; model?: string | null },
+): T & { filter?: UsageFilterEcho } {
+  const provider = normalizeFilterValue(filter.provider);
+  const model = normalizeFilterValue(filter.model);
+  if (provider === null && model === null) return summary;
+
+  const keep = (row: { provider: string; model?: string }): boolean => {
+    if (provider !== null && row.provider.toLowerCase() !== provider) return false;
+    if (model !== null && (row.model ?? "").toLowerCase() !== model) return false;
+    return true;
+  };
+
+  const models = summary.models.filter(keep);
+  // A provider row carries no model, so a model filter cannot select one
+  // directly; derive the surviving providers from the retained model rows.
+  const providers = model === null
+    ? summary.providers.filter(keep)
+    : summary.providers.filter(row => models.some(m => m.provider === row.provider));
+
+  let comboOverlap = false;
+  const days = summary.days.map(day => {
+    const dayModels = day.models.filter(keep);
+    const requests = dayModels.reduce((acc, row) => acc + row.requests, 0);
+    const attempts = dayModels.reduce((acc, row) => acc + row.attemptCount, 0);
+    if (attempts > requests) comboOverlap = true;
+    return {
+      ...day,
+      models: dayModels,
+      requests,
+      totalTokens: dayModels.reduce((acc, row) => acc + row.totalTokens, 0),
+      estimatedCostUsd: dayModels.reduce((acc, row) => acc + row.estimatedCostUsd, 0),
+      // Measured/reported counts are per-request properties the row breakdown
+      // does not carry, so they cannot be re-derived here. Zero them rather
+      // than pass through a whole-window number beside filtered totals.
+      measuredRequests: 0,
+      reportedRequests: 0,
+    };
+  });
+
+  const totals = blankTotals();
+  for (const row of models) {
+    totals.requests += row.requests;
+    totals.attemptCount += row.attemptCount;
+    totals.measuredRequests += row.measuredRequests;
+    totals.reportedRequests += row.reportedRequests;
+    totals.estimatedRequests += row.estimatedRequests;
+    totals.inputTokens += row.inputTokens;
+    totals.outputTokens += row.outputTokens;
+    totals.totalTokens += row.totalTokens;
+    totals.estimatedCostUsd += row.estimatedCostUsd ?? 0;
+    if (row.estimatedCostUsd !== undefined) totals.pricedRequests += row.requests;
+    else totals.unpricedRequests += row.requests;
+  }
+  finalizeCoverage(totals);
+
+  return {
+    ...summary,
+    summary: totals,
+    days,
+    models,
+    providers,
+    accounts: [],
+    filter: { provider, model, matched: models.length > 0, comboOverlap },
   };
 }

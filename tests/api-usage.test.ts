@@ -473,6 +473,122 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("today narrows the window to the current local day", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=today", server.url)).then(res => res.json());
+      expect(body.range).toBe("today");
+      // A range that missed its rangeWindow branch would fall through to the
+      // all-history window and report since: null while looking plausible.
+      expect(body.since).not.toBeNull();
+      expect(body.days).toHaveLength(1);
+      const thirtyDay = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(body.summary.requests).toBeLessThan(thirtyDay.summary.requests);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("1d is an alias for today, not a separate range", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=1d", server.url)).then(res => res.json());
+      expect(body.range).toBe("today");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider filter narrows the rows and echoes what it matched", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=all&provider=openai", server.url)).then(res => res.json());
+      expect(body.filter).toMatchObject({ provider: "openai", model: null, matched: true });
+      expect(body.models.every((row: { provider: string }) => row.provider === "openai")).toBe(true);
+      expect(body.providers.every((row: { provider: string }) => row.provider === "openai")).toBe(true);
+      const providerCost = body.providers.reduce((acc: number, row: { estimatedCostUsd?: number }) => acc + (row.estimatedCostUsd ?? 0), 0);
+      expect(body.summary.estimatedCostUsd).toBeCloseTo(providerCost, 8);
+      // Account rows are not provider-partitioned in a way the projection can
+      // honestly re-derive, so they are dropped rather than shown unfiltered
+      // beside filtered totals.
+      expect(body.accounts).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider matching is case-insensitive", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const upper = await fetch(new URL("/api/usage?range=all&provider=OPENAI", server.url)).then(res => res.json());
+      expect(upper.filter.matched).toBe(true);
+      expect(upper.models.length).toBeGreaterThan(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a filter that matches nothing reports an empty window, not the unfiltered one", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=all&provider=no-such-provider", server.url)).then(res => res.json());
+      expect(body.filter).toMatchObject({ provider: "no-such-provider", matched: false });
+      expect(body.models).toEqual([]);
+      expect(body.providers).toEqual([]);
+      expect(body.summary.requests).toBe(0);
+      expect(body.summary.estimatedCostUsd).toBe(0);
+      expect(body.days.every((day: { requests: number }) => day.requests === 0)).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a filtered request never poisons the cache for the next unfiltered one", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      // The cache key is `range:surface` and the warm loop writes every key on
+      // a miss. If the filter reached the producer, this filtered request would
+      // store a narrowed summary under "all:all" and the dashboard would then
+      // be served one provider's totals as the whole window.
+      const filtered = await fetch(new URL("/api/usage?range=all&provider=no-such-provider", server.url)).then(res => res.json());
+      expect(filtered.summary.requests).toBe(0);
+
+      const unfiltered = await fetch(new URL("/api/usage?range=all", server.url)).then(res => res.json());
+      expect(unfiltered.filter).toBeUndefined();
+      expect(unfiltered.summary.requests).toBeGreaterThan(0);
+      expect(unfiltered.models.length).toBeGreaterThan(0);
+      expect(unfiltered.accounts.length).toBeGreaterThan(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the filter is applied on the cache-hit path too", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      // Warm the cache first, then filter. A projection wired only into the
+      // fresh-compute path would work until the cache warmed and then silently
+      // return unfiltered rows.
+      await fetch(new URL("/api/usage?range=all", server.url)).then(res => res.json());
+      expect(getUsageSummaryCacheEntry("all:all")).toBeDefined();
+
+      const filtered = await fetch(new URL("/api/usage?range=all&provider=openai", server.url)).then(res => res.json());
+      expect(filtered.filter).toMatchObject({ provider: "openai", matched: true });
+      expect(filtered.models.every((row: { provider: string }) => row.provider === "openai")).toBe(true);
+      expect(filtered.accounts).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("filters by surface and normalizes unknown values to all", async () => {
     writeFixture(Date.now());
     const server = startServer(0);
