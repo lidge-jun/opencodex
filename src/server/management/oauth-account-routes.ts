@@ -273,7 +273,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
-    const rows = await fetchProviderAccountQuotas(provider, forceRefresh);
+    const rows = await fetchProviderAccountQuotas(provider, forceRefresh, ctx.config.providers[provider]?.baseUrl);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
     return jsonResponse({
