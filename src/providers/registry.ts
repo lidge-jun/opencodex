@@ -2906,9 +2906,13 @@ export function providerModelResponsesTerminalRepair(
     const compat = lookupCaseInsensitive(provider.modelResponsesCompatibility, modelId);
     if (compat === "terminal-repair") {
       const raw = lookupCaseInsensitive(provider.modelResponsesTerminalRepair, modelId);
-      const grace = typeof raw === "number" ? raw : (typeof raw === "object" && raw ? raw.graceMs : 500);
-      const graceMs = Math.floor(grace ?? 500);
-      return { graceMs: Number.isFinite(graceMs) && graceMs > 0 ? graceMs : 500 };
+      if (raw !== undefined) {
+        const grace = typeof raw === "number" ? raw : (typeof raw === "object" && raw ? raw.graceMs : undefined);
+        const graceMs = Math.floor(grace ?? 0);
+        if (!Number.isFinite(graceMs) || graceMs <= 0) return undefined;
+        return { graceMs };
+      }
+      return { graceMs: 500 };
     }
 
     // 2. Check explicit modelResponsesTerminalRepair

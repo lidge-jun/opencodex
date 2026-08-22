@@ -1098,10 +1098,26 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
           "neg-grace": -500,
           "nan-grace": NaN,
         },
+        modelResponsesCompatibility: {
+          "compat-zero": "terminal-repair" as const,
+          "compat-neg": "terminal-repair" as const,
+          "compat-nan": "terminal-repair" as const,
+        },
+      };
+      const invalidCompatProv = {
+        ...invalidProv,
+        modelResponsesTerminalRepair: {
+          "compat-zero": 0,
+          "compat-neg": -500,
+          "compat-nan": NaN,
+        },
       };
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "zero-grace")).toBeUndefined();
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "neg-grace")).toBeUndefined();
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "nan-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-zero")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-neg")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-nan")).toBeUndefined();
     });
   });
 });
