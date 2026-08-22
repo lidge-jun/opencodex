@@ -207,6 +207,9 @@ import {
   applySubagentModelFallback,
   maybePrimeSubagentQuota,
   recordSubagentQuotaFailureForThreadSpawn,
+  subagentFallbackNeedsModelEntitlements,
+  type SubagentModelEligibleAccountIds,
+  type SubagentPoolAccountPreview,
 } from "../../codex/subagent-model-fallback";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
@@ -1224,6 +1227,8 @@ export interface HandleResponsesOptions {
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
+  /** Internal deterministic seam for account-gated native fallback tests. */
+  resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
   recordTerminalOutcomes?: boolean;
   setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined) => void;
   onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
@@ -1515,6 +1520,7 @@ async function resolveResponsesCodexAuth(
         modelId: route.modelId,
         substituteMainCredentialForDirect: substituteMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        resolveCodexModelEntitlements: options.resolveCodexModelEntitlements,
       });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
@@ -2361,6 +2367,8 @@ async function handleResponsesInner(
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
   let subagentFallbackPreviewAccountId: string | null | undefined;
+  let subagentFallbackAccountPreview: SubagentPoolAccountPreview | undefined;
+  let subagentFallbackModelEligibleAccountIds: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
   const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
@@ -2374,6 +2382,20 @@ async function handleResponsesInner(
       await maybePrimeSubagentQuota(config, Date.now(), { nativeMainReadsForbidden });
     }
 
+    if (
+      threadSpawn
+      && !options.comboAttempt
+      && route.codexAccountId === undefined
+      && subagentFallbackNeedsModelEntitlements(parsed, config)
+    ) {
+      const entitlementSnapshot = await (options.resolveCodexModelEntitlements
+        ?? resolveCodexModelEntitlements)(config);
+      subagentFallbackModelEligibleAccountIds = (modelId) => entitledCodexAccountIdsForModel(
+        entitlementSnapshot,
+        modelId,
+      );
+    }
+
   // Subagent fallback must settle the final model/provider BEFORE route-dependent
   // normalization (virtual models, effort caps, service tier, wire protocol).
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
@@ -2383,12 +2405,22 @@ async function handleResponsesInner(
     // so the preview must read the same scope slot — an undefined scope would map to the
     // "legacy" affinity bucket and never find a binding made under "shared" or a native
     // model scope, making the preview diverge from the account that actually authenticates.
-    const previewAccountId = previewCodexAccountForRequest(
+    const fallbackNow = Date.now();
+    subagentFallbackAccountPreview = (
+      modelId,
+      previewNow,
+      modelEligibleAccountIds,
+    ) => previewCodexAccountForRequest(
       poolAffinityKey,
       config,
-      Date.now(),
-      codexQuotaScopeForModel(route.modelId),
-      previewSelectionOptions,
+      previewNow,
+      codexQuotaScopeForModel(modelId),
+      { ...previewSelectionOptions, modelEligibleAccountIds },
+    );
+    const previewAccountId = subagentFallbackAccountPreview(
+      route.modelId,
+      fallbackNow,
+      subagentFallbackModelEligibleAccountIds?.(route.modelId),
     );
     subagentFallbackPreviewAccountId = previewAccountId;
     subagentFallbackAccountId = previewAccountId ?? config.activeCodexAccountId ?? null;
@@ -2397,9 +2429,11 @@ async function handleResponsesInner(
       req.headers,
       config,
       previewAccountId,
-      Date.now(),
+      fallbackNow,
       unreadableEncryptedAgentTask,
       previewSelectionOptions,
+      subagentFallbackAccountPreview,
+      subagentFallbackModelEligibleAccountIds,
     );
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
@@ -2482,14 +2516,17 @@ async function handleResponsesInner(
           // The ciphertext-only pass intentionally excludes routed candidates. Once recovery
           // makes the assignment readable, run selection again with the full configured chain
           // and keep the route in sync with any newly selected fallback.
+          const fallbackNow = Date.now();
           const fallback = applySubagentModelFallback(
             parsed,
             req.headers,
             config,
             subagentFallbackPreviewAccountId,
-            Date.now(),
+            fallbackNow,
             false,
             previewSelectionOptions,
+            subagentFallbackAccountPreview,
+            subagentFallbackModelEligibleAccountIds,
           );
           if (fallback) {
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
