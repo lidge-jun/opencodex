@@ -4,22 +4,22 @@ overview: "Retarget the public fork’s daily pin from upstream/dev to released 
 todos:
   - id: plan-file
     content: Write docs/superpowers/plans/2026-08-21-fork-daily-main-pin.md and SDD ledger
-    status: in_progress
+    status: completed
   - id: wave1-docs
     content: "Parallel Luna worktrees: README, OWNED, skill+MIXED-SPLIT; cherry-pick onto overlay"
-    status: in_progress
+    status: completed
   - id: wave2-rebase
     content: Create/FF vendor/main; rebase overlay; run fork+lab-boundary tests
-    status: pending
+    status: completed
   - id: wave3-run-main
     content: Rebuild run/main from overlay + origin feat PR heads; focused tests + typecheck
-    status: pending
+    status: completed
   - id: wave4-pr
     content: Push overlay; open yansigit PR into main; do not merge
-    status: pending
+    status: completed
   - id: final-review
     content: Luna whole-branch review of overlay vs vendor/main and run/main contents
-    status: pending
+    status: completed
 isProject: false
 ---
 
