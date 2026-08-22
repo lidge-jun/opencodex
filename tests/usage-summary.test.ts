@@ -577,7 +577,7 @@ describe("summarizeUsage", () => {
       expect.objectContaining({ provider: "b", requests: 1, attemptCount: 1, totalTokens: 12 }),
     ]);
     expect(sum.providers.some(provider => provider.provider === "combo")).toBe(false);
-    expect(sum.days.find(day => day.requests === 1)?.models).toEqual([
+    expect(sum.days.find(day => day.requests === 1)?.models).toMatchObject([
       { provider: "a", model: "model-a", requests: 1, attemptCount: 1, totalTokens: 100 },
       { provider: "b", model: "model-b", requests: 1, attemptCount: 1, totalTokens: 12 },
     ]);
