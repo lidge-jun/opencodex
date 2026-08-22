@@ -7,6 +7,7 @@ import {
 } from "./google-errors";
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
+import { recordAntigravityCooldown } from "../oauth/antigravity-routing";
 import {
   antigravityHostCandidates,
   canonicalAntigravityHttpsHost,
@@ -270,6 +271,38 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
   });
 }
 
+function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
+  }
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) && timestamp > now ? timestamp - now : undefined;
+}
+
+async function recordAntigravityHttpCooldown(
+  response: Response,
+  accountId: string | undefined,
+): Promise<boolean> {
+  if (!accountId || (response.status !== 429 && response.status !== 403)) return false;
+  const payloadText = await readDisplaySafeErrorPayloadText(response.clone());
+  if (response.status === 429) {
+    recordAntigravityCooldown(
+      accountId,
+      isQuotaExhaustedBody(payloadText) ? "quota_exhausted" : "rate_limited",
+      retryAfterMs(response.headers.get("retry-after")),
+    );
+    return true;
+  }
+  if (isAntigravityGeoBlockedBody(payloadText)) {
+    recordAntigravityCooldown(accountId, "geo_blocked");
+    return true;
+  }
+  return false;
+}
+
 /**
  * Fetch a Google-family upstream with Kiro-style hardening: per-attempt timeout
  * (`AbortSignal.any([parent, timeout])`), bounded retry on transient status / network errors,
@@ -318,6 +351,12 @@ async function fetchGoogleWithRetryInternal(
           antigravityHostIndex = 1;
           activeRequest = requestForHost(activeRequest, antigravityHosts[antigravityHostIndex]!);
           continue;
+        }
+      }
+      if (label === "Antigravity") {
+        const cooldownRecorded = await recordAntigravityHttpCooldown(res, ctx.accountId);
+        if (cooldownRecorded) {
+          return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
         }
       }
       if (label === "Antigravity" && isAntigravitySseRequest(activeRequest) && res.ok) {

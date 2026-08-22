@@ -876,4 +876,23 @@ describe("runWithImageBridge — runTurn adapter", () => {
     expect(seenIds[1]).toBe("conv-from-first-turn");
     expect(parsed._cursorConversationId).toBe("conv-from-first-turn");
   });
+
+  test("forwards AdapterFetchContext.accountId to fetchResponse", async () => {
+    let received: string | undefined;
+    streamQueue = [[{ type: "text_delta", text: "ok" }, { type: "done" }]];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      accountId: "antigravity-account-a",
+      adapter: {
+        ...mockAdapter,
+        fetchResponse: async (_request, ctx) => {
+          received = ctx?.accountId;
+          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+        },
+      },
+      plan,
+    });
+    await response.text();
+    expect(received).toBe("antigravity-account-a");
+  });
 });

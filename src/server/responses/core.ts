@@ -105,6 +105,12 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
+import {
+  bindAntigravityProject,
+  isAntigravityAccountInCooldown,
+  nextAntigravityAccount,
+} from "../../oauth/antigravity-routing";
+import { getAccountCredential, getAccountSet, setActiveAccount } from "../../oauth/store";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -2555,6 +2561,8 @@ async function handleResponsesInner(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  let antigravityAccountId: string | undefined;
+  let antigravityFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -2587,24 +2595,51 @@ async function handleResponsesInner(
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
       } else {
-        const resolved = await getValidAccessTokenSnapshot(route.providerName);
+        let resolved = await getValidAccessTokenSnapshot(route.providerName);
+        let skippedAntigravityCooldown = false;
+        if (route.providerName === "google-antigravity"
+          && route.provider.googleMode === "cloud-code-assist"
+          && isAntigravityAccountInCooldown(resolved.accountId)) {
+          const accountIds = getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
+          const nextAccountId = nextAntigravityAccount(accountIds, resolved.accountId);
+          if (!nextAccountId) {
+            return formatErrorResponse(429, "rate_limit_error", "All Google Antigravity OAuth accounts are temporarily unavailable");
+          }
+          const accessToken = await getValidAccessTokenForAccount("google-antigravity", nextAccountId);
+          const nextCredential = getAccountCredential("google-antigravity", nextAccountId);
+          resolved = {
+            ...resolved,
+            accountId: nextAccountId,
+            accessToken,
+            // Always replace; omitting a missing id would keep the previous account's projectId.
+            projectId: nextCredential?.projectId,
+          };
+          skippedAntigravityCooldown = true;
+        }
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
         };
+        if (skippedAntigravityCooldown) replayOAuthCredentialSnapshot = undefined;
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        if (route.providerName === "google-antigravity" && route.provider.googleMode === "cloud-code-assist") {
+          antigravityAccountId = resolved.accountId;
+          // Always overwrite `project` from the credential in use. A missing id fails closed
+          // so a rotated account cannot inherit the previous account's Cloud Code Assist project.
+          const bound = bindAntigravityProject(route.provider, resolved.projectId);
+          if (!bound.ok) {
+            return formatErrorResponse(bound.status, bound.type, bound.message);
+          }
+          route.provider = bound.provider;
+          if (skippedAntigravityCooldown) {
+            void setActiveAccount("google-antigravity", resolved.accountId).catch(() => { /* best-effort promotion */ });
+          }
+        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
-        }
-        // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-        // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
-        // a fresh token with project metadata re-read from a different credential generation.
-        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-          const projectId = resolved.projectId;
-          if (projectId) route.provider = { ...route.provider, project: projectId };
         }
       }
     } catch (err) {
@@ -3972,6 +4007,7 @@ async function handleResponsesInner(
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
@@ -4060,6 +4096,7 @@ async function handleResponsesInner(
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,
@@ -4423,6 +4460,7 @@ async function handleResponsesInner(
           providerName: route.providerName,
           modelId: route.modelId,
         }),
+        ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
       });
     } else {
       // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
@@ -4530,6 +4568,7 @@ async function handleResponsesInner(
                 providerName: route.providerName,
                 modelId: route.modelId,
               }),
+              ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
             });
           }
           return await fetchWithHeaderTimeout(retryRequest.url, {
@@ -4702,6 +4741,55 @@ async function handleResponsesInner(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
           const result = await rebuildAndRefetch("anthropic-oauth-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
+      // Antigravity OAuth accounts use the same bounded pre-stream carousel as Anthropic, but
+      // their process-local routing module also excludes accounts cooled by quota/rate-limit
+      // responses. Geoblocked 403s intentionally never enter this loop.
+      while (
+        upstreamResponse.status === 429
+        && route.providerName === "google-antigravity"
+        && route.provider.googleMode === "cloud-code-assist"
+        && antigravityAccountId
+        && antigravityFailovers < 3
+      ) {
+        const accountIds = getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
+        const nextAccountId = nextAntigravityAccount(accountIds, antigravityAccountId);
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getValidAccessTokenForAccount("google-antigravity", nextAccountId);
+          const nextCredential = getAccountCredential("google-antigravity", nextAccountId);
+          const bound = bindAntigravityProject(
+            { ...route.provider, apiKey: accessToken },
+            nextCredential?.projectId,
+          );
+          if (!bound.ok) {
+            return formatErrorResponse(bound.status, bound.type, bound.message);
+          }
+          antigravityAccountId = nextAccountId;
+          antigravityFailovers += 1;
+          route.provider = bound.provider;
+          replayOAuthCredentialSnapshot = undefined;
+          invalidateSameTargetRequest();
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+            codexAuthContext: authCtx,
+            forwardHeaders: selectedForwardHeaders,
+          });
+          void setActiveAccount("google-antigravity", nextAccountId).catch(() => { /* best-effort promotion */ });
+          const result = await rebuildAndRefetch("rate-limit-429");
           if ("failed" in result) return result.failed;
           upstreamResponse = result;
         } catch {
@@ -4883,6 +4971,7 @@ async function handleResponsesInner(
               providerName: route.providerName,
               modelId: nextParsed.modelId,
             }),
+            ...(antigravityAccountId ? { accountId: antigravityAccountId } : {}),
           });
         }
         // Same #1851 scope guard as the initial send: transient-5xx retry only for direct
