@@ -46,4 +46,11 @@ describe("fork upstream sync workflow contract", () => {
     );
     expect(workflow).not.toMatch(/git\s+push\s+origin\s+(?:main|origin\/main)\b/);
   });
+
+  test("bootstraps missing vendor refs from upstream instead of failing the fetch", () => {
+    expect(workflow).toContain("git ls-remote --exit-code origin refs/heads/vendor/main");
+    expect(workflow).toContain("git ls-remote --exit-code origin refs/heads/vendor/dev");
+    expect(workflow).toContain("git branch vendor/main upstream/main");
+    expect(workflow).toContain("git branch vendor/dev upstream/dev");
+  });
 });

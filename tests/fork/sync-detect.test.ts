@@ -24,6 +24,7 @@ describe("fork sync detection", () => {
         result(MAIN_SHA),
         result(DEV_SHA),
         result(""),
+        result("", 1),
         result(""),
       ]),
     });
@@ -54,6 +55,41 @@ describe("fork sync detection", () => {
     expect(event.latestTagSha).toBe(TAG_SHA);
   });
 
+  test("skips a newer preview tag that is not on upstream main", async () => {
+    const previewSha = "4444444444444444444444444444444444444444";
+    const event = await detectLatestVTag({
+      upstreamRepo: "upstream",
+      now: () => new Date("2026-08-22T18:00:00.000Z"),
+      runner: queuedRunner([
+        result(`${TAG_SHA} refs/tags/v2.31.0\n${previewSha} refs/tags/v2.32.0-preview.20260822\n`),
+        result(TAG_SHA),
+        result(DEV_SHA),
+        result("", 1, "preview not on main"),
+        result(""),
+      ]),
+    });
+
+    expect(event.kind).toBe("already-current");
+    expect(event.latestTag).toBe("v2.31.0");
+    expect(event.latestTagSha).toBe(TAG_SHA);
+  });
+
+  test("returns already-current when vendor main already contains the latest tag", async () => {
+    const event = await detectLatestVTag({
+      upstreamRepo: "upstream",
+      runner: queuedRunner([
+        result(`${TAG_SHA} refs/tags/v2.29.0\n`),
+        result(MAIN_SHA),
+        result(DEV_SHA),
+        result(""),
+        result(""),
+      ]),
+    });
+
+    expect(event.kind).toBe("already-current");
+    expect(event.vendorMainSha).toBe(MAIN_SHA);
+  });
+
   test("returns pin-diverged when vendor main cannot fast-forward to the tag", async () => {
     const event = await detectLatestVTag({
       upstreamRepo: "upstream",
@@ -62,6 +98,7 @@ describe("fork sync detection", () => {
         result(MAIN_SHA),
         result(DEV_SHA),
         result(""),
+        result("", 1, "tag not in vendor"),
         result("", 1, "not an ancestor"),
       ]),
     });

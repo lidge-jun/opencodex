@@ -57,6 +57,9 @@ function compareTags(left: string, right: string): number {
       const difference = Number(leftMatch[index]) - Number(rightMatch[index]);
       if (difference !== 0) return difference;
     }
+    const leftStable = /^v\d+\.\d+\.\d+$/.test(left);
+    const rightStable = /^v\d+\.\d+\.\d+$/.test(right);
+    if (leftStable !== rightStable) return leftStable ? 1 : -1;
   } else if (leftMatch) {
     return 1;
   } else if (rightMatch) {
@@ -103,10 +106,7 @@ export async function detectLatestVTag(
         "v*",
       ])).stdout,
     ).sort((left, right) => compareTags(left.tag, right.tag));
-    const latest = tags.at(-1);
-    if (!latest) throw new Error("no v* release tag found");
-    latestTag = latest.tag;
-    latestTagSha = latest.sha;
+    if (tags.length === 0) throw new Error("no v* release tag found");
     vendorMainSha = (await runGit(options.runner, [
       "rev-parse",
       "refs/heads/vendor/main",
@@ -116,29 +116,41 @@ export async function detectLatestVTag(
       "refs/heads/vendor/dev",
     ])).stdout.trim();
 
-    const onUpstreamMain = await options.runner([
-      "merge-base",
-      "--is-ancestor",
-      latestTagSha,
-      "refs/remotes/upstream/main",
-    ]);
-    if (onUpstreamMain.exitCode !== 0) {
-      if (onUpstreamMain.exitCode === 1) {
-        return event(
-          "detect-failed",
-          options,
-          latestTag,
-          latestTagSha,
-          vendorMainSha,
-          vendorDevSha,
-          `${latestTag} is not an ancestor of upstream/main`,
+    let latest: { tag: string; sha: string } | undefined;
+    for (let index = tags.length - 1; index >= 0; index -= 1) {
+      const candidate = tags[index]!;
+      latestTag = candidate.tag;
+      latestTagSha = candidate.sha;
+      const onUpstreamMain = await options.runner([
+        "merge-base",
+        "--is-ancestor",
+        candidate.sha,
+        "refs/remotes/upstream/main",
+      ]);
+      if (onUpstreamMain.exitCode === 0) {
+        latest = candidate;
+        break;
+      }
+      if (onUpstreamMain.exitCode !== 1) {
+        throw new GitCommandError(
+          ["merge-base", "--is-ancestor", candidate.sha, "refs/remotes/upstream/main"],
+          onUpstreamMain,
         );
       }
-      throw new GitCommandError(
-        ["merge-base", "--is-ancestor", latestTagSha, "refs/remotes/upstream/main"],
-        onUpstreamMain,
+    }
+    if (!latest) {
+      return event(
+        "detect-failed",
+        options,
+        latestTag,
+        latestTagSha,
+        vendorMainSha,
+        vendorDevSha,
+        "no v* tag is an ancestor of upstream/main",
       );
     }
+    latestTag = latest.tag;
+    latestTagSha = latest.sha;
 
     if (vendorMainSha === latestTagSha) {
       return event(
@@ -148,6 +160,29 @@ export async function detectLatestVTag(
         latestTagSha,
         vendorMainSha,
         vendorDevSha,
+      );
+    }
+
+    const tagContainedInVendor = await options.runner([
+      "merge-base",
+      "--is-ancestor",
+      latestTagSha,
+      vendorMainSha,
+    ]);
+    if (tagContainedInVendor.exitCode === 0) {
+      return event(
+        "already-current",
+        options,
+        latestTag,
+        latestTagSha,
+        vendorMainSha,
+        vendorDevSha,
+      );
+    }
+    if (tagContainedInVendor.exitCode !== 1) {
+      throw new GitCommandError(
+        ["merge-base", "--is-ancestor", latestTagSha, vendorMainSha],
+        tagContainedInVendor,
       );
     }
 
