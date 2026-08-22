@@ -14,7 +14,7 @@ and test; a human confirms and lands `origin/main`.
 
 | Role | Does | Must not |
 |---|---|---|
-| Coordinator | Fetches, opens the sync branch, lists conflicts, dispatches workers, assembles the decision table, pushes after confirmation | Resolve hunks itself or use whole-tree `-X ours` |
+| Coordinator | Fetches, opens the sync branch, lists conflicts, dispatches workers, assembles the decision table, pushes, and leaves the draft PR mergeable | Resolve hunks itself or use whole-tree `-X ours` |
 | File worker | Owns one conflict domain and reports 3-way intent, options, recommendation, and tests | Touch another domain or commit `main` |
 | Test worker | Runs named tests; runs typecheck/full suite for shared runtime, routing, config, or server changes | Claim green without command output |
 | Absorbed-patch worker | Compares overlay patches with upstream and identifies duplicates to drop | Keep a patch merely because the fork wrote it first |
@@ -115,27 +115,26 @@ recommendation, just like Cursor.
 
 ## Cursor Automation stages 3–7
 
-The webhook-triggered Cursor Automation starts only after `pin-updated`. Fetch
-the refs, rebuild disposable `run/main` from `origin/main` plus the vendor
-release and selected feature branches, use Mergiraf where available, and read
-`docs/fork/OWNED.md` before resolving conflicts. Run the exact focused tests
-for changed domains, assemble the required conflict decision table, and open a
-draft PR into `origin/main`. Stop after the draft PR; do not merge it.
+The webhook-triggered Cursor Automation starts only after `pin-updated`. The
+daily path starts at `origin/main`: create
+`sync/upstream-YYYYMMDD` from it, merge `origin/vendor/main`, use Mergiraf
+where available, and read `docs/fork/OWNED.md` before resolving conflicts.
+Replay overlay or feature patches only when they are not already contained,
+using `merge-base --is-ancestor` or patch-id. Run the exact focused tests for
+changed domains, assemble the required conflict decision table, and open or
+update a draft PR into `main`. Confirm `mergeable=true` before stopping; the
+human then clicks Merge (merge commit). Do not merge it from the automation.
 
-## Rebuild daily `main`
+If histories diverge again, a disconnected `run/main` rebuild is an emergency
+recipe only. After reviewing that rebuild, check out `run/main` first and use
+the catch-up `git merge --no-ff -s ours origin/main` to record the old parent
+without changing the rebuilt tree. This is the only documented `-s ours`
+exception. Never use whole-tree `git merge -X ours` or `git merge -X theirs`,
+and never recursively merge old `main` into a rebuild.
 
-`origin/main` is the daily driver (release + overlay + selected `feat/*`). Rebuild on disposable `run/main`, then submit a reviewed PR into `origin/main`. Never force-push `main`.
-
-```bash
-git switch -C run/main overlay
-git merge <selected-origin-feat-head>
-git push --force-with-lease origin run/main
-git switch main
-git merge --no-ff origin/run/main
-git push origin main
-```
-
-Do not retarget those upstream PRs to upstream `main`, and stop replaying a `feat/*` once it is contained in `vendor/main`.
+Never squash or rebase these fork sync PRs. Do not retarget upstream PRs to
+upstream `main`, and stop replaying a `feat/*` once it is contained in
+`vendor/main`.
 
 ## Conflict report (required for every conflict)
 
