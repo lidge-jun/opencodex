@@ -5435,7 +5435,7 @@ describe("auto_review_model configuration (#1225)", () => {
       { slug: "opencode-go/glm-5.2", auto_review_model_override: null },
     ];
 
-    applyAutoReviewModelOverride(entries, "opencode-go/deepseek-v4-flash");
+    applyAutoReviewModelOverride(entries, "  opencode-go/deepseek-v4-flash  ");
     expect(entries[0].auto_review_model_override).toBe("opencode-go/deepseek-v4-flash");
     expect(entries[1].auto_review_model_override).toBe("opencode-go/deepseek-v4-flash");
   });
@@ -5443,13 +5443,13 @@ describe("auto_review_model configuration (#1225)", () => {
   test("applyAutoReviewModelOverride is a no-op when autoReviewModel is null or empty", () => {
     const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
     const entries = [
-      { slug: "gpt-5.5", auto_review_model_override: null },
+      { slug: "gpt-5.5", auto_review_model_override: "existing-model" },
     ];
 
     applyAutoReviewModelOverride(entries, null);
-    expect(entries[0].auto_review_model_override).toBeNull();
+    expect(entries[0].auto_review_model_override).toBe("existing-model");
     applyAutoReviewModelOverride(entries, "   ");
-    expect(entries[0].auto_review_model_override).toBeNull();
+    expect(entries[0].auto_review_model_override).toBe("existing-model");
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
