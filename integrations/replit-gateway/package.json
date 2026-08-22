@@ -1,0 +1,15 @@
+{
+  "name": "@opencodex/replit-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "User-deployed Replit gateway companion for opencodex",
+  "scripts": {
+    "test": "bun test tests/",
+    "typecheck": "bun x tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "7.0.2"
+  }
+}

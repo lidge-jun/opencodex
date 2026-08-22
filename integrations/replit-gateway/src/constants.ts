@@ -1,0 +1,25 @@
+export const GATEWAY_CONTRACT_VERSION = "1" as const;
+
+export const DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024;
+export const DEFAULT_MAX_HEADER_BYTES = 32 * 1024;
+export const DEFAULT_MAX_CONCURRENT_REQUESTS = 10;
+export const DEFAULT_UPSTREAM_TIMEOUT_MS = 300_000;
+export const DEFAULT_CLIENT_TIMEOUT_MS = 310_000;
+export const MIN_GATEWAY_KEY_LENGTH = 32;
+
+export const MIN_CONFIG_REQUEST_BYTES = 1024;
+export const MAX_CONFIG_REQUEST_BYTES = 64 * 1024 * 1024;
+export const MIN_CONFIG_HEADER_BYTES = 1024;
+export const MAX_CONFIG_HEADER_BYTES = 256 * 1024;
+export const MIN_CONFIG_CONCURRENT = 1;
+export const MAX_CONFIG_CONCURRENT = 100;
+export const MIN_CONFIG_TIMEOUT_MS = 1000;
+export const MAX_CONFIG_TIMEOUT_MS = 3_600_000;
+export const MIN_CONFIG_PORT = 1;
+export const MAX_CONFIG_PORT = 65535;
+
+export const AI_INTEGRATIONS_ENV_PREFIX = "AI_INTEGRATIONS_";
+
+export const GATEWAY_AUTH_HEADER = "Authorization";
+
+export const DECIMAL_INTEGER_PATTERN = /^(0|[1-9]\d*)$/;

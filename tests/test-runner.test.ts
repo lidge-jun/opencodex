@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { createIsolatedTestEnvironment } from "../scripts/test";
+import { createIsolatedTestEnvironment, shouldRunCompanionTests } from "../scripts/test";
 import {
   decodeWindowsIdentityPowerShellOutputForTests,
   windowsIdentityPowerShellCommandForTests,
@@ -67,4 +67,37 @@ describe("test runner isolation", () => {
       }
     },
   );
+});
+
+describe("test runner companion gating", () => {
+  test("shouldRunCompanionTests is true only for the default full suite", () => {
+    expect(shouldRunCompanionTests([])).toBe(true);
+    expect(shouldRunCompanionTests(["tests/example.test.ts"])).toBe(false);
+    expect(shouldRunCompanionTests(["tests/a.test.ts", "tests/b.test.ts"])).toBe(false);
+  });
+
+  test("file-scoped wrapper invocation does not run the replit-gateway companion", () => {
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "scripts/test.ts",
+        "tests/test-runner.test.ts",
+        "--test-name-pattern",
+        "redirects user homes to a disposable root",
+      ],
+      {
+        cwd: join(import.meta.dir, ".."),
+        env: { ...process.env, OCX_TEST_NO_QUEUE: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const output = [
+      new TextDecoder().decode(result.stdout),
+      new TextDecoder().decode(result.stderr),
+    ].join("\n");
+    expect(result.exitCode).toBe(0);
+    expect(output).not.toContain("replit-gateway companion");
+    expect(output).not.toContain("integrations/replit-gateway");
+  });
 });

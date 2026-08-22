@@ -31,6 +31,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "integrations/replit-gateway/**"
       - "assets/**"
       - ".gitattributes"
       - ".npmignore"
@@ -179,6 +180,7 @@ jobs:
               - 'tests/**'
               - 'scripts/**'
               - 'gui/**'
+              - 'integrations/replit-gateway/**'
               - 'assets/**'
               - '.gitattributes'
               - '.npmignore'
@@ -406,6 +408,15 @@ jobs:
         run: |
           bun x tsc --noEmit
           bun x tsc --noEmit -p tests/tsconfig.doctor-service-memory-contract.json
+
+      - name: Install replit-gateway companion
+        run: cd integrations/replit-gateway && bun install --frozen-lockfile
+
+      - name: Replit gateway typecheck
+        run: cd integrations/replit-gateway && bun run typecheck
+
+      - name: Replit gateway tests
+        run: cd integrations/replit-gateway && bun run test
 
       - name: GUI tests
         run: cd gui && bun test --isolate tests
