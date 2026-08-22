@@ -59,6 +59,7 @@ reference-image), используя тот же bearer ChatGPT, что и дл�
   провал жёсткий: никакого fallback на другой платный upstream нет. Id провайдера, управляемые
   registry, здесь не принимаются; если хотите использовать встроенные уровни OpenAI, опустите
   `images.provider`.
+- **Relay xAI Imagine (Grok OAuth):** если `images.bridgeEnabled` равно `true` и у провайдера `xai` есть действующий OAuth-токен Grok CLI (`ocx login xai`) или API-ключ, `/v1/images/generations` и `/v1/images/edits` уходят на `https://api.x.ai/v1` с этим токеном. Учётные данные ChatGPT не пересылаются. Если токена нет, прокси возвращает 400 и не тарифицирует ChatGPT. Relay отображает Codex `size` / `aspect_ratio` на тело Imagine и возвращает ту же форму `{created, data:[{b64_json}]}`. Суммарные декодированные байты и base64-выход партии (inline `b64_json` и скачанные URL) остаются ниже 100 MiB; превышение даёт 502. Это отдельно от цикла Responses Image Bridge, который по-прежнему только с API-ключом.
 - **Fallback Google Antigravity (CCA):** если не настроен ни один OpenAI forward-candidate и ни
   один keyed provider, `/v1/images/generations` (но не `/images/edits`) переходит на endpoint
   Antigravity **Cloud Code Assist** с моделью `gemini-3.1-flash-image`. Этот fallback также

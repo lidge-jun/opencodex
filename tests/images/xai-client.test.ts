@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { callXaiImages } from "../../src/images/xai-client";
+import { callXaiImages, resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
@@ -46,6 +46,20 @@ describe("callXaiImages", () => {
     expect(body.model).toBe("grok-imagine-fast");
     expect(body.prompt).toBe("a dog");
     expect(body.n).toBe(3);
+  });
+
+  test("3xx is not followed and throws with the redirect status", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://evil.example/images/generations" },
+      });
+    }) as typeof fetch;
+    await expect(callXaiImages({ prompt: "x" }, AUTH)).rejects.toThrow("302");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init?.redirect).toBe("manual");
   });
 
   test("non-2xx → throws Error containing status code", async () => {
@@ -157,5 +171,30 @@ describe("callXaiImages", () => {
     expect(body).not.toHaveProperty("resolution");
     expect(body).not.toHaveProperty("size");
     expect(body).not.toHaveProperty("quality");
+  });
+
+  test("explicit aspect_ratio is forwarded and wins over size", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", size: "1024x1024", aspectRatio: "16:9" }, AUTH);
+    const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
+    expect(body.aspect_ratio).toBe("16:9");
+    expect(body).not.toHaveProperty("size");
+  });
+
+  test("aspect_ratio literals come from the size-mapping table", () => {
+    expect(resolveXaiAspectRatioLiteral("3:4")).toBe("3:4");
+    expect(resolveXaiAspectRatioLiteral("4:3")).toBe("4:3");
+    expect(resolveXaiAspectRatioLiteral("auto")).toBeUndefined();
+    expect(resolveXaiAspectRatioLiteral("2:1")).toBeUndefined();
+  });
+
+  test("aspect_ratio auto and illegal values are dropped", async () => {
+    const autoCalls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", aspectRatio: "auto" }, AUTH);
+    expect(JSON.parse((autoCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
+
+    const badCalls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", aspectRatio: "2:1" }, AUTH);
+    expect(JSON.parse((badCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
   });
 });

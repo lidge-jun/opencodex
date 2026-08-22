@@ -2,6 +2,7 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveEnvValue } from "../config";
+import { getValidAccessToken } from "../oauth/index";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 
@@ -38,6 +39,19 @@ export function resolveXaiImageApiKey(provider: OcxProviderConfig): string | und
   if (provider.authMode === "oauth") return undefined;
   const apiKey = resolveEnvValue(provider.apiKey)?.trim();
   return apiKey || undefined;
+}
+
+/** Token for the /v1/images → Imagine relay. OAuth reuses the Grok CLI grant. */
+export async function resolveXaiImageAuthToken(provider: OcxProviderConfig): Promise<string | undefined> {
+  if (provider.authMode === "oauth") {
+    try {
+      const token = (await getValidAccessToken("xai"))?.trim();
+      return token || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return resolveXaiImageApiKey(provider);
 }
 
 export async function planImageBridge(

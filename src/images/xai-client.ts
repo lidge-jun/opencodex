@@ -14,6 +14,8 @@ export interface XaiImageRequest {
   n?: number; // 1-4
   size?: string;
   quality?: string;
+  /** Literal xAI aspect_ratio. Wins over `size` when both are present. */
+  aspectRatio?: string;
   imageUrl?: string; // if set → /images/edits
 }
 
@@ -35,6 +37,20 @@ const XAI_ASPECT_RATIOS: ReadonlyArray<readonly [string, number]> = [
   ["9:16", 0.5625],
   ["16:9", 16 / 9],
 ];
+const XAI_ASPECT_RATIO_LITERALS = new Set(XAI_ASPECT_RATIOS.map(([label]) => label));
+
+/** Accept a hosted/Codex `aspect_ratio` literal; `auto` and unknown values drop. */
+export function resolveXaiAspectRatioLiteral(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const literal = value.trim();
+  if (!literal || literal === "auto") return undefined;
+  return XAI_ASPECT_RATIO_LITERALS.has(literal) ? literal : undefined;
+}
+
+function resolveAspectRatio(req: XaiImageRequest): string | undefined {
+  if (req.aspectRatio?.trim()) return resolveXaiAspectRatioLiteral(req.aspectRatio);
+  return mapSizeToAspectRatio(req.size);
+}
 
 function mapSizeToAspectRatio(size?: string): string | undefined {
   if (!size) return undefined;
@@ -75,7 +91,7 @@ export async function callXaiImages(
     prompt: req.prompt,
     n: req.n ?? 1,
   };
-  const aspectRatio = mapSizeToAspectRatio(req.size);
+  const aspectRatio = resolveAspectRatio(req);
   const resolution = mapQualityToResolution(req.quality);
   if (aspectRatio) body.aspect_ratio = aspectRatio;
   if (resolution) body.resolution = resolution;
@@ -98,7 +114,19 @@ export async function callXaiImages(
     },
     body: JSON.stringify(body),
     signal: linkedSignal,
+    // Do not follow 3xx while carrying the xAI bearer. Bun may strip Authorization
+    // cross-origin but still leave the request on the redirect target.
+    redirect: "manual",
   });
+
+  const redirected = resp.type === "opaqueredirect" || (resp.status >= 300 && resp.status < 400);
+  if (redirected) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    const status = resp.status >= 300 && resp.status < 400 ? resp.status : 302;
+    const err = new Error("xAI images API returned " + status) as Error & { status: number };
+    err.status = status;
+    throw err;
+  }
 
   if (!resp.ok) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }

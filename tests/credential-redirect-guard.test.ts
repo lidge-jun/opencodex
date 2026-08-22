@@ -58,6 +58,7 @@ describe("Bun forwards nonstandard headers across a redirect", () => {
 describe("credential-bearing sidecars refuse to follow redirects", () => {
   const sites: Array<{ file: string; label: string }> = [
     { file: "../src/server/images.ts", label: "images relay" },
+    { file: "../src/images/xai-client.ts", label: "xAI images client" },
     { file: "../src/server/live.ts", label: "live relay" },
     { file: "../src/server/search.ts", label: "search relay" },
     { file: "../src/web-search/executor.ts", label: "web-search sidecar" },

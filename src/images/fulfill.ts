@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { ImageBridgePlan, ImageCallResult } from "./types";
-import { callXaiImages } from "./xai-client";
+import { callXaiImages, resolveXaiAspectRatioLiteral } from "./xai-client";
 import {
   materializeInlineImage,
   downloadImageToArtifact,
@@ -91,11 +91,12 @@ export async function fulfillImageCall(
     typeof obj.image_url === "string" ? obj.image_url : typeof obj.image === "string" ? obj.image : undefined;
   const size = typeof obj.size === "string" ? obj.size : plan.defaultSize;
   const quality = typeof obj.quality === "string" ? obj.quality : plan.defaultQuality;
+  const aspectRatio = resolveXaiAspectRatioLiteral(obj.aspect_ratio);
 
   let result;
   try {
     result = await callXaiImages(
-      { prompt, model: plan.model, n, imageUrl, size, quality },
+      { prompt, model: plan.model, n, imageUrl, size, quality, aspectRatio },
       plan.auth,
       signal,
       plan.timeoutMs,

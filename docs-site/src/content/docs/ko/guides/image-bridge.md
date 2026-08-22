@@ -10,7 +10,7 @@ Codex를 Claude, Gemini, Grok 같은 OpenAI가 아닌 모델로 라우팅하면 
 ## 사전 조건
 
 - 구성에서 `images.bridgeEnabled: true`로 설정해 브리지를 켭니다. 예상치 못한 xAI 요금을 피하려고 기본값은 꺼져 있습니다. 아래 [Configuration](#configuration)을 참고합니다.
-- API 키가 있는 `xai` provider 항목이 필요합니다. 브리지는 처리를 레지스트리의 xAI Images endpoint (`https://api.x.ai/v1`)에 고정하며, 이미지 호출에서는 설정된 `baseUrl` override를 무시합니다. OAuth / `ocx login xai`만으로는 브리지가 활성화되지 않습니다. Grok CLI OAuth transport는 채팅용이며 `/images/*`에는 사용되지 않습니다.
+- API 키가 있는 `xai` provider 항목이 필요합니다. 브리지는 처리를 레지스트리의 xAI Images endpoint (`https://api.x.ai/v1`)에 고정하며, 이미지 호출에서는 설정된 `baseUrl` override를 무시합니다. OAuth / `ocx login xai`만으로는 이 sidecar 루프가 켜지지 않습니다. 같은 `bridgeEnabled` 플래그는 별도의 Codex `/v1/images` relay를 켜서, 내장 `image_gen` 클라이언트가 Grok CLI grant로 Imagine을 호출할 수 있게 합니다. 그 grant(또는 xAI API key)가 없으면 `/v1/images`는 ChatGPT로 넘어가지 않고 오류를 반환합니다. [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen)을 참고하세요.
 
   ```json
   {

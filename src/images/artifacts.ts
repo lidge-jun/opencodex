@@ -295,6 +295,66 @@ function pickPinnedAddress(addresses: PinnedAddress[]): PinnedAddress {
   return addresses.find(a => a.family === 4) ?? addresses[0]!;
 }
 
+/**
+ * HTTPS-only destination check, public-address resolution, and pinned connect.
+ * Callers own the !ok / 3xx policy so image vs video error text can stay distinct.
+ */
+async function connectPublicHttps(
+  url: string,
+  options: {
+    context: string;
+    signal?: AbortSignal;
+    pinnedDownload?: PinnedDownloadFn;
+    maxBytes?: number;
+  },
+): Promise<Response> {
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error(`${options.context} URL is not valid`); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`${options.context} URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  const assessment = assessUrlDestination(url);
+  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
+    throw new Error(`${options.context} URL targets ${assessment.detail}`);
+  }
+  const resolved = await resolvePublicAddresses(url, options.context);
+  const pinned = pickPinnedAddress(resolved.addresses);
+  const download = options.pinnedDownload ?? ((resource, peer, signal) =>
+    pinnedHttpGet(resource, peer, signal, {
+      maxBytes: options.maxBytes,
+      context: `${options.context} download`,
+    }));
+  return download(url, pinned, options.signal);
+}
+
+/**
+ * Fetch a provider-returned image URL after destination-policy + pinned HTTPS.
+ * Redirects are not followed: the default pinned GET returns the status, and this
+ * helper rejects every non-2xx including 3xx. Throws a message that names the
+ * class of failure (scheme / destination kind / download) without reflecting the
+ * target URL.
+ */
+export async function fetchPublicHttpsImage(
+  url: string,
+  options?: {
+    signal?: AbortSignal;
+    pinnedDownload?: PinnedDownloadFn;
+    maxBytes?: number;
+  },
+): Promise<Response> {
+  const resp = await connectPublicHttps(url, {
+    context: "image",
+    signal: options?.signal,
+    pinnedDownload: options?.pinnedDownload,
+    maxBytes: options?.maxBytes,
+  });
+  if (!resp.ok || (resp.status >= 300 && resp.status < 400)) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw new Error("image download failed");
+  }
+  return resp;
+}
+
 export async function downloadImageToArtifact(
   url: string,
   budget?: ImageBudget,
@@ -307,30 +367,11 @@ export async function downloadImageToArtifact(
     return materializeInlineImage(m[2], budget);
   }
 
-  // SSRF protection: validate the provider-returned URL before fetching.
-  // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
-  // Resolve DNS once, then pin that public address for the HTTPS connect (SNI/Host keep
-  // the original hostname) so a rebinding answer cannot retarget the TCP peer.
-  let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
-  }
-  // Reject literal private/loopback/link-local/metadata addresses.
-  const assessment = assessUrlDestination(url);
-  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
-    throw new Error(`image URL targets ${assessment.detail}`);
-  }
-  const resolved = await resolvePublicAddresses(url);
-  const pinned = pickPinnedAddress(resolved.addresses);
-  const download = options?.pinnedDownload ?? pinnedHttpsGet;
-  const resp = await download(url, pinned, signal);
-  if (!resp.ok) {
-    // Custom `pinnedDownload` seams may still return a failed Response with a
-    // live body; cancel it so unread error payloads cannot keep the socket warm.
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    throw new Error("image download failed: " + resp.status);
-  }
+  const resp = await fetchPublicHttpsImage(url, {
+    signal,
+    pinnedDownload: options?.pinnedDownload,
+    maxBytes: MAX_DOWNLOAD_BYTES,
+  });
 
   // Stream the body with a hard byte cap so a missing/lying Content-Length or a
   // compromised CDN URL cannot exhaust memory before the size check runs.
@@ -433,19 +474,11 @@ export async function downloadVideoToArtifact(
     return dest;
   }
 
-  // SSRF protection: same validation as downloadImageToArtifact
-  let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { throw new Error("video URL is not valid"); }
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error(`video URL must use HTTPS, got ${parsedUrl.protocol}`);
-  }
-  const assessment = assessUrlDestination(url);
-  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
-    throw new Error(`video URL targets ${assessment.detail}`);
-  }
-  const resolved = await resolvePublicAddresses(url, "video");
-  const pinned = pickPinnedAddress(resolved.addresses);
-  const resp = await pinnedHttpsGet(url, pinned, signal, { maxBytes: MAX_VIDEO_DOWNLOAD_BYTES });
+  const resp = await connectPublicHttps(url, {
+    context: "video",
+    signal,
+    maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+  });
   if (!resp.ok) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }
     throw new Error("video download failed: " + resp.status);

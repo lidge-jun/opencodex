@@ -14,10 +14,14 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
 
 - **Enable the bridge** by setting `images.bridgeEnabled: true` in your config (it is off by
   default to avoid unexpected xAI charges — see [Configuration](#configuration) below).
-- An `xai` provider entry with an **API key**. The bridge pins fulfillment to the registry xAI
-  Images endpoint (`https://api.x.ai/v1`); any configured `baseUrl` override is ignored for image
-  calls. OAuth / `ocx login xai` alone does **not** arm the bridge (the Grok CLI OAuth transport is
-  chat-oriented and is not used for `/images/*`).
+- An `xai` provider entry with an **API key**. The Responses Image Bridge pins fulfillment to the
+  registry xAI Images endpoint (`https://api.x.ai/v1`); any configured `baseUrl` override is
+  ignored for image calls. OAuth / `ocx login xai` alone does **not** arm this sidecar loop.
+  The same `bridgeEnabled` flag does arm the separate Codex `/v1/images` relay so the built-in
+  `image_gen` client can call Imagine with the Grok CLI grant — see
+  [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen).
+  If that grant (or an xAI API key) is missing, `/v1/images` returns an error instead of
+  falling through to ChatGPT.
 
   ```json
   {

@@ -366,6 +366,62 @@ describe("Responses parser", () => {
 
     expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
     expect(parsed.options.toolChoice).toEqual({ name: "image_gen" });
+    expect(parsed.context.tools?.some(
+      tool => tool.name === "image_gen" && tool.imageGeneration === true,
+    )).toBe(true);
+  });
+
+  test("namespaced ordinary image_gen does not suppress the synthetic root image tool", () => {
+    const parsed = parseRequest({
+      model: "grok-4.6",
+      input: "draw a cat",
+      tools: [
+        {
+          type: "namespace",
+          name: "mcp_pack",
+          tools: [{ type: "function", name: "image_gen", parameters: { type: "object" } }],
+        },
+        { type: "image_generation" },
+      ],
+    });
+
+    const tools = parsed.context.tools ?? [];
+    const namespaced = tools.find(tool => tool.name === "image_gen" && tool.namespace === "mcp_pack");
+    const synthetic = tools.find(tool => tool.name === "image_gen" && !tool.namespace);
+    expect(namespaced).toBeDefined();
+    expect(namespaced?.imageGeneration).toBeUndefined();
+    expect(synthetic?.imageGeneration).toBe(true);
+  });
+
+  test("hosted image_generation then a root ordinary image_gen keeps one synthetic tool", () => {
+    const parsed = parseRequest({
+      model: "grok-4.6",
+      input: "draw a cat",
+      tools: [
+        { type: "image_generation" },
+        { type: "function", name: "image_gen", parameters: { type: "object" } },
+      ],
+    });
+
+    const root = (parsed.context.tools ?? []).filter(tool => tool.name === "image_gen" && !tool.namespace);
+    expect(root).toHaveLength(1);
+    expect(root[0]?.imageGeneration).toBe(true);
+  });
+
+  test("hosted image_generation then a root custom image_gen keeps one synthetic tool", () => {
+    const parsed = parseRequest({
+      model: "grok-4.6",
+      input: "draw a cat",
+      tools: [
+        { type: "image_generation" },
+        { type: "custom", name: "image_gen" },
+      ],
+    });
+
+    const root = (parsed.context.tools ?? []).filter(tool => tool.name === "image_gen" && !tool.namespace);
+    expect(root).toHaveLength(1);
+    expect(root[0]?.imageGeneration).toBe(true);
+    expect(root[0]?.freeform).toBeUndefined();
   });
 
   test("preserves requested service_tier for request logging", () => {
