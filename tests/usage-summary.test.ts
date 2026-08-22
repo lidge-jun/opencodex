@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { parseRange, parseUsageSurface, summarizeUsage } from "../src/usage/summary";
+import {
+  MAX_USAGE_MODEL_BREAKDOWN_ROWS,
+  USAGE_RANGES,
+  USAGE_SURFACES,
+  parseRange,
+  parseUsageSurface,
+  rangeWindow,
+  summarizeUsage,
+} from "../src/usage/summary";
 import type { PersistedUsageEntry } from "../src/usage/log";
 
 const FIXED_NOW = Date.UTC(2026, 5, 28, 12, 0, 0);
@@ -35,6 +43,127 @@ describe("parseRange", () => {
     expect(parseRange(undefined)).toBe("30d");
     expect(parseRange("90d")).toBe("30d");
     expect(parseRange("")).toBe("30d");
+  });
+});
+
+describe("today range (CLI cost query)", () => {
+  test("accepts today and normalises the 1d alias to it", () => {
+    expect(parseRange("today")).toBe("today");
+    // `1d` deliberately collapses instead of becoming a second union member:
+    // a second member would need its own cache slot and grid arm for no gain.
+    expect(parseRange("1d")).toBe("today");
+    expect(parseRange("2d")).toBe("30d");
+  });
+
+  test("today is bounded by local midnight, never the all-history fallthrough", () => {
+    // rangeWindow has no exhaustive switch — its final return is the `all`
+    // window. A today member that failed to reach its own branch would compile
+    // clean and silently report all-time history, so assert since is bounded
+    // rather than only asserting the day count.
+    for (const at of [
+      new Date(2026, 7, 22, 0, 0, 0).getTime(),
+      new Date(2026, 7, 22, 12, 34, 56).getTime(),
+      new Date(2026, 7, 22, 23, 59, 59).getTime(),
+    ]) {
+      const window = rangeWindow("today", at);
+      expect(window.since).not.toBeNull();
+      expect(window.days).toBe(1);
+      expect(new Date(window.since!).getHours()).toBe(0);
+      expect(new Date(window.since!).getDate()).toBe(new Date(at).getDate());
+      expect(window.since).toBeLessThanOrEqual(at);
+    }
+  });
+
+  test("today excludes yesterday's entries", () => {
+    const midday = new Date(2026, 7, 22, 12, 0, 0).getTime();
+    const yesterday = new Date(2026, 7, 21, 12, 0, 0).getTime();
+    const entries = [
+      entry({ ts: midday, requestId: "today-1", usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 2 } }),
+      entry({ ts: yesterday, requestId: "yday-1", usageStatus: "reported", usage: { inputTokens: 99, outputTokens: 9 } }),
+    ];
+    const sum = summarizeUsage(entries, "today", midday);
+    expect(sum.summary.requests).toBe(1);
+    expect(sum.days).toHaveLength(1);
+    expect(sum.days[0]!.requests).toBe(1);
+  });
+});
+
+describe("day-level estimated cost", () => {
+  const at = Date.UTC(2026, 5, 28, 10, 0, 0);
+
+  test("a day row equals the sum of its model rows, and the window equals the totals", () => {
+    const entries = [
+      entry({ ts: at, requestId: "r1", provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 1_000, outputTokens: 100 } }),
+      entry({ ts: at + 1, requestId: "r2", provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 2_000, outputTokens: 200 } }),
+    ];
+    const sum = summarizeUsage(entries, "30d", at);
+    const day = sum.days.find(d => d.requests === 2);
+    expect(day).toBeDefined();
+    expect(day!.estimatedCostUsd).toBeGreaterThan(0);
+
+    const modelSum = day!.models.reduce((acc, m) => acc + m.estimatedCostUsd, 0);
+    expect(day!.estimatedCostUsd).toBeCloseTo(modelSum, 10);
+
+    const windowSum = sum.days.reduce((acc, d) => acc + d.estimatedCostUsd, 0);
+    expect(windowSum).toBeCloseTo(sum.summary.estimatedCostUsd, 10);
+  });
+
+  test("combo cost partitions across attempts instead of double-counting the parent", () => {
+    const entries = [entry({
+      ts: at,
+      requestId: "combo-1",
+      provider: "combo",
+      model: "combo-model",
+      usageStatus: "reported",
+      attempts: [
+        { provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: { inputTokens: 1_000, outputTokens: 100 } },
+        { provider: "openai", model: "gpt-5.5-mini", usageStatus: "reported", usage: { inputTokens: 500, outputTokens: 50 } },
+      ],
+    } as Partial<PersistedUsageEntry> & { ts: number })];
+    const sum = summarizeUsage(entries, "30d", at);
+    const day = sum.days.find(d => d.requests === 1);
+    expect(day).toBeDefined();
+    const modelSum = day!.models.reduce((acc, m) => acc + m.estimatedCostUsd, 0);
+    expect(day!.estimatedCostUsd).toBeCloseTo(modelSum, 10);
+    expect(day!.estimatedCostUsd).toBeCloseTo(sum.summary.estimatedCostUsd, 10);
+  });
+
+  test("the day overflow row sums the cost of the models it collapsed", () => {
+    // Past MAX_USAGE_MODEL_BREAKDOWN_ROWS the tail collapses into one "other"
+    // row. If that aggregation drops cost, every breakdown under the cap still
+    // looks right — which is every test one would write by hand.
+    const total = MAX_USAGE_MODEL_BREAKDOWN_ROWS + 20;
+    // Rows sort by request count, so the priced model must land in the TAIL to
+    // prove the aggregation sums cost rather than merely carrying the head.
+    // One request each keeps the order stable and puts the priced row last.
+    const entries = Array.from({ length: total }, (_, i) => entry({
+      ts: at + i,
+      requestId: `overflow-${i}`,
+      provider: "openai",
+      model: i === total - 1 ? "gpt-5.5" : `unpriced-variant-${String(i).padStart(4, "0")}`,
+      usageStatus: "reported",
+      usage: { inputTokens: 1_000, outputTokens: 100 },
+    }));
+    const sum = summarizeUsage(entries, "30d", at + total);
+    const day = sum.days.find(d => d.requests === total);
+    expect(day).toBeDefined();
+    expect(day!.models).toHaveLength(MAX_USAGE_MODEL_BREAKDOWN_ROWS);
+
+    const other = day!.models.find(m => m.model === "other");
+    expect(other).toBeDefined();
+    expect(other!.estimatedCostUsd).toBeGreaterThan(0);
+
+    const modelSum = day!.models.reduce((acc, m) => acc + m.estimatedCostUsd, 0);
+    expect(day!.estimatedCostUsd).toBeCloseTo(modelSum, 10);
+  });
+});
+
+describe("canonical range and surface constants", () => {
+  test("the exported members match what the parsers accept", () => {
+    expect([...USAGE_RANGES]).toEqual(["today", "7d", "30d", "all"]);
+    expect([...USAGE_SURFACES]).toEqual(["all", "codex", "claude", "grok"]);
+    for (const range of USAGE_RANGES) expect(parseRange(range)).toBe(range);
+    for (const surface of USAGE_SURFACES) expect(parseUsageSurface(surface)).toBe(surface);
   });
 });
 
@@ -521,7 +650,7 @@ describe("summarizeUsage", () => {
     expect(sum.models).toHaveLength(1);
     expect(sum.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 });
     expect(sum.days.find(day => day.requests === 4)?.models).toEqual([
-      { provider: "openai", model: "gpt-5.5", requests: 4, attemptCount: 4, totalTokens: 14 },
+      { provider: "openai", model: "gpt-5.5", requests: 4, attemptCount: 4, totalTokens: 14, estimatedCostUsd: 0.00017 },
     ]);
   });
 
@@ -578,8 +707,8 @@ describe("summarizeUsage", () => {
     ]);
     expect(sum.providers.some(provider => provider.provider === "combo")).toBe(false);
     expect(sum.days.find(day => day.requests === 1)?.models).toEqual([
-      { provider: "a", model: "model-a", requests: 1, attemptCount: 1, totalTokens: 100 },
-      { provider: "b", model: "model-b", requests: 1, attemptCount: 1, totalTokens: 12 },
+      { provider: "a", model: "model-a", requests: 1, attemptCount: 1, totalTokens: 100, estimatedCostUsd: 0 },
+      { provider: "b", model: "model-b", requests: 1, attemptCount: 1, totalTokens: 12, estimatedCostUsd: 0 },
     ]);
   });
 
