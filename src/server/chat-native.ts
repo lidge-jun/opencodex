@@ -42,6 +42,7 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
+import { warnRetainedModel404Once } from "../codex/catalog/provider-fetch";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 
 type Rec = Record<string, unknown>;
@@ -295,13 +296,16 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
           : response.status >= 500 ? "server_error" : "invalid_request_error"),
       message,
     );
-    if (isCyberPolicyCode(upstreamCode)) {
-      classified.code = CYBER_POLICY_ERROR_CODE;
-      classified.type = "invalid_request_error";
-    } else if (upstreamCode === "model_not_found") {
-      classified.code = "model_not_found";
-      classified.type = "invalid_request_error";
-    } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
+   if (response.status === 404 || upstreamCode === "model_not_found") {
+     warnRetainedModel404Once(route.providerName, route.modelId);
+   }
+   if (isCyberPolicyCode(upstreamCode)) {
+     classified.code = CYBER_POLICY_ERROR_CODE;
+     classified.type = "invalid_request_error";
+   } else if (upstreamCode === "model_not_found") {
+     classified.code = "model_not_found";
+     classified.type = "invalid_request_error";
+   } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400 : response.status;

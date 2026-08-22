@@ -128,6 +128,8 @@ export interface CatalogModel {
   /** Optional provider-specific copy for the advertised Fast tier. */
   fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;
+  /** Whether this model was retained in the catalog via retainModels without live discovery confirmation. */
+  retainedWithoutDiscovery?: boolean;
   /**
    * Codex tool calling mode for this routed model.
    * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only".

@@ -266,6 +266,12 @@ export interface OcxProviderConfig {
    * full set so the user can pick). See devlog issue_052_provider-model-allowlist.
    */
   selectedModels?: string[];
+  /**
+   * Models that should be retained in the catalog when configured in `models` even if live discovery omits them.
+   * Useful when an upstream account has unlisted or upcoming models (e.g. unprovisioned
+   * Antigravity models or regional previews). Processed by mergeConfiguredModelsIntoLiveCatalog.
+   */
+  retainModels?: string[];
   /** Provider-wide fallback when context metadata is absent; otherwise caps the reported window. */
   contextWindow?: number;
   /** Per-model fallback when context metadata is absent; otherwise caps the reported window. */

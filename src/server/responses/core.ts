@@ -8,6 +8,7 @@ import {
 } from "./responses-field-backfill";
 import { checkInputAdmission } from "./input-admission";
 import { nativeContextLimits } from "../../codex/catalog";
+import { warnRetainedModel404Once } from "../../codex/catalog/provider-fetch";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
   multiAgentGuidanceEnabled,
@@ -3535,6 +3536,8 @@ async function handleResponsesInner(
       });
     }
     if (!upstreamResponse.ok) {
+      // Retained-but-unprovisioned models surface here as upstream 404; explain once.
+      if (upstreamResponse.status === 404) warnRetainedModel404Once(route.providerName, route.modelId);
       if (options.comboAttempt) {
         // No pre-read guard here: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself and already threads the abort signal through its own read,
@@ -4816,9 +4819,10 @@ async function handleResponsesInner(
       }
       break;
     }
-    if (!upstreamResponse.ok) {
-      if (options.comboAttempt) {
-        // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
+   if (!upstreamResponse.ok) {
+     if (upstreamResponse.status === 404) warnRetainedModel404Once(route.providerName, route.modelId);
+     if (options.comboAttempt) {
+       // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.

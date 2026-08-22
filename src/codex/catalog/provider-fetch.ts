@@ -870,6 +870,8 @@ export function reconcileProviderFetchWarnings(generation: number): number {
   if (generation <= lastWarningReconciledGeneration) return 0;
   const removed = lastDropWarnSignature.size;
   lastDropWarnSignature.clear();
+  retainedWithoutDiscoveryRefs.clear();
+  warnedRetained404Refs.clear();
   lastWarningReconciledGeneration = generation;
   return removed;
 }
@@ -900,6 +902,42 @@ export function warnDroppedConfiguredIdsOnce(name: string, droppedConfiguredIds:
   console.warn(
     `[opencodex] Provider model discovery for "${name}" omitted configured model ids; dropping them from the authoritative live catalog: ${droppedConfiguredIds.join(", ")}.`,
   );
+}
+
+/**
+ * Model ids on each provider that `retainModels` kept in the catalog even though live
+ * discovery did not report them. Used by dispatch error paths to explain a later
+ * upstream 404 (model_not_found) instead of letting the operator blame the proxy.
+ */
+const retainedWithoutDiscoveryRefs = new Map<string, Set<string>>();
+const warnedRetained404Refs = new Set<string>();
+
+/**
+ * Emit a one-shot warning when a model retained via `retainModels` is rejected by the
+ * upstream (HTTP 404 / model_not_found). Only fires for models that were actually
+ * retained without live-discovery confirmation, and only once per provider/model.
+ */
+export function warnRetainedModel404Once(providerName: string, modelId: string): void {
+  const refs = retainedWithoutDiscoveryRefs.get(providerName);
+  if (!refs || !refs.has(modelId)) return;
+  const signature = `${providerName}/${modelId}`;
+  if (warnedRetained404Refs.has(signature)) return;
+  warnedRetained404Refs.add(signature);
+  console.warn(
+    `[opencodex] Model "${modelId}" on provider "${providerName}" is retained via retainModels but upstream returned 404/model_not_found; the account or project may not be provisioned for it. Remove it from retainModels if it should not be callable.`,
+  );
+}
+
+/** Test-only helper: check whether a provider model is currently tracked as retained without discovery. */
+export function isRetainedModelWithoutDiscoveryForTests(providerName: string, modelId: string): boolean {
+  return retainedWithoutDiscoveryRefs.get(providerName)?.has(modelId) === true;
+}
+
+/** Test-only helper: reset retained model warning states and reconciled generation. */
+export function resetRetainedModelWarningsForTests(): void {
+  retainedWithoutDiscoveryRefs.clear();
+  warnedRetained404Refs.clear();
+  lastWarningReconciledGeneration = 0;
 }
 
 /**
@@ -1125,20 +1163,44 @@ async function fetchProviderModelsWithAuth(
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
   const { name, provider: prov, discovery, request } = captured;
-  const observed = (
-    models: CatalogModel[],
-    state: CatalogGatherProviderModelOutcome["state"],
-  ): ProviderModelsResult => ({ models, outcome: { provider: name, state } });
   // Capture before any credential refresh or outbound await. OAuth account changes clear this
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
+  function syncRetainedModelDiagnostics(models: readonly CatalogModel[]): void {
+    if (prov.liveModels === false || !Array.isArray(prov.retainModels) || prov.retainModels.length === 0) {
+      retainedWithoutDiscoveryRefs.delete(name);
+      return;
+    }
+    const retainSet = new Set(prov.retainModels);
+    const retainedIds = models
+      .filter(m => m.retainedWithoutDiscovery === true && retainSet.has(m.id))
+      .map(m => m.id);
+    if (retainedIds.length > 0) {
+      retainedWithoutDiscoveryRefs.set(name, new Set(retainedIds));
+    } else {
+      retainedWithoutDiscoveryRefs.delete(name);
+    }
+  }
+  const observed = (
+    models: CatalogModel[],
+    state: CatalogGatherProviderModelOutcome["state"],
+  ): ProviderModelsResult => {
+    if (isCurrentCacheGeneration()) {
+      syncRetainedModelDiagnostics(models);
+    }
+    return { models, outcome: { provider: name, state } };
+  };
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
-  const configuredIds = seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : (prov.models ?? []);
+  const configuredIds = Array.from(new Set([
+    ...(seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : []),
+    ...(prov.models ?? []),
+    ...(prov.retainModels ?? []),
+  ]));
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
@@ -1233,16 +1295,16 @@ async function fetchProviderModelsWithAuth(
       ...(cursorFetch ? { fetch: cursorFetch } : {}),
     });
     if (liveResult.ok) {
-      const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
-      const result = available.length > 0 ? available : configured;
-      // Cache the discovery-filtered roster without combo retention so a later
-      // gather can re-apply the current capture's retain set on read.
+     const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
+     const result = available.length > 0 ? available : configured;
+     // Cache the discovery-filtered roster without combo retention so a later
+     // gather can re-apply the current capture's retain set on read.
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, liveResult.models.length);
-      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+      return observed(withConfiguredRetention(result, { warnDrops: true }), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
       markModelsFetchFailure(name);
@@ -1389,10 +1451,10 @@ async function fetchProviderModelsWithAuth(
         provider: name,
         // CCA only exposes a numeric thinking budget. Until the adapter owns an exact Codex
         // effort-to-wire mapping for a newly discovered model, do not advertise a false ladder.
-        reasoningEfforts: [],
-        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-        ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap));
+       reasoningEfforts: [],
+       ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+       ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
+     }, contextCap));
       const forCache = withConfiguredRetention(live, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
@@ -1402,7 +1464,7 @@ async function fetchProviderModelsWithAuth(
         cacheGeneration,
       });
       markProviderDiscoveryOk(name, live.length);
-      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+      return observed(withConfiguredRetention(live, { warnDrops: true }), "authoritative");
     }
     const extracted = extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {
@@ -1433,15 +1495,15 @@ async function fetchProviderModelsWithAuth(
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
     // `live`; otherwise configured entries would be reported as discovered ones.
-    const liveModelCount = live.length;
-    // Dated-release aliases + configured retention (compat allow-list, combo targets,
-    // Vertex default). Cache without combo retention so a later gather re-applies the
-    // current capture's retain set on read (warm-cache OCX-111 / #1308).
+   const liveModelCount = live.length;
+   // Dated-release aliases + configured retention (compat allow-list, combo targets,
+   // Vertex default). Cache without combo retention so a later gather re-applies the
+   // current capture's retain set on read (warm-cache OCX-111 / #1308).
     const forCache = withConfiguredRetention(live, { retainComboTargets: false });
-    const returned = withConfiguredRetention(forCache, { warnDrops: true });
-    const droppedConfiguredIds = configured
-      .map(model => model.id)
-      .filter(id => !returned.some(model => model.id === id));
+    const returned = withConfiguredRetention(live, { warnDrops: true });
+   const droppedConfiguredIds = configured
+     .map(model => model.id)
+     .filter(id => !returned.some(model => model.id === id));
     if (returned.length === 0 && name !== OPENAI_API_PROVIDER_ID) {
       console.warn(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
@@ -1517,7 +1579,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   contextCap?: number;
   seedVertexDefault?: boolean;
   retainComboTargets?: boolean;
-}): { models: CatalogModel[]; droppedConfiguredIds: string[] } {
+}): { models: CatalogModel[]; droppedConfiguredIds: string[]; retainedConfiguredIds: string[] } {
   const {
     name,
     provider: prov,
@@ -1530,6 +1592,8 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   const out = [...opts.models];
   const present = new Set(out.map(model => model.id));
   const droppedConfiguredIds: string[] = [];
+  const retainedConfiguredIds: string[] = [];
+  const providerRetainModels = Array.isArray(prov.retainModels) ? new Set(prov.retainModels) : undefined;
   for (const candidate of configured) {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
@@ -1542,14 +1606,17 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
       seedVertexDefault === true
       || shouldRetainConfiguredProviderModel(name, candidate.id)
       || (retainComboTargets && retainConfiguredModelIds?.has(candidate.id) === true)
+      || (providerRetainModels?.has(candidate.id) === true)
     ) {
-      out.push(candidate);
+      const isRetainedFromConfig = providerRetainModels?.has(candidate.id) === true;
+      out.push(isRetainedFromConfig ? { ...candidate, retainedWithoutDiscovery: true } : candidate);
       present.add(candidate.id);
+      if (isRetainedFromConfig) retainedConfiguredIds.push(candidate.id);
       continue;
     }
     droppedConfiguredIds.push(candidate.id);
   }
-  return { models: out, droppedConfiguredIds };
+  return { models: out, droppedConfiguredIds, retainedConfiguredIds };
 }
 
 export function filterCatalogVisibleModels(
