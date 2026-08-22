@@ -47,7 +47,10 @@ export function resolveGithubCopilotTransport(
     ? validateCopilotApiBaseUrl(apiBaseUrl)
       ?? validateCopilotApiBaseUrl(provider.baseUrl)
       ?? GITHUB_COPILOT_DEFAULT_API_BASE
-    : apiBaseUrl?.trim() || provider.baseUrl || GITHUB_COPILOT_DEFAULT_API_BASE;
+    // A credential endpoint is OAuth routing metadata, not an authorization for a
+    // key-auth provider to leave its explicitly configured destination. In particular,
+    // a persisted Copilot credential may outlive a later key-auth provider edit.
+    : provider.baseUrl || GITHUB_COPILOT_DEFAULT_API_BASE;
   return {
     ...provider,
     baseUrl,
