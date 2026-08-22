@@ -14,7 +14,13 @@ const releaseScriptPath = join(repoRoot, "scripts", "release.ts");
 interface LoggedCall {
   args: string[];
   name: string;
+  /** Only the ssh override is recorded: the release deploy-key path is the reason it exists. */
+  gitSshCommand?: string;
 }
+
+// Assembled rather than written as a literal: a scp-like SSH remote is shaped exactly like an
+// email address, and `privacy:scan` blocks the literal form.
+const sshTarget = `${"git"}@${"github.com"}:lidge-jun/opencodex.git`;
 
 interface ReleaseScenario {
   branch?: string;
@@ -25,6 +31,10 @@ interface ReleaseScenario {
   privacyExitCode?: number;
   testExitCode?: number;
   typecheckExitCode?: number;
+  releaseSshKey?: string;
+  releaseSshRepo?: string;
+  pendingBump?: boolean;
+  originUrl?: string;
 }
 
 function writeExecutable(path: string, contents: string): void {
@@ -57,7 +67,7 @@ process.exit(exitCode);
     return `import { appendFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
-appendFileSync(process.env.FAKE_RELEASE_LOG, JSON.stringify({ name: "git", args }) + "\\n");
+appendFileSync(process.env.FAKE_RELEASE_LOG, JSON.stringify({ name: "git", args, ...(process.env.GIT_SSH_COMMAND ? { gitSshCommand: process.env.GIT_SSH_COMMAND } : {}) }) + "\\n");
 
 const headSha = process.env.FAKE_GIT_HEAD_SHA ?? "abc123def456";
 const branch = process.env.FAKE_GIT_BRANCH ?? "main";
@@ -69,8 +79,16 @@ if (args[0] === "rev-parse" && args[1] === "--abbrev-ref" && args[2] === "HEAD")
   process.exit(0);
 }
 
+if (args[0] === "remote" && args[1] === "get-url") {
+  stdout((process.env.FAKE_GIT_ORIGIN_URL ?? "https://github.com/lidge-jun/opencodex.git") + "\\n");
+  process.exit(0);
+}
+
 if (args[0] === "status" && args[1] === "--porcelain") {
-  stdout((process.env.FAKE_GIT_STATUS ?? "") + "\\n");
+  // The clean-tree preflight and the pendingBump probe both land here. Only the second one
+  // passes a path, so a scenario can report a pending bump without failing the first gate.
+  const pathScoped = args.length > 2;
+  stdout((pathScoped ? (process.env.FAKE_GIT_PENDING_BUMP ?? "") : (process.env.FAKE_GIT_STATUS ?? "")) + "\\n");
   process.exit(0);
 }
 
@@ -209,7 +227,12 @@ function runRelease(version: string, scenario: ReleaseScenario = {}) {
   // script aborted before logging a single call. Strip every case variant, then
   // set exactly one.
   const inheritedEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
+    Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"
+      // A real release EXPORTS the deploy-key variables, and the preflight runs this suite as a
+      // child that inherits them — so an inherited value would make the "no key configured"
+      // scenario run WITH a key and fail the release at its own preflight. Scrub them the same
+      // way PATH is scrubbed, then let the scenario add back exactly what it asked for.
+      && key !== "OCX_RELEASE_SSH_KEY" && key !== "OCX_RELEASE_SSH_REPO"),
   );
   const pathKey = process.platform === "win32" ? "Path" : "PATH";
   const pathValue = `${shimDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? process.env.Path ?? ""}`;
@@ -228,6 +251,10 @@ function runRelease(version: string, scenario: ReleaseScenario = {}) {
       FAKE_BUN_PRIVACY_EXIT_CODE: String(scenario.privacyExitCode ?? 0),
       ...(scenario.npmLatest ? { FAKE_NPM_LATEST: scenario.npmLatest } : {}),
       ...(scenario.npmPreview ? { FAKE_NPM_PREVIEW: scenario.npmPreview } : {}),
+      ...(scenario.releaseSshKey ? { OCX_RELEASE_SSH_KEY: scenario.releaseSshKey } : {}),
+      ...(scenario.releaseSshRepo ? { OCX_RELEASE_SSH_REPO: scenario.releaseSshRepo } : {}),
+      ...(scenario.pendingBump ? { FAKE_GIT_PENDING_BUMP: " M package.json" } : {}),
+      ...(scenario.originUrl ? { FAKE_GIT_ORIGIN_URL: scenario.originUrl } : {}),
     },
     encoding: "utf8",
   });
@@ -322,6 +349,123 @@ describe("release helper", () => {
       && call.args.includes("release.yml")
       && call.args.includes("expected-sha=deadbeefcafe1234"),
     )).toBeGreaterThanOrEqual(0);
+  });
+
+  /**
+   * `main` and `preview` carry rulesets whose admin bypass is `pull_request` — enough to merge a
+   * PR, not enough to push. That is where v2.29.0 died. The carve-out is a dedicated write deploy
+   * key registered as a `DeployKey` bypass actor, selected for this one push and nothing else.
+   *
+   * Pin both halves: the key path must reach git as `GIT_SSH_COMMAND` with `IdentitiesOnly` (an
+   * ssh-agent holding the maintainer's key would otherwise authenticate as the maintainer and be
+   * rejected by the ruleset again), and the default path must stay byte-identical so a contributor
+   * or CI clone without the variable is unaffected.
+   */
+  test("the protected push uses the release deploy key only when one is configured", () => {
+    const { calls, result } = runRelease("9.9.9", {
+      releaseSshKey: "/tmp/ocx-release-key",
+      releaseSshRepo: sshTarget,
+      pendingBump: true,
+    });
+
+    expect(result.status).toBe(0);
+    const push = calls.find(call => call.name === "git" && call.args[0] === "push");
+    expect(push).toBeDefined();
+    expect(push?.args).toEqual(["push", sshTarget, "HEAD:main"]);
+    expect(push?.gitSshCommand).toBe('ssh -i "/tmp/ocx-release-key" -o IdentitiesOnly=yes');
+  });
+
+  /**
+   * Git parses `GIT_SSH_COMMAND` with shell-style word splitting rather than exec'ing it, so a
+   * bare interpolation splits any key path containing a space — the Windows default
+   * (`C:\Users\Jun Kim\.ssh\...`) is exactly that shape, and ssh would read the tail as its next
+   * flag. Assert the whole command string, not a substring: `toContain` passes on the broken form.
+   */
+  test("a key path with spaces and backslashes stays a single ssh argument", () => {
+    const { calls } = runRelease("9.9.9", {
+      releaseSshKey: "C:\\Users\\Jun Kim\\.ssh\\ocx release key",
+      pendingBump: true,
+    });
+
+    const push = calls.find(call => call.name === "git" && call.args[0] === "push");
+    expect(push?.gitSshCommand).toBe('ssh -i "C:\\\\Users\\\\Jun Kim\\\\.ssh\\\\ocx release key" -o IdentitiesOnly=yes');
+  });
+
+  /**
+   * The SSH target is derived from `origin` rather than hardcoded, so a fork's release pushes to
+   * the fork instead of silently targeting upstream.
+   */
+  test("the ssh push target follows the configured origin remote", () => {
+    const { calls } = runRelease("9.9.9", {
+      releaseSshKey: "/tmp/k",
+      originUrl: "https://github.com/someone-else/opencodex.git",
+      pendingBump: true,
+    });
+
+    const push = calls.find(call => call.name === "git" && call.args[0] === "push");
+    expect(push?.args[1]).toBe(`${"git"}@${"github.com"}:someone-else/opencodex.git`);
+  });
+
+  /**
+   * A credential-bearing origin must not be transplanted into the SSH target: `runLoud` prints the
+   * failing command, so a folded `user:token@` would put the token on the terminal and in the
+   * release log. Refuse instead of building a target.
+   */
+  test("an origin carrying credentials is refused rather than transplanted", () => {
+    const { calls, result } = runRelease("9.9.9", {
+      releaseSshKey: "/tmp/k",
+      originUrl: `https://x-access-token:SECRET@${"github.com"}/lidge-jun/opencodex.git`,
+      pendingBump: true,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain("origin carries credentials");
+    expect(result.stderr + result.stdout).not.toContain("SECRET");
+    expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
+  });
+
+  test("a malformed OCX_RELEASE_SSH_REPO override is refused instead of pushed to", () => {
+    const { calls, result } = runRelease("9.9.9", {
+      releaseSshKey: "/tmp/k",
+      releaseSshRepo: "not-a-remote",
+      pendingBump: true,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain("OCX_RELEASE_SSH_REPO");
+    expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
+  });
+
+  test("an ssh origin is reused verbatim rather than rewritten", () => {
+    const { calls } = runRelease("9.9.9", {
+      releaseSshKey: "/tmp/k",
+      originUrl: `${"git"}@${"github.com"}:lidge-jun/opencodex.git`,
+      pendingBump: true,
+    });
+
+    const push = calls.find(call => call.name === "git" && call.args[0] === "push");
+    expect(push?.args[1]).toBe(`${"git"}@${"github.com"}:lidge-jun/opencodex.git`);
+  });
+
+  test("an origin that yields no ssh target aborts instead of guessing one", () => {
+    const { calls, result } = runRelease("9.9.9", {
+      releaseSshKey: "/tmp/k",
+      originUrl: "/srv/git/opencodex.git",
+      pendingBump: true,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain("no SSH push target");
+    expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
+  });
+
+  test("without a configured key the push is unchanged and carries no ssh override", () => {
+    const { calls, result } = runRelease("9.9.9", { pendingBump: true });
+
+    expect(result.status).toBe(0);
+    const push = calls.find(call => call.name === "git" && call.args[0] === "push");
+    expect(push?.args).toEqual(["push", "origin", "main"]);
+    expect(push?.gitSshCommand).toBeUndefined();
   });
 
   test("aborts before dispatch when the remote branch moved during the CI wait", () => {

@@ -58,12 +58,12 @@ ocx start                            # or `ocx service` to run it in the backgro
 ```
 
 <details>
-<summary>Install from source (latest dev, Bun canary)</summary>
+<summary>Install from source (latest dev)</summary>
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun upgrade --canary
+curl -fsSL https://bun.sh/install | bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
 ~/.bun/bin/bun run src/cli/index.ts start
@@ -72,13 +72,13 @@ cd opencodex && ~/.bun/bin/bun install
 **Windows (PowerShell):**
 
 ```powershell
-irm bun.sh/install.ps1 | iex; bun upgrade --canary
+irm bun.sh/install.ps1 | iex
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
 bun run src/cli/index.ts start
 ```
 
-Source install runs the latest `dev` branch with Bun canary. Memory ownership
+Source install runs the latest `dev` branch. Memory ownership
 patches, runtime GC improvements, and unreleased fixes are available here before
 they reach the npm package.
 

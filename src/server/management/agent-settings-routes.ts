@@ -1073,13 +1073,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const section = body[field];
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
-      // The widened union applies to the WEB-SEARCH override only (roadmap 060).
-      // Vision keeps its two-backend contract — accepting a wider id there would
-      // persist a backend the vision resolver reads as unset, silently activating
-      // a backend the operator never chose (review F1).
+      // Both overrides now speak their full unions (roadmap 060 web, 170
+      // vision revised). Vision's third arm is "routed" (loopback through the
+      // proxy's own router), never exa: exa is not an LLM, and accepting an
+      // unknown literal would persist a backend the vision resolver reads as
+      // unset (review F1's failure mode).
       const allowedBackends = field === "webSearchSidecar"
         ? ["openai", "anthropic", "xai", "gemini", "exa"]
-        : ["openai", "anthropic"];
+        : ["openai", "anthropic", "routed"];
       if (section.backend !== undefined && section.backend !== null
         && !allowedBackends.includes(section.backend as string)) {
         return jsonResponse({ error: `${field}.backend must be ${allowedBackends.join(", ")}, or null` }, 400);
@@ -1094,8 +1095,18 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const requested = section.model;
         const candidates = await visionCandidateRows(config);
         const hint = section.backend === "anthropic" || section.backend === "openai"
+          || section.backend === "routed"
           ? section.backend
           : config.claudeCode?.visionSidecar?.backend;
+        // Same coherence rule as /api/sidecar-settings (roadmap 170 r2).
+        const effectiveBackend = hint ?? "openai";
+        const namespaced = requested.includes("/");
+        if (namespaced && effectiveBackend !== "routed") {
+          return jsonResponse({ error: `visionSidecar.model "${requested}" is provider-namespaced; it requires backend "routed"` }, 400);
+        }
+        if (!namespaced && effectiveBackend === "routed") {
+          return jsonResponse({ error: `visionSidecar.backend "routed" requires a provider-namespaced model ("provider/model"); got "${requested}"` }, 400);
+        }
         if (visionDescriberIsProvablyBlind(config, requested, candidates, hint)) {
           return jsonResponse(visionDescriberRejection("visionSidecar.model", requested, config, candidates), 400);
         }

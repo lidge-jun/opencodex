@@ -284,6 +284,15 @@ les paramètres de modèle propres à Cursor :
 Les variantes explicites envoient le modèle `default` de Cursor avec son paramètre `optimization`, ce qui préserve la
 sélection à chaque requête. Elles restent disponibles lorsque la découverte en direct omet `default`.
 
+### Vision
+
+La vision native Cursor utilise `SelectedImage` (plafond JPEG souple + `blobIdWithData`) pour les modèles
+qui voient les images nativement — Claude, Gemini, GPT, Kimi et Grok notamment — à partir des images
+`data:` du tour actif uniquement. Les images des tours précédents rejouent comme marqueurs texte
+`[image attached]` ; les images distantes ou indécodables deviennent des marqueurs d’omission.
+Auto, la famille Composer et GLM (`glm-5.2`, `glm-5.3`) restent
+sur la liste curatée `noVisionModels` et passent par le sidecar de description d'images.
+
 Les outils locaux pilotés par le serveur Cursor sont désactivés par défaut. Codex continue d'utiliser ses propres outils tels que
 `apply_patch` et `exec_command` avec sa propre politique d'approbation et de bac à sable :
 
@@ -413,7 +422,7 @@ avec un contexte de `922000` et une entrée maximale de `922000` ; OpenRouter i
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",
-      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
+      "noVisionModels": ["glm-5.2", "glm-5.3", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
     }
   },
   "subagentModels": ["anthropic/claude-opus-5", "ollama-cloud/glm-5.2"],

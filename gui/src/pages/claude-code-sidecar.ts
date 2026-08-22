@@ -4,12 +4,12 @@
  * trimmed model is present.
  */
 
-import type { SidecarBackend, SidecarOverride } from "./claude-manual-env";
+import type { SidecarOverride, VisionOverrideBackend } from "./claude-manual-env";
 
-export type SidecarSelectValue = "inherit" | "auto" | SidecarBackend;
+export type SidecarSelectValue = "inherit" | "auto" | VisionOverrideBackend;
 
 export type PersistedSidecarOverride = {
-  backend: SidecarBackend | null;
+  backend: VisionOverrideBackend | null;
   model: string;
 };
 

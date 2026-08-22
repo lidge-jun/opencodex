@@ -133,7 +133,13 @@ describe("GitHub Actions hardening", () => {
       expect(`${name}:${typeof job?.["timeout-minutes"]}`).toBe(`${name}:number`);
     }
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
-    expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
+    // Bun setup moved into .github/actions/setup-project-bun so the runtime
+    // version has a single source (package.json). The SHA pin still has to
+    // exist — it just lives in the composite action now, and this workflow
+    // must reference that local action rather than a third-party one.
+    expect(workflow).toContain("./.github/actions/setup-project-bun");
+    expect(await readText(".github/actions/setup-project-bun/action.yml"))
+      .toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).toContain("bun test --isolate tests");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
@@ -161,8 +167,9 @@ describe("GitHub Actions hardening", () => {
     // keys closes all three — a hardcoded list rots on the next job added.
     const gate = ci.jobs?.ci as { if?: unknown; needs?: string[] } | undefined;
     expect(gate?.if).toBe("always()");
+    const ungated = new Set(["ci"]);
     expect([...(gate?.needs ?? [])].sort())
-      .toEqual(Object.keys(ci.jobs ?? {}).filter(name => name !== "ci").sort());
+      .toEqual(Object.keys(ci.jobs ?? {}).filter(name => !ungated.has(name)).sort());
 
     // The focused doctor contract config is ADDITIVE evidence. It must never
     // replace the repository-wide strict typecheck: doing so made the aggregate
@@ -380,7 +387,8 @@ describe("GitHub Actions hardening", () => {
       };
       jobs?: Record<string, Record<string, unknown> | undefined>;
     };
-    expect([...(ci.on?.push?.branches ?? [])].sort()).toEqual(["dev", "main", "preview"]);
+    expect([...(ci.on?.push?.branches ?? [])].sort())
+      .toEqual(["dev", "main", "preview"]);
 
     // The PR trigger must carry NO base-branch filter, and the two triggers
     // differ on purpose. GitHub matches `branches:` against the BASE ref, so
@@ -700,7 +708,11 @@ describe("GitHub Actions hardening", () => {
 
     // Immutable action references.
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
-    expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
+    // Same move as the CI workflow: the pinned setup-bun reference now lives in
+    // the shared composite action.
+    expect(workflow).toContain("./.github/actions/setup-project-bun");
+    expect(await readText(".github/actions/setup-project-bun/action.yml"))
+      .toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 

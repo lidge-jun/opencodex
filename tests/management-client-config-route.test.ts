@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import {
   OPENCODE_API_KEY_ENV,
@@ -332,12 +333,17 @@ describe("GET /api/client-config", () => {
 
   test("an accepted override still resolves through the route", async () => {
     const previous = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = "/tmp/opencodex-pi-route-fixture";
+    // One binding for the override, so the env value and the expectation cannot
+    // drift apart, and `join` for the separator: the resolver builds the
+    // destination with `join`, which is `\` on win32, so a hard-coded POSIX
+    // string asserted the platform rather than the override taking effect.
+    const overrideDir = "/tmp/opencodex-pi-route-fixture";
+    process.env.PI_CODING_AGENT_DIR = overrideDir;
     try {
       const response = await clientConfigApi(baseConfig(), "?client=pi");
       expect(response.status).toBe(200);
       const body = await response.json() as ClientConfigEnvelope;
-      expect(body.destination).toBe("/tmp/opencodex-pi-route-fixture/models.json");
+      expect(body.destination).toBe(join(overrideDir, "models.json"));
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;

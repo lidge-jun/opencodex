@@ -1227,6 +1227,15 @@ export interface HandleResponsesOptions {
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
   /** Caller-owned for Chat/Claude replay; omitted only at genuine Responses ingress. */
   translatorBudget?: TranslatorBudget;
+  /**
+   * Terminal vision-describe marker (roadmap 180): true when the inbound
+   * request IS the vision sidecar's own loopback describe call. The plan site
+   * then STRIPS images instead of planning another describe — a depth cap of 1
+   * that holds under predicate drift and combo re-resolution. The Chat surface
+   * detects the raw `x-opencodex-vision-describe` header before its bridge
+   * rebuilds headers and carries the fact through this flag.
+   */
+  visionDescribeTerminal?: boolean;
 }
 
 
@@ -2725,7 +2734,15 @@ async function handleResponsesInner(
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main
   // call, so the text-only model can reason about it.
-  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
+  // Terminal describe fence (roadmap 180): the sidecar's OWN loopback describe
+  // call must never plan another describe. The flag arrives from the Chat
+  // surface (whose bridge rebuilds headers) or as the raw header for native
+  // Responses callers. Marked + text-only routed model → strip, depth cap 1.
+  const visionDescribeTerminal = options.visionDescribeTerminal === true
+    || req.headers.get("x-opencodex-vision-describe") === "1";
+  const visionPlan = visionDescribeTerminal
+    ? undefined
+    : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
     await describeImagesInPlace(

@@ -1,4 +1,20 @@
 import { describe, expect, test } from "bun:test";
+
+/**
+ * PATH for tests that must stop PATH-based codex DISCOVERY while keeping their
+ * fake launchers runnable.
+ *
+ * These tests write `/bin/sh` scripts that call `dirname` and `cat`, so the
+ * child still needs the standard utilities. `PATH=""` used to work by accident:
+ * Bun 1.3.14 ignored an empty PATH and handed the child the parent's real one.
+ * Bun 1.4 passes the empty value through faithfully — the correct behaviour —
+ * and the scripts then die with "dirname: No such file or directory".
+ *
+ * `/usr/bin:/bin` keeps the utilities reachable and contains no `codex`, which
+ * is the only property these tests depend on. Found during Bun 1.4 canary
+ * qualification (#1691).
+ */
+const NO_CODEX_PATH = "/usr/bin:/bin";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -98,7 +114,7 @@ describe("observe-only Codex catalog gather caches", () => {
     const previousPath = process.env.PATH;
     process.env.OPENCODEX_HOME = home;
     process.env.CODEX_CLI_PATH = launcher;
-    process.env.PATH = "";
+    process.env.PATH = NO_CODEX_PATH;
     resetCodexRuntimeResolveCacheForTests();
     resetBundledCatalogCacheForTests();
 
@@ -701,7 +717,7 @@ describe("resolveCodexRuntime", () => {
     const previousPath = process.env.PATH;
     process.env.OPENCODEX_HOME = home;
     process.env.CODEX_CLI_PATH = bin;
-    process.env.PATH = "";
+    process.env.PATH = NO_CODEX_PATH;
     resetCodexRuntimeResolveCacheForTests();
     resetBundledCatalogCacheForTests();
 
@@ -879,7 +895,7 @@ describe("resolveCodexRuntime", () => {
     const previousCli = process.env.CODEX_CLI_PATH;
     const previousPath = process.env.PATH;
     process.env.OPENCODEX_HOME = home;
-    process.env.PATH = "";
+    process.env.PATH = NO_CODEX_PATH;
     resetCodexRuntimeResolveCacheForTests();
     resetBundledCatalogCacheForTests();
 

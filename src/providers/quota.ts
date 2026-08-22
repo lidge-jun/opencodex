@@ -28,6 +28,12 @@ import {
   type CodexCapacityAggregation,
   type CodexCapacityQuota,
 } from "./codex-capacity";
+import {
+  AntigravityQuotaRpcError,
+  fetchAntigravityLiveQuota,
+  isTerminalAntigravityQuotaStatus,
+} from "./antigravity-quota";
+import { antigravityHostCandidates, isAntigravityHttpsHost } from "../adapters/google-antigravity-hosts";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -50,6 +56,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const CLINE_BASE_URL = "https://api.cline.bot";
 const ZAI_BASE_URL = "https://api.z.ai";
+const ZAI_CN_BASE_URL = "https://open.bigmodel.cn";
 const MINIMAX_REMAINS_URL = "https://www.minimax.io/v1/token_plan/remains";
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
@@ -343,7 +350,12 @@ function isCanonicalClineBaseUrl(baseUrl: string): boolean {
 
 function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
-  return normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`;
+  return normalized === ZAI_BASE_URL
+    || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
+    || normalized === ZAI_CN_BASE_URL
+    || normalized === `${ZAI_CN_BASE_URL}/api/coding/paas/v4`
+    // BigModel serves the same GLM Coding Plan on the OpenAI Responses wire at /api/v1.
+    || normalized === `${ZAI_CN_BASE_URL}/api/v1`;
 }
 
 function isCanonicalMinimaxBaseUrl(baseUrl: string): boolean {
@@ -669,34 +681,67 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
 
 /**
  * Z.AI GLM Coding Plan `GET /api/monitor/usage/quota/limit` — the coding-plan
- * subscription's 5-hour token cycle, weekly quota, and monthly MCP usage.
- * Authenticates with the API key as a Bearer token per Z.AI's API reference.
+ * limits arrive as a `limits` array of `TOKENS_LIMIT` (newer plans call the
+ * same rows `CREDIT_LIMIT`) and `TIME_LIMIT` rows. `TOKENS_LIMIT`/`CREDIT_LIMIT`
+ * rows carry the window length as `unit`/`number`: unit 3 is hours (number 5 →
+ * the rolling five-hour window), unit 6 is weeks (number 1 → the weekly
+ * window). `TIME_LIMIT` rows are the monthly MCP tool budget (Web Search / Web
+ * Reader / Zread). Every row's `percentage` is the consumed share (falling
+ * back to `currentValue`/`usage` when absent) and `nextResetTime` (unix ms)
+ * the window reset.
  */
-async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
-  if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
-  if (!apiKey) return null;
-  const response = await fetch(`${ZAI_BASE_URL}/api/monitor/usage/quota/limit`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-    redirect: "error",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
-      ? TERMINAL_QUOTA_FAILURE
-      : null;
+export function parseZaiQuotaLimits(data: Record<string, unknown> | null): ProviderQuota | null {
+  const limits = Array.isArray(data?.limits) ? data.limits as unknown[] : null;
+  if (!limits) return null;
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+  for (const raw of limits) {
+    const row = asRecord(raw);
+    if (!row) continue;
+    const resetAt = normalizeResetAt(row.nextResetTime);
+    let percent = normalizePercent(row.percentage);
+    if (percent === undefined) {
+      const used = toFiniteNumber(row.currentValue);
+      const total = toFiniteNumber(row.usage);
+      if (used !== undefined && total !== undefined && total > 0) {
+        percent = normalizePercent((used / total) * 100);
+      }
+    }
+    if (percent === undefined) continue;
+    if (row.type === "TOKENS_LIMIT" || row.type === "CREDIT_LIMIT") {
+      const unit = toFiniteNumber(row.unit);
+      const number = toFiniteNumber(row.number);
+      if (unit === 3 && number === 5) {
+        quota.fiveHourPercent = percent;
+        if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
+        windows += 1;
+      } else if (unit === 6 && number === 1) {
+        quota.weeklyPercent = percent;
+        if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
+        windows += 1;
+      }
+    } else if (row.type === "TIME_LIMIT") {
+      quota.monthlyPercent = percent;
+      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+      windows += 1;
+    }
   }
-  const body = asRecord(await readQuotaJson(response));
-  if (!body || body.success === false) return null;
-  const data = asRecord(body.data) ?? body;
-  // The plugin renders a 5h token window, a weekly window, and a monthly MCP
-  // window. Look for percent fields with window identifiers.
+  return windows > 0 ? quota : null;
+}
+
+/**
+ * Legacy Z.AI payload shape: percent fields with window identifiers directly on
+ * the data object (optionally nested under `quota`). Kept as a fallback so
+ * older responses keep rendering when the `limits` array is absent.
+ */
+function parseZaiQuotaLegacyFields(data: Record<string, unknown> | null): ProviderQuota | null {
+  if (!data) return null;
   const quota: ProviderQuota = { updatedAt: Date.now() };
   let windows = 0;
   const percentAt = (key: string): number | undefined => {
-    const value = normalizePercent(data?.[key]);
+    const value = normalizePercent(data[key]);
     if (value !== undefined) return value;
-    const nested = asRecord(data?.quota);
+    const nested = asRecord(data.quota);
     return nested ? normalizePercent(nested[key]) : undefined;
   };
   const fiveHour = percentAt("fiveHourPercent") ?? percentAt("fiveHourUsage") ?? percentAt("fiveHourUsed");
@@ -714,7 +759,40 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
     quota.monthlyPercent = monthly;
     windows += 1;
   }
-  return windows > 0 ? report(provider, "zai:quota-limit", quota) : null;
+  return windows > 0 ? quota : null;
+}
+
+/**
+ * Fetches the Z.AI GLM Coding Plan quota — on whichever region the provider
+ * points at (api.z.ai or open.bigmodel.cn). Authenticates with the API key as
+ * a Bearer token per Z.AI's API reference. The `limits` array shape is
+ * preferred; older field-name payloads fall back to the legacy parser.
+ */
+async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const normalized = normalizedBaseUrl(config.baseUrl);
+  const monitorHost = normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
+    ? ZAI_BASE_URL
+    : ZAI_CN_BASE_URL;
+  const response = await fetch(`${monitorHost}/api/monitor/usage/quota/limit`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  if (!body || body.success === false) return null;
+  const data = asRecord(body.data) ?? body;
+  const quota = Array.isArray(data?.limits)
+    ? parseZaiQuotaLimits(data)
+    : parseZaiQuotaLegacyFields(data);
+  return quota ? report(provider, "zai:quota-limit", quota) : null;
 }
 
 /**
@@ -1993,13 +2071,13 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
   const remaining = normalizePercent(toFiniteNumber(quotaInfo.remainingFraction) !== undefined
     ? toFiniteNumber(quotaInfo.remainingFraction)! * 100
     : toFiniteNumber(quotaInfo.remainingPercentage) !== undefined
-      ? toFiniteNumber(quotaInfo.remainingPercentage)! * 100
+      ? toFiniteNumber(quotaInfo.remainingPercentage)!
       : undefined);
   if (remaining === undefined) return undefined;
   return normalizePercent(100 - remaining);
 }
 
-async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   const credential = getCredential("google-antigravity");
   if (!credential?.projectId) return null;
   let accessToken: string;
@@ -2009,37 +2087,79 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     return null;
   }
   const baseUrl = (config.baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": antigravityUserAgent(),
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ project: credential.projectId }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
-  const body = asRecord(await readQuotaJson(response));
-  const models = asRecord(body?.models);
-  if (!models) return null;
+  let liveQuota: ProviderQuota | null;
+  try {
+    liveQuota = await fetchAntigravityLiveQuota({
+      accessToken,
+      projectId: credential.projectId,
+      baseUrl,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (error instanceof AntigravityQuotaRpcError && isTerminalAntigravityQuotaStatus(error.status)) {
+      return TERMINAL_QUOTA_FAILURE;
+    }
+    liveQuota = null;
+  }
 
   const windows = new Map<string, ProviderQuotaWindow>();
-  for (const [modelId, rawModelInfo] of Object.entries(models)) {
-    const modelInfo = asRecord(rawModelInfo);
-    if (!modelInfo) continue;
-    for (const quotaInfo of quotaInfoEntries(modelInfo)) {
-      const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
-      if (!label || windows.has(label)) continue;
-      const percent = antigravityUsedPercent(quotaInfo);
-      if (percent === undefined) continue;
-      windows.set(label, {
-        label,
-        percent,
-        ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
+  for (const [index, host] of antigravityHostCandidates(baseUrl).entries()) {
+    if (!isAntigravityHttpsHost(host)) continue;
+    try {
+      const response = await fetch(`${host}/v1internal:fetchAvailableModels`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": antigravityUserAgent(),
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ project: credential.projectId }),
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      if (!response.ok) {
+        if (index === 0 && (response.status === 404 || response.status === 503)) continue;
+        break;
+      }
+      const body = asRecord(await readQuotaJson(response));
+      const models = asRecord(body?.models);
+      if (models) {
+        for (const [modelId, rawModelInfo] of Object.entries(models)) {
+          const modelInfo = asRecord(rawModelInfo);
+          if (!modelInfo) continue;
+          for (const quotaInfo of quotaInfoEntries(modelInfo)) {
+            const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
+            if (!label || windows.has(label)) continue;
+            const percent = antigravityUsedPercent(quotaInfo);
+            if (percent === undefined) continue;
+            windows.set(label, {
+              label,
+              percent,
+              ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
+            });
+          }
+        }
+      }
+      break;
+    } catch {
+      if (index === 0) continue;
+      break;
     }
+  }
+
+  if (liveQuota) {
+    const liveWindows = liveQuota.customWindows ?? [];
+    const catalogClaude = windows.get("Cla");
+    const customWindows = [
+      ...liveWindows,
+      ...(liveWindows.some(window => window.label === "Cla") || !catalogClaude ? [] : [catalogClaude]),
+    ];
+    return report(provider, "google-antigravity:retrieveUserQuota", {
+      ...liveQuota,
+      ...(customWindows.length > 0 ? { customWindows } : {}),
+      updatedAt: Date.now(),
+    });
   }
 
   const customWindows = ["Gem", "Cla"].flatMap(label => {
@@ -2106,7 +2226,8 @@ async function maybeFetchProviderQuota(
     if ((provider.authMode ?? "key") === "key" && name === "cline-pass") {
       return fetchClineQuota(name, provider);
     }
-    if ((provider.authMode ?? "key") === "key" && name === "zai") {
+    if ((provider.authMode ?? "key") === "key"
+      && (name === "zai" || name === "glm" || name === "glm-cn" || name === "zhipu-bigmodel-coding")) {
       return fetchZaiQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key" && (name === "minimax" || name === "minimax-cn")) {

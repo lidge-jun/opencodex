@@ -113,8 +113,14 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   // Match the runtime's one selected Anthropic executor for both backend fallback
   // and catalog reachability; resolving it once prevents the two projections drifting.
   const anthropicSidecar = findAnthropicVisionProvider(config);
-  const backend = resolveVisionBackend(vs.backend, anthropicSidecar);
-  const model = resolveEffectiveVisionModel(config, backend);
+  // The routed backend reports its own namespaced model verbatim: it is the
+  // dispatched value, and collapsing it through the legacy resolver would
+  // display a describer the runtime is not using (roadmap 190).
+  const routedActive = vs.backend === "routed" && !!vs.model && vs.model.includes("/");
+  const backend = routedActive ? "routed" as const : resolveVisionBackend(vs.backend, anthropicSidecar);
+  const model = routedActive && vs.model
+    ? vs.model
+    : resolveEffectiveVisionModel(config, backend === "routed" ? resolveVisionBackend(undefined, anthropicSidecar) : backend);
   const reasoning = normalizeVisionReasoningForModel(model, vs.reasoning) ?? "low";
   const models = await visionModelOptionsFor(config, anthropicSidecar);
   // Display-only grandfather: a persisted id stays selectable, but the write gate
@@ -592,8 +598,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
     }
     if (body.vision && body.vision.backend !== undefined
-      && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic") {
-      return jsonResponse({ error: "vision.backend must be openai, anthropic, or null" }, 400);
+      && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic"
+      && body.vision.backend !== "routed") {
+      return jsonResponse({ error: "vision.backend must be openai, anthropic, routed, or null" }, 400);
     }
     if (body.vision && body.vision.maxDescriptionsPerTurn !== undefined
       && (typeof body.vision.maxDescriptionsPerTurn !== "number"
@@ -621,8 +628,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       const requested = body.vision.model;
       const candidates = await visionCandidateRows(config);
       const hint = body.vision.backend === "anthropic" || body.vision.backend === "openai"
+        || body.vision.backend === "routed"
         ? body.vision.backend
         : config.visionSidecar?.backend;
+      // Coherence (roadmap 170 r2): the forward/OAuth executors POST the model
+      // string VERBATIM, so a namespaced id on those backends persists a wire
+      // id they cannot run; and "routed" without a namespace cannot route.
+      const effectiveBackend = hint ?? "openai";
+      const namespaced = requested.includes("/");
+      if (namespaced && effectiveBackend !== "routed") {
+        return jsonResponse({ error: `vision.model "${requested}" is provider-namespaced; it requires vision.backend "routed"` }, 400);
+      }
+      if (!namespaced && effectiveBackend === "routed") {
+        return jsonResponse({ error: `vision.backend "routed" requires a provider-namespaced vision.model ("provider/model"); got "${requested}"` }, 400);
+      }
       if (visionDescriberIsProvablyBlind(config, requested, candidates, hint)) {
         return jsonResponse(visionDescriberRejection("vision.model", requested, config, candidates), 400);
       }
@@ -736,7 +755,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else config.visionSidecar.model = body.vision.model;
       }
       if (body.vision.backend === null) delete config.visionSidecar.backend;
-      else if (body.vision.backend === "openai" || body.vision.backend === "anthropic") {
+      else if (body.vision.backend === "openai" || body.vision.backend === "anthropic"
+        || body.vision.backend === "routed") {
         config.visionSidecar.backend = body.vision.backend;
       }
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {

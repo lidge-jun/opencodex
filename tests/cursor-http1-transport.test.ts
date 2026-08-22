@@ -284,9 +284,17 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
     }) as typeof fetch;
 
     const pending = runHttp1Turn(fetchImpl, "cursor_http1_ready_order");
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(paths).toEqual(["/agent.v1.AgentService/RunSSE"]);
+    const runSsePath = "/agent.v1.AgentService/RunSSE";
+    const bidiAppendPath = "/aiserver.v1.BidiService/BidiAppend";
+    const deadline = Date.now() + 2_000;
+    while (!paths.includes(runSsePath)) {
+      expect(paths).not.toContain(bidiAppendPath);
+      if (Date.now() >= deadline) {
+        throw new Error("timed out waiting for the RunSSE fetch before BidiAppend");
+      }
+      await Bun.sleep(1);
+    }
+    expect(paths).toEqual([runSsePath]);
 
     releaseRunSse(new Response(new ReadableStream<Uint8Array>({
       start(controller) { runController = controller; },

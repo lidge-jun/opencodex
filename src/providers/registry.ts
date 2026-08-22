@@ -10,6 +10,7 @@ import {
   MOONSHOT_BASE_URL_CHOICES, MOONSHOT_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
+  CURSOR_NO_VISION_MODELS,
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
   cursorModelIds,
@@ -452,7 +453,23 @@ const THINKING_BUDGET_MODELS = [
 ];
 const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"];
 const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
+/*
+ * DeepSeek's experimental vision preview (released 2026-08-21, api-docs.deepseek.com):
+ * text+image input on the V4 Flash base. DeepSeek positions it as a preview id;
+ * the expectation is that vision merges into `deepseek-v4-flash` proper later,
+ * at which point this id retires the same way deepseek-chat/reasoner did.
+ */
+const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
+/*
+ * OpenCode Zen's free slug for the OpenRouter stealth model "Ox Alpha"
+ * (openrouter.ai/stealth/ox-alpha): 1,048,576-token context, multimodal
+ * (text+image+video upstream; Zen serves text+image), mandatory reasoning,
+ * free during the stealth window. Zen displays it as "Ox Alpha Free" under
+ * this exact id (opencode.ai/docs/zen, verified 2026-08-21).
+ */
+const OPENCODE_OX_ALPHA_FREE_MODEL = "x-preview-f-free";
+const OX_ALPHA_CONTEXT_WINDOW = 1_048_576;
 /*
  * Zen free models that reject `image_url` upstream (#1043, and the reproducible
  * half of #1024).
@@ -994,11 +1011,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
     // routes (kimi, kimi-code, opencode-go).
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
-    // Cursor's wire protocol never forwards image parts (request-builder emits an unsupported-
-    // content marker), so the vision sidecar covers ALL cursor models regardless of what the
-    // upstream model could natively do. Live-discovered models outside the static list fall back
-    // to the same marker until they appear here.
-    noVisionModels: cursorModelIds(CURSOR_STATIC_MODELS),
+    // Blind Cursor models (Auto routers, Composer, GLM-5.2, GLM-5.3) go through the vision sidecar;
+    // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
+    // still advertises image for noVision members so Codex can attach (sidecar option B).
+    noVisionModels: [...CURSOR_NO_VISION_MODELS],
   },
   {
     id: "xai",
@@ -1101,6 +1117,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Unknown/new live models deliberately do not advertise a reasoning picker.
     reasoningEfforts: [],
     modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
+    // Ox Alpha (stealth preview, changelog v1.31.0): free 1M multimodal reasoning
+    // model on every plan. DeepSeek vision preview id is preemptive metadata —
+    // it is expected to merge into deepseek-v4-flash later.
+    modelContextWindows: {
+      "stealth/ox-alpha": OX_ALPHA_CONTEXT_WINDOW,
+      [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
+    },
+    modelInputModalities: {
+      "stealth/ox-alpha": ["text", "image"],
+      [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: ["text", "image"],
+    },
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,
@@ -1292,8 +1319,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 장점, 단점 및 영향: Luna reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
     modelWireDefaults: { "gpt-5.6-luna": "openai-responses" },
-    modelContextWindows: { "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW },
-    modelInputModalities: { "kimi-k3": ["text", "image"] },
+    modelContextWindows: {
+      "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
+      // Ox Alpha (stealth 1M multimodal) and the DeepSeek vision preview are
+      // metadata-only here: the Go roster is discovered live, so these apply
+      // the moment the gateway starts serving the ids.
+      [OPENCODE_OX_ALPHA_FREE_MODEL]: OX_ALPHA_CONTEXT_WINDOW,
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
+    },
+    modelInputModalities: {
+      "kimi-k3": ["text", "image"],
+      [OPENCODE_OX_ALPHA_FREE_MODEL]: ["text", "image"],
+      // Experimental DeepSeek vision preview — expected to merge into deepseek-v4-flash later.
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+    },
     modelReasoningEfforts: {
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
@@ -1396,11 +1435,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: true,
     dashboardUrl: "https://openrouter.ai/keys",
     jawcodeBundle: "openrouter",
-    models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS],
+    // stealth/ox-alpha: free stealth-window frontier model (launched 2026-08-20).
+    // /api/v1/models reports 1,048,576 context, 131,072 max output, text+image+video
+    // input, $0 pricing, mandatory reasoning. Single provider slug: `stealth`.
+    models: ["anthropic/claude-sonnet-5", "stealth/ox-alpha", ...OPENROUTER_GPT56_MODELS],
     modelContextWindows: {
       "anthropic/claude-sonnet-5": 1_000_000,
+      "stealth/ox-alpha": OX_ALPHA_CONTEXT_WINDOW,
       ...OPENROUTER_GPT56_CONTEXT_WINDOWS,
     },
+    modelInputModalities: { "stealth/ox-alpha": ["text", "image"] },
     // OpenRouter documents priority support for OpenAI endpoints, but not Anthropic. Keep the
     // provider unclassified and opt in only the exact OpenAI-backed slugs we ship. These facts
     // belong only to the canonical destination; a same-named custom gateway is unknown to us.
@@ -1551,11 +1595,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // keep validating and routing (they previously mapped to v4-flash; devlog
     // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
     // the V4 ids — defaultModel and the model-specific wiring above use them.
-    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
+    // deepseek-v4-flash-vision-exp: experimental vision preview (2026-08-21) —
+    // expected to merge into deepseek-v4-flash later; see DEEPSEEK_VISION_PREVIEW_MODEL.
+    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
     defaultModel: "deepseek-v4-flash",
     // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
     // for both V4 models; the older 1,000,000 figure was a rounded approximation.
-    modelContextWindows: { "deepseek-v4-flash": 1_048_576, "deepseek-v4-pro": 1_048_576 },
+    modelContextWindows: { "deepseek-v4-flash": 1_048_576, "deepseek-v4-pro": 1_048_576, [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576 },
+    modelInputModalities: { [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"] },
     // DeepSeek documents both V4 models as native Responses API models adapted for Codex
     // (model table marks Responses API ✓ for flash and pro; the /responses reference lists
     // both ids as accepted `model` values — verified 2026-08-13 with the V4 Pro GA,
@@ -1808,6 +1855,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // slash ids — so a Codex-facing slug like `commandcode/deepseek-deepseek-v4-pro`
     // is sent upstream verbatim and rejected with `unsupported_model`.
     modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
+    // Ox Alpha (stealth preview, Command Code changelog v1.31.0) ships with a
+    // 1.05M-token multimodal context; the DeepSeek vision preview id is
+    // preemptive for when the catalog serves it (merges into v4-flash later).
+    modelContextWindows: {
+      "stealth/ox-alpha": OX_ALPHA_CONTEXT_WINDOW,
+      [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
+    },
+    modelInputModalities: {
+      "stealth/ox-alpha": ["text", "image"],
+      [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: ["text", "image"],
+    },
     modelDiscovery: {
       path: "models",
       maxResponseBytes: 256 * 1024,
@@ -2452,6 +2510,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekReasoningMapFor(id)]),
     ),
     preserveReasoningContentModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
+    // Same Zen gateway as opencode-free: Ox Alpha Free (1M multimodal stealth model)
+    // and the DeepSeek vision preview (merges into deepseek-v4-flash later).
+    modelContextWindows: {
+      [OPENCODE_OX_ALPHA_FREE_MODEL]: OX_ALPHA_CONTEXT_WINDOW,
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
+    },
+    modelInputModalities: {
+      [OPENCODE_OX_ALPHA_FREE_MODEL]: ["text", "image"],
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+    },
     noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_THINKING_MODELS],
   },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
@@ -2482,6 +2550,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     preserveReasoningContentModels: OPENCODE_FREE_DEEPSEEK_MODELS,
+    // Ox Alpha Free (`x-preview-f-free`): the OpenRouter stealth model on Zen's
+    // free tier — 1,048,576 context, text+image input. Deliberately NOT in the
+    // text-only list below. The DeepSeek vision preview id is preemptive
+    // metadata for when Zen starts serving it (merges into v4-flash later).
+    modelContextWindows: {
+      [OPENCODE_OX_ALPHA_FREE_MODEL]: OX_ALPHA_CONTEXT_WINDOW,
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
+    },
+    modelInputModalities: {
+      [OPENCODE_OX_ALPHA_FREE_MODEL]: ["text", "image"],
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+    },
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).
     noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,

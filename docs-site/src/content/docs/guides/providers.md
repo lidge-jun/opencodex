@@ -585,3 +585,15 @@ does not follow redirects. The response's rolling, weekly, and monthly `percent`
 already-consumed utilization: rolling maps to the 5-hour bar, while weekly and monthly keep
 their matching bars. OpenCodex does not reconstruct dollar caps from local usage logs, and a
 provider using a non-canonical `baseUrl` is never sent the key for this probe.
+
+**Z.AI GLM Coding Plan quota.** The `zai`, `glm`, `glm-cn`, and `zhipu-bigmodel-coding`
+presets read `GET /api/monitor/usage/quota/limit` with the configured key as a Bearer token
+and do not follow redirects. The probe runs against the region the provider points at:
+`api.z.ai` (bare or `/api/coding/paas/v4`) or `open.bigmodel.cn` (bare,
+`/api/coding/paas/v4`, or the OpenAI Responses endpoint `/api/v1`). The response's `limits`
+rows fill the utilization bars: `TOKENS_LIMIT` / `CREDIT_LIMIT` rows with `unit` 3 /
+`number` 5 fill the 5-hour bar and `unit` 6 / `number` 1 the weekly bar, while
+`TIME_LIMIT` rows fill the monthly MCP bar. The v2 coding-plan protocol reports the
+monthly MCP row; the newer protocol does not, so the monthly bar renders only when that
+row is present. A provider using a non-canonical `baseUrl` is never sent the key for this
+probe.

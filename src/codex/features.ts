@@ -155,6 +155,29 @@ export function multiAgentV2EnabledFromConfigText(content: string | null): boole
     return false;
   }
 
+  // Bun 1.4 enforces TOML's "value must begin on the assignment line" rule that
+  // 1.3.14 did not, so `hint =` followed by `[` on the next line now fails the
+  // real parse and reaches the line-based fallback below — which reads that `[`
+  // as a table header and truncates the table before `enabled`. Codex's own
+  // parser accepts the document, so answering "disabled" would report a parser
+  // disagreement as a feature state (#1295, #1691).
+  //
+  // Joining a dangling `=` to the line that follows is the smallest repair that
+  // keeps the scanner untouched: widening `tomlTableBody` to be string-aware is
+  // what previously broke `getAgentsEnabled`, `getAgentsMaxDepth`, and
+  // `getMaxConcurrentThreads` (see its comment). If the joined document parses,
+  // that answer is authoritative; if it does not, nothing is lost.
+  const joined = joinDanglingTomlAssignments(content);
+  if (joined !== content) {
+    const reparsed = parsedTomlTable(joined, "features");
+    if (reparsed !== null) {
+      const table = plainTomlRecord(reparsed.multi_agent_v2);
+      if (table !== null) return table.enabled === true;
+      if (typeof reparsed.multi_agent_v2 === "boolean") return reparsed.multi_agent_v2;
+      return false;
+    }
+  }
+
   const table = tomlTableBody(content, "features.multi_agent_v2");
   if (table !== null) {
     const enabled = tomlBoolInBody(table, "enabled");
@@ -182,6 +205,41 @@ function plainTomlRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+/**
+ * Join `key =` to the following line when the value was written on the next
+ * line, so a parser enforcing TOML's same-line rule can read the document.
+ *
+ * Bun 1.3.14 accepted this shape; Bun 1.4 rejects it, correctly — TOML requires
+ * the value to begin on the assignment line. Codex's parser still accepts it, so
+ * this exists to keep the two readers agreeing rather than to endorse the shape.
+ *
+ * Deliberately narrow: it only acts on a line whose LAST non-comment character
+ * is `=`, which cannot occur in a valid assignment. Lines inside multi-line
+ * strings are left alone — a `"""` body line ending in `=` would be rewritten,
+ * but the result is only used when it PARSES, and the unmodified document is
+ * always tried first, so a wrong join cannot displace a correct read.
+ */
+function joinDanglingTomlAssignments(content: string): string {
+  const lines = content.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    // A dangling assignment: trailing `=` with nothing after it on this line.
+    if (/^[^#]*[^=!<>]=\s*$/.test(line) && i + 1 < lines.length) {
+      let j = i + 1;
+      // Skip blank and comment-only lines between the `=` and its value.
+      while (j < lines.length && /^\s*(?:#.*)?$/.test(lines[j]!)) j++;
+      if (j < lines.length) {
+        out.push(`${line.replace(/\s*$/, "")} ${lines[j]!.replace(/^\s*/, "")}`);
+        i = j;
+        continue;
+      }
+    }
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 /**

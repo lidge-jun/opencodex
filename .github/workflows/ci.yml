@@ -268,10 +268,8 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       # The GUI install is NOT optional here, however unrelated it looks to a
       # test shard. Several files under tests/ import JSX-bearing modules from
@@ -315,10 +313,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: |
@@ -356,10 +352,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: |
@@ -393,10 +387,8 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: |
@@ -463,10 +455,8 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: |
@@ -598,10 +588,8 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: |
@@ -674,10 +662,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

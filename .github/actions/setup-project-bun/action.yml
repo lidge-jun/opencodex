@@ -1,0 +1,30 @@
+name: Setup project Bun
+description: >-
+  Install the Bun runtime for a job. Installs the version declared in
+  package.json (dependencies.bun), keeping the runtime SOT in one place so
+  version bumps only touch package.json and bun.lock.
+
+outputs:
+  version:
+    description: The resolved Bun version string.
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve project Bun version
+      id: resolve
+      shell: bash
+      run: |
+        version="$(node -p "require('./package.json').dependencies.bun")"
+        if [ -z "$version" ]; then
+          echo "::error::Could not resolve Bun version from package.json"
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Using Bun $version from package.json"
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      with:
+        bun-version: ${{ steps.resolve.outputs.version }}

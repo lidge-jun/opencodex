@@ -519,7 +519,6 @@ test("every non-string TOML type for model_catalog_json is indeterminate", () =>
     ["boolean", "true"],
     ["array", '["custom.json"]'],
     ["inline table", '{ path = "custom.json" }'],
-    ["datetime", "1979-05-27T07:32:00Z"],
   ] as const;
 
   for (const [type, value] of nonStringTomlValues) {
@@ -530,6 +529,31 @@ test("every non-string TOML type for model_catalog_json is indeterminate", () =>
       path: canonicalPathInCodexHome("config.toml"),
     });
   }
+});
+
+// TOML datetime is deliberately not in the list above: which SURFACE reports the
+// problem is runtime-dependent, and neither answer is a defect.
+//
+// Bun 1.3.14 has no datetime support, so the document fails to parse and the
+// config surface reports it. Bun 1.4 added datetime and yields a string, so
+// `model_catalog_json` becomes a syntactically valid path, the classifier
+// resolves it like any other, and the CATALOG surface reports it as absent.
+// Pinning `surface: "config"` for both fails on 1.4 for a reason unrelated to
+// this repository — found during Bun 1.4 canary qualification (#1691).
+//
+// The property worth pinning survives both: a datetime literal is never
+// accepted as a usable catalog. It is either unparseable config or a path that
+// does not exist, and `indeterminate` is what refuses coordinator
+// initialization in both cases.
+test("a TOML datetime for model_catalog_json is never accepted as a usable catalog", () => {
+  writeFileSync(pathInCodexHome("config.toml"), "model_catalog_json = 1979-05-27T07:32:00Z\n");
+  const classification = classifyNativeRoutedResidue();
+
+  expect(classification.kind).toBe("indeterminate");
+  // 1.3.14 blames the unreadable config; 1.4 blames the catalog path it parsed.
+  expect(["config", "catalog"]).toContain(
+    (classification as { surface: string }).surface,
+  );
 });
 
 test("duplicate configured catalog paths are indeterminate", () => {

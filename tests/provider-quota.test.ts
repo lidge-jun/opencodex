@@ -121,11 +121,16 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
     await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
 
-    const seen: { url: string; authorization?: string; body?: string }[] = [];
+    const seen: { url: string; authorization?: string; body?: string; redirect?: RequestRedirect }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const headers = init?.headers as Record<string, string> | undefined;
-      seen.push({ url, authorization: headers?.Authorization, body: typeof init?.body === "string" ? init.body : undefined });
+      seen.push({
+        url,
+        authorization: headers?.Authorization,
+        body: typeof init?.body === "string" ? init.body : undefined,
+        redirect: init?.redirect,
+      });
       if (url === "https://chatgpt.com/backend-api/wham/usage") {
         return new Response(JSON.stringify({
           email: "person@example.com",
@@ -255,7 +260,46 @@ describe("fetchProviderQuotaReports", () => {
     expect(seen.find(row => row.url.includes("anthropic.com"))?.authorization).toBe("Bearer claude-access-secret");
     expect(seen.find(row => row.url.includes("cloudcode-pa.googleapis.com"))?.authorization).toBe("Bearer agy-access-secret");
     expect(seen.find(row => row.url.includes("cloudcode-pa.googleapis.com"))?.body).toBe(JSON.stringify({ project: "agy-project-secret" }));
+    expect(seen.find(row => row.url.endsWith("/v1internal:fetchAvailableModels"))?.redirect).toBe("error");
     expect(seen.find(row => row.url === "https://api.kimi.com/coding/v1/usages")?.authorization).toBe("Bearer kimi-access-secret");
+  });
+
+  test("treats remainingPercentage as a percentage at values one and below", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-access-secret",
+      refresh: "agy-refresh-secret",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-project-secret",
+    });
+    const config = {
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        },
+      },
+    } as OcxConfig;
+
+    for (const [remainingPercentage, expectedUsedPercentage] of [[1, 99], [0.75, 99.25], [75, 25]]) {
+      clearProviderQuotaCache();
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes(":retrieveUserQuota")) return new Response("not found", { status: 404 });
+        if (url.endsWith("/v1internal:fetchAvailableModels")) {
+          return new Response(JSON.stringify({
+            models: {
+              "gemini-test": { quotaInfo: { remainingPercentage } },
+            },
+          }), { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+
+      const result = await fetchProviderQuotaReports(config, true);
+      expect(result.reports[0]?.quota.customWindows?.[0]?.percent).toBe(expectedUsedPercentage);
+    }
   });
 
   function kimiOnlyConfig(baseUrl = "https://api.kimi.com/coding/v1"): OcxConfig {
@@ -593,11 +637,11 @@ describe("fetchProviderQuotaReports", () => {
     expect(rejectedRefresh.reports).toEqual([]);
   });
 
-  function keyQuotaConfig(name: string, baseUrl: string): OcxConfig {
+  function keyQuotaConfig(name: string, baseUrl: string, apiKey = `${name}-secret`): OcxConfig {
     return {
       defaultProvider: name,
       providers: {
-        [name]: { adapter: "openai-chat", authMode: "key", baseUrl, apiKey: `${name}-secret` },
+        [name]: { adapter: "openai-chat", authMode: "key", baseUrl, apiKey },
       },
     } as OcxConfig;
   }
@@ -883,6 +927,79 @@ describe("fetchProviderQuotaReports", () => {
       seen.push({ url, authorization: headers?.Authorization, redirect: init?.redirect });
       return new Response(JSON.stringify({
         success: true,
+        data: {
+          limits: [
+            { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 40.5, currentValue: 405, usage: 1000, nextResetTime: 1789000000000 },
+            { type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 52, nextResetTime: 1789600000000 },
+            { type: "TIME_LIMIT", percentage: 12.3, nextResetTime: 1789000000000 },
+          ],
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai"), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("zai:quota-limit");
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 40.5,
+      fiveHourResetAt: 1789000000000,
+      weeklyPercent: 52,
+      weeklyResetAt: 1789600000000,
+      monthlyPercent: 12.3,
+      monthlyResetAt: 1789000000000,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
+    expect(seen[0]?.authorization).toBe("Bearer zai-secret");
+    expect(seen[0]?.redirect).toBe("error");
+  });
+
+  test("Z.AI quota probes the BigModel region from the provider's own host", async () => {
+    const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url, authorization: headers?.Authorization, redirect: init?.redirect });
+      // Weekly row omits `percentage`: the fallback derives it from currentValue/usage.
+      return new Response(JSON.stringify({
+        success: true,
+        data: {
+          limits: [
+            { type: "CREDIT_LIMIT", unit: 3, number: 5, percentage: 20, currentValue: 200, usage: 1000, nextResetTime: 1789000000000 },
+            { type: "TOKENS_LIMIT", unit: 6, number: 1, currentValue: 156, usage: 300, nextResetTime: 1789600000000 },
+            { type: "TIME_LIMIT", percentage: 7.5, nextResetTime: 1789000000000 },
+          ],
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("zhipu-bigmodel-coding", "https://open.bigmodel.cn/api/coding/paas/v4", "zai-secret"),
+      true,
+    );
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("zai:quota-limit");
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 20,
+      weeklyPercent: 52,
+      monthlyPercent: 7.5,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://open.bigmodel.cn/api/monitor/usage/quota/limit");
+    expect(seen[0]?.authorization).toBe("Bearer zai-secret");
+    expect(seen[0]?.redirect).toBe("error");
+  });
+
+  test("Z.AI quota falls back to legacy field-name payloads", async () => {
+    const seen: Array<{ url: string; authorization?: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url, authorization: headers?.Authorization });
+      return new Response(JSON.stringify({
+        success: true,
         data: { fiveHourPercent: 40.5, weeklyPercent: 52, monthlyMCPUsage: 12.3 },
       }), { status: 200 });
     }) as typeof fetch;
@@ -898,8 +1015,41 @@ describe("fetchProviderQuotaReports", () => {
     });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
+  });
+
+  test("Z.AI quota probes the BigModel Responses endpoint at /api/v1", async () => {
+    const seen: Array<{ url: string; authorization?: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url, authorization: headers?.Authorization });
+      return new Response(JSON.stringify({
+        success: true,
+        data: {
+          limits: [
+            { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 30, currentValue: 300, usage: 1000, nextResetTime: 1789000000000 },
+            { type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 60, nextResetTime: 1789600000000 },
+            { type: "TIME_LIMIT", percentage: 9.5, nextResetTime: 1789000000000 },
+          ],
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("zhipu-bigmodel-coding", "https://open.bigmodel.cn/api/v1", "zai-secret"),
+      true,
+    );
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("zai:quota-limit");
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 30,
+      weeklyPercent: 60,
+      monthlyPercent: 9.5,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://open.bigmodel.cn/api/monitor/usage/quota/limit");
     expect(seen[0]?.authorization).toBe("Bearer zai-secret");
-    expect(seen[0]?.redirect).toBe("error");
   });
 
   test("Z.AI quota treats an unsuccessful payload as a no-report", async () => {
@@ -926,6 +1076,103 @@ describe("fetchProviderQuotaReports", () => {
 
     expect(result.reports).toEqual([]);
     expect(seen).toEqual([]);
+  });
+
+  test("Z.AI quota never probes the BigModel pay-as-you-go endpoint", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("zhipu-bigmodel-coding", "https://open.bigmodel.cn/api/paas/v4"),
+      true,
+    );
+
+    expect(result.reports).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  test("Z.AI quota ignores token rows whose window length does not match", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        limits: [
+          { type: "TOKENS_LIMIT", unit: 3, number: 2, percentage: 40, nextResetTime: 1789000000000 },
+          { type: "TOKENS_LIMIT", unit: 6, number: 2, percentage: 52, nextResetTime: 1789600000000 },
+          { type: "TIME_LIMIT", percentage: 12.3, nextResetTime: 1789000000000 },
+        ],
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.quota).toMatchObject({ monthlyPercent: 12.3 });
+    expect(result.reports[0]?.quota.fiveHourPercent).toBeUndefined();
+    expect(result.reports[0]?.quota.weeklyPercent).toBeUndefined();
+  });
+
+  test("Z.AI quota does not fall back to legacy fields when limits is present but empty", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      success: true,
+      data: { limits: [], fiveHourPercent: 40.5, weeklyPercent: 52, monthlyMCPUsage: 12.3 },
+    }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"), true);
+
+    expect(result.reports).toEqual([]);
+  });
+
+  test("Z.AI quota renders a real v2 coding-plan response (monthly MCP TIME_LIMIT)", async () => {
+    // Sanitized live response captured from the /api/monitor/usage/quota/limit probe
+    // (level=max, v2 protocol): the TIME_LIMIT row is the 30-day MCP tool budget
+    // (search-prime / web-reader / zread), independent of the token windows.
+    const v2Response = {
+      limits: [
+        { type: "TIME_LIMIT", unit: 5, number: 1, usage: 4000, currentValue: 0, remaining: 4000, percentage: 0, nextResetTime: 1788073095998,
+          usageDetails: [{ modelCode: "search-prime", usage: 0 }, { modelCode: "web-reader", usage: 0 }, { modelCode: "zread", usage: 0 }] },
+        { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 100, nextResetTime: 1787056863927 },
+        { type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 20, nextResetTime: 1787641095989 },
+      ],
+      level: "max",
+    };
+    globalThis.fetch = (async () => new Response(JSON.stringify({ success: true, data: v2Response }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 100,
+      fiveHourResetAt: 1787056863927,
+      weeklyPercent: 20,
+      weeklyResetAt: 1787641095989,
+      monthlyPercent: 0,
+      monthlyResetAt: 1788073095998,
+    });
+  });
+
+  test("Z.AI quota renders a real new-protocol response without the monthly MCP row", async () => {
+    // Sanitized live response (level=pro, newer protocol): CREDIT_LIMIT rows only,
+    // no TIME_LIMIT row — the monthly MCP bar must not render.
+    const newProtocolResponse = {
+      limits: [
+        { type: "CREDIT_LIMIT", unit: 3, number: 5, usage: 12000, currentValue: 0, remaining: 12000, percentage: 0 },
+        { type: "CREDIT_LIMIT", unit: 6, number: 1, usage: 60000, currentValue: 0, remaining: 60000, percentage: 0, nextResetTime: 1787649214999 },
+      ],
+      level: "pro",
+    };
+    globalThis.fetch = (async () => new Response(JSON.stringify({ success: true, data: newProtocolResponse }), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 0,
+      weeklyPercent: 0,
+    });
+    expect(result.reports[0]?.quota.monthlyPercent).toBeUndefined();
   });
 
   test("MiniMax quota drops the row when the API omits the plan total after having it", async () => {

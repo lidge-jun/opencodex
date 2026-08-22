@@ -130,7 +130,7 @@ export interface OcxClaudeCodeConfig {
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
   webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
-  visionSidecar?: { backend?: "openai" | "anthropic"; model?: string };
+  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
@@ -774,8 +774,14 @@ export interface OcxSearchConfig {
 export interface OcxVisionSidecarConfig {
   /** Master switch. Default: enabled when the selected backend has a usable credential. */
   enabled?: boolean;
-  /** Description backend. Unset prefers a usable stored Anthropic OAuth credential, else OpenAI. */
-  backend?: "openai" | "anthropic";
+  /**
+   * Description backend. Unset prefers a usable stored Anthropic OAuth credential, else OpenAI —
+   * the historical default order, deliberately unchanged by the union widening (#2188 roadmap
+   * 170/180 revised): "routed" describes through the proxy's OWN routing (loopback
+   * /v1/chat/completions) with a NAMESPACED "provider/model" describer, is explicit-only, and is
+   * never auto-selected from credential availability.
+   */
+  backend?: "openai" | "anthropic" | "routed";
   /** Vision model that describes images. */
   model?: string;
   /** Max description cache misses admitted in one main-model turn. Zero disables description calls. */
