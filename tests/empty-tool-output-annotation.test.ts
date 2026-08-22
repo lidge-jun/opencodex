@@ -77,6 +77,27 @@ describe("openai-chat empty tool output annotation", () => {
     expect(tool?.content).toBe(ANNOTATION);
   });
 
+  test("whitespace-only text-part array is annotated when enabled", () => {
+    const messages = wire(providerWithFlag, toolCallTurn([{ type: "text", text: "   \n  " }]));
+    const tool = messages.find(m => m.role === "tool");
+    expect(tool?.content).toBe(ANNOTATION);
+  });
+
+  test("whitespace-only text-part array stays unchanged when the option is absent", () => {
+    const messages = wire(providerWithoutFlag, toolCallTurn([{ type: "text", text: "   " }]));
+    const tool = messages.find(m => m.role === "tool");
+    expect(tool?.content).toBe("   ");
+  });
+
+  test("image parts with whitespace text are not treated as empty", () => {
+    const messages = wire(providerWithFlag, toolCallTurn([
+      { type: "text", text: "   " },
+      { type: "image", imageUrl: "data:image/png;base64,AAAA" },
+    ]));
+    const tool = messages.find(m => m.role === "tool");
+    expect(tool?.content).not.toBe(ANNOTATION);
+  });
+ 
   test("non-empty result stays byte-identical when enabled", () => {
     const messages = wire(providerWithFlag, toolCallTurn("real output"));
     const tool = messages.find(m => m.role === "tool");
