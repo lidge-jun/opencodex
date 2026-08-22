@@ -87,9 +87,9 @@ describe("provider request pacing queue", () => {
   test("spaces concurrent starts in one provider FIFO and exposes queue state", async () => {
     const clock = fakePacingClock();
     setProviderRequestPacingRuntimeForTest(clock.runtime);
-    const starts: number[] = [];
-    const fetchImpl = Object.assign(async () => {
-      starts.push(clock.now());
+    const started: Array<{ url: string; at: number }> = [];
+    const fetchImpl = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      started.push({ url: String(input), at: clock.now() });
       return new Response("ok");
     }, { preconnect() {} }) as typeof globalThis.fetch;
     const configured = {
@@ -97,18 +97,25 @@ describe("provider request pacing queue", () => {
       fetch: fetchImpl,
     } as OcxProviderConfig & { fetch: typeof globalThis.fetch };
     const send = providerFetch(configured, undefined, { providerName: "demo", modelId: "model-a" });
-    const first = send("https://example.test/v1/chat/completions");
-    const second = send("https://example.test/v1/chat/completions");
-    const third = send("https://example.test/v1/chat/completions");
+    const first = send("https://example.test/v1/first");
+    const second = send("https://example.test/v1/second");
+    const third = send("https://example.test/v1/third");
     await first;
-    expect(starts).toEqual([0]);
+    expect(started).toEqual([{ url: "https://example.test/v1/first", at: 0 }]);
     expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
     clock.advanceBy(100);
     await second;
-    expect(starts).toEqual([0, 100]);
+    expect(started).toEqual([
+      { url: "https://example.test/v1/first", at: 0 },
+      { url: "https://example.test/v1/second", at: 100 },
+    ]);
     clock.advanceBy(100);
     await third;
-    expect(starts).toEqual([0, 100, 200]);
+    expect(started).toEqual([
+      { url: "https://example.test/v1/first", at: 0 },
+      { url: "https://example.test/v1/second", at: 100 },
+      { url: "https://example.test/v1/third", at: 200 },
+    ]);
     const status = providerRequestPacingStatus("demo", configured);
     expect(status.queued).toBe(0);
     expect(status.lastModelId).toBe("model-a");
