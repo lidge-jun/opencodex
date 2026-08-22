@@ -11,9 +11,9 @@ Execute stages 3–8:
    before changing branches.
 2. For `pin-updated` and `main-behind`, create
    `sync/upstream-YYYYMMDD` from the current `origin/main` and merge
-   `origin/vendor/main`. Replay the fork overlay and selected `feat/*` heads
-   documented in `docs/fork/README.md` only when they are not already
-   contained, using `scripts/fork/sync/contained.ts` or
+   `origin/vendor/main`. Replay `fork:` commits on `origin/main` and selected
+   `feat/*` heads documented in `docs/fork/README.md` only when they are not
+   already contained, using `scripts/fork/sync/contained.ts` or
    `git merge-base --is-ancestor`. Never run
    `git switch -C run/main vendor/main` on this daily path, and never rewrite
    or force-push `origin/main`.
