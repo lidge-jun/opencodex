@@ -244,6 +244,16 @@ differs. A relative path in any of those three environment overrides is refused,
 and the client can have different working directories and would otherwise disagree about which
 file is meant.
 
+ZCode 3.8.1 may save runtime-derived `reasoning`, `limit.output`, and default context metadata back
+into the generated `provider.opencodex.models` entries. Managed integration status treats only
+those documented additions as refreshable drift. Provider identity and connection settings,
+including `options.baseURL`, model membership, names, modalities, and any context limit OpenCodex
+emitted authoritatively remain protected; editing them reports `conflict / foreign-edit` instead of
+overwriting the file. An ownership record created by an older OpenCodex version can recover
+automatically when the generated catalog is otherwise unchanged. If both the catalog and the block
+changed, re-apply only after reviewing the file because the older record cannot prove which change
+was ZCode-derived.
+
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by
 hand, and `--out` refuses to overwrite an existing file without `--force`, because replacing a
