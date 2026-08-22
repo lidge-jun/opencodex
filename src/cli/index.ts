@@ -143,6 +143,12 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
   const reservedLoopbackPort = config.unauthenticatedLoopbackListener?.enabled
     ? config.unauthenticatedLoopbackListener.port
     : undefined;
+  const reservedDashboardPort = config.dashboardListener?.enabled
+    ? config.dashboardListener.port
+    : undefined;
+  const reservedPorts = [reservedLoopbackPort, reservedDashboardPort].filter(
+    (port): port is number => port !== undefined,
+  );
   // Before the reclaim path, not after (#1102). Asking for the port the loopback listener is
   // configured to bind is a configuration mistake, and reclaim would spend up to 60 seconds
   // waiting for a socket to free before reporting "port is busy" — the wrong diagnosis for a
@@ -150,6 +156,11 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
   if (reservedLoopbackPort !== undefined && preferred === reservedLoopbackPort) {
     throw new Error(
       `Port ${preferred} is reserved for unauthenticatedLoopbackListener; choose a different proxy port.`,
+    );
+  }
+  if (reservedDashboardPort !== undefined && preferred === reservedDashboardPort) {
+    throw new Error(
+      `Port ${preferred} is reserved for dashboardListener; choose a different proxy port.`,
     );
   }
   // Soft start: brief prefer-retry then ephemeral hop.
@@ -179,7 +190,7 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
       // bind (#1102). Without this, `--port <loopback port>` binds the public listener
       // first and the loopback bind then fails, rolling back a startup that was only
       // ever a config collision.
-      ...(reservedLoopbackPort !== undefined ? { reservedPort: reservedLoopbackPort } : {}),
+      ...(reservedPorts.length > 0 ? { reservedPort: reservedPorts } : {}),
     });
     if (preferred > 0 && selected !== preferred) {
       console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);

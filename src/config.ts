@@ -1258,6 +1258,17 @@ const configSchema = z.object({
     z.object({ enabled: z.literal(false) }),
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535) }),
   ]).optional().catch(undefined),
+  // Same discriminated shape and degradation policy as unauthenticatedLoopbackListener: an
+  // opt-in surface whose hand-edit typos must never reset providers/apiKeys through the
+  // backup-and-defaults repair path. Write-time rejection lives in dashboardListenerError().
+  dashboardListener: z.union([
+    z.object({ enabled: z.literal(false) }),
+    z.object({
+      enabled: z.literal(true),
+      port: z.number().int().min(1).max(65535),
+      hostname: z.string().trim().min(1),
+    }),
+  ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   // A retry can be billable, so absence and malformed hand edits both stay off.
@@ -2505,6 +2516,45 @@ function loopbackListenerPortError(value: unknown): string | null {
 }
 
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
+  /**
+   * Write-time relationship checks for the dashboard listener, mirroring
+   * loopbackListenerPortError: the schema validates each field alone, while port collisions
+   * are between fields. A live caller is told; a hand-edited config on the read path
+   * degrades to undefined via the schema catch rather than resetting the file.
+   */
+  function dashboardListenerError(value: unknown): string | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const listener = (value as Record<string, unknown>).dashboardListener;
+    if (listener === undefined) return null;
+    if (!listener || typeof listener !== "object" || Array.isArray(listener)) {
+      return "schema_invalid: dashboardListener: must be an object or omitted";
+    }
+    const entry = listener as Record<string, unknown>;
+    // Real boolean required, for the same reason as the loopback listener: a "true" string
+    // would otherwise be silently deleted by the schema catch while the operator believes
+    // the listener is on.
+    if (typeof entry.enabled !== "boolean") {
+      return "schema_invalid: dashboardListener.enabled: must be a boolean";
+    }
+    if (entry.enabled !== true) return null;
+    const listenerPort = entry.port;
+    if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
+      return "schema_invalid: dashboardListener.port: must be an integer port when enabled";
+    }
+    const listenerHostname = entry.hostname;
+    if (typeof listenerHostname !== "string" || !listenerHostname.trim()) {
+      return "schema_invalid: dashboardListener.hostname: must be a non-blank bind address when enabled";
+    }
+    const proxyPort = (value as Record<string, unknown>).port;
+    if (typeof proxyPort === "number" && proxyPort === listenerPort) {
+      return "schema_invalid: dashboardListener.port: must differ from the proxy port";
+    }
+    const loopback = (value as Record<string, unknown>).unauthenticatedLoopbackListener as Record<string, unknown> | undefined;
+    if (loopback && loopback.enabled === true && loopback.port === listenerPort) {
+      return "schema_invalid: dashboardListener.port: must differ from unauthenticatedLoopbackListener.port";
+    }
+    return null;
+  }
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
@@ -2514,7 +2564,8 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexAccountPrioritiesError(value)
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
-    ?? loopbackListenerPortError(value);
+    ?? loopbackListenerPortError(value)
+    ?? dashboardListenerError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) {
