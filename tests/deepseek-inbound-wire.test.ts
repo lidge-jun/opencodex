@@ -12,6 +12,13 @@
  * assert the captured upstream URL, which is externally observable.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { safeConfigDTO, providerManagementConfigError } from "../src/server/auth-cors";
+import {
+  modelResponsesCompatibilityConfigError,
+  modelResponsesTerminalRepairConfigError,
+  responsesTerminalRepairConfigError,
+} from "../src/config";
+import type { OcxConfig } from "../src/types";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import {
   getProviderRegistryEntry,
@@ -1013,5 +1020,203 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
     const input = (JSON.parse(String(built.body)) as { input: Array<{ type?: string; call_id?: string }> }).input;
     expect(input.some(item => item.call_id === "call_orphan")).toBe(false);
     expect(input.some(item => item.type === "message")).toBe(true);
+  });
+
+  describe("Custom provider Responses terminal repair escape hatch (#1809)", () => {
+    test("custom provider opts into default 500ms terminal repair via modelResponsesCompatibility", () => {
+      const customProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: {
+          "My-Model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "my-model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MY-MODEL")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "My-Model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "other-model")).toBeUndefined();
+    });
+
+    test("custom provider specifies explicit graceMs via modelResponsesTerminalRepair", () => {
+      const customProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "Model-Num": 1500,
+          "Model-Obj": { graceMs: 2000 },
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-num")).toEqual({ graceMs: 1500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MODEL-NUM")).toEqual({ graceMs: 1500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-obj")).toEqual({ graceMs: 2000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MODEL-OBJ")).toEqual({ graceMs: 2000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "unconfigured")).toBeUndefined();
+    });
+
+    test("custom provider specifies provider-level responsesTerminalRepair", () => {
+      const customProvString = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: "terminal-repair" as const,
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProvString, "any-model")).toEqual({ graceMs: 500 });
+
+      const customProvNumber = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProvNumber, "any-model")).toEqual({ graceMs: 750 });
+    });
+
+    test("rejects repair for non-responses wires even when compatibility is set", () => {
+      const chatProv = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: {
+          "my-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", chatProv, "my-model")).toBeUndefined();
+    });
+
+    test("respects per-model modelAdapters overrides", () => {
+      const hybridProv = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelAdapters: {
+          "responses-model": "openai-responses",
+        },
+        modelResponsesCompatibility: {
+          "responses-model": "terminal-repair" as const,
+          "chat-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hybridProv, "responses-model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hybridProv, "chat-model")).toBeUndefined();
+    });
+
+    test("fails closed on non-positive or invalid grace values", () => {
+      const invalidProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+        modelResponsesTerminalRepair: {
+          "zero-grace": 0,
+          "neg-grace": -500,
+          "nan-grace": NaN,
+        },
+        modelResponsesCompatibility: {
+          "compat-zero": "terminal-repair" as const,
+          "compat-neg": "terminal-repair" as const,
+          "compat-nan": "terminal-repair" as const,
+        },
+      };
+      const invalidCompatProv = {
+        ...invalidProv,
+        modelResponsesTerminalRepair: {
+          "compat-zero": 0,
+          "compat-neg": -500,
+          "compat-nan": NaN,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "zero-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "neg-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "nan-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-zero")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-neg")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-nan")).toBeUndefined();
+    });
+
+    test("canonical ChatGPT forward provider never undergoes terminal repair", () => {
+      const canonicalOpenAi = {
+        adapter: "openai-responses",
+        authMode: "forward" as const,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        responsesTerminalRepair: "terminal-repair" as const,
+        modelResponsesTerminalRepair: { "gpt-5": 1000 },
+        modelResponsesCompatibility: { "gpt-5": "terminal-repair" as const },
+      };
+      expect(providerModelResponsesTerminalRepair("openai", canonicalOpenAi, "gpt-5")).toBeUndefined();
+    });
+
+    test("duplicate case-folded keys fail closed on ambiguity", () => {
+      const conflictProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "My-Model": 500,
+          "my-model": 1500,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "My-Model")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "my-model")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "MY-MODEL")).toBeUndefined();
+    });
+
+    test("clamps grace period to maximum 60,000 ms", () => {
+      const hugeProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "huge-model": 120_000,
+          "max-safe": Number.MAX_SAFE_INTEGER,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hugeProv, "huge-model")).toEqual({ graceMs: 60_000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hugeProv, "max-safe")).toEqual({ graceMs: 60_000 });
+    });
+
+    test("safeConfigDTO preserves terminal-repair configuration keys", () => {
+      const config: OcxConfig = {
+        providers: {
+          "custom-gw": {
+            adapter: "openai-responses",
+            baseUrl: "https://custom-gateway.test/v1",
+            modelResponsesCompatibility: { "my-model": "terminal-repair" },
+            modelResponsesTerminalRepair: { "my-model": 1500 },
+            responsesTerminalRepair: { graceMs: 800 },
+          },
+        },
+      } as unknown as OcxConfig;
+      const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+      expect(dto.providers["custom-gw"].modelResponsesCompatibility).toEqual({ "my-model": "terminal-repair" });
+      expect(dto.providers["custom-gw"].modelResponsesTerminalRepair).toEqual({ "my-model": 1500 });
+      expect(dto.providers["custom-gw"].responsesTerminalRepair).toEqual({ graceMs: 800 });
+    });
+
+    test("providerManagementConfigError validates terminal-repair configuration", () => {
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "my-model": "terminal-repair" },
+        modelResponsesTerminalRepair: { "my-model": 1500 },
+        responsesTerminalRepair: 800,
+      })).toBeNull();
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "my-model": "invalid" },
+      })).toContain('modelResponsesCompatibility.my-model must be "terminal-repair"');
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: -500,
+      })).toContain('responsesTerminalRepair must be "terminal-repair", a positive number');
+
+      const canonicalOpenAi = {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      };
+      expect(responsesTerminalRepairConfigError("terminal-repair", "responsesTerminalRepair", "openai", canonicalOpenAi))
+        .toContain("responsesTerminalRepair is not supported on the canonical ChatGPT forward provider");
+      expect(modelResponsesCompatibilityConfigError({ "gpt-5": "terminal-repair" }, "modelResponsesCompatibility", "openai", canonicalOpenAi))
+        .toContain("modelResponsesCompatibility is not supported on the canonical ChatGPT forward provider");
+      expect(modelResponsesTerminalRepairConfigError({ "gpt-5": 500 }, "modelResponsesTerminalRepair", "openai", canonicalOpenAi))
+        .toContain("modelResponsesTerminalRepair is not supported on the canonical ChatGPT forward provider");
+    });
   });
 });

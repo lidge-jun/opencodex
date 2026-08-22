@@ -19,6 +19,7 @@ import {
 } from "../adapters/cursor/discovery";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
+import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -2877,18 +2878,91 @@ export function providerModelResponsesUpstreamStreaming(
   return entry.modelResponsesUpstreamStreaming[modelId.trim().toLowerCase()];
 }
 
-/** Resolve a registry-only terminal-repair policy for native Responses streams. */
+const DEFAULT_TERMINAL_REPAIR_GRACE_MS = 500;
+const MAX_TERMINAL_REPAIR_GRACE_MS = 60_000;
+
+function lookupCaseInsensitive<T>(map: Record<string, T> | undefined, key: string): T | undefined {
+  if (!map) return undefined;
+  const target = key.trim().toLowerCase();
+  if (!target) return undefined;
+  let matchedValue: T | undefined = undefined;
+  let matchCount = 0;
+  for (const [k, v] of Object.entries(map)) {
+    if (k.trim().toLowerCase() === target) {
+      matchedValue = v;
+      matchCount++;
+    }
+  }
+  // If multiple keys case-fold to the same target (e.g. "My-Model" and "my-model"), reject as ambiguous
+  if (matchCount > 1) return undefined;
+  return matchedValue;
+}
+
+/**
+ * Resolve terminal-repair policy for native Responses streams (supports registry presets
+ * and custom-provider configuration overrides, issue #1809).
+ */
 export function providerModelResponsesTerminalRepair(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode" | "modelAdapters" | "modelResponsesCompatibility" | "modelResponsesTerminalRepair" | "responsesTerminalRepair">>,
   modelId: string,
 ): ResponsesTerminalRepairPolicy | undefined {
+  // Canonical ChatGPT forward traffic must never undergo synthetic terminal repair
+  if (isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return undefined;
+  }
+
+  const modelKey = modelId.trim().toLowerCase();
+  const effectiveAdapter = lookupCaseInsensitive(provider.modelAdapters, modelId) ?? provider.adapter;
+
+  // Custom provider opt-in: effective wire must be openai-responses
+  if (effectiveAdapter === "openai-responses") {
+    // 1. Check explicit modelResponsesCompatibility
+    const compat = lookupCaseInsensitive(provider.modelResponsesCompatibility, modelId);
+    if (compat === "terminal-repair") {
+      const raw = lookupCaseInsensitive(provider.modelResponsesTerminalRepair, modelId);
+      if (raw !== undefined) {
+        const grace = typeof raw === "number" ? raw : (typeof raw === "object" && raw && "graceMs" in raw ? (raw as { graceMs?: unknown }).graceMs : undefined);
+        const graceMs = Math.floor(typeof grace === "number" ? grace : 0);
+        if (!Number.isFinite(graceMs) || graceMs <= 0) return undefined;
+        return { graceMs: Math.min(graceMs, MAX_TERMINAL_REPAIR_GRACE_MS) };
+      }
+      return { graceMs: DEFAULT_TERMINAL_REPAIR_GRACE_MS };
+    }
+
+    // 2. Check explicit modelResponsesTerminalRepair
+    const rawModel = lookupCaseInsensitive(provider.modelResponsesTerminalRepair, modelId);
+    if (rawModel !== undefined) {
+      const grace = typeof rawModel === "number" ? rawModel : (typeof rawModel === "object" && rawModel && "graceMs" in rawModel ? (rawModel as { graceMs?: unknown }).graceMs : undefined);
+      const graceMs = Math.floor(typeof grace === "number" ? grace : 0);
+      if (Number.isFinite(graceMs) && graceMs > 0) {
+        return { graceMs: Math.min(graceMs, MAX_TERMINAL_REPAIR_GRACE_MS) };
+      }
+      // Explicit model-level setting exists but is non-positive/invalid: fail closed, do not fall back to provider default
+      return undefined;
+    }
+
+    // 3. Check provider-level responsesTerminalRepair
+    if (provider.responsesTerminalRepair !== undefined) {
+      if (provider.responsesTerminalRepair === "terminal-repair") return { graceMs: DEFAULT_TERMINAL_REPAIR_GRACE_MS };
+      const grace = typeof provider.responsesTerminalRepair === "number"
+        ? provider.responsesTerminalRepair
+        : (typeof provider.responsesTerminalRepair === "object" && provider.responsesTerminalRepair && "graceMs" in provider.responsesTerminalRepair ? (provider.responsesTerminalRepair as { graceMs?: unknown }).graceMs : undefined);
+      const graceMs = Math.floor(typeof grace === "number" ? grace : 0);
+      if (Number.isFinite(graceMs) && graceMs > 0) {
+        return { graceMs: Math.min(graceMs, MAX_TERMINAL_REPAIR_GRACE_MS) };
+      }
+      return undefined;
+    }
+  }
+
+  // Fall back to registry-defined policy
   const entry = getProviderRegistryEntry(id);
   if (!entry?.modelResponsesTerminalRepair || !providerMatchesRegistryTransport(id, provider)) return undefined;
-  const policy = entry.modelResponsesTerminalRepair[modelId.trim().toLowerCase()];
+  const policy = entry.modelResponsesTerminalRepair[modelKey];
   const graceMs = Math.floor(policy?.graceMs ?? 0);
   if (!Number.isFinite(graceMs) || graceMs <= 0) return undefined;
-  return { graceMs };
+  return { graceMs: Math.min(graceMs, MAX_TERMINAL_REPAIR_GRACE_MS) };
 }
 
 /**

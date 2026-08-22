@@ -1104,6 +1104,71 @@ export function modelAdapterRecordConfigError(
   return null;
 }
 
+export function modelResponsesCompatibilityConfigError(
+  value: unknown,
+  field = "modelResponsesCompatibility",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  for (const [key, entry] of entries) {
+    if (!key.trim() || key !== key.trim()) return `${field} keys must be nonblank trimmed model ids`;
+    if (entry !== "terminal-repair") {
+      return `${field}.${key} must be "terminal-repair"`;
+    }
+  }
+  return null;
+}
+
+export function modelResponsesTerminalRepairConfigError(
+  value: unknown,
+  field = "modelResponsesTerminalRepair",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  for (const [key, entry] of entries) {
+    if (!key.trim() || key !== key.trim()) return `${field} keys must be nonblank trimmed model ids`;
+    const grace = typeof entry === "number" ? entry : (typeof entry === "object" && entry ? (entry as { graceMs?: unknown }).graceMs : null);
+    if (typeof grace !== "number" || !Number.isFinite(grace) || grace <= 0) {
+      return `${field}.${key} must be a positive number of milliseconds or { graceMs: number }`;
+    }
+  }
+  return null;
+}
+
+export function responsesTerminalRepairConfigError(
+  value: unknown,
+  field = "responsesTerminalRepair",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  if (value === "terminal-repair") return null;
+  const grace = typeof value === "number" ? value : (typeof value === "object" && value ? (value as { graceMs?: unknown }).graceMs : null);
+  if (typeof grace !== "number" || !Number.isFinite(grace) || grace <= 0) {
+    return `${field} must be "terminal-repair", a positive number of milliseconds, or { graceMs: number }`;
+  }
+  return null;
+}
+
 const CODEX_ACCOUNT_NAMESPACES_RECORD_ERROR =
   "codexAccountNamespaces must be a plain object mapping account selectors to Codex account ids";
 const CODEX_ACCOUNT_NAMESPACE_KEY_ERROR =
@@ -1471,6 +1536,36 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
+      });
+    }
+    const compatError = modelResponsesCompatibilityConfigError(
+      (provider as { modelResponsesCompatibility?: unknown }).modelResponsesCompatibility,
+    );
+    if (compatError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelResponsesCompatibility"],
+        message: compatError,
+      });
+    }
+    const modelRepairError = modelResponsesTerminalRepairConfigError(
+      (provider as { modelResponsesTerminalRepair?: unknown }).modelResponsesTerminalRepair,
+    );
+    if (modelRepairError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelResponsesTerminalRepair"],
+        message: modelRepairError,
+      });
+    }
+    const repairError = responsesTerminalRepairConfigError(
+      (provider as { responsesTerminalRepair?: unknown }).responsesTerminalRepair,
+    );
+    if (repairError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "responsesTerminalRepair"],
+        message: repairError,
       });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
