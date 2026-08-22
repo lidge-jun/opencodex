@@ -1,7 +1,7 @@
 # Fork Sync Automation Design
 
-Date: 2026-08-22  
-Status: approved implementation design  
+Date: 2026-08-22
+Status: approved implementation design
 Scope: fork-owned automation for polling released upstream tags, maintaining
 the two vendor refs, and notifying a Cursor Automation that prepares a human
 reviewable `origin/main` rebuild.
