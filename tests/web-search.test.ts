@@ -2401,3 +2401,33 @@ describe("web-search sidecar live streaming (streamRoutedModelOutput)", () => {
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
   });
 });
+
+describe("Antigravity sidecar accountId", () => {
+  test("forwards AdapterFetchContext.accountId to fetchResponse", async () => {
+    let received: string | undefined;
+    const adapter: ProviderAdapter = {
+      name: "antigravity-sidecar",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async (_request, ctx) => {
+        received = ctx?.accountId;
+        return new Response("wire", { status: 200 });
+      },
+      async *parseStream() {
+        yield { type: "text_delta", text: "ok" };
+        yield { type: "done" };
+      },
+    };
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      accountId: "antigravity-account-a",
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+    await response.text();
+    expect(received).toBe("antigravity-account-a");
+  });
+});

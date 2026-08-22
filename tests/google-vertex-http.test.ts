@@ -2,9 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { AdapterRequest } from "../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../src/adapters/google-http";
 import { safeVertexHttpErrorMessage, retryableGoogleStatus } from "../src/adapters/google-errors";
+import { clearAntigravityAccountCooldown, isAntigravityAccountInCooldown } from "../src/oauth/antigravity-routing";
 
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  clearAntigravityAccountCooldown("account-http-geo");
+});
 
 const request: AdapterRequest = {
   url: "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse",
@@ -203,6 +207,24 @@ describe("vertex retry fetch", () => {
     const res403 = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });
     expect(res403.status).toBe(403);
     expect(await res403.text()).toContain("Vertex AI access denied");
+  });
+
+  test("records an Antigravity geo-block cooldown from its HTTP response", async () => {
+    const mock = mockFetch([
+      new Response(
+        vertexError(403, "PERMISSION_DENIED", "User location is not supported for the API use"),
+        { status: 403 },
+      ),
+    ]);
+
+    const res = await fetchAntigravityWithRetry(request, {
+      timeoutMs: 5_000,
+      accountId: "account-http-geo",
+    });
+
+    expect(res.status).toBe(403);
+    expect(mock.calls).toHaveLength(1);
+    expect(isAntigravityAccountInCooldown("account-http-geo")).toBe(true);
   });
 
   test("aborts promptly when the caller signal fires", async () => {
