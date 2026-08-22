@@ -167,7 +167,7 @@ export async function runInit(): Promise<void> {
       defaultProvider: providerName,
     };
 
-    saveConfig(config);
+    saveConfig(config, { surface: "cli", detail: "ocx init" });
     // Init writes a fresh config, so a stale pre-migration backup from a previous
     // installation would make the next `ocx start` crash on a stale-backup
     // collision (issue #257). But only a STALE backup (unparseable, or already a

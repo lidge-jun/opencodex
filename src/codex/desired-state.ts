@@ -117,7 +117,7 @@ export function setIntegrationEnabled(
     if (Object.keys(integrations).length === 0) delete config.clientIntegrations;
     else config.clientIntegrations = integrations;
     return { changed: true, value: enabled };
-  });
+  }, { surface: "internal", detail: "desired-state: setIntegrationEnabled" });
 
   if (outcome.status !== "unavailable") {
     return { ok: true, status: outcome.status, enabled };

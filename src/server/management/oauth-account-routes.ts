@@ -376,7 +376,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
     };
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/oauth/accounts/pool" });
     reconcileLiveStateStores();
     return jsonResponse({
       ok: true,
@@ -601,7 +601,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const key = "ocx_data_" + randomBytes(20).toString("hex");
     const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
     config.apiKeys = [...(config.apiKeys ?? []), entry];
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "POST /api/keys" });
     reconcileLiveStateStores();
     return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
   }
@@ -615,7 +615,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
     if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
     entry.name = nameField.value;
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PATCH /api/keys" });
     reconcileLiveStateStores();
     // Never echo key material from a rename.
     return jsonResponse({ id: entry.id, name: entry.name, createdAt: entry.createdAt }, 200, req, config);
@@ -629,7 +629,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
     // A stale id must not read as a successful revocation.
     if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "DELETE /api/keys" });
     reconcileLiveStateStores();
     return jsonResponse({ success: true }, 200, req, config);
   }

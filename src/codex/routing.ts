@@ -1230,7 +1230,7 @@ function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   const releasedPin = releaseCodexAccountPinFor(config, accountId);
   if (config.activeCodexAccountId === accountId && !releasedPin) return;
   config.activeCodexAccountId = accountId;
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "internal", detail: "routing: active codex account selection" });
 }
 
 /** Quota strategy persists; RR/fill-first keep a process-local cursor only. */
@@ -1322,7 +1322,7 @@ function releaseDrainedCodexAccountPin(config: OcxConfig): void {
     || !hasCodexQuotaHeadroom(config, pinned);
   if (!drained) return;
   clearCodexAccountPin(config);
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "internal", detail: "routing: clear drained codex account pin" });
 }
 
 function applyQuotaAutoSwitch(

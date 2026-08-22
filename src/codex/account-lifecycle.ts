@@ -142,7 +142,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       try {
         // Persist first for durable configs. Destructive cleanup below must never run for a
         // deletion that failed to commit. Transient configs intentionally skip this write.
-        saveConfigPreservingClaudeCode(runtimeConfig);
+        saveConfigPreservingClaudeCode(runtimeConfig, { surface: "internal", detail: "account lifecycle: remove account" });
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
         try {

@@ -68,7 +68,7 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
     console.error(`Error: defaultProvider "${config.defaultProvider}" does not exist in providers. Aborting.`);
     process.exit(1);
   }
-  saveConfig(config);
+  saveConfig(config, { surface: "cli", detail: "ocx provider set" });
 }
 
 // ---------------------------------------------------------------------------

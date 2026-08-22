@@ -50,6 +50,7 @@ import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
+import { redactSecrets } from "./lib/redact";
 import {
   resolveTrustedWindowsPowerShellExe,
   resolveTrustedWindowsSystemDirectory,
@@ -2638,6 +2639,40 @@ export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
 
 const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
+
+/**
+ * Who performed a persisted config mutation. `surface` separates the two human-facing
+ * entry points (management API vs CLI) from internal/automatic writers so an operator
+ * can tell a GUI edit from a background migration at a glance.
+ */
+export interface ConfigMutationSource {
+  readonly surface: "cli" | "api" | "internal";
+  /** Human-readable route or command, e.g. "PUT /api/providers/blsc" or "ocx provider set". */
+  readonly detail: string;
+}
+
+export interface ConfigMutationAuditRow {
+  id: number;
+  createdAt: number;
+  surface: "cli" | "api" | "internal";
+  detail: string;
+  fields: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}
+
+/** Bounded audit retention: newest N rows survive each insert; older rows are pruned. */
+const CONFIG_AUDIT_MAX_ROWS = 5_000;
+let configAuditMaxRows = CONFIG_AUDIT_MAX_ROWS;
+
+/** Test-only seam: shrink the audit retention bound without building a 5k-row fixture. */
+export function setConfigAuditMaxRowsForTests(value: number | null): void {
+  configAuditMaxRows = value ?? CONFIG_AUDIT_MAX_ROWS;
+}
+/** A single changed-field path list is capped so a wholesale rewrite cannot bloat the row. */
+const CONFIG_AUDIT_MAX_FIELDS = 64;
+/** Redacted before/after values are capped per entry; longer values are truncated. */
+const CONFIG_AUDIT_MAX_VALUE_CHARS = 4_096;
 let warnedConfigMutationDirectoryAcl = false;
 
 export class ConfigMutationLockError extends Error {
@@ -2712,6 +2747,7 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
     initializeConfigGeneration(database);
+    ensureConfigMutationAuditTable(database);
   } catch (cause) {
     if (transactionOpen) {
       try { database?.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
@@ -2744,6 +2780,165 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     configMutationDatabase = null;
     try { database.close(); } catch { /* the OS lock is released with the handle */ }
   }
+}
+
+const CONFIG_MUTATION_AUDIT_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS config_mutation_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    surface TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    fields TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL
+  )
+`;
+
+function ensureConfigMutationAuditTable(database: Database): void {
+  database.exec(CONFIG_MUTATION_AUDIT_TABLE_SQL);
+}
+
+/**
+ * Append one audit row inside the CURRENT open config-mutation transaction, so the
+ * audit entry commits or rolls back atomically with the config bytes it describes.
+ * Retention is bounded: only the newest CONFIG_AUDIT_MAX_ROWS rows survive.
+ */
+export function recordConfigMutationInCurrentTransaction(
+  source: ConfigMutationSource,
+  fields: string[],
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): void {
+  if (configMutationLockDepth < 1 || !configMutationDatabase) {
+    throw new Error(
+      "recordConfigMutationInCurrentTransaction requires an open config mutation transaction.",
+    );
+  }
+  ensureConfigMutationAuditTable(configMutationDatabase);
+  configMutationDatabase.prepare(`
+    INSERT INTO config_mutation_audit (created_at, surface, detail, fields, before_json, after_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(Date.now(), source.surface, source.detail, JSON.stringify(fields), JSON.stringify(before), JSON.stringify(after));
+  // Keep the newest CONFIG_AUDIT_MAX_ROWS rows: delete every row at or below the id of
+  // the (N+1)-th newest entry. COALESCE keeps a small table a no-op.
+  configMutationDatabase.exec(`
+    DELETE FROM config_mutation_audit
+    WHERE id <= COALESCE((
+      SELECT id FROM config_mutation_audit ORDER BY id DESC LIMIT 1 OFFSET ${configAuditMaxRows}
+    ), 0)
+  `);
+}
+
+/**
+ * Read the bounded audit trail, newest first. Defaults to 100 rows; the cap is 1000.
+ * Missing database or table yields an empty trail, never an error.
+ */
+export function readConfigMutationAudit(limit = 100): { rows: ConfigMutationAuditRow[]; maxRows: number } {
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 100;
+  const path = configMutationDatabasePath();
+  if (!existsSync(path)) return { rows: [], maxRows: configAuditMaxRows };
+  let database: Database | undefined;
+  try {
+    // Read-only like the generation observer: a management read must never create
+    // the coordinator database; the first config write under the mutation lock does.
+    database = new Database(path, { readonly: true });
+    const rows = database.prepare(`
+      SELECT id, created_at AS createdAt, surface, detail, fields,
+             before_json AS beforeJson, after_json AS afterJson
+      FROM config_mutation_audit
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(safeLimit).map((row: unknown) => {
+      const record = row as Record<string, unknown>;
+      return {
+        id: Number(record.id),
+        createdAt: Number(record.createdAt),
+        surface: String(record.surface) as ConfigMutationAuditRow["surface"],
+        detail: String(record.detail),
+        fields: JSON.parse(String(record.fields)) as string[],
+        before: JSON.parse(String(record.beforeJson)) as Record<string, unknown>,
+        after: JSON.parse(String(record.afterJson)) as Record<string, unknown>,
+      };
+    });
+    return { rows, maxRows: configAuditMaxRows };
+  } catch {
+    return { rows: [], maxRows: configAuditMaxRows };
+  } finally {
+    try { database?.close(); } catch { /* read path is best-effort */ }
+  }
+}
+
+function isPlainConfigObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Collect changed dotted paths, descending at most three object levels (e.g. providers.<id>.<field>). */
+function collectConfigDiffPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string,
+  depth: number,
+  out: string[],
+): void {
+  if (out.length >= CONFIG_AUDIT_MAX_FIELDS) return;
+  const beforeObject = isPlainConfigObject(before);
+  const afterObject = isPlainConfigObject(after);
+  if (beforeObject && afterObject && depth < 3) {
+    const keys = new Set([
+      ...Object.keys(before),
+      ...Object.keys(after),
+    ]);
+    for (const key of keys) {
+      const nextPrefix = prefix ? `${prefix}.${key}` : key;
+      collectConfigDiffPaths(before[key], after[key], nextPrefix, depth + 1, out);
+    }
+    return;
+  }
+  if (!deepEqual(before, after)) out.push(prefix || "<root>");
+}
+
+function extractConfigValueAtPath(root: unknown, path: string): unknown {
+  let current = root;
+  if (path === "<root>") return root;
+  for (const part of path.split(".")) {
+    if (!isPlainConfigObject(current)) return undefined;
+    current = current[part];
+    if (current === undefined) return undefined;
+  }
+  return current;
+}
+
+/** Redact secrets and bound the serialized size of one audit value. */
+function boundAuditValue(value: unknown, key: string): unknown {
+  // Wrap in an object so redactSecrets can see the field name: a bare string leaf
+  // like `sk-old` has no context of its own and would otherwise survive unmasked.
+  const wrapped = redactSecrets({ [key]: value });
+  const redacted = (wrapped as Record<string, unknown>)[key];
+  const text = JSON.stringify(redacted);
+  if (text === undefined) return null;
+  return text.length <= CONFIG_AUDIT_MAX_VALUE_CHARS
+    ? redacted
+    : `${text.slice(0, CONFIG_AUDIT_MAX_VALUE_CHARS)}…[truncated]`;
+}
+
+/**
+ * Build the bounded, redacted before/after snapshot for one config write. Both inputs
+ * must be parsed config objects (raw JSON text must be JSON.parsed by the caller).
+ */
+export function buildConfigMutationSnapshot(
+  beforeRaw: unknown,
+  afterRaw: unknown,
+): { fields: string[]; before: Record<string, unknown>; after: Record<string, unknown> } {
+  const fields: string[] = [];
+  collectConfigDiffPaths(beforeRaw, afterRaw, "", 0, fields);
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  for (const path of fields) {
+    const key = path.split(".").at(-1) ?? path;
+    before[path] = boundAuditValue(extractConfigValueAtPath(beforeRaw, path), key);
+    after[path] = boundAuditValue(extractConfigValueAtPath(afterRaw, path), key);
+  }
+  return { fields, before, after };
 }
 
 function bumpGenerationForCooperatingConfigWrite(): void {
@@ -2870,12 +3065,20 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
 }
 
 /** Persist `config` to config.json under the config-mutation lock. */
-export function saveConfig(config: OcxConfig): void {
+export function saveConfig(
+  config: OcxConfig,
+  source: ConfigMutationSource = { surface: "internal", detail: "saveConfig" },
+): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
-    const projected = projectCustomModelCatalogMigration(readRawConfigJson(), config);
-    if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+    const beforeRaw = readRawConfigJson();
+    const projected = projectCustomModelCatalogMigration(beforeRaw, config);
+    if (persistConfigUnlocked(projected)) {
+      bumpGenerationForCooperatingConfigWrite();
+      const snapshot = buildConfigMutationSnapshot(beforeRaw, projected);
+      recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
+    }
     adoptCustomModelCatalogMigration(config, projected);
   });
 }
@@ -2911,6 +3114,7 @@ function unavailableConfigMutationReason(snapshot: ConfigFileSnapshot): "missing
  */
 export function mutatePersistedConfig<T>(
   mutate: (config: OcxConfig) => PersistedConfigMutation<T>,
+  source: ConfigMutationSource = { surface: "internal", detail: "mutatePersistedConfig" },
 ): PersistedConfigMutationOutcome<T> {
   // Avoid creating/opening the coordinator database for a read-path update that already knows
   // there is no valid config. The same check runs again under the transaction for authority.
@@ -2961,7 +3165,11 @@ export function mutatePersistedConfig<T>(
         commitBase.diagnostics.config,
         confirmedConfig,
       );
-      if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+      if (persistConfigUnlocked(projected)) {
+        bumpGenerationForCooperatingConfigWrite();
+        const snapshot = buildConfigMutationSnapshot(commitBase.diagnostics.config, projected);
+        recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
+      }
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -3289,7 +3497,10 @@ function readPersistedServerBinding(
  * Custom-model rows are merged by their stable `id`, preserving independent
  * edits and deletions across stale whole-config saves.
  */
-export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
+export function saveConfigPreservingClaudeCode(
+  config: OcxConfig,
+  source: ConfigMutationSource = { surface: "internal", detail: "saveConfigPreservingClaudeCode" },
+): void {
   withConfigMutationLockSync(() => {
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
@@ -3347,10 +3558,18 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
+      if (persistConfigUnlocked(persistedConfig)) {
+        bumpGenerationForCooperatingConfigWrite();
+        const snapshot = buildConfigMutationSnapshot(onDisk, persistedConfig);
+        recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
+      }
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      if (persistConfigUnlocked(projectedConfig)) bumpGenerationForCooperatingConfigWrite();
+      if (persistConfigUnlocked(projectedConfig)) {
+        bumpGenerationForCooperatingConfigWrite();
+        const snapshot = buildConfigMutationSnapshot(onDisk, projectedConfig);
+        recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
+      }
     }
     adoptCustomModelCatalogMigration(config, projectedConfig);
     if (claudeCodeBaseline.has(config)) {

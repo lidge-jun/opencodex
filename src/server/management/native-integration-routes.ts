@@ -733,7 +733,7 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
      */
     const persist = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
     try {
-      persist(config);
+      persist(config, { surface: "api", detail: "PUT /api/native-integrations/claude" });
     } catch (error) {
       if (isConfigLockError(error)) {
         return isLockContention(error)
