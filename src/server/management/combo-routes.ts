@@ -192,6 +192,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       if (config.subagentModels) {
         config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
       }
+      if (config.subagentRoles) {
+        for (const role of config.subagentRoles) {
+          role.model = migrateAgentReference(role.model);
+        }
+      }
       if (config.injectionModel && migratedModels.has(config.injectionModel)) {
         config.injectionModel = migrateReference(config.injectionModel);
       }
