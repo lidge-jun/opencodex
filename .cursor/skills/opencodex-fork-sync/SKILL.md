@@ -17,7 +17,7 @@ and test; a human confirms and lands `origin/main`.
 | Coordinator | Fetches, opens the sync branch, lists conflicts, dispatches workers, assembles the decision table, pushes, and leaves the draft PR mergeable | Resolve hunks itself or use whole-tree `-X ours` |
 | File worker | Owns one conflict domain and reports 3-way intent, options, recommendation, and tests | Touch another domain or commit `main` |
 | Test worker | Runs named tests; runs typecheck/full suite for shared runtime, routing, config, or server changes | Claim green without command output |
-| Absorbed-patch worker | Compares overlay patches with upstream and identifies duplicates to drop | Keep a patch merely because the fork wrote it first |
+| Absorbed-patch worker | Compares `fork:` commits on `origin/main` with upstream and identifies duplicates to drop | Keep a patch merely because the fork wrote it first |
 
 Parallelize independent domains. Serialize `src/adapters/google.ts` and `src/server/responses/core.ts`.
 Workers must be **Composer 2.5** or **GPT 5.6 Luna**.
@@ -61,7 +61,7 @@ Open the sync PR as a draft and stop only when
 Never ping the human before that gate is true. The human performs the merge
 commit; never squash or rebase these sync PRs. `vendor/main` remains an exact
 fast-forward of `upstream/main`; `vendor/dev` remains an exact fast-forward of
-`upstream/dev` for PR bases only. Do not commit overlay work on either vendor
+`upstream/dev` for PR bases only. Do not commit `fork:` work on either vendor
 branch. The issue notifier is selected by `FORK_SYNC_NOTIFIERS=github-issue`;
 the Cursor coordinator is selected by `FORK_SYNC_COORDINATORS=cursor-webhook`.
 
@@ -124,7 +124,7 @@ The webhook-triggered Cursor Automation starts for `pin-updated`,
 `origin/main`: create
 `sync/upstream-YYYYMMDD` from it, merge `origin/vendor/main`, use Mergiraf
 where available, and read `docs/fork/OWNED.md` before resolving conflicts.
-Replay overlay or feature patches only when they are not already contained,
+Replay `fork:` commits on `origin/main` or feature patches only when they are not already contained,
 using `scripts/fork/sync/contained.ts` or
 `git merge-base --is-ancestor`; do not rely on patch-id alone. Run the exact
 focused tests for changed domains, assemble the required conflict decision
@@ -165,7 +165,7 @@ exact test commands:
 | `upstream-owned` | Take theirs; re-apply still-needed fork intent as a small new commit |
 | `fork-owned` | Take ours |
 | `shared-hotspot` | Manual/agent report; preserve upstream control flow and re-fit fork behavior |
-| Lockfile | Take theirs; regenerate if the overlay added dependencies |
+| Lockfile | Take theirs; regenerate if the fork added dependencies |
 | Absorbed idea | Drop ours |
 
 ## Decision policy
@@ -187,4 +187,4 @@ bun run privacy:scan
 
 Use the focused matching adapter test for provider changes (for example `bun test tests/google-hardening.test.ts`). Use typecheck and the full suite for shared runtime/routing/config/server changes; use privacy scanning for logging or credential changes. Do not claim completion without output.
 
-Never run `git config`; never use whole-tree `git merge -X ours` or `-X theirs`; never force-push `main`; never skip a failing test. Never open upstream PRs from `main`, `overlay`, `run/main`, `run/dev`, or `dev`. Upstream PRs come from isolated `feat/*` branches based on `vendor/dev`.
+Never run `git config`; never use whole-tree `git merge -X ours` or `-X theirs`; never force-push `main`; never skip a failing test. Never open upstream PRs from `main`, leftover `overlay`, `run/main`, `run/dev`, or `dev`. Upstream PRs come from isolated `feat/*` branches based on `vendor/dev`. The `overlay` git branch is retired. Overlay patches are `fork:` commits on `origin/main`.

@@ -2,7 +2,7 @@
 
 Agents read this before resolving sync conflicts. Three-way merge: base = last common ancestor; **ours** = `origin/main`; **theirs** = `vendor/main`.
 
-Do not open this document or the fork overlay as an upstream PR.
+Do not open this document or the fork overlay (the conflict class, not a git branch) as an upstream PR.
 
 ## Path classes
 
@@ -22,7 +22,7 @@ Files only this fork adds or maintains:
 
 ### `shared-hotspot` — manual / agent report
 
-Upstream and overlay both touch wire protocol or core request path. Serialize merges on `google` adapters and `responses/core.ts` (never two workers at once).
+Upstream and the fork overlay (conflict class) both touch wire protocol or core request path. Serialize merges on `google` adapters and `responses/core.ts` (never two workers at once).
 
 | Path |
 |---|
@@ -51,7 +51,7 @@ Everything not listed above. Re-apply fork intent as a **new small commit** only
 | `upstream-owned` | Take theirs | Re-apply fork intent as a new small commit only if still needed |
 | `fork-owned` | Take ours | Files only the fork added |
 | `shared-hotspot` | Manual / agent report | Keep upstream control flow; re-fit fork behavior; never “accept all ours” |
-| Lockfiles | Take theirs | Regenerate if overlay added deps |
+| Lockfiles | Take theirs | Regenerate if the fork added deps |
 | File deleted by them, edited by us | Decide restore vs abandon | Record in merge message |
 | Rename | Follow new path | `--find-renames`; do not keep a zombie old path |
 | Upstream shipped the same idea | Drop ours | Duplicate patches cause later impossible conflicts |

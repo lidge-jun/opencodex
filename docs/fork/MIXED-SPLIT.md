@@ -4,7 +4,10 @@ One-time record. Fork-owned. Do not open as an upstream PR.
 
 Source snapshot: `archive/mixed-dev-2026-08-21` (`f6c5ef1ed`).
 Release base: `vendor/main` (`231e622be`), fast-forwarded from `upstream/main`.
-Compared with `git log vendor/main..overlay` plus the selected GitHub PR heads.
+The `overlay` git branch is retired (2026-08-22). Live verification of fork
+deltas is `git log vendor/main..origin/main --grep='^fork:'`. At split time the
+stack was compared with `git log vendor/main..overlay` plus the selected GitHub
+PR heads.
 
 The release-pin overlay is the curated `fork:` stack on `vendor/main`, not the
 mixed 65-commit archive. At review time it contained six existing `fork:`
@@ -19,8 +22,9 @@ commits (the review fixes are additional `fork:` commits):
 | `570e89da3` | update OWNED merge sides for `vendor/main` |
 | `6e2533fac` | pin sync guidance to released main |
 
-Use `git log vendor/main..overlay` to verify the final stack remains
-`fork:`-only. The overlay is based on `vendor/main`, never on `vendor/dev`.
+Use `git log vendor/main..origin/main --grep='^fork:'` to verify the live
+stack remains `fork:`-only. Those commits sit on `origin/main` above
+`vendor/main`, never on `vendor/dev`.
 
 ## DROP — contained by `vendor/main`
 
@@ -36,7 +40,7 @@ daily `main` replay (via `run/main`, then merge).
 
 ## FEAT-ONLY — still unique; leave on GitHub `feat/*` / open PRs
 
-Do not fold these into `overlay`. Replay the GitHub `feat/*` PR heads onto
+Do not fold these into the daily `fork:` stack on `origin/main`. Replay the GitHub `feat/*` PR heads onto
 `run/main` (then merge into daily `main`) if you need them locally; local `feat/*` branches are not required.
 
 | Stack | Where it lives | Upstream |
@@ -55,10 +59,13 @@ Merge commits on mixed `dev` (`Merge PR #2113/#2226/#1742/#2071`) are not overla
 
 ## FORK — local-forever overlay
 
-| Commit | Branch |
+The `overlay` **branch** listed here is the 2026-08-21 split record. It is
+retired; live `fork:` commits are on `origin/main`.
+
+| Commit | Branch (at split) |
 |---|---|
-| Six commits listed above | `overlay` on `vendor/main` |
-| Review-fix `fork:` commits | `overlay` after the six-commit release-pin stack |
+| Six commits listed above | `overlay` on `vendor/main` (retired) |
+| Review-fix `fork:` commits | `overlay` after the six-commit release-pin stack (retired) |
 
 ## Rebuild result
 

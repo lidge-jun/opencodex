@@ -18,8 +18,8 @@ base for upstream PRs.
 |---|---|---|---|
 | `vendor/main` | Fast-forward copy of `upstream/main` | No (FF only) | No |
 | `vendor/dev` | Fast-forward copy of `upstream/dev`; `feat/*` PR base only | No (FF only) | No |
-| `overlay` | Linear fork stack on `vendor/main` | Yes | No |
-| `origin/main` | Daily driver: release + overlay + selected `feat/*` | No | Yes |
+| `overlay` | **Retired.** Former linear fork stack; do not check out or merge | — | No |
+| `origin/main` | Daily driver: released `vendor/main` + `fork:` deltas + selected `feat/*` | No | Yes |
 | `feat/…` | One topic; upstream PRs from `vendor/dev` | Yes until landed | No |
 | `run/main` | Disposable rebuild workspace; merge into `main`, never force-push `main` | Yes (rebuilt) | No |
 | `run/dev` | Retired as the daily checkout | Yes (if used) | No |
@@ -28,9 +28,9 @@ base for upstream PRs.
 
 Rules:
 
-- Never commit overlay work on `vendor/main` or `vendor/dev`.
-- Never open an upstream PR from `origin/main`, `overlay`, or `run/main`. Daily checkout is **`main`**.
-- After upstream absorbs a patch, drop it from the overlay.
+- Never commit `fork:` work on `vendor/main` or `vendor/dev`.
+- Never open an upstream PR from `origin/main` or `run/main` (leftover `overlay` is the same ban). Daily checkout is **`main`**.
+- After upstream absorbs a patch, drop the matching `fork:` commit from `main` on the next sync.
 - **Never force-push `origin/main` (or public `main`).**
 - The normal coordinator lane is a merge from the current `origin/main`.
   Never run `git switch -C run/main vendor/main` for a daily release; that
@@ -93,14 +93,12 @@ merge old `main` into the rebuild: that would reintroduce dropped commits
 
 1. `git branch archive/mixed-dev-2026-08-21` at pre-split HEAD.
 2. `git branch vendor/main upstream/main` and `git branch vendor/dev upstream/dev` (FF-only after).
-3. Classify `upstream/dev..archive/mixed-dev-*`: drop duplicates, keep open PRs on `feat/*`, cherry-pick local-forever as small `fork:` commits onto `overlay`.
-4. Point public `origin/main` at the daily tree (`vendor/main` + overlay + selected `feat/*`)—not the old mixed `dev`.
+3. Classify `upstream/dev..archive/mixed-dev-*`: drop duplicates, keep open PRs on `feat/*`, cherry-pick local-forever as small `fork:` commits onto `origin/main`.
+4. Point public `origin/main` at the daily tree (`vendor/main` + `fork:` deltas + selected `feat/*`)—not the old mixed `dev`.
 
 Classification of the 2026-08-21 mixed snapshot: [`MIXED-SPLIT.md`](./MIXED-SPLIT.md).
 
-Daily pin design: [`2026-08-21-fork-daily-main-pin-design.md`](../superpowers/specs/2026-08-21-fork-daily-main-pin-design.md).
-
-Overlay/seam design: [`2026-08-21-fork-sync-design.md`](../superpowers/specs/2026-08-21-fork-sync-design.md).
+Historical design (the `overlay` git branch is retired): [`2026-08-21-fork-daily-main-pin-design.md`](../superpowers/specs/2026-08-21-fork-daily-main-pin-design.md), [`2026-08-21-fork-sync-design.md`](../superpowers/specs/2026-08-21-fork-sync-design.md).
 
 ## Automated release sync
 
