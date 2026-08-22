@@ -53,6 +53,7 @@ import { startHistoryMigrationGuardian } from "../codex/history-migration-guardi
 import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
+import { PKG } from "../update/index";
 import { syncModelsToCodex } from "../codex/sync";
 import {
   shouldSyncGrokOnStart,
@@ -823,7 +824,7 @@ async function handleUninstall() {
     console.error(`\nUninstall finished with ${failures.length} failed step(s): ${failures.join(", ")}`);
     process.exit(1);
   }
-  console.log("\n✅ opencodex local state removed. Remove the package with: npm uninstall -g @bitkyc08/opencodex");
+  console.log(`\n✅ opencodex local state removed. Remove the package with: npm uninstall -g ${PKG}`);
 }
 
 async function handleStatus() {

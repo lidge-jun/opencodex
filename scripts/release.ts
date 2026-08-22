@@ -586,4 +586,4 @@ const releaseRun = await waitForReleaseWorkflowRun(releaseSha, branch, dispatchS
 await watchRun(releaseRun.databaseId);
 console.log(dryRun
   ? "\n✓ Dry run complete. Re-run with --publish to publish for real."
-  : "\n✓ Published. Try:  npm install -g @bitkyc08/opencodex");
+  : `\n✓ Published. Try:  npm install -g ${packageName}`);

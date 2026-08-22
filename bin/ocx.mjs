@@ -3,7 +3,7 @@
  * opencodex npm bin launcher.
  *
  * The package source is TypeScript that runs on the Bun runtime. To let
- * `npm install -g @bitkyc08/opencodex` work without a separately-installed Bun,
+ * `npm install -g @yansigit/opencodex` work without a separately-installed Bun,
  * we bundle the runtime via the `bun` npm dependency and exec it from this
  * Node shim. (Dev still runs `bun run src/cli/index.ts` directly via the shebang on
  * src/cli/index.ts — only the published npm `bin` routes through here.)
@@ -24,9 +24,17 @@ import {
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 import { bootRestoreProbe, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
 
-const PKG = "@bitkyc08/opencodex";
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
+function readPublishedPackageName() {
+  try {
+    const parsed = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+    return typeof parsed.name === "string" && parsed.name ? parsed.name : "@yansigit/opencodex";
+  } catch {
+    return "@yansigit/opencodex";
+  }
+}
+const PKG = readPublishedPackageName();
 const cliPath = join(here, "..", "src", "cli", "index.ts");
 const NODE_LAUNCH_CONTEXT_ENV = "OCX_NODE_LAUNCH_CONTEXT";
 const NODE_LAUNCH_PROOF_PREFIX = "--ocx-internal-launch-proof=";
@@ -432,7 +440,7 @@ function fail(msg) {
       "The bundled Bun runtime could not be prepared. This usually means the\n" +
       "install skipped lifecycle scripts (e.g. npm blocked bun's postinstall\n" +
       "under allowScripts) or optional dependencies. Reinstall with:\n" +
-      "  npm install -g --allow-scripts=bun @bitkyc08/opencodex\n" +
+      `  npm install -g --allow-scripts=bun ${PKG}\n` +
       "(use sudo if the original install used sudo; without --ignore-scripts\n" +
       "and without --omit=optional / optional=false)"
   );
