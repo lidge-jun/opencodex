@@ -803,10 +803,10 @@ function execCommandExtras(toolName: string, argsText: string, cmd: string): Gro
   const args = parseArgsObject(argsText);
   if ("error" in args) return {};
   const workdir = firstStringArg(args, ["working_directory", "workingDirectory", "workdir", "cwd"]);
-  const justification = firstStringArg(args, ["justification", "reason", "description"]);
+  const justification = firstStringArg(args, ["justification", "reason"]);
   const explicit = firstBooleanArg(args, ["with_escalated_permissions", "withEscalatedPermissions", "escalate"]);
   const auto = grokShellNeedsGitEscalation(cmd);
-  const escalate = explicit !== false && (explicit === true || auto || !!justification);
+  const escalate = explicit !== false && (explicit === true || auto);
   if (!escalate && !workdir) return {};
   return {
     ...(workdir ? { workdir } : {}),

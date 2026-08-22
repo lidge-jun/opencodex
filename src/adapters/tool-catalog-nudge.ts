@@ -164,7 +164,6 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
   wireNames: readonly string[] | undefined,
   toWireName: (name: string) => string = name => name,
   codeModeExecName?: string,
-  catalogWriteToolNames?: readonly string[],
 ): string | undefined {
   const names = uniqueNames(wireNames ?? []);
   if (names.length === 0) return undefined;
@@ -178,12 +177,9 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(
     name => !advertised.has(name) && !advertised.has(toWireName(name)),
   );
   const verifiedCodeModeExecName = codeModeExecWireName(advertised, codeModeExecName);
-  const writeNames = uniqueNames(catalogWriteToolNames ?? []).filter(name => advertised.has(name));
   const codeModeContract = !verifiedCodeModeExecName
     ? "If a listed tool exposes nested helpers such as a tools.* API, call the listed parent tool and use those helpers only inside that tool's input."
-    : writeNames.length > 0
-      ? "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, such as `await tools.exec_command(...)` or `await tools.codex_app__list_threads({})`."
-      : "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, such as `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names.";
+    : "`" + verifiedCodeModeExecName + "` is Codex code mode: its body is JavaScript evaluated in a V8 isolate. Nested helpers are called INSIDE that body as `await tools.<name>(...)`, such as `await tools.codex_app__list_threads({})`. Absence from the top-level catalog or from `" + verifiedCodeModeExecName + "`'s description is not absence: deferred helpers stay callable on `tools.<name>`. Discover them from the isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`. Do not skip an available nested helper because it is omitted from the listed top-level names.";
 
   return [
     "Tool contract: use the current tool catalog as ground truth.",
@@ -221,13 +217,11 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
     && convertedNativeToolNames.has("search_replace")
     && visibleNames?.includes("write") === true
     && visibleNames.includes("search_replace");
-  const grokWriteNames = grokWrite ? ["write", "search_replace"] : [];
   // Neighbor names are bare and un-namespaced, so probe the same transform with a bare tool.
   const base = buildNonOpenAIToolCatalogNudgeFromNames(
     visibleNames,
     name => toWireName({ name }),
     grokWrite ? undefined : codeModeExecName,
-    grokWriteNames,
   );
   if (!base) return base;
   if (grokWrite) {

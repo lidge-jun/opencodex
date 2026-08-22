@@ -241,8 +241,9 @@ function-call lifecycle to `custom_tool_call` before Codex sees it. Native OpenA
 and the supported `apply_patch` custom tool stay unchanged.
 
 For an xAI/Grok destination, a writable Code Mode turn uses a provider-native catalog instead of
-asking Grok to author JavaScript for Codex's freeform `exec` tool. OpenCodex exposes `read_file`,
-`grep`, `list_dir`, `search_replace`, `write`, and `run_terminal_command` upstream. It translates
+asking Grok to author JavaScript for Codex's freeform `exec` tool. OpenCodex exposes the
+collision-free request-local subset of `read_file`, `grep`, `list_dir`, `search_replace`, `write`,
+and `run_terminal_command` upstream; same-name caller-owned tools remain unchanged. It translates
 file edits into the caller's existing `apply_patch` helper, translates reads and commands into the
 existing `exec_command` helper, and restores the original `exec` call shape, ids, and stream events
 before Codex sees the response. Supported calls in prior history are reconstructed into the same

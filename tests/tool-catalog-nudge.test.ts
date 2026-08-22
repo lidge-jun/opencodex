@@ -286,6 +286,14 @@ describe("non-OpenAI tool catalog nudge", () => {
     ]);
     expect(callerOwned).not.toContain("converts those calls into Codex apply_patch");
     expect(callerOwned).not.toContain("with_escalated_permissions");
+
+    const partialProvenance = buildNonOpenAIToolCatalogNudgeForTools([
+      exec("declare const tools: { apply_patch(input: string): Promise<unknown>; exec_command(cmd: string): Promise<unknown> }"),
+      { name: "search_replace", description: "caller-owned", parameters: {} },
+      { name: "write", description: "bridge", parameters: {} },
+    ], undefined, undefined, undefined, new Set(["write"]));
+    expect(partialProvenance).not.toContain("converts those calls into Codex apply_patch");
+    expect(partialProvenance).not.toContain("with_escalated_permissions");
   });
 
   test("suppresses contextual guidance for disallowed, planned, structured, and MCP tools", () => {

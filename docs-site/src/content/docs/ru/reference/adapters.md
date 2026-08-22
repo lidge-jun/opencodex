@@ -66,8 +66,9 @@ sandbox и approval prompts, включая повышение прав для g
 
 ## `openai-responses`
 
-**Назначение:** OpenAI **Responses API**. **`passthrough: true`** — пересылает исходное тело
-запроса и стримит ответ обратно **без преобразования**.
+**Назначение:** OpenAI **Responses API**. **`passthrough: true`** — обычно пересылает исходное тело
+запроса и ответ обратно, применяя только узкие compatibility rewrites для маршрутизируемых шлюзов,
+включая bridge xAI/Grok Code Mode.
 **Аутентификация:** `forward` (ретрансляция заголовков вызывающей стороны) или `key`.
 
 При `key`-аутентификации [`retryOn429`](/ru/reference/configuration/) действует и здесь: 429 до
