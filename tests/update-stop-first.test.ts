@@ -1,8 +1,39 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { runNpmCachePreflight } from "../src/update/npm-cache-preflight.mjs";
+import { killProxy } from "../src/lib/process-control";
 
+const repoRoot = join(import.meta.dir, "..");
+
+function freePort(): Promise<number> {
+  const { promise, resolve, reject } = Promise.withResolvers<number>();
+  const server = createServer();
+  server.on("error", reject);
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    server.close(() => port ? resolve(port) : reject(new Error("no free port")));
+  });
+  return promise;
+}
+
+async function waitForProxy(port: number): Promise<boolean> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+        signal: AbortSignal.timeout(500),
+      });
+      if (response.ok) return true;
+    } catch { /* detached proxy is still starting */ }
+    // The detached process exposes readiness only over HTTP; fake timers cannot advance it.
+    await Bun.sleep(100);
+  }
+  return false;
+}
 const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
 const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server", "index.ts"), "utf8");
@@ -104,6 +135,97 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("sawRuntimePort");
     expect(updateSource).toContain("runtimeTrusted");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "npm launcher restarts the stopped runtime after a staged update failure",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "ocx-update-recovery-"));
+      const packageRoot = join(root, "node_modules", "@bitkyc08", "opencodex");
+      const launcher = join(packageRoot, "bin", "ocx.mjs");
+      const opencodexHome = join(root, "opencodex-home");
+      const fakeBin = join(root, "fake-bin");
+      const fakeNpm = join(fakeBin, "npm");
+      const cache = join(root, "npm-cache");
+      const bundledBun = join(repoRoot, "node_modules", "bun");
+      const env = {
+        ...process.env,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCODEX_HOME: opencodexHome,
+        OCX_FAKE_NPM_CACHE: cache,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      };
+      let recoveredPid: number | undefined;
+
+      try {
+        const port = await freePort();
+        expect(existsSync(bundledBun)).toBe(true);
+        mkdirSync(dirname(launcher), { recursive: true });
+        mkdirSync(join(packageRoot, "node_modules"), { recursive: true });
+        mkdirSync(opencodexHome, { recursive: true });
+        mkdirSync(fakeBin, { recursive: true });
+        mkdirSync(cache, { recursive: true });
+        copyFileSync(join(repoRoot, "bin", "ocx.mjs"), launcher);
+        chmodSync(launcher, 0o755);
+        symlinkSync(join(repoRoot, "src"), join(packageRoot, "src"), "dir");
+        symlinkSync(bundledBun, join(packageRoot, "node_modules", "bun"), "dir");
+        writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+          name: "@bitkyc08/opencodex",
+          version: "1.0.0",
+          type: "module",
+        }));
+        writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ port }));
+        writeFileSync(join(opencodexHome, "runtime-port.json"), JSON.stringify({ port, pid: 999_999_999 }));
+        writeFileSync(fakeNpm, `#!/bin/sh
+case "$1" in
+  view) printf '2.0.0\\n' ;;
+  config) printf '%s\\n' "$OCX_FAKE_NPM_CACHE" ;;
+  install) exit 1 ;;
+  *) exit 1 ;;
+esac
+`);
+        chmodSync(fakeNpm, 0o755);
+
+        const result = Bun.spawnSync(["node", launcher, "update"], {
+          cwd: root,
+          env,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 30_000,
+        });
+        const output = result.stdout.toString() + result.stderr.toString();
+
+        expect(result.exitCode).toBe(1);
+        expect(output).toContain("Stopping the running proxy before updating");
+        expect(output).toContain("restarting the previous version directly");
+        expect(output).toContain(`Attempting to restart the proxy on port ${port}.`);
+        expect(await waitForProxy(port)).toBe(true);
+        const runtime = JSON.parse(readFileSync(join(opencodexHome, "runtime-port.json"), "utf8"));
+        expect(runtime.pid).toBeGreaterThan(0);
+        recoveredPid = runtime.pid;
+      } finally {
+        const stopped = existsSync(launcher)
+          ? Bun.spawnSync(["node", launcher, "stop"], {
+              cwd: root,
+              env,
+              stdout: "ignore",
+              stderr: "ignore",
+              timeout: 30_000,
+            })
+          : null;
+        if (stopped?.exitCode !== 0) {
+          if (!recoveredPid) {
+            try {
+              recoveredPid = JSON.parse(readFileSync(join(opencodexHome, "runtime-port.json"), "utf8")).pid;
+            } catch { /* the proxy never wrote runtime state */ }
+          }
+          if (Number.isSafeInteger(recoveredPid) && recoveredPid! > 0) killProxy(recoveredPid!);
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 
   test("both update paths surface a skipped history restore after the stop", () => {
     // A codex-history-backup-*.json surviving `ocx stop` means the native-history restore

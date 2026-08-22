@@ -58,6 +58,14 @@ function expectTextToContainPath(text: string, path: string): void {
 }
 
 describe("service listen-port bake", () => {
+  test("service ownership state paths stay pinned to the captured OpenCodex home", () => {
+    const pinned = join(TEST_DIR, "pinned-opencodex");
+    process.env.OPENCODEX_HOME = join(TEST_DIR, "ambient-opencodex");
+    const paths = serviceModule.serviceStatePathsForOpenCodexHome(pinned);
+    expect(paths[0]).toBe(join(pinned, "service-state.json"));
+    expect(paths).not.toContain(join(process.env.OPENCODEX_HOME, "service-state.json"));
+  });
+
   test("resolveServiceListenPort prefers override, then OCX_BAKE_PORT, then config", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });

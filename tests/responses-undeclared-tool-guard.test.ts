@@ -6,8 +6,11 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
   createUndeclaredToolCallGuardBlockRewrite,
+  currentTurnWireToolCatalogBody,
+  hasExplicitWireToolCatalog,
   undeclaredToolCallNameInResponse,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../src/server/responses-undeclared-tool-guard";
@@ -54,12 +57,19 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
   return text;
 }
 
-async function relay(upstream: string, declared: Iterable<string>): Promise<string> {
+async function relay(
+  upstream: string,
+  declared: Iterable<string>,
+  declaredNamelessClientCallTypes: Iterable<string> = [],
+): Promise<string> {
   const budget = createTestTranslatorBudget();
   try {
     return await readAll(relaySseWithBlockRewrite(
       streamFromText(upstream),
-      createUndeclaredToolCallGuardBlockRewrite(new Set(declared)),
+      createUndeclaredToolCallGuardBlockRewrite(
+        new Set(declared),
+        new Set(declaredNamelessClientCallTypes),
+      ),
       budget,
     ));
   } finally {
@@ -96,15 +106,38 @@ describe("collectDeclaredWireToolNames", () => {
     expect([...names]).toEqual(["wait"]);
   });
 
+  test("reads definitions loaded by a current tool-search output", () => {
+    const names = collectDeclaredWireToolNames({
+      input: [{
+        type: "tool_search_output",
+        tools: [{ type: "function", name: "deferred_read" }],
+      }],
+    });
+
+    expect([...names]).toEqual(["deferred_read"]);
+  });
+
+  test("recognizes nested function names accepted by the parser", () => {
+    expect([...collectDeclaredWireToolNames({
+      tools: [{ type: "function", function: { name: "lookup" } }],
+    })]).toEqual(["lookup"]);
+    expect(collectDeclaredWireToolNames({
+      tools: [{ type: "function", function: {} }],
+    }).size).toBe(0);
+  });
+
   test("is empty for a body this proxy could not read", () => {
     expect(collectDeclaredWireToolNames(undefined).size).toBe(0);
     expect(collectDeclaredWireToolNames({ tools: "nonsense" }).size).toBe(0);
   });
 
-  test("is empty for a readable request that declares nothing", () => {
-    // Indistinguishable from the unreadable case by size alone, which is why the caller keeps
-    // readability as separate state: a request declaring no tools authorizes none.
+  test("is empty when a readable request omits the tool catalog", () => {
     expect(collectDeclaredWireToolNames({}).size).toBe(0);
+  });
+
+  test("is empty when a readable request explicitly declares an empty tool catalog", () => {
+    // The name set alone cannot distinguish omission from an explicit deny-all catalog, so the
+    // caller separately tracks whether the readable body contained a supported catalog array.
     expect(collectDeclaredWireToolNames({ tools: [] }).size).toBe(0);
   });
 
@@ -114,6 +147,78 @@ describe("collectDeclaredWireToolNames", () => {
     });
 
     expect([...names]).toEqual(["exec"]);
+  });
+});
+
+describe("hasExplicitWireToolCatalog", () => {
+  test("distinguishes omitted or unreadable catalogs from top-level arrays", () => {
+    expect(hasExplicitWireToolCatalog(undefined)).toBe(false);
+    expect(hasExplicitWireToolCatalog({})).toBe(false);
+    expect(hasExplicitWireToolCatalog({ tools: "nonsense" })).toBe(false);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "function" }] })).toBe(false);
+    expect(hasExplicitWireToolCatalog({ tools: [] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "function", name: "exec" }] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      tools: [{ type: "function" }, { type: "custom", name: "apply_patch" }],
+    })).toBe(true);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "web_search" }] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "image_gen" }, { type: "x_search" }] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      tools: [{ type: "namespace", name: "empty", tools: [] }],
+    })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      tools: [{
+        type: "namespace",
+        name: "outer",
+        tools: [{ type: "namespace", name: "inner", tools: [] }],
+      }],
+    })).toBe(false);
+  });
+
+  test("recognizes an additional_tools array, including an explicit empty catalog", () => {
+    expect(hasExplicitWireToolCatalog({
+      input: [{ type: "additional_tools", role: "developer", tools: [] }],
+    })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      input: [{ type: "additional_tools", role: "developer", tools: "nonsense" }],
+    })).toBe(false);
+    expect(hasExplicitWireToolCatalog({
+      input: [{ type: "additional_tools", role: "developer", tools: [{}] }],
+    })).toBe(false);
+  });
+});
+
+describe("collectDeclaredNamelessClientCallTypes", () => {
+  test("maps supported nameless declarations to their client response call types", () => {
+    const callTypes = collectDeclaredNamelessClientCallTypes({
+      tools: [{ type: "local_shell" }, { type: "tool_search" }, { type: "web_search" }],
+      input: [{
+        type: "additional_tools",
+        tools: [{ type: "computer_use_preview" }, { type: "function", name: "exec" }],
+      }],
+    });
+
+    expect([...callTypes].sort()).toEqual(["computer_call", "local_shell_call", "tool_search_call"]);
+  });
+});
+
+describe("currentTurnWireToolCatalogBody", () => {
+  test("keeps top-level tools and only the current input suffix", () => {
+    const body = {
+      tools: [],
+      input: [
+        { type: "additional_tools", tools: [{ type: "function", name: "historical" }] },
+        { type: "message", role: "assistant", content: [] },
+        { type: "additional_tools", tools: [{ type: "function", name: "current" }] },
+      ],
+    };
+    const current = currentTurnWireToolCatalogBody(body, 2) as typeof body;
+
+    expect(current.tools).toEqual([]);
+    expect(current.input).toEqual([
+      { type: "additional_tools", tools: [{ type: "function", name: "current" }] },
+    ]);
+    expect(body.input).toHaveLength(3);
   });
 });
 
@@ -216,6 +321,30 @@ describe("undeclared tool call guard", () => {
     });
 
     expect(await relay(upstream, declared)).toBe(upstream);
+  });
+
+  test("relays a declared nameless client call and rejects an undeclared one", async () => {
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: {
+        type: "local_shell_call",
+        id: "sh_1",
+        call_id: "call_1",
+        action: { type: "exec", command: ["echo", "ok"] },
+      },
+    });
+
+    expect(await relay(upstream, [], ["local_shell_call"])).toBe(upstream);
+    expect(await relay(upstream, [])).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+  });
+
+  test("does not classify a server-executed tool search as a client call", async () => {
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "tool_search_call", id: "ts_1", execution: "server", arguments: {} },
+    });
+
+    expect(await relay(upstream, [])).toBe(upstream);
   });
 
   test("leaves comment frames, [DONE], and unparseable payloads alone", async () => {
@@ -462,7 +591,7 @@ describe("a refused turn does not become continuation state", () => {
   });
 });
 
-describe("a request that declares no tools has no catalog to police", () => {
+describe("empty and absent tool catalogs", () => {
   const config = {
     port: 0,
     defaultProvider: "fixture",
@@ -470,6 +599,19 @@ describe("a request that declares no tools has no catalog to police", () => {
       fixture: {
         adapter: "openai-responses",
         baseUrl: "https://fixture.test/v1",
+        authMode: "key",
+        apiKey: "fixture-key",
+      },
+    },
+  } as OcxConfig;
+
+  const xaiConfig = {
+    port: 0,
+    defaultProvider: "fixture",
+    providers: {
+      fixture: {
+        adapter: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
         authMode: "key",
         apiKey: "fixture-key",
       },
@@ -485,7 +627,16 @@ describe("a request that declares no tools has no catalog to police", () => {
     status: "completed",
   };
 
-  async function post(stream: boolean, tools: unknown[] | undefined, upstream: () => Response) {
+  async function post(
+    stream: boolean,
+    tools: unknown[] | undefined,
+    upstream: () => Response,
+    additionalTools?: unknown[],
+    requestConfig: OcxConfig = config,
+    history: unknown[] = [],
+    model = "fixture/deepseek-v4-flash",
+    previousResponseId?: string,
+  ) {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
     try {
@@ -493,12 +644,19 @@ describe("a request that declares no tools has no catalog to police", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "fixture/deepseek-v4-flash",
+          model,
           stream,
-          input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+          ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+          input: [
+            ...history,
+            { role: "user", content: [{ type: "input_text", text: "hi" }] },
+            ...(additionalTools === undefined
+              ? []
+              : [{ type: "additional_tools", role: "developer", tools: additionalTools }]),
+          ],
           ...(tools === undefined ? {} : { tools }),
         }),
-      }), config, { model: "", provider: "" });
+      }), requestConfig, { model: "", provider: "" });
     } finally {
       globalThis.fetch = savedFetch;
     }
@@ -520,25 +678,548 @@ describe("a request that declares no tools has no catalog to police", () => {
 
   // A passthrough request may omit `tools` entirely and still receive a tool call the client
   // understands — the Copilot contract in tests/github-copilot-stream-contract.test.ts does
-  // exactly that with `apply_patch`. Refusing on an empty catalog truncates those turns, so the
-  // guard needs at least one declared name before it has an opinion.
-  for (const [label, tools] of [["no tools field", undefined], ["tools: []", []]] as const) {
-    test(`non-streaming, ${label} — relayed, not refused`, async () => {
-      const response = await post(false, tools, jsonUpstream);
+  // exactly that with `apply_patch`. With no catalog the proxy has no authorization boundary to
+  // enforce, so the call remains untouched on both transports.
+  test("non-streaming, no tools field — relayed, not refused", async () => {
+    const response = await post(false, undefined, jsonUpstream);
 
-      expect(response.status).toBe(200);
-      const body = await response.json() as { output: Array<Record<string, unknown>> };
-      expect(body.output[0]).toMatchObject({ name: "apply_patch" });
-    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "apply_patch" });
+  });
 
-    test(`streaming, ${label} — relayed, not refused`, async () => {
-      const response = await post(true, tools, sseUpstream);
-      const body = await response.text();
+  test("streaming, no tools field — relayed, not refused", async () => {
+    const response = await post(true, undefined, sseUpstream);
+    const body = await response.text();
 
-      expect(body).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
-      expect(body).toContain("response.completed");
-    });
-  }
+    expect(body).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).toContain("response.completed");
+  });
+
+  test("non-streaming, an unreadable top-level catalog — relayed, not refused", async () => {
+    const response = await post(false, [{ type: "function" }], jsonUpstream);
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "apply_patch" });
+  });
+
+  test("streaming, an unreadable additional_tools catalog — relayed, not refused", async () => {
+    const response = await post(true, undefined, sseUpstream, [{}]);
+    const body = await response.text();
+
+    expect(body).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).toContain("response.completed");
+  });
+
+  test("Spark normalization cannot turn an unreadable catalog into deny-all", async () => {
+    const response = await post(
+      false,
+      [{ type: "some_future_hosted_tool" }],
+      jsonUpstream,
+      undefined,
+      config,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+    );
+
+    expect(response.status).toBe(200);
+    const sparkBody = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(sparkBody.output[0]).toMatchObject({ name: "apply_patch" });
+  });
+
+  test("Spark normalization preserves streaming stand-down for an unreadable top-level catalog", async () => {
+    const response = await post(
+      true,
+      [{ type: "some_future_hosted_tool" }],
+      sseUpstream,
+      undefined,
+      config,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+    );
+    const sparkBody = await response.text();
+
+    expect(sparkBody).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(sparkBody).toContain("response.completed");
+  });
+
+  test("Spark normalization preserves non-streaming stand-down for unreadable additional tools", async () => {
+    const response = await post(
+      false,
+      undefined,
+      jsonUpstream,
+      [{ type: "some_future_hosted_tool" }],
+      config,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+    );
+
+    expect(response.status).toBe(200);
+    const sparkBody = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(sparkBody.output[0]).toMatchObject({ name: "apply_patch" });
+  });
+
+  test("Spark normalization preserves streaming stand-down for unreadable additional tools", async () => {
+    const response = await post(
+      true,
+      undefined,
+      sseUpstream,
+      [{ type: "some_future_hosted_tool" }],
+      config,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+    );
+    const sparkBody = await response.text();
+
+    expect(sparkBody).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(sparkBody).toContain("response.completed");
+  });
+
+  test("non-streaming, tools: [] — refuses an upstream client tool call", async () => {
+    const response = await post(false, [], jsonUpstream);
+
+    expect(response.status).toBe(502);
+    const topLevelEmptyBody = await response.json() as { error: { message: string } };
+    expect(topLevelEmptyBody.error.message).toContain('undeclared client tool "apply_patch"');
+  });
+
+  test("streaming, tools: [] — refuses an upstream client tool call", async () => {
+    const response = await post(true, [], sseUpstream);
+    const body = await response.text();
+
+    expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).not.toContain("response.completed");
+  });
+
+  test("non-streaming, additional_tools.tools: [] — refuses an upstream client tool call", async () => {
+    const response = await post(false, undefined, jsonUpstream, []);
+
+    expect(response.status).toBe(502);
+    const embeddedEmptyBody = await response.json() as { error: { message: string } };
+    expect(embeddedEmptyBody.error.message).toContain('undeclared client tool "apply_patch"');
+  });
+
+  test("streaming, additional_tools.tools: [] — refuses an upstream client tool call", async () => {
+    const response = await post(true, undefined, sseUpstream, []);
+    const body = await response.text();
+
+    expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).not.toContain("response.completed");
+  });
+
+  test("non-streaming, a rewritten-away top-level catalog remains authoritative", async () => {
+    const response = await post(
+      false,
+      [{ type: "web_search", external_web_access: false }],
+      jsonUpstream,
+      undefined,
+      xaiConfig,
+    );
+
+    expect(response.status).toBe(502);
+    const rewrittenCatalogBody = await response.json() as { error: { message: string } };
+    expect(rewrittenCatalogBody.error.message).toContain('undeclared client tool "apply_patch"');
+  });
+
+  test("streaming, a rewritten-away additional_tools catalog remains authoritative", async () => {
+    const response = await post(
+      true,
+      undefined,
+      sseUpstream,
+      [{ type: "web_search", external_web_access: false }],
+      xaiConfig,
+    );
+    const body = await response.text();
+
+    expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).not.toContain("response.completed");
+  });
+
+  test("non-streaming, tools: [] — refuses a nameless local shell call", async () => {
+    const response = await post(false, [], () => Response.json({
+      id: "resp_shell",
+      status: "completed",
+      output: [{
+        type: "local_shell_call",
+        id: "sh_1",
+        call_id: "call_shell",
+        action: { type: "exec", command: ["echo", "ok"] },
+        status: "completed",
+      }],
+    }));
+
+    expect(response.status).toBe(502);
+    const localShellBody = await response.json() as { error: { message: string } };
+    expect(localShellBody.error.message).toContain('undeclared client tool "local_shell"');
+  });
+
+  test("streaming, additional_tools.tools: [] — refuses a client tool-search call", async () => {
+    const response = await post(true, undefined, () => new Response(
+      [
+        frame("response.output_item.added", {
+          output_index: 0,
+          item: {
+            type: "tool_search_call",
+            id: "ts_1",
+            call_id: "call_search",
+            execution: "client",
+            arguments: { query: "tools" },
+          },
+        }),
+        frame("response.completed", {
+          response: { id: "resp_search", status: "completed", output: [] },
+        }),
+        "data: [DONE]",
+      ].join("\n\n") + "\n\n",
+      { headers: { "content-type": "text/event-stream" } },
+    ), []);
+    const toolSearchBody = await response.text();
+
+    expect(toolSearchBody).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(toolSearchBody).toContain('undeclared client tool \\"tool_search\\"');
+    expect(toolSearchBody).not.toContain("response.completed");
+  });
+
+  test("a declared tool_search authorizes its nameless client call", async () => {
+    const response = await post(false, [{ type: "tool_search" }], () => Response.json({
+      id: "resp_search_allowed",
+      status: "completed",
+      output: [{
+        type: "tool_search_call",
+        id: "ts_1",
+        call_id: "call_search",
+        execution: "client",
+        arguments: { query: "tools" },
+        status: "completed",
+      }],
+    }));
+
+    expect(response.status).toBe(200);
+    const allowedSearchBody = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(allowedSearchBody.output[0]).toMatchObject({ type: "tool_search_call", execution: "client" });
+  });
+
+  test("history-only tool search restoration does not override a current empty catalog", async () => {
+    const response = await post(
+      false,
+      [],
+      () => Response.json({
+        id: "resp_history_search",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_history_search",
+          call_id: "call_history_search",
+          name: "tool_search",
+          arguments: '{"query":"new tools"}',
+          status: "completed",
+        }],
+      }),
+      undefined,
+      config,
+      [
+        {
+          type: "tool_search_call",
+          id: "tsc_old",
+          call_id: "call_old",
+          execution: "client",
+          arguments: { query: "old tools" },
+          status: "completed",
+        },
+        {
+          type: "tool_search_output",
+          call_id: "call_old",
+          execution: "client",
+          status: "completed",
+          tools: [],
+        },
+      ],
+    );
+
+    expect(response.status).toBe(502);
+    const historySearchBody = await response.json() as { error: { message: string } };
+    expect(historySearchBody.error.message).toContain('undeclared client tool "tool_search"');
+  });
+
+  test("a replayed named catalog cannot authorize a deny-all continuation", async () => {
+    const previousId = "resp_replayed_named_catalog";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [{ type: "function", name: "exec", parameters: { type: "object" } }],
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      [],
+      () => Response.json({
+        id: "resp_named_continuation",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_replayed_exec",
+          call_id: "call_replayed_exec",
+          name: "exec",
+          arguments: "{}",
+          status: "completed",
+        }],
+      }),
+      undefined,
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    expect(response.status).toBe(502);
+    const namedBody = await response.json() as { error: { message: string } };
+    expect(namedBody.error.message).toContain('undeclared client tool "exec"');
+  });
+
+  test("a replayed nameless catalog cannot authorize a deny-all continuation", async () => {
+    const previousId = "resp_replayed_nameless_catalog";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [{ type: "local_shell" }],
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      true,
+      undefined,
+      () => {
+        const replayedShell = {
+          type: "local_shell_call",
+          id: "sh_replayed",
+          call_id: "call_replayed_shell",
+          action: { type: "exec", command: ["echo", "blocked"] },
+          status: "completed",
+        };
+        return new Response(
+          [
+            frame("response.output_item.added", { output_index: 0, item: replayedShell }),
+            frame("response.completed", {
+              response: { id: "resp_nameless_continuation", status: "completed", output: [replayedShell] },
+            }),
+            "data: [DONE]",
+          ].join("\n\n") + "\n\n",
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+      [],
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    const namelessBody = await response.text();
+    expect(namelessBody).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(namelessBody).toContain('undeclared client tool \\"local_shell\\"');
+    expect(namelessBody).not.toContain("response.completed");
+  });
+
+  test("a replay without a current catalog retains passthrough compatibility", async () => {
+    const previousId = "resp_replayed_catalog_without_current_boundary";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [{ type: "function", name: "exec", parameters: { type: "object" } }],
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      undefined,
+      () => Response.json({
+        id: "resp_unbounded_continuation",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_unbounded_exec",
+          call_id: "call_unbounded_exec",
+          name: "exec",
+          arguments: "{}",
+          status: "completed",
+        }],
+      }),
+      undefined,
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    expect(response.status).toBe(200);
+    const unboundedBody = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(unboundedBody.output[0]).toMatchObject({ name: "exec" });
+  });
+
+  test("a current additional-tools suffix still authorizes after replay", async () => {
+    const previousId = "resp_replay_with_current_catalog_suffix";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [{ type: "function", name: "historical", parameters: { type: "object" } }],
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      undefined,
+      () => Response.json({
+        id: "resp_current_suffix",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_current_exec",
+          call_id: "call_current_exec",
+          name: "exec",
+          arguments: "{}",
+          status: "completed",
+        }],
+      }),
+      [{ type: "function", name: "exec", parameters: { type: "object" } }],
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    expect(response.status).toBe(200);
+    const currentBody = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(currentBody.output[0]).toMatchObject({ name: "exec" });
+  });
+
+  test("a current tool-search output still authorizes its discovered tool after replay", async () => {
+    const previousId = "resp_replay_with_current_tool_search_output";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      [{ type: "tool_search" }],
+      () => Response.json({
+        id: "resp_discovered_tool",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_deferred_read",
+          call_id: "call_deferred_read",
+          name: "deferred_read",
+          arguments: "{}",
+          status: "completed",
+        }],
+      }),
+      undefined,
+      config,
+      [
+        {
+          type: "tool_search_call",
+          id: "tsc_current",
+          call_id: "call_current_search",
+          execution: "client",
+          arguments: { query: "read tools" },
+          status: "completed",
+        },
+        {
+          type: "tool_search_output",
+          call_id: "call_current_search",
+          execution: "client",
+          status: "completed",
+          tools: [{ type: "function", name: "deferred_read", parameters: { type: "object" } }],
+        },
+      ],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    expect(response.status).toBe(200);
+    const discoveredBody = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(discoveredBody.output[0]).toMatchObject({ name: "deferred_read" });
+  });
+
+  test("a nameless-only current discovery activates a bounded replay guard", async () => {
+    const previousId = "resp_replay_with_current_nameless_discovery";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const discoveryInput = [
+      {
+        type: "tool_search_call",
+        id: "tsc_nameless",
+        call_id: "call_nameless_search",
+        execution: "client",
+        arguments: { query: "shell tools" },
+        status: "completed",
+      },
+      {
+        type: "tool_search_output",
+        call_id: "call_nameless_search",
+        execution: "client",
+        status: "completed",
+        tools: [{ type: "local_shell" }],
+      },
+    ];
+
+    const allowed = await post(
+      false,
+      undefined,
+      () => Response.json({
+        id: "resp_discovered_shell",
+        status: "completed",
+        output: [{
+          type: "local_shell_call",
+          id: "sh_discovered",
+          call_id: "call_discovered_shell",
+          action: { type: "exec", command: ["echo", "allowed"] },
+          status: "completed",
+        }],
+      }),
+      undefined,
+      config,
+      discoveryInput,
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+    expect(allowed.status).toBe(200);
+    await allowed.arrayBuffer();
+
+    const refused = await post(
+      false,
+      undefined,
+      jsonUpstream,
+      undefined,
+      config,
+      discoveryInput,
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+    expect(refused.status).toBe(502);
+    const refusedBody = await refused.json() as { error: { message: string } };
+    expect(refusedBody.error.message).toContain('undeclared client tool "apply_patch"');
+  });
 });
 
 describe("undeclaredToolCallNameInResponse", () => {
@@ -552,5 +1233,18 @@ describe("undeclaredToolCallNameInResponse", () => {
 
     expect(undeclaredToolCallNameInResponse(response, new Set(["exec"]))).toBe("apply_patch");
     expect(undeclaredToolCallNameInResponse(response, new Set(["exec", "apply_patch"]))).toBeUndefined();
+  });
+
+  test("maps nameless client calls without colliding with ordinary function names", () => {
+    const response = {
+      output: [{ type: "computer_call", id: "cmp_1", action: { type: "screenshot" } }],
+    };
+
+    expect(undeclaredToolCallNameInResponse(response, new Set(["computer_use"]))).toBe("computer_use");
+    expect(undeclaredToolCallNameInResponse(
+      response,
+      new Set(),
+      new Set(["computer_call"]),
+    )).toBeUndefined();
   });
 });

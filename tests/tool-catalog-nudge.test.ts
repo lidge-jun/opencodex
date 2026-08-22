@@ -71,8 +71,12 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("await tools.codex_app__list_threads({})");
     expect(note).toContain("isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`");
     expect(note).toContain("Do not skip an available nested helper");
+    expect(note).toContain("`*** Begin Patch`");
+    expect(note).toContain("`*** End Patch`");
+    expect(note).toContain("no trailing `***`");
+    expect(note).toContain("OpenCodex does not rewrite JavaScript inside exec");
+    expect(note).toContain("Nested `tools.apply_patch(input)` is host-executed");
     expect(note).not.toContain("call the listed parent tool and use those helpers only inside that tool's input");
-    expect(note).not.toContain("apply_patch");
   });
 
   test("keeps the generic nested-helper parent-tool rule when exec is not listed", () => {

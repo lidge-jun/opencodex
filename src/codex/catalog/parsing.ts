@@ -194,6 +194,8 @@ export function shouldExposeRoutedModel(model: CatalogModel): boolean {
 }
 
 export function readCodexCatalogPath(): string {
+  const home = activeCodexHome();
+  if (home) return readCodexCatalogPathForHome(home);
   try {
     const configPath = activeCodexConfigPath();
     if (existsSync(configPath)) {
@@ -203,6 +205,19 @@ export function readCodexCatalogPath(): string {
     }
   } catch { /* ignore */ }
   return activeDefaultCatalogPath();
+}
+
+/** Resolve the configured catalog without consulting ambient CODEX_HOME again. */
+export function readCodexCatalogPathForHome(codexHome: string): string {
+  try {
+    const configPath = join(codexHome, "config.toml");
+    if (existsSync(configPath)) {
+      const toml = readFileSync(configPath, "utf-8");
+      const path = readRootTomlString(toml, "model_catalog_json");
+      if (path) return resolve(codexHome, path);
+    }
+  } catch { /* ignore */ }
+  return join(codexHome, "opencodex-catalog.json");
 }
 
 export function parseCatalogJson(raw: string): RawCatalog | null {

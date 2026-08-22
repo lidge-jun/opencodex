@@ -405,6 +405,9 @@ export async function handleResponsesCompact(
       if (err instanceof CodexAuthContextError) {
         return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
       }
+      if (err instanceof CodexMainSubstitutionUnavailableError) {
+        return formatErrorResponse(401, "authentication_error", "No usable Codex main credential to serve this request");
+      }
       if (err instanceof CodexPoolAuthenticationError || err instanceof CodexDirectAuthenticationError) {
         return formatErrorResponse(401, "authentication_error", err.message);
       }

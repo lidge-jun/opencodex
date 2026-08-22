@@ -82,6 +82,23 @@ describe("#1942 transactional update", () => {
     expect(liveVersion(result.backup!)).toBe("1.0.0");
   });
 
+  test("global staging explicitly allows only Bun's required install script", () => {
+    let installArgs: string[] = [];
+    const stage = stagingNpm("2.0.0");
+    const result = transactionalNpmUpdate({
+      packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest",
+      runNpm: (args: string[]) => {
+        installArgs = args;
+        return stage(args);
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(installArgs).toContain("--allow-scripts=bun");
+    expect(installArgs).not.toContain("--dangerously-allow-all-scripts");
+    expect(installArgs).not.toContain("--ignore-scripts");
+  });
+
   test("stage install failure leaves live untouched (D4 row 1)", () => {
     const result = transactionalNpmUpdate({
       packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest",
