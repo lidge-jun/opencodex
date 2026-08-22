@@ -29,10 +29,16 @@ import {
 } from "../src/codex/subagent-model-fallback";
 import { resolveCodexAuthContext, type CodexAuthContext } from "../src/codex/auth-context";
 import { handleResponses } from "../src/server/responses";
+import { resetAgentTaskRecoveryState } from "../src/server/responses/agent-task-recovery";
 import { isEagerRelaySseResponse } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { ResponsesTerminalStatus } from "../src/bridge";
+import {
+  codexHeaders,
+  encryptedInput as recoverableEncryptedInput,
+  recoverySse,
+} from "./helpers/agent-task-recovery";
 
 setDefaultTimeout(30_000);
 
@@ -52,6 +58,7 @@ beforeEach(() => {
   clearCodexUpstreamHealth();
   clearAccountQuota();
   resetSubagentModelFallbackStateForTests();
+  resetAgentTaskRecoveryState();
 });
 
 afterEach(() => {
@@ -61,6 +68,7 @@ afterEach(() => {
   clearCodexUpstreamHealth();
   clearAccountQuota();
   resetSubagentModelFallbackStateForTests();
+  resetAgentTaskRecoveryState();
   rmSync(testDir, { recursive: true, force: true });
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
@@ -773,6 +781,208 @@ describe("native fallback account preview", () => {
     // the same account that bound the thread — even though the active account is now pool-b.
     expect(response.status).toBe(200);
     expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-a" });
+  });
+
+  test("fallback previews the pool account separately for each candidate quota scope", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      subagentModelFallback: ["gpt-5.3-codex-spark", "xai/grok-4.5"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const desktopHeaders = {
+      "session-id": "candidate-scope-session-private",
+      "thread-id": "candidate-scope-thread-private",
+    };
+    const bound = await resolveCodexAuthContext(new Headers(desktopHeaders), cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (bound.kind !== "pool") throw new Error("expected pool context");
+
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+      modelId: "gpt-5.3-codex-spark",
+      now,
+      resetAt: Math.floor((now + 60 * 60_000) / 1_000),
+    });
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("gpt-5.3-codex-spark", "429", cfg, "pool-a", now);
+    noteSubagentModelFailure("gpt-5.6-sol", "429", cfg, "pool-a", now);
+
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "shared")).toBe("pool-a");
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "spark")).toBe("pool-b");
+
+    let finalAuth: CodexAuthContext | undefined;
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      { onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; } },
+      { model: "", provider: "" },
+      desktopHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(capture.urls.some((url) => url.includes("chatgpt.com/backend-api/codex"))).toBe(true);
+    expect(capture.auths.some((auth) => auth?.includes("pool-b_token"))).toBe(true);
+    expect(capture.bodies.some((body) => body.includes('"model":"gpt-5.3-codex-spark"'))).toBe(true);
+  });
+
+  test("account-gated fallback previews and authenticates an entitled pool account", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      subagentModelFallback: ["gpt-daybreak-blue-latest", "xai/grok-4.5"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const desktopHeaders = {
+      "session-id": "candidate-entitlement-session-private",
+      "thread-id": "candidate-entitlement-thread-private",
+    };
+    const bound = await resolveCodexAuthContext(new Headers(desktopHeaders), cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("gpt-5.6-sol", "429", cfg, "pool-a", now);
+    const entitlementSnapshot = {
+      modelsByAccount: new Map([
+        ["pool-a", new Set(["gpt-5.6-sol"])],
+        ["pool-b", new Set(["gpt-5.6-sol", "gpt-daybreak-blue-latest"])],
+      ]),
+      confirmedAccountIds: new Set(["pool-a", "pool-b"]),
+      credentialIdentities: new Map<string, string>(),
+    };
+    let entitlementCalls = 0;
+
+    let finalAuth: CodexAuthContext | undefined;
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      {
+        onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; },
+        resolveCodexModelEntitlements: async () => {
+          entitlementCalls += 1;
+          return entitlementSnapshot;
+        },
+      },
+      { model: "", provider: "" },
+      desktopHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    expect(entitlementCalls).toBe(2);
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(capture.urls.some((url) => url.includes("chatgpt.com/backend-api/codex"))).toBe(true);
+    expect(capture.auths.some((auth) => auth?.includes("pool-b_token"))).toBe(true);
+    expect(capture.urls.some((url) => url.includes("api.x.ai"))).toBe(false);
+  });
+
+  test("recovery second pass re-previews the account for the newly available candidate scope", async () => {
+    const now = 1_800_000_000_000;
+    let currentNow = now;
+    Date.now = () => currentNow;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      agentTaskRecovery: { enabled: true },
+      subagentModelFallback: ["gpt-5.3-codex-spark"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const requestHeaders = codexHeaders("caller-account", {
+      "session-id": "recovery-candidate-scope-session-private",
+      "thread-id": "recovery-candidate-scope-thread-private",
+    });
+    const bound = await resolveCodexAuthContext(requestHeaders, cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (bound.kind !== "pool") throw new Error("expected pool context");
+
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+      modelId: "gpt-5.3-codex-spark",
+      now,
+      resetAt: Math.floor((now + 60 * 60_000) / 1_000),
+    });
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("gpt-5.3-codex-spark", "429", cfg, "pool-b", now);
+    noteSubagentModelFailure("xai/grok-4.5", "429", cfg, undefined, now, 10 * 60_000);
+
+    let finalAuth: CodexAuthContext | undefined;
+    const fetchedUrls: string[] = [];
+    const forwardedBodies: string[] = [];
+    const forwardedAuths: Array<string | null> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const raw = typeof init?.body === "string" ? init.body : "";
+      fetchedUrls.push(url);
+      forwardedBodies.push(raw);
+      forwardedAuths.push(new Headers(init?.headers).get("authorization"));
+      if (raw.includes("capture_assignment")) {
+        currentNow = now + 60_001;
+        return new Response(recoverySse("Use the recovered candidate-scope assignment."), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return Response.json({
+        id: "resp_recovered_candidate_scope",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.3-codex-spark",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await postSpawn(
+      cfg,
+      { model: "xai/grok-4.5", input: recoverableEncryptedInput(), stream: false },
+      { onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; } },
+      { model: "", provider: "" },
+      requestHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    const bodyRequests = forwardedBodies.map((body, index) => ({
+      body,
+      url: fetchedUrls[index],
+      auth: forwardedAuths[index],
+    })).filter(({ body }) => body.length > 0);
+    expect(bodyRequests).toHaveLength(2);
+    expect(bodyRequests[0]?.body).toContain("capture_assignment");
+    expect(bodyRequests[1]?.body).toContain("Use the recovered candidate-scope assignment.");
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(bodyRequests[1]?.auth).toContain("pool-b_token");
   });
 
   test("uses healthier pool account B when active A is above threshold", async () => {

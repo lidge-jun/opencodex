@@ -612,6 +612,15 @@ export function tryAcquireCodexQuotaScopeProbeLease(
   return probeLeaseId;
 }
 
+/** Side-effect-free check for a confirmed model-specific quota probe. */
+export function canAcquireCodexQuotaScopeProbeLease(
+  accountId: string,
+  scope: CodexQuotaScope,
+  now = Date.now(),
+): boolean {
+  return canAcquireQuotaProbeLease(scopedHealthFor(accountId, scope), now);
+}
+
 /**
  * Hand a probe lease back without recording an upstream outcome. Used by paths
  * that take a lease and then fail before any request reaches upstream.
