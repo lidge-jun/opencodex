@@ -4797,6 +4797,37 @@ describe("Codex catalog routed normalization", () => {
     });
   });
 
+  test("a max-input-only Combo member ignores the configured soft budget", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "max-only",
+      providers: {
+        "max-only": {
+          adapter: "openai-chat",
+          baseUrl: "https://max-only.test/v1",
+          liveModels: false,
+          models: [],
+          modelMaxInputTokens: { model: 80_000 },
+          modelAutoCompactTokenLimits: { model: 10_000 },
+        },
+      },
+      combos: {
+        "max-only-combo": {
+          strategy: "failover",
+          targets: [{ provider: "max-only", model: "model", weight: 1 }],
+        },
+      },
+    });
+
+    expect(models.find(row => row.provider === "max-only" && row.id === "model")).toBeUndefined();
+    expect(models.find(row => row.provider === "combo" && row.id === "max-only-combo"))
+      .toMatchObject({
+        contextWindow: 80_000,
+        maxInputTokens: 80_000,
+        autoCompactTokenLimit: 72_000,
+      });
+  });
+
   // #1073's exact reproduction: a provider whose /models returns nothing but ids. Two cases,
   // deliberately not one — a single test that sets `modelContextWindows` would keep passing
   // with the provider-wide `?? prov.contextWindow` fallback deleted, because the per-model
