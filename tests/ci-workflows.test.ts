@@ -423,6 +423,7 @@ describe("GitHub Actions hardening", () => {
       "bin/**",
       "bun.lock",
       "gui/**",
+      "integrations/replit-gateway/**",
       "package.json",
       "scripts/**",
       "src/**",

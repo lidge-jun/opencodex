@@ -136,12 +136,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "provider",
-    usage: "ocx provider <list|add|edit|test|remove|show|set-default|selected|quota|presets|account-mode>",
+    usage: "ocx provider <list|add|install-replit|edit|test|remove|show|set-default|selected|quota|presets|account-mode>",
     summary: "Non-interactive provider management.",
     details: [
-      "Subcommands: list, add/edit/test/remove/show, set-default, selected, quota, presets, account-mode",
+      "Subcommands: list, add, install-replit, edit/test/remove/show, set-default, selected, quota, presets, account-mode",
+      "install-replit reads the gateway key from REPLIT_GATEWAY_KEY, --stdin, or --gateway-key-file (never argv).",
       "Registry providers are auto-configured by name. Custom providers need --adapter and --base-url.",
-      "Run `ocx provider --help` for full usage and examples.",
+      "Run `ocx provider help` for full usage and examples.",
     ],
   },
   {

@@ -30,6 +30,10 @@ export interface ManagementApiDeps {
    * OPENCODEX_HOME (incident: devlog 260730.../070).
    */
   saveConfigPreservingClaudeCode?: (config: OcxConfig) => void;
+  /** Config-mutation seam for routes that commit through `mutatePersistedConfig`. */
+  mutatePersistedConfig?: typeof import("../../config").mutatePersistedConfig;
+  /** Test-only fetch injection for Replit gateway install probes. */
+  probeFetch?: typeof globalThis.fetch;
   /**
    * Catalog seam for the Grok toggle (WP2, devlog 260803_integrations_toggle_all
    * Rev 3 N2). Production leaves this unset and the route dynamic-imports the

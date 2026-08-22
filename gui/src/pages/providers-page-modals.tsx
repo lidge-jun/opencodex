@@ -1,6 +1,7 @@
 import AddProviderModal from "../components/AddProviderModal";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
+import ReplitGatewayWizard from "../components/replit-gateway/ReplitGatewayWizard";
 import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
 import type { AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import type { AccountLoginRow, AccountLoginStatus } from "../components/provider-catalog/ProviderCatalog";
@@ -12,6 +13,7 @@ export function ProvidersPageModals({
   apiBase,
   config,
   adding,
+  replitWizardOpen,
   addIntent,
   busy,
   addModalAccountRows,
@@ -23,6 +25,8 @@ export function ProvidersPageModals({
   jsonSaving,
   oauthTosPending,
   onCloseAdd,
+  onCloseReplitWizard,
+  onReplitInstalled,
   onAdded,
   onAccountLogin,
   onAccountCancelLogin,
@@ -42,6 +46,7 @@ export function ProvidersPageModals({
   apiBase: string;
   config: ProvidersConfig;
   adding: boolean;
+  replitWizardOpen: boolean;
   addIntent: AddProviderIntent | null;
   busy: string | null;
   addModalAccountRows: AccountLoginRow[];
@@ -53,6 +58,8 @@ export function ProvidersPageModals({
   jsonSaving?: boolean;
   oauthTosPending: { provider: string; addAccount: boolean } | null;
   onCloseAdd: () => void;
+  onCloseReplitWizard: () => void;
+  onReplitInstalled: (name: string) => void;
   onAdded: (name: string) => void;
   onAccountLogin: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin: (provider: string) => void;
@@ -87,6 +94,13 @@ export function ProvidersPageModals({
           onAccountLogout={onAccountLogout}
           onAccountManage={onAccountManage}
           onOpen={onOpenAdd}
+        />
+      )}
+      {replitWizardOpen && (
+        <ReplitGatewayWizard
+          apiBase={apiBase}
+          onClose={onCloseReplitWizard}
+          onInstalled={onReplitInstalled}
         />
       )}
       {codexLoginOpen && (
