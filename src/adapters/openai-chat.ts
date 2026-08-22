@@ -596,6 +596,12 @@ function toolResultTextForWire(content: string | OcxContentPart[], annotateEmpty
     return content;
   }
   const text = content.filter((p) => p.type === "text").map((p) => (p as OcxTextContent).text).join("");
+  // A whitespace-only text-part array is the array twin of a blank string: the
+  // Responses adapter treats it as empty, so the Chat adapter must annotate it too
+  // instead of forwarding whitespace the model silently accepts (CodeRabbit).
+  if (annotateEmpty && content.every(part => part.type === "text") && text.trim() === "") {
+    return EMPTY_TOOL_OUTPUT_ANNOTATION;
+  }
   if (text) {
     const untransportableImages = content.filter((p) => p.type === "image" && !p.imageUrl).length;
     return `${text}${"[image]".repeat(untransportableImages)}`;
