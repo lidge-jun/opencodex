@@ -3,7 +3,7 @@ import { buildCatalogEntries } from "../src/codex/catalog";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import type { AdapterRequest } from "../src/adapters/base";
-import { configuredReasoningEfforts, mapReasoningEffort, sanitizeCodexReasoningEfforts } from "../src/reasoning-effort";
+import { configuredReasoningEfforts, mapReasoningEffort, REASONING_EFFORT_OMIT, sanitizeCodexReasoningEfforts } from "../src/reasoning-effort";
 import { routeModel } from "../src/router";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -972,5 +972,57 @@ describe("stale reasoning-ladder self-heal", () => {
       modelReasoningEffortMap: { model: { low: "low", high: "high" } },
     };
     expect(configuredReasoningEfforts(prov, "model")).toEqual([]);
+  });
+});
+
+describe("reasoning effort omission sentinel (__omit__)", () => {
+  // ollama >=0.32 normalizes xhigh/ultra/max to "max" before rendering a GGUF chat template,
+  // and templates like Qwen3.8's accept only xhigh/medium/low — with the xhigh default
+  // reachable only by omitting reasoning_effort. The sentinel makes that expressible.
+  const ollamaLike: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: "http://localhost:11434/v1",
+    modelReasoningEfforts: { "qwen-local": ["low", "medium", "high", "xhigh", "max"] },
+    modelReasoningEffortMap: {
+      "qwen-local": {
+        low: "low",
+        medium: "medium",
+        high: REASONING_EFFORT_OMIT,
+        xhigh: REASONING_EFFORT_OMIT,
+        max: REASONING_EFFORT_OMIT,
+      },
+    },
+  };
+
+  test("mapped __omit__ drops the wire value so the upstream default applies", () => {
+    expect(mapReasoningEffort(ollamaLike, "qwen-local", "high")).toBeUndefined();
+    expect(mapReasoningEffort(ollamaLike, "qwen-local", "xhigh")).toBeUndefined();
+    expect(mapReasoningEffort(ollamaLike, "qwen-local", "max")).toBeUndefined();
+  });
+
+  test("ultra collapses to the max boundary before the sentinel lookup", () => {
+    expect(mapReasoningEffort(ollamaLike, "qwen-local", "ultra")).toBeUndefined();
+  });
+
+  test("non-sentinel entries in the same map still pass through", () => {
+    expect(mapReasoningEffort(ollamaLike, "qwen-local", "low")).toBe("low");
+    expect(mapReasoningEffort(ollamaLike, "qwen-local", "medium")).toBe("medium");
+  });
+
+  test("provider-wide reasoningEffortMap sentinels apply to every model", () => {
+    const prov: OcxProviderConfig = { adapter: "openai-chat", reasoningEffortMap: { max: REASONING_EFFORT_OMIT } };
+    expect(mapReasoningEffort(prov, "anything", "max")).toBeUndefined();
+    expect(mapReasoningEffort(prov, "anything", "medium")).toBe("medium");
+  });
+
+  test("the openai-chat adapter omits reasoning_effort entirely for omitted efforts", () => {
+    const body = buildBody(ollamaLike, "qwen-local", { reasoning: "max" });
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(body).not.toHaveProperty("reasoning");
+    expect(buildBody(ollamaLike, "qwen-local", { reasoning: "low" }).reasoning_effort).toBe("low");
+  });
+
+  test("__omit__ wire values never leak into the configured ladder", () => {
+    expect(configuredReasoningEfforts(ollamaLike, "qwen-local")).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 });
