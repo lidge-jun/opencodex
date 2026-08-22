@@ -737,4 +737,48 @@ describe("fetchProviderAccountQuotas", () => {
     expect(redirectTargetCalled).toBe(false);
   });
 
+  test("destination-qualified Antigravity cache rows survive generation reconcile when account remains live", async () => {
+    const { saveCredential, getAccountSet } = await import("../src/oauth/store");
+    await saveCredential("google-antigravity", {
+      access: "token-agy-reconcile",
+      refresh: "refresh-agy-reconcile",
+      expires: Date.now() + 3600_000,
+      projectId: "project-reconcile",
+      accountId: "acct-agy-reconcile",
+      email: "reconcile@example.com",
+    });
+
+    let probeCount = 0;
+    globalThis.fetch = (async () => {
+      probeCount += 1;
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-3.7-flash": { quotaInfo: { remainingFraction: 0.8, resetTime: "2026-07-05T14:00:00Z" } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const rows1 = await fetchProviderAccountQuotas("google-antigravity", true, "https://custom-dest.example.com");
+    expect(rows1.length).toBe(1);
+    expect(probeCount).toBe(1);
+    expect(rows1[0]!.quota?.customWindows?.find(w => w.label === "Gem")?.percent).toBe(20);
+
+    const set = getAccountSet("google-antigravity");
+    expect(set?.accounts.length).toBe(1);
+    const liveAccountId = set!.accounts[0]!.id;
+    reconcileProviderAccountQuotaRows({
+      generation: 50_000,
+      providerNames: new Set(["google-antigravity"]),
+      comboIds: new Set(),
+      comboTargets: new Set(),
+      codexAccountIds: new Set(),
+      oauthAccountKeys: new Set([`google-antigravity\0${liveAccountId}`]),
+      configRoots: new Set(),
+    });
+
+    const rows2 = await fetchProviderAccountQuotas("google-antigravity", false, "https://custom-dest.example.com");
+    expect(rows2.length).toBe(1);
+    expect(probeCount).toBe(1);
+    expect(rows2[0]!.quota?.customWindows?.find(w => w.label === "Gem")?.percent).toBe(20);
+  });
 });

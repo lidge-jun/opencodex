@@ -1,4 +1,7 @@
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { providerOutboundPost, providerRedirectError } from "../lib/provider-outbound";
+
+const originalFetch = globalThis.fetch;
 import { createHash } from "node:crypto";
 import {
   effectiveCodexAuthAccountId,
@@ -1378,8 +1381,16 @@ let lastReconciledGeneration = 0;
 let liveAccountQuotaKeys = new Set<string>();
 let liveProviderQuotaKeys = new Set<string>();
 
+function canonicalAccountQuotaKey(key: string): string {
+  const firstNull = key.indexOf("\0");
+  if (firstNull === -1) return key;
+  const secondNull = key.indexOf("\0", firstNull + 1);
+  if (secondNull === -1) return key;
+  return key.slice(0, secondNull);
+}
+
 function mayCommitAccountQuotaKey(key: string, writerGeneration: number): boolean {
-  return writerGeneration >= lastReconciledGeneration || liveAccountQuotaKeys.has(key);
+  return writerGeneration >= lastReconciledGeneration || liveAccountQuotaKeys.has(canonicalAccountQuotaKey(key));
 }
 
 function mayCommitProviderQuotaKey(key: string, writerGeneration: number): boolean {
@@ -1449,7 +1460,8 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
   if (context.generation <= lastReconciledGeneration) return 0;
   let removed = 0;
   for (const key of accountQuotaCache.keys()) {
-    if (context.oauthAccountKeys.has(key)) continue;
+    const canonical = canonicalAccountQuotaKey(key);
+    if (context.oauthAccountKeys.has(canonical)) continue;
     accountQuotaCache.delete(key);
     removed += 1;
   }
@@ -2119,30 +2131,42 @@ export async function fetchAntigravityUsageQuota(
   accessToken: string,
   projectId: string,
   baseUrl = "https://daily-cloudcode-pa.googleapis.com",
+  options?: {
+    allowPrivateNetwork?: boolean;
+    fetch?: typeof globalThis.fetch;
+    outboundPost?: typeof providerOutboundPost;
+  },
 ): Promise<ProviderQuota | null> {
-  const destError = providerDestinationConfigError("google-antigravity", {
-    baseUrl: baseUrl || "https://daily-cloudcode-pa.googleapis.com",
-  });
-  if (destError) return null;
+  const outboundPost = options?.outboundPost ?? providerOutboundPost;
   const normalizedUrl = (baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
+  const targetUrl = normalizedUrl + "/v1internal:fetchAvailableModels";
   let response: Response;
   try {
-    response = await fetch(normalizedUrl + "/v1internal:fetchAvailableModels", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": antigravityUserAgent(),
-        Authorization: "Bearer " + accessToken,
+    const activeFetch = options?.fetch ?? (globalThis.fetch !== originalFetch ? globalThis.fetch : undefined);
+    response = await outboundPost(
+      "google-antigravity",
+      {
+        baseUrl: normalizedUrl,
+        allowPrivateNetwork: options?.allowPrivateNetwork ?? false,
+        ...(activeFetch ? { fetch: activeFetch } : {}),
       },
-      body: JSON.stringify({ project: projectId }),
-      redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+      targetUrl,
+      {
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": antigravityUserAgent(),
+          Authorization: "Bearer " + accessToken,
+        },
+        body: JSON.stringify({ project: projectId }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      },
+    );
   } catch {
     return null;
   }
-  if (!response.ok) return null;
+  const redirectError = await providerRedirectError(response, targetUrl);
+  if (redirectError || !response.ok) return null;
   const body = asRecord(await readQuotaJson(response));
   const models = asRecord(body?.models);
   if (!models) return null;
