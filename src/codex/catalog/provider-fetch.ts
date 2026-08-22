@@ -1163,6 +1163,10 @@ async function fetchProviderModelsWithAuth(
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
   const { name, provider: prov, discovery, request } = captured;
+  // Capture before any credential refresh or outbound await. OAuth account changes clear this
+  // generation, so a request started with the former account cannot later publish its result.
+  const cacheGeneration = captureModelCacheGeneration(name);
+  const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
   function syncRetainedModelDiagnostics(models: readonly CatalogModel[]): void {
     if (prov.liveModels === false || !Array.isArray(prov.retainModels) || prov.retainModels.length === 0) {
       retainedWithoutDiscoveryRefs.delete(name);
@@ -1187,10 +1191,6 @@ async function fetchProviderModelsWithAuth(
     }
     return { models, outcome: { provider: name, state } };
   };
-  // Capture before any credential refresh or outbound await. OAuth account changes clear this
-  // generation, so a request started with the former account cannot later publish its result.
-  const cacheGeneration = captureModelCacheGeneration(name);
-  const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"

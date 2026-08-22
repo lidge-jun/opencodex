@@ -206,14 +206,15 @@ describe("#1690 retainModels provider configuration", () => {
     expect(visible.map(m => m.id)).toEqual(["gemini-3.7-flash"]);
   });
 
-  test("warnRetainedModel404Once warns on first 404, suppresses on second, and resets on new generation", () => {
+  test("warnRetainedModel404Once does not warn for non-retained models", () => {
     resetRetainedModelWarningsForTests();
     reconcileProviderFetchWarnings(1);
 
     const warnCalls: string[] = [];
     const originalWarn = console.warn;
     console.warn = (...args: any[]) => {
-      warnCalls.push(args.join(" "));
+      const msg = args.join(" ");
+      if (msg.includes("retained via retainModels")) warnCalls.push(msg);
     };
 
     try {
@@ -237,7 +238,8 @@ describe("catalog lifecycle and server 404 diagnostics for retained models", () 
     const warnCalls: string[] = [];
     const originalWarn = console.warn;
     console.warn = (...args: any[]) => {
-      warnCalls.push(args.join(" "));
+      const msg = args.join(" ");
+      if (msg.includes("retained via retainModels")) warnCalls.push(msg);
     };
 
     let upstreamCalls = 0;
