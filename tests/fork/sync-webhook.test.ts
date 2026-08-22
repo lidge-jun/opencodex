@@ -40,16 +40,40 @@ describe("fork sync Cursor webhook coordinator", () => {
     });
   });
 
-  test("does not post non-updated events", async () => {
-    let calls = 0;
+  test("posts main-behind and history-diverged events", async () => {
+    const postedKinds: string[] = [];
     await createCursorWebhookCoordinator({
       url: "https://cursor.example/hook",
       secret: SECRET,
-      fetchImpl: async () => {
-        calls += 1;
+      fetchImpl: async (_url, init) => {
+        postedKinds.push((JSON.parse(String(init?.body)) as SyncEvent).kind);
         return new Response(null, { status: 200 });
       },
-    }).start(event("pin-diverged"));
+    }).start(event("main-behind"));
+    await createCursorWebhookCoordinator({
+      url: "https://cursor.example/hook",
+      secret: SECRET,
+      fetchImpl: async (_url, init) => {
+        postedKinds.push((JSON.parse(String(init?.body)) as SyncEvent).kind);
+        return new Response(null, { status: 200 });
+      },
+    }).start(event("history-diverged"));
+    expect(postedKinds).toEqual(["main-behind", "history-diverged"]);
+  });
+
+  test("does not post issue-only events", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return new Response(null, { status: 200 });
+    };
+    for (const kind of ["pin-diverged", "detect-failed", "already-current"] as const) {
+      await createCursorWebhookCoordinator({
+        url: "https://cursor.example/hook",
+        secret: SECRET,
+        fetchImpl,
+      }).start(event(kind));
+    }
     expect(calls).toBe(0);
   });
 

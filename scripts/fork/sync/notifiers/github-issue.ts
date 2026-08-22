@@ -26,17 +26,22 @@ function issueText(event: SyncEvent, upstreamRepo: string): {
 } {
   const tag = publicValue(event.latestTag) || "unknown-release";
   const kind = publicValue(event.kind);
+  const recommendedLane = publicValue(event.recommendedLane ?? "unspecified");
+  const action = event.recommendedLane === "daily-merge"
+    ? "Action: open or update a merge-from-main draft PR."
+    : "Action: review the release and rebuild run/main.";
   const title = `[fork-sync] ${kind}: ${tag}`;
   const body = [
     "<!-- opencodex-fork-sync -->",
     `Upstream repository: ${publicValue(upstreamRepo)}`,
     `Event: ${kind}`,
+    `recommendedLane: ${recommendedLane}`,
     `Latest tag: ${tag}`,
     `Latest tag SHA: ${publicValue(event.latestTagSha) || "unavailable"}`,
     `vendor/main SHA: ${publicValue(event.vendorMainSha) || "unavailable"}`,
     `vendor/dev SHA: ${publicValue(event.vendorDevSha) || "unavailable"}`,
     `Detected at: ${publicValue(event.detectedAt)}`,
-    event.error ? `Error: ${publicValue(event.error)}` : "Action: review the release and rebuild run/main.",
+    event.error ? `Error: ${publicValue(event.error)}` : action,
   ].join("\n");
   return { title, body };
 }
