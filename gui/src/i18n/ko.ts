@@ -216,6 +216,7 @@ export const ko: Record<TKey, string> = {
   "dash.providers": "프로바이더",
   "dash.tokens30d": "토큰 (30일)",
   "dash.coverage": "커버리지 {pct}",
+  "dash.configDiverged": "config.json이 프록시 로드 후 변경되었습니다 — 재시작하여 적용",
   "dash.mem.title": "메모리 관찰",
   "dash.mem.hint": "읽기 전용 런타임 진단. 관측 메모리는 max(RSS, external, ArrayBuffers)라 Windows working set trimming이 커밋된 보존 메모리를 숨기지 못합니다.",
   "dash.mem.rss": "상주 메모리 (RSS)",

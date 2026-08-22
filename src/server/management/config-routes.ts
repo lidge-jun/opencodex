@@ -11,6 +11,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  readConfigDivergenceStatus,
 } from "../../config";
 import {
   clearLoginState,
@@ -247,6 +248,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     return jsonResponse(withProviderServiceTierDTO(safeConfigDTO(config), config));
   }
 
+  if (url.pathname === "/api/config/status" && req.method === "GET") {
+    return jsonResponse(readConfigDivergenceStatus());
+  }
+ 
   if (url.pathname === "/api/config" && req.method === "PUT") {
     return jsonResponse({ error: "Full config PUT is disabled. Use /api/providers POST for provider changes." }, 405);
   }

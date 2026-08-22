@@ -16,14 +16,15 @@ export function DashboardOverviewHead({
   healthLoading,
   startupHealth,
   projectConfigWarnings,
+  configDivergence,
   maMode,
   maBusy,
   maHelpTriggerRef,
  maHelpOpen,
  setMaHelpOpen,
- switchMaMode,
+  switchMaMode,
   maError,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "maError">) {
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "configDivergence" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "maError">) {
  const t = useT();
   const online = health?.status === "ok";
 
@@ -111,6 +112,14 @@ export function DashboardOverviewHead({
             </div>
           )}
         </div>
+        {configDivergence?.available === true && configDivergence.diverged && (
+          <div className="startup-health-slot" role="alert">
+            <button type="button" className="startup-health-bar" onClick={() => navigateHash("settings")}>
+              <span className="dot dot-amber" aria-hidden="true" />
+              <span className="startup-health-bar__summary">{t("dash.configDiverged")}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {projectConfigWarnings.length > 0 && (

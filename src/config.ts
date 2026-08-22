@@ -2636,9 +2636,42 @@ export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
   };
 }
 
+export interface ConfigDivergenceStatus {
+  /** SHA-256 of the config bytes the running process last loaded or wrote. */
+  residentVersion: string | null;
+  /** SHA-256 of the current config.json bytes on disk (null when unreadable). */
+  diskVersion: string | null;
+  /** True only when a resident version exists and differs from the current disk bytes. */
+  diverged: boolean;
+}
+
+/**
+ * Compare the running process's resident config identity to the current file. A CLI
+ * process without an armed live config reports `residentVersion: null` and never claims
+ * divergence; only the proxy process can answer this truthfully.
+ */
+export function readConfigDivergenceStatus(): ConfigDivergenceStatus {
+  const admission = readConfigAdmissionSnapshot();
+  const diskVersion = admission.kind === "read" ? admission.contentSha256 : null;
+  return {
+    residentVersion: residentConfigSha256,
+    diskVersion,
+    diverged: residentConfigSha256 !== null && diskVersion !== null && residentConfigSha256 !== diskVersion,
+  };
+}
+ 
 const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 let warnedConfigMutationDirectoryAcl = false;
+// SHA-256 of the config bytes the running process last loaded or wrote (armed at server
+// start, refreshed on every changed in-process save). Compared to the current file digest
+// by `ocx status` / the dashboard to warn when config.json changed without a reload.
+let residentConfigSha256: string | null = null;
+
+/** Test-only seam: reset the resident identity so isolated test files cannot leak state. */
+export function setResidentConfigSha256ForTests(value: string | null): void {
+  residentConfigSha256 = value;
+}
 
 export class ConfigMutationLockError extends Error {
   readonly code = "CONFIG_MUTATION_LOCK_UNAVAILABLE";
@@ -2863,6 +2896,7 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
     return false;
   }
   atomicWriteFile(configPath, bytes);
+  residentConfigSha256 = createHash("sha256").update(bytes).digest("hex");
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
   refreshUserCostOverlays(persisted);
@@ -3014,6 +3048,10 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  // The live config was just loaded from disk: record that byte identity as the
+  // resident version so a later external edit becomes a detectable divergence.
+  const admission = readConfigAdmissionSnapshot();
+  if (admission.kind === "read") residentConfigSha256 = admission.contentSha256;
 }
 
 /**

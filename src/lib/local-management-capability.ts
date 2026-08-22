@@ -10,6 +10,7 @@ export const LOCAL_MANAGEMENT_CAPABILITY_TTL_MS = 10_000;
 export const LOCAL_MANAGEMENT_READ_PATHS = {
   codexAccounts: "/api/codex-auth/accounts",
   systemMemory: "/api/system/memory",
+  configStatus: "/api/config/status",
 } as const;
 
 export type LocalManagementReadPath =
@@ -32,7 +33,8 @@ export function parseExpectedLocalManagementPid(value: string | null): ExpectedL
 
 function isLocalManagementReadPath(path: string): path is LocalManagementReadPath {
   return path === LOCAL_MANAGEMENT_READ_PATHS.codexAccounts
-    || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory;
+    || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory
+    || path === LOCAL_MANAGEMENT_READ_PATHS.configStatus;
 }
 
 function localReadCapabilityPayload(

@@ -76,6 +76,16 @@ export type DashboardSettingsPoll = {
   startupHealthSeed: SettingsData["startupHealth"] | null | undefined;
 };
 
+export type DashboardConfigStatusPoll = {
+  /** Null when the endpoint is unavailable (older server) or the fetch failed. */
+  configDivergence: {
+    available: boolean;
+    residentVersion: string | null;
+    diskVersion: string | null;
+    diverged: boolean;
+  } | null;
+};
+
 export type DashboardMaModePoll = {
   maMode: "v1" | "default" | "v2";
 };
@@ -245,6 +255,36 @@ export async function fetchDashboardMaMode(
   } catch (error) {
     if (isAbortError(error, signal)) throw error;
     return { maMode: "default" };
+  }
+}
+
+/**
+ * Resident-vs-disk config divergence from the running proxy. Older servers without
+ * /api/config/status report null; the dashboard must keep showing the normal state.
+ */
+export async function fetchDashboardConfigStatus(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<DashboardConfigStatusPoll> {
+  try {
+    const response = await fetch(`${apiBase}/api/config/status`, { signal });
+    if (!response.ok) return { configDivergence: null };
+    const data = await response.json() as {
+      residentVersion?: unknown;
+      diskVersion?: unknown;
+      diverged?: unknown;
+    };
+    return {
+      configDivergence: {
+        available: true,
+        residentVersion: typeof data.residentVersion === "string" ? data.residentVersion : null,
+        diskVersion: typeof data.diskVersion === "string" ? data.diskVersion : null,
+        diverged: data.diverged === true,
+      },
+    };
+  } catch (error) {
+    if (isAbortError(error, signal)) throw error;
+    return { configDivergence: null };
   }
 }
 
