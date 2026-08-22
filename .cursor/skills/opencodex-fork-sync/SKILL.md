@@ -1,6 +1,6 @@
 ---
 name: opencodex-fork-sync
-description: Use when performing an opencodex public-fork sync, updating vendor/dev, merging upstream into an overlay, or resolving fork-sync conflicts.
+description: Use when performing an opencodex public-fork sync, updating vendor/main or vendor/dev, merging upstream/main into an overlay, rebuilding run/main, or resolving fork-sync conflicts.
 ---
 
 # opencodex fork sync
@@ -22,17 +22,32 @@ Workers must be **Composer 2.5** or **GPT 5.6 Luna**.
 ## Sync commands
 
 ```bash
-git fetch upstream --prune
+git fetch upstream origin --prune
+git switch vendor/main
+git merge --ff-only upstream/main
 git switch vendor/dev
 git merge --ff-only upstream/dev
-git switch -c sync/upstream-YYYYMMDD main
-git merge --no-ff vendor/dev
+# PR-base only; do not merge vendor/dev into origin/main
+git switch -c sync/upstream-YYYYMMDD origin/main
+git merge --no-ff vendor/main
 gh repo view --json defaultBranchRef -q .defaultBranchRef.name
 gh pr create --base main --head sync/upstream-YYYYMMDD --title "sync: upstream YYYYMMDD" --body "<summary and verification>"
 gh pr merge <number> --merge
 ```
 
-Open and merge the sync PR on the fork into `main` only after human confirmation. `vendor/dev` remains an exact fast-forward of `upstream/dev`; do not commit overlay work there.
+Open and merge the sync PR on the fork into `main` only after human confirmation. `vendor/main` remains an exact fast-forward of `upstream/main`; `vendor/dev` remains an exact fast-forward of `upstream/dev` for PR bases only. Do not commit overlay work on either vendor branch.
+
+## Rebuild `run/main`
+
+`run/main` is the disposable daily driver. Rebuild it from `vendor/main`, apply the overlay, then replay selected GitHub `feat/*` PR heads in stack order:
+
+```bash
+git switch -C run/main overlay
+git merge <selected-origin-feat-head>
+git push --force-with-lease origin run/main
+```
+
+Do not retarget those upstream PRs to `main`, and stop replaying a `feat/*` once it is contained in `vendor/main`.
 
 ## Conflict report (required for every conflict)
 
@@ -73,4 +88,4 @@ bun run privacy:scan
 
 Use the focused matching adapter test for provider changes (for example `bun test tests/google-hardening.test.ts`). Use typecheck and the full suite for shared runtime/routing/config/server changes; use privacy scanning for logging or credential changes. Do not claim completion without output.
 
-Never run `git config`; never use whole-tree `git merge -X ours` or `-X theirs`; never force-push `main`; never skip a failing test. Never open upstream PRs from `main`, `overlay`, `run/dev`, or `dev`. Upstream PRs come from isolated `feat/*` branches based on `vendor/dev`.
+Never run `git config`; never use whole-tree `git merge -X ours` or `-X theirs`; never force-push `main`; never skip a failing test. Never open upstream PRs from `main`, `overlay`, `run/main`, `run/dev`, or `dev`. Upstream PRs come from isolated `feat/*` branches based on `vendor/dev`.
