@@ -57,6 +57,20 @@ describe("generic HTTP coordinator", () => {
     expect(calls).toBe(1);
   });
 
+  test("posts all actionable lane events", async () => {
+    const postedKinds: string[] = [];
+    for (const kind of ["pin-updated", "main-behind", "history-diverged"] as const) {
+      await createHttpCoordinator({
+        url: "https://agent.example/webhook",
+        fetchImpl: async (_url, init) => {
+          postedKinds.push((JSON.parse(String(init?.body)) as SyncEvent).kind);
+          return new Response(null, { status: 200 });
+        },
+      }).start(event(kind));
+    }
+    expect(postedKinds).toEqual(["pin-updated", "main-behind", "history-diverged"]);
+  });
+
   test("does not post non-updated events or without a URL", async () => {
     let calls = 0;
     const fetchImpl = async () => {

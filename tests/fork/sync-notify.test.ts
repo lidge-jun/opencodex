@@ -85,6 +85,25 @@ describe("fork sync GitHub issue notifier", () => {
     expect(created.body).not.toContain("rebuild run/main");
   });
 
+  test("reserves the rebuild recommendation for history-diverged events", async () => {
+    const emergency = client();
+    await createGitHubIssueNotifier({
+      client: emergency.api,
+      upstreamRepo: "lidge-jun/opencodex",
+    }).notify(event("history-diverged", "emergency-rebuild"));
+    const emergencyBody = emergency.calls[1]?.value as { body: string };
+    expect(emergencyBody.body).toContain("rebuild run/main");
+
+    const failed = client();
+    await createGitHubIssueNotifier({
+      client: failed.api,
+      upstreamRepo: "lidge-jun/opencodex",
+    }).notify(event("pin-diverged"));
+    const failedBody = failed.calls[1]?.value as { body: string };
+    expect(failedBody.body).toContain("investigate the fork sync event");
+    expect(failedBody.body).not.toContain("rebuild run/main");
+  });
+
   test("does not call GitHub for an already-current event", async () => {
     const fake = client();
     await createGitHubIssueNotifier({

@@ -21,6 +21,7 @@ describe("fork PR mergeable workflow", () => {
     expect(source).toMatch(/permissions:\s*\n\s+contents:\s*read/);
     expect(source).not.toMatch(/pull-requests:\s*(?!read\b)\S+/);
     expect(source).toMatch(/fetch-depth:\s*0/);
+    expect(source).toContain("persist-credentials: false");
   });
 
   test("fails dirty PRs and fails closed when mergeability stays unknown", () => {

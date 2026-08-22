@@ -27,9 +27,11 @@ function issueText(event: SyncEvent, upstreamRepo: string): {
   const tag = publicValue(event.latestTag) || "unknown-release";
   const kind = publicValue(event.kind);
   const recommendedLane = publicValue(event.recommendedLane ?? "unspecified");
-  const action = event.recommendedLane === "daily-merge"
+  const action = event.kind === "history-diverged"
+    ? "Action: review the release and rebuild run/main."
+    : event.kind === "pin-updated" || event.kind === "main-behind"
     ? "Action: open or update a merge-from-main draft PR."
-    : "Action: review the release and rebuild run/main.";
+    : "Action: investigate the fork sync event.";
   const title = `[fork-sync] ${kind}: ${tag}`;
   const body = [
     "<!-- opencodex-fork-sync -->",

@@ -51,6 +51,9 @@ describe("fork upstream sync workflow contract", () => {
     expect(workflow).toContain(
       "git push origin refs/heads/vendor/main:refs/heads/vendor/main refs/heads/vendor/dev:refs/heads/vendor/dev",
     );
+    expect(workflow).toContain(
+      "if: steps.pin.outputs.kind == 'pin-updated' || steps.pin.outputs.kind == 'history-diverged'",
+    );
     expect(workflow).not.toMatch(/git\s+push\s+origin\s+(?:main|origin\/main)\b/);
   });
 

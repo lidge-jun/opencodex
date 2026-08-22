@@ -160,8 +160,8 @@ FORK_SYNC_CLI_INPUT=summary
 
 The default CLI input is the full event JSON; `summary` is a readable,
 credential-free message. Commands are whitespace-separated executable and
-arguments. Both generic coordinators send only `pin-updated` and are silent
-when their required URL or command is absent.
+arguments. Both generic coordinators send `pin-updated`, `main-behind`, and
+`history-diverged`, and are silent when their required URL or command is absent.
 
 The current agent mappings are:
 
