@@ -2957,11 +2957,29 @@ describe("server local API auth", () => {
     }
   }, { timeout: SERVER_BUDGET_MS });
 
+  // #2398 changed what the caller sees here, and this test had to move with it.
+  //
+  // The invariant this test exists for is unchanged and still asserted: an oversized 400
+  // must NOT authorize a pool retry, so exactly one account is dispatched and neither
+  // account is marked unhealthy. What changed is the body. Relaying 65 KiB of
+  // attacker-controlled bytes back to the client is precisely what #2398 stopped, so the
+  // caller now gets #452's bounded status-only JSON instead of the original prefix
+  // (pinned from the other side by "oversized passthrough errors become bounded
+  // status-only JSON" in tests/issue-452-empty-503.test.ts).
+  //
+  // The upstream's own headers still survive, which is what keeps pool-retry diagnostics
+  // honest — that part is still checked below.
   test("oversized 400 body never authorizes a pool retry", async () => {
-    const body = `${unsupportedModelBody()}${"x".repeat(65_536)}`;
+    const hostileSuffix = "x".repeat(65_536);
+    const body = `${unsupportedModelBody()}${hostileSuffix}`;
     const harness = await startPoolRetryHarness(() => rejectionResponse(body));
     try {
-      await expectOriginal400(await harness.request(), body);
+      const response = await harness.request();
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(text).not.toContain(hostileSuffix);
+      expect(text.length).toBeLessThan(1_024);
+
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
