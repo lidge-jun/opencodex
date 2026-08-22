@@ -7,6 +7,7 @@ import { createCursorAdapter } from "./cursor";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
+import { createWorkBuddyAdapter } from "./workbuddy";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
@@ -100,6 +101,10 @@ export const ADAPTER_REGISTRY = {
   "mimo-free": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createMimoFreeAdapter(provider),
+  },
+  workbuddy: {
+    contractParent: "openai-chat",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createWorkBuddyAdapter(provider),
   },
 } as const satisfies Record<string, AdapterDefinition>;
 

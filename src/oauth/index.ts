@@ -14,6 +14,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
@@ -216,6 +217,13 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: (rt, signal, credential) => refreshKiroToken(rt, signal, credential),
     providerConfig: oauthConfig("kiro"),
     defaultModel: oauthDefaultModel("kiro"),
+  },
+  workbuddy: {
+    login: (ctrl) => loginWorkBuddy(ctrl),
+    refresh: (rt, signal, credential) => refreshWorkBuddyToken(rt, signal, credential),
+    providerConfig: oauthConfig("workbuddy"),
+    defaultModel: oauthDefaultModel("workbuddy"),
+    defaultRefreshPolicy: "lazy-only",
   },
   "google-antigravity": {
     login: (ctrl, opts) => loginAntigravity(ctrl, { forceAccountSelect: opts?.forceLogin === true }),
