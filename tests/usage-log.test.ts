@@ -925,4 +925,49 @@ describe("usage log", () => {
     expect(row?.transportPhase).toBe("mid_stream");
     expect(row?.terminalSource).toBe("synthetic");
   });
+
+  test("drops unknown or invalid transportPhase and terminalSource (#1217)", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-invalid-attribution-test",
+      timestamp: Date.now(),
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 502,
+      durationMs: 1000,
+      usageStatus: "unreported",
+      failureSide: "invalid_side" as unknown as any,
+      failureStage: "invalid_stage" as unknown as any,
+      transportPhase: "invalid_phase" as unknown as any,
+      terminalSource: "invalid_source" as unknown as any,
+      attempts: [
+        {
+          ordinal: 1,
+          adapter: "anthropic",
+          sendCount: 1,
+          usageStatus: "unreported",
+          timestamp: Date.now(),
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          status: 502,
+          durationMs: 1000,
+          failureSide: "bogus_side" as unknown as any,
+          failureStage: "bogus_stage" as unknown as any,
+          transportPhase: "bogus_phase" as unknown as any,
+          terminalSource: "bogus_source" as unknown as any,
+        },
+      ],
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === "ocx-stream-invalid-attribution-test");
+    expect(row).toBeDefined();
+    expect(row?.failureSide).toBeUndefined();
+    expect(row?.failureStage).toBeUndefined();
+    expect(row?.transportPhase).toBeUndefined();
+    expect(row?.terminalSource).toBeUndefined();
+    expect(row?.attempts?.[0].failureSide).toBeUndefined();
+    expect(row?.attempts?.[0].failureStage).toBeUndefined();
+    expect(row?.attempts?.[0].transportPhase).toBeUndefined();
+    expect(row?.attempts?.[0].terminalSource).toBeUndefined();
+  });
 });
