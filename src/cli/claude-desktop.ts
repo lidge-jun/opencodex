@@ -46,7 +46,7 @@ export async function applyProfile(
 ): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
   // Explicit apply is an enable action. Persist intent before any Desktop write
   // so a process crash cannot leave a gateway profile that startup immediately removes.
-  const desired = setIntegrationEnabled("claude-desktop", true);
+  const desired = setIntegrationEnabled("claude-desktop", true, { surface: "cli", detail: "ocx claude desktop apply" });
   if (!desired.ok) return { ok: false, path: "", reason: desired.message };
   const config = loadConfig();
   const state = await buildClaudeDesktopState(config, profile);

@@ -253,6 +253,17 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/config/mutations" && req.method === "GET") {
+    // Mutation history echoes caller-chosen provider/model names and field values.
+    // Only authenticated human-facing management principals may read it; direct
+    // dispatch (undefined principal) and process-scoped capabilities are rejected.
+    if (ctx.principal !== "admin-token" && ctx.principal !== "gui-session") {
+      return jsonResponse(
+        { error: ctx.principal === undefined ? "admin token required" : "not authorized to read config mutation history" },
+        ctx.principal === undefined ? 401 : 403,
+        req,
+        config,
+      );
+    }
     const requested = Number(url.searchParams.get("limit") ?? "");
     const { rows, maxRows } = readConfigMutationAudit(Number.isFinite(requested) ? requested : 100);
     return jsonResponse({ mutations: rows, retention: { maxRows } });

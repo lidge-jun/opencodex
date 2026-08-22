@@ -218,7 +218,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       );
       if (result.written && result.fingerprint) {
         current.claudeCode = { ...current.claudeCode, desktopProfile: { ...current.claudeCode.desktopProfile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
-        saveConfigPreservingClaudeCode(current, { surface: "api", detail: "PUT /api/native-integrations/claude-desktop (fingerprint)" });
+        saveConfigPreservingClaudeCode(current, { surface: "internal", detail: "auto-apply desktop fingerprint" });
       }
     } catch { /* best-effort */ }
   }
@@ -650,7 +650,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const chosen = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string").slice(0, 5) : [];
     config.subagentModels = chosen;
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    save(config, { surface: "api", detail: "PUT /api/subagent-models" });
     const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
@@ -719,7 +719,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     else delete config.subagentModelFallback;
     if (nextPollMs !== undefined) config.subagentModelFallbackPollMs = nextPollMs;
     else delete config.subagentModelFallbackPollMs;
-    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/subagent-models" });
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/subagent-model-fallback" });
     return jsonResponse({
       ok: true,
       models: config.subagentModelFallback ?? [],
@@ -860,7 +860,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         }
       }
       const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
-      const desired = setIntegrationEnabled("claude-desktop", true);
+      const desired = setIntegrationEnabled("claude-desktop", true, { surface: "api", detail: "POST /api/claude-desktop/apply" });
       if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
       // Disk now says ON; the reused server snapshot must agree, or the native
       // GET reports OFF and a later whole-snapshot save undoes this transition.
@@ -871,7 +871,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // its stale `clientIntegrations` back over that write and turn the enable
       // action into an immediate self-cancelling OFF — the guard below would then
       // refuse the apply it was asked to perform. Persist ONLY the profile field.
-      const profileSaved = persistDesktopProfileField(config, state.profile);
+      const profileSaved = persistDesktopProfileField(config, state.profile, { surface: "api", detail: "POST /api/claude-desktop/apply" });
       if (!profileSaved.ok) {
         return jsonResponse({
           error: `Claude Desktop profile could not be saved (${profileSaved.reason}); nothing was applied.`,
@@ -918,7 +918,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           ...state.profile,
           appliedFingerprint: result.fingerprint,
           appliedAt: new Date().toISOString(),
-        });
+        }, { surface: "api", detail: "POST /api/claude-desktop/apply (fingerprint)" });
         if (!marked.ok) {
           return jsonResponse({
             ok: true,

@@ -1,6 +1,6 @@
 export const REDACTED_SECRET = "[REDACTED]";
 
-const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|api[-_]?key[-_]?pool|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|oauth[-_]?client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body

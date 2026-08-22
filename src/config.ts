@@ -2834,12 +2834,12 @@ export function recordConfigMutationInCurrentTransaction(
  */
 export function readConfigMutationAudit(limit = 100): { rows: ConfigMutationAuditRow[]; maxRows: number } {
   const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 100;
-  const path = configMutationDatabasePath();
-  if (!existsSync(path)) return { rows: [], maxRows: configAuditMaxRows };
   let database: Database | undefined;
   try {
-    // Read-only like the generation observer: a management read must never create
-    // the coordinator database; the first config write under the mutation lock does.
+    // A management read must never create or harden the coordinator directory, so
+    // resolve the path without the write-side effects of configMutationDatabasePath().
+    const path = configMutationDatabasePathForRead();
+    if (!existsSync(path)) return { rows: [], maxRows: configAuditMaxRows };
     database = new Database(path, { readonly: true });
     const rows = database.prepare(`
       SELECT id, created_at AS createdAt, surface, detail, fields,
@@ -2871,13 +2871,18 @@ function isPlainConfigObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Collect changed dotted paths, descending at most three object levels (e.g. providers.<id>.<field>). */
+/** Path resolution with no directory creation or ACL side effects, for read-only callers. */
+function configMutationDatabasePathForRead(): string {
+  return join(getConfigDir(), CONFIG_MUTATION_DB_FILENAME);
+}
+
+/** Collect changed paths as segment arrays, descending at most three object levels (e.g. providers.<id>.<field>). */
 function collectConfigDiffPaths(
   before: unknown,
   after: unknown,
-  prefix: string,
+  prefix: string[],
   depth: number,
-  out: string[],
+  out: string[][],
 ): void {
   if (out.length >= CONFIG_AUDIT_MAX_FIELDS) return;
   const beforeObject = isPlainConfigObject(before);
@@ -2888,18 +2893,16 @@ function collectConfigDiffPaths(
       ...Object.keys(after),
     ]);
     for (const key of keys) {
-      const nextPrefix = prefix ? `${prefix}.${key}` : key;
-      collectConfigDiffPaths(before[key], after[key], nextPrefix, depth + 1, out);
+      collectConfigDiffPaths(before[key], after[key], [...prefix, key], depth + 1, out);
     }
     return;
   }
-  if (!deepEqual(before, after)) out.push(prefix || "<root>");
+  if (!deepEqual(before, after)) out.push(prefix);
 }
 
-function extractConfigValueAtPath(root: unknown, path: string): unknown {
+function extractConfigValueAtPath(root: unknown, segments: readonly string[]): unknown {
   let current = root;
-  if (path === "<root>") return root;
-  for (const part of path.split(".")) {
+  for (const part of segments) {
     if (!isPlainConfigObject(current)) return undefined;
     current = current[part];
     if (current === undefined) return undefined;
@@ -2928,15 +2931,20 @@ export function buildConfigMutationSnapshot(
   beforeRaw: unknown,
   afterRaw: unknown,
 ): { fields: string[]; before: Record<string, unknown>; after: Record<string, unknown> } {
-  const fields: string[] = [];
-  collectConfigDiffPaths(beforeRaw, afterRaw, "", 0, fields);
+  const segmentPaths: string[][] = [];
+  collectConfigDiffPaths(beforeRaw, afterRaw, [], 0, segmentPaths);
+  // Config keys are caller-controlled and can be token-shaped (see the provider-name
+  // redaction at the schema boundary). Redact every segment before it is persisted
+  // and echoed by GET /api/config/mutations; extraction keeps the raw segments.
+  const fields = segmentPaths.map(segments => segments.map(redactSecretString).join(".") || "<root>");
   const before: Record<string, unknown> = {};
   const after: Record<string, unknown> = {};
-  for (const path of fields) {
-    const key = path.split(".").at(-1) ?? path;
-    before[path] = boundAuditValue(extractConfigValueAtPath(beforeRaw, path), key);
-    after[path] = boundAuditValue(extractConfigValueAtPath(afterRaw, path), key);
-  }
+  segmentPaths.forEach((segments, index) => {
+    const label = fields[index]!;
+    const key = segments.at(-1) ?? label;
+    before[label] = boundAuditValue(extractConfigValueAtPath(beforeRaw, segments), key);
+    after[label] = boundAuditValue(extractConfigValueAtPath(afterRaw, segments), key);
+  });
   return { fields, before, after };
 }
 
@@ -3031,11 +3039,11 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
 
 /**
  * Atomic config.json write WITHOUT the mutation lock; callers must hold
- * `withConfigMutationLockSync`. Returns true when bytes changed. Refreshes the
- * cost-overlay registry from the persisted config so runtime estimates follow
- * every save path.
+ * `withConfigMutationLockSync`. Returns the exact persisted document when bytes
+ * changed and null when the save was byte-identical. Refreshes the cost-overlay
+ * registry from the persisted config so runtime estimates follow every save path.
  */
-function persistConfigUnlocked(config: OcxConfig): boolean {
+function persistConfigUnlocked(config: OcxConfig): OcxConfig | null {
   const configPath = getConfigPath();
   // External editors can add provider rows the live config deliberately does
   // not route with yet; merge them at the serialization boundary so an
@@ -3054,13 +3062,28 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   // adopt the overlay without waiting for a changed save or restart.
   if (unchanged) {
     refreshUserCostOverlays(persisted);
-    return false;
+    return null;
   }
   atomicWriteFile(configPath, bytes);
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
   refreshUserCostOverlays(persisted);
-  return true;
+  return persisted;
+}
+
+/**
+ * Record one changed persist under the open mutation transaction, snapshotted
+ * against the exact document that was written (including preserved disk-only
+ * providers) so the audit never reports a deletion that did not reach disk.
+ */
+function recordPersistedConfigMutation(
+  before: unknown,
+  persisted: OcxConfig,
+  source: ConfigMutationSource,
+): void {
+  bumpGenerationForCooperatingConfigWrite();
+  const snapshot = buildConfigMutationSnapshot(before, persisted);
+  recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
 }
 
 /** Persist `config` to config.json under the config-mutation lock. */
@@ -3073,11 +3096,8 @@ export function saveConfig(
   withConfigMutationLockSync(() => {
     const beforeRaw = readRawConfigJson();
     const projected = projectCustomModelCatalogMigration(beforeRaw, config);
-    if (persistConfigUnlocked(projected)) {
-      bumpGenerationForCooperatingConfigWrite();
-      const snapshot = buildConfigMutationSnapshot(beforeRaw, projected);
-      recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
-    }
+    const persisted = persistConfigUnlocked(projected);
+    if (persisted) recordPersistedConfigMutation(beforeRaw, persisted, source);
     adoptCustomModelCatalogMigration(config, projected);
   });
 }
@@ -3164,11 +3184,8 @@ export function mutatePersistedConfig<T>(
         commitBase.diagnostics.config,
         confirmedConfig,
       );
-      if (persistConfigUnlocked(projected)) {
-        bumpGenerationForCooperatingConfigWrite();
-        const snapshot = buildConfigMutationSnapshot(commitBase.diagnostics.config, projected);
-        recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
-      }
+      const persisted = persistConfigUnlocked(projected);
+      if (persisted) recordPersistedConfigMutation(commitBase.diagnostics.config, persisted, source);
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -3557,18 +3574,12 @@ export function saveConfigPreservingClaudeCode(
       const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      if (persistConfigUnlocked(persistedConfig)) {
-        bumpGenerationForCooperatingConfigWrite();
-        const snapshot = buildConfigMutationSnapshot(onDisk, persistedConfig);
-        recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
-      }
+      const persisted = persistConfigUnlocked(persistedConfig);
+      if (persisted) recordPersistedConfigMutation(onDisk, persisted, source);
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      if (persistConfigUnlocked(projectedConfig)) {
-        bumpGenerationForCooperatingConfigWrite();
-        const snapshot = buildConfigMutationSnapshot(onDisk, projectedConfig);
-        recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
-      }
+      const persisted = persistConfigUnlocked(projectedConfig);
+      if (persisted) recordPersistedConfigMutation(onDisk, persisted, source);
     }
     adoptCustomModelCatalogMigration(config, projectedConfig);
     if (claudeCodeBaseline.has(config)) {

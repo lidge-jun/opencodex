@@ -160,7 +160,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
         }
         Object.assign(fresh, config);
         return { changed: JSON.stringify(fresh) !== before, value: undefined };
-      }, { surface: "cli", detail: "ocx config set/unset" });
+      }, { surface: "cli", detail: `ocx config ${action}` });
       if (outcome.status === "unavailable") {
         throw new Error(outcome.reason === "conflict"
           ? "config changed while applying this update; retry"
