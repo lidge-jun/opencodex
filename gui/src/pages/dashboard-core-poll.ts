@@ -274,12 +274,20 @@ export async function fetchDashboardConfigStatus(
       diskVersion?: unknown;
       diverged?: unknown;
     };
+    const residentVersion = data.residentVersion ?? null;
+    const diskVersion = data.diskVersion ?? null;
+    const diverged = data.diverged;
+    if (
+      !(residentVersion === null || typeof residentVersion === "string")
+      || !(diskVersion === null || typeof diskVersion === "string")
+      || typeof diverged !== "boolean"
+    ) return { configDivergence: null };
     return {
       configDivergence: {
         available: true,
-        residentVersion: typeof data.residentVersion === "string" ? data.residentVersion : null,
-        diskVersion: typeof data.diskVersion === "string" ? data.diskVersion : null,
-        diverged: data.diverged === true,
+        residentVersion,
+        diskVersion,
+        diverged,
       },
     };
   } catch (error) {

@@ -202,6 +202,12 @@ test("fetchDashboardConfigStatus normalizes diverged and tolerates old servers",
     });
     globalThis.fetch = (async () => new Response("nope", { status: 404 })) as typeof fetch;
     await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+
+    // Malformed successful payloads must not be trusted as available data.
+    globalThis.fetch = (async () => Response.json({})) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diskVersion: "b", diverged: "yes" })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
   } finally {
     globalThis.fetch = originalFetch;
   }

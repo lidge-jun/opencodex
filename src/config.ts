@@ -2191,7 +2191,11 @@ export function loadConfig(): OcxConfig {
     return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
-    const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
+    // Keep the pre-strip bytes: the resident identity must hash exactly what the
+    // process parsed, including a leading BOM, so it matches the admission digest.
+    const rawWithBom = readFileSync(configPath, "utf-8");
+    const raw = rawWithBom.replace(/^\uFEFF/, "");
+    residentConfigSha256 = createHash("sha256").update(rawWithBom).digest("hex");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
@@ -2257,9 +2261,11 @@ export function loadConfig(): OcxConfig {
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
+    residentConfigSha256 = null;
     return getDefaultConfig();
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
+    residentConfigSha256 = null;
     return getDefaultConfig();
   }
 }
@@ -3048,10 +3054,10 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
-  // The live config was just loaded from disk: record that byte identity as the
-  // resident version so a later external edit becomes a detectable divergence.
-  const admission = readConfigAdmissionSnapshot();
-  if (admission.kind === "read") residentConfigSha256 = admission.contentSha256;
+  // The resident digest is captured by loadConfig() from the exact bytes it parsed.
+  // Do NOT re-read config.json here: a file edit between that read and arming
+  // would otherwise be recorded as the resident identity while the live config
+  // still reflects the earlier bytes, producing a false divergence at startup.
 }
 
 /**

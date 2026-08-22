@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import {
   armClaudeCodeBaseline,
   getConfigPath,
@@ -74,6 +75,40 @@ describe("config divergence status", () => {
     armClaudeCodeBaseline(armed);
     armed.port = 20200;
     saveConfig(armed);
+    const status = readConfigDivergenceStatus();
+    expect(status.diverged).toBe(false);
+    expect(status.residentVersion).toBe(status.diskVersion);
+  });
+
+  test("resident digest comes from the loaded bytes, not a post-load re-read", async () => {
+    const first = JSON.stringify(config(), null, 2) + "\n";
+    writeFileSync(getConfigPath(), first);
+    const loaded = loadConfig();
+    // The file changes between load and arming (e.g. another process saves during startup).
+    const second = JSON.stringify(config(20200), null, 2) + "\n";
+    writeFileSync(getConfigPath(), second);
+    armClaudeCodeBaseline(loaded);
+    const status = readConfigDivergenceStatus();
+    // Resident identity is the bytes that PRODUCED the live config (first), so the
+    // newer disk bytes are a real divergence the running process has not applied.
+    expect(status.residentVersion).toBe(createHash("sha256").update(first).digest("hex"));
+    expect(status.diverged).toBe(true);
+  });
+
+  test("a save that preserves disk-only providers does not false-positive", () => {
+    const onDisk = JSON.stringify({
+      ...config(),
+      defaultProvider: "diskOnly",
+      providers: {
+        diskOnly: { adapter: "openai-chat", baseUrl: "https://disk.example/v1", apiKey: "sk-disk" },
+      },
+    }, null, 2) + "\n";
+    writeFileSync(getConfigPath(), onDisk);
+    const loaded = loadConfig();
+    armClaudeCodeBaseline(loaded);
+    // Live edit adds a provider; persistConfigUnlocked preserves the disk-only row.
+    loaded.providers.live = { adapter: "openai-chat", baseUrl: "https://live.example/v1", apiKey: "sk-live" };
+    saveConfig(loaded);
     const status = readConfigDivergenceStatus();
     expect(status.diverged).toBe(false);
     expect(status.residentVersion).toBe(status.diskVersion);

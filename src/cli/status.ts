@@ -201,11 +201,19 @@ export async function collectStatus(): Promise<CliStatusView> {
         diskVersion?: unknown;
         diverged?: unknown;
       };
+      const residentVersion = body.residentVersion ?? null;
+      const diskVersion = body.diskVersion ?? null;
+      const diverged = body.diverged;
+      if (
+        !(residentVersion === null || typeof residentVersion === "string")
+        || !(diskVersion === null || typeof diskVersion === "string")
+        || typeof diverged !== "boolean"
+      ) return unavailable;
       return {
         available: true,
-        residentVersion: typeof body.residentVersion === "string" ? body.residentVersion : null,
-        diskVersion: typeof body.diskVersion === "string" ? body.diskVersion : null,
-        diverged: body.diverged === true,
+        residentVersion,
+        diskVersion,
+        diverged,
       };
     } catch {
       return unavailable;
