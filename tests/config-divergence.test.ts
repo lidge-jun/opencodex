@@ -156,6 +156,30 @@ describe("config divergence status", () => {
     expect(persisted.providers.diskOnly).toBeDefined();
   });
 
+  test("an external edit to a preserved disk-only row still flips diverged", async () => {
+    writeFileSync(getConfigPath(), JSON.stringify(config(), null, 2) + "\n");
+    const loaded = loadConfig();
+    armClaudeCodeBaseline(loaded);
+    writeFileSync(getConfigPath(), JSON.stringify({
+      ...config(),
+      providers: {
+        ...(config().providers as Record<string, unknown>),
+        diskOnly: { adapter: "openai-chat", baseUrl: "https://disk.example/v1", apiKey: "sk-disk" },
+      },
+    }, null, 2) + "\n");
+    reconcileUserCostOverlaysFromDisk(loaded);
+    saveConfig(loaded);
+    // The file the proxy last wrote includes the preserved disk-only row; editing that
+    // row is still a real file change that a restart applies (the row becomes live
+    // routing after restart), so the warning must not be hidden.
+    const path = getConfigPath();
+    const current = JSON.parse(await Bun.file(path).text()) as { providers: Record<string, { baseUrl?: string }> };
+    current.providers.diskOnly.baseUrl = "https://disk.example/v2";
+    writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
+    const status = readConfigDivergenceStatus();
+    expect(status.diverged).toBe(true);
+  });
+
   test("GET /api/config/status exposes resident and disk versions", async () => {
     saveConfig(config());
     const armed = loadConfig();
