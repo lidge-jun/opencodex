@@ -17,7 +17,7 @@ bulunur.
 
 Sağlayıcılar sayfasındaki Pool/Direct seçeneğiyle yalın `gpt-5.6-sol` kullanın
 veya API için `openai-apikey/gpt-5.6-sol` kullanın. Kimlik bilgisi rotaları asla
-birbirine geri dönmez (fall through yapmaz). API rotası 1.050.000 bağlam /
+birbirine geri dönmez (fall through yapmaz). API rotası 922.000 bağlam /
 922.000 maksimum girdi meta verisi yayınlar. `sol-pro`, `terra-pro` ve
 `luna-pro` sanal kimlikleri, hat temel modeli artı `reasoning.mode: "pro"`
 kullanırken seçilen genel kimliklerini korur.
@@ -435,6 +435,8 @@ doğrulamalı keşif uç noktasından gelir. Sohbet istekleri yapılandırılmı
 anahtarını kullanır. [Command Code Studio](https://commandcode.ai/studio/)
 üzerinden anahtarlar oluşturun.
 
+**Command Code kotası.** Pano ve `ocx account refresh`, kanonik `https://api.commandcode.ai` ana bilgisayarında `/alpha/billing/credits` pencerelerini (5 saat ve haftalık) sorgular. OAuth önayarı (`command-code`) kayıtlı hesap bearer'ını kullanır; Provider-API anahtar önayarı (`commandcode`) etkin yapılandırılmış anahtarı kullanır. Kullanıcının değiştirdiği benzer bir temel URL asla sorgulanmaz. Command Code dönem harcamasını da bildirirse kalan monthly / purchased / free credits USD penceresi olarak gösterilir.
+
 **SambaNova Cloud keşfi.** Önayar, sabit API ana bilgisayarından SambaNova
 Cloud'un genel `/v1/models` listesini okur, sağlayıcı yerel kimliklerini korur
 ve keşfi 128 KiB ve 128 ham satırla sınırlar. Katalog kimlik doğrulamasız
@@ -558,9 +560,9 @@ tohumlanmıştır:
 
 | Codex rotası | Tohumlanan model kimlikleri | Codex tarafından görülebilen bağlam |
 | --- | --- | --- |
-| Codex girişi (Pool veya Direct) | `gpt-5.6-*` | 372.000 |
-| OpenAI (API anahtarı) | `openai-apikey/gpt-5.6-*` artı `*-pro` | 1.050.000 (922.000 maksimum girdi) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 1.050.000 |
+| Codex girişi (Pool veya Direct) | `gpt-5.6-*` | 922.000 |
+| OpenAI (API anahtarı) | `openai-apikey/gpt-5.6-*` artı `*-pro` | 922.000 (922.000 maksimum girdi) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922.000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1.000.000 |
 
 Yerel GPT-5.6 girdileri sabitlenmiş yukarı akış akıl yürütme merdivenlerini
@@ -662,4 +664,3 @@ Canlı araştırmaya sahip sağlayıcılar: OpenAI/Codex, Anthropic, xAI, Cursor
 Kimi, Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt ve a6api destekli herhangi
 bir özel sağlayıcı.
-

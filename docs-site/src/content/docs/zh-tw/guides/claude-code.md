@@ -42,7 +42,7 @@ ocx claude
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:<port>` |
 | `ANTHROPIC_AUTH_TOKEN` | 僅在代理要求 API 金鑰時設定——否則不會設定，因此你的 claude.ai 登入（訂閱 + 聯結器）會保持有效 |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1`（原生 `/model` 選擇器發現） |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自動上下文壓縮閾值（預設 `350000`）；僅在啟用自動上下文時注入 |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自動上下文壓縮閾值（預設 `829800`）；僅在啟用自動上下文時注入 |
 | `ANTHROPIC_MODEL` | `claudeCode.model`（可選） |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel`（可選，也包括舊版 `ANTHROPIC_SMALL_FAST_MODEL`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可選） |
@@ -113,7 +113,9 @@ shell 不受影響，必須重新開啟。
 
 `ocx stop` 和代理關閉操作會**取消設定已注入的鍵**（不會恢復之前的值——只會移除 opencodex
 注入的鍵）。代理還會寫入 `~/.opencodex/claude-env.sh`；`ocx start` 會安裝一個 `.zshrc`
-source hook，以自動載入該檔案。
+source hook，以自動載入該檔案，但僅限 `PATH` 中存在可執行的 Claude Code CLI。Claude Code
+不存在或系統環境整合未啟用時，啟動程序和 `ocx ensure` 會移除 OpenCodex 自己寫入的 hook。
+Claude Desktop 使用獨立 profile，不會觸發 shell hook 安裝。
 
 可以在設定中設定 `claudeCode.systemEnv: false`，或使用 GUI 開關來停用。此功能僅適用於
 macOS；在其他平臺上，請使用 `ocx claude`。
@@ -186,7 +188,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 
 1. 實際視窗大於 200k **且**至少達到自動壓縮閾值的模型，其選擇器條目和環境變數槽位會帶有
    `[1m]` 標記。
-2. 系統會注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（預設 `350000`，範圍 `100000`–`1000000`），
+2. 系統會注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（預設 `829800`，範圍 `100000`–`1000000`），
    使對話在該位置自動進行摘要。
 
 設定有三種狀態：
@@ -199,7 +201,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 工作——聊天會在觸發摘要之前報錯。
 
 低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的值始終優先（代理會使用**你的**
-值來判斷哪些模型可以安全標記）。手動編輯設定時填入的無效值會回退到 350k。
+值來判斷哪些模型可以安全標記）。手動編輯設定時填入的無效值會回退到 829,800。
 
 ### 有效模型環境變數
 

@@ -59,6 +59,16 @@ export interface ClaudeCodeState {
 }
 
 /** Compact auto-summarize window labels (350k / 1M). Uses Intl for the million suffix. */
+/**
+ * Mirror of AUTO_COMPACT_WINDOW_DEFAULT in src/claude/context-windows.ts.
+ *
+ * The GUI cannot import from src/, so this is a hand-kept copy. It exists as a named
+ * constant rather than a literal because the previous default lived inline in a ladder, a
+ * comment, a manual-env fallback, and nine translated labels — and a default change left
+ * every one of them saying 350k while the runtime injected something else.
+ */
+export const AUTO_COMPACT_WINDOW_DEFAULT = 829_800;
+
 export function formatCompactWindow(value: number, locale = "en"): string {
   if (value >= 1_000_000) {
     const millions = value / 1_000_000;

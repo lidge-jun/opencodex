@@ -48,6 +48,21 @@ Cursor tool/continuation/edit 경로의 correctness fix를
 - teardown 문제 (정상 완료를 aborted/expectedClose:false로 기록)는
   별도 작은 PR로 먼저 고친다
 
+2026-08-18 로컬 조사/prototype 메모 (fix/cursor-checkpoint-continuation, 아직 upstream PR 아님):
+
+- 병목의 1차 원인은 JSON 포맷 자체가 아니라, 매 턴 rootPromptMessages/conversationTurns로
+  과거 대화를 다시 만드는 full replay semantics다.
+- ConversationStateStructure checkpoint를 다음 conversationState로 재사용하면 no-tool
+  follow-up에서 로컬 rootBytes가 history와 같이 커지지 않는다. grok-4.6 live 3턴에서
+  2·3턴이 continuationMode=checkpoint였고 ALPHA-7을 기억했다.
+- 공식 cursor-agent 같은 계정 대조: 1턴 cacheReadTokens 0 / input 18937, 같은 세션 2턴
+  cacheReadTokens 18816 / 새 input 331 / 답 ALPHA-7. OpenCodex Cursor wire는 usedTokens만
+  주므로 이쪽 usage로 cache hit를 주장하면 안 된다.
+- tool-result는 마지막 정상 완료 턴 checkpoint + suffix replay가 live에서 동작했다.
+  client-tool suspend 턴 자체는 온전한 checkpoint가 없어 commit하지 않는다.
+- 아직 미해결: 큰 context / 429 / kimi-k3 premature completion 재현, stateful live MCP
+  bridge, 정상 완료 teardown을 aborted로 분류하는 별건.
+
 ### Step 5: #1623 분할 (behavior fix 안정화 후)
 
 1. refactor/adapter-registry-authority

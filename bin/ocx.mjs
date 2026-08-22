@@ -22,6 +22,7 @@ import {
   runNpmCachePreflight,
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
+import { bootRestoreProbe, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const require = createRequire(import.meta.url);
@@ -267,13 +268,50 @@ function runNpmSelfUpdate() {
     }
   }
 
-  console.log(`Updating${latest ? ` to v${latest}` : ""}...\n$ npm install -g ${PKG}@${tag}`);
-  const res = spawnSync(installInvocation.file, installInvocation.args, {
-    stdio: "inherit",
-    timeout: 180000,
-    windowsHide: true,
-    ...installInvocation.options,
-  });
+  // #1942/#1849: stage -> verify -> swap -> rollback instead of installing straight
+  // into the live tree. A failure at any point leaves either the old or the new tree
+  // complete — never a file-less skeleton. Falls back to the legacy in-place install
+  // only when the transactional module cannot run at all.
+  const packageDir = resolve(here, "..");
+  console.log(`Updating${latest ? ` to v${latest}` : ""} (transactional)...`);
+  let res;
+  try {
+    const tx = transactionalNpmUpdate({
+      packageDir,
+      pkgName: PKG,
+      targetVersion: latest || undefined,
+      tag,
+      runNpm: (args) => {
+        const invocation = npmInvocation(args);
+        if (!invocation) return { status: 1 };
+        return spawnSync(invocation.file, invocation.args, {
+          stdio: "inherit",
+          timeout: 180000,
+          windowsHide: true,
+          ...invocation.options,
+        });
+      },
+      log: (line) => console.log(line),
+    });
+    if (tx.ok) {
+      res = { status: 0 };
+    } else if (tx.phase === "stage" || tx.phase === "verify") {
+      // Live tree untouched: report and stop. Nothing to roll back.
+      console.error(`opencodex: update aborted before touching the live install (${tx.phase}): ${tx.error}`);
+      res = { status: 1 };
+    } else {
+      console.error(`opencodex: update failed (${tx.phase}): ${tx.error}${tx.rolledBack ? " — previous version restored." : ""}`);
+      res = { status: 1 };
+    }
+  } catch (error) {
+    // An unexpected throw means we cannot prove the live tree is untouched, so the
+    // legacy in-place install (which deletes live first) is exactly the wrong rescue —
+    // it recreates the #1849 destruction path. Report and stop; the boot probe and the
+    // recovery marker cover the swap-window states.
+    console.error(`opencodex: transactional update failed unexpectedly (${error?.message ?? error}). ` +
+      "The live install was not knowingly modified; run 'ocx update' again or reinstall with npm install -g.");
+    res = { status: 1 };
+  }
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     repairCodexShimIfNeeded();
@@ -447,6 +485,20 @@ if (updateHelpRequested) {
 
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   runNpmSelfUpdate();
+}
+
+// #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
+// backup sibling and a broken live tree. Restore before anything tries to run from the
+// broken tree; reap stale backups once the live tree verifies healthy.
+if (isNodeModulesInstall() && !isBunGlobalInstall()) {
+  try {
+    const probe = bootRestoreProbe(resolve(here, ".."));
+    if (probe.action === "restored") {
+      console.warn(`opencodex: previous update left a broken install — restored the backup from ${probe.from}.`);
+    } else if (probe.action === "failed") {
+      console.warn(`opencodex: a backup from a failed update exists but could not be restored automatically: ${probe.error}`);
+    }
+  } catch { /* the probe must never block launch */ }
 }
 
 const bunRuntime = resolveBun();

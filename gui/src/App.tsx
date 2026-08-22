@@ -14,7 +14,7 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -22,6 +22,7 @@ import { type Page } from "./app-routing";
 import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
+import { useCodexRestart } from "./use-codex-restart";
 
 installApiAuthFetch();
 
@@ -178,6 +179,15 @@ export default function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
+  // The sidebar control is on every page, including Models. Bumping an epoch on a
+  // settled restart lets the models tab re-read staleness without the two surfaces
+  // sharing a controller — the backend is already single-flight, so what is missing
+  // is invalidation, not mutual exclusion.
+  const [codexRestartEpoch, setCodexRestartEpoch] = useState(0);
+  const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(API_BASE, {
+    onSettled: () => setCodexRestartEpoch(epoch => epoch + 1),
+  });
+
   const handleStop = async () => {
     if (!confirm(t("dash.stopConfirm"))) return;
     setStopping(true);
@@ -211,10 +221,17 @@ export default function App() {
           <IconMenu />
         </button>
         {brand}
-        <button type="button" className="theme-toggle stop-toggle" onClick={handleStop} disabled={stopping}
-          aria-label={t("dash.stop")} title={t("dash.stop")}>
-          <IconPower />
-        </button>
+        <div className="mobile-topbar-actions">
+          <button type="button" className="sidebar-orb sidebar-orb--danger" onClick={handleStop} disabled={stopping}
+            aria-label={t("dash.stop")} title={t("dash.stop")}>
+            <IconPower />
+          </button>
+          <button type="button" className="sidebar-orb"
+            onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}
+            aria-label={t("dash.codexRestart")} title={t("dash.codexRestart")}>
+            <IconRefresh />
+          </button>
+        </div>
       </header>
       {navOpen && <div className="drawer-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <aside id="app-sidebar" className={`sidebar${navOpen ? " open" : ""}`} ref={sidebarRef} tabIndex={-1}>
@@ -273,10 +290,23 @@ export default function App() {
             aria-label={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`} title={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`}>
             <ThemeIcon /> <span className="mode">{t(THEME_TKEY[theme])}</span>
           </button>
-          <button type="button" className="theme-toggle stop-toggle" onClick={handleStop} disabled={stopping}
-            aria-label={t("dash.stop")} title={t("dash.stop")}>
-            <IconPower /> <span className="mode">{stopping ? t("dash.stopping") : t("dash.stop")}</span>
-          </button>
+          <div className="sidebar-action-row">
+            <span className="sidebar-action-label">{t("dash.actions")}</span>
+            <div className="sidebar-action-orbs">
+              <button type="button" className="sidebar-orb sidebar-orb--danger"
+                onClick={handleStop} disabled={stopping}
+                aria-label={stopping ? t("dash.stopping") : t("dash.stop")}
+                title={stopping ? t("dash.stopping") : t("dash.stop")}>
+                <IconPower />
+              </button>
+              <button type="button" className="sidebar-orb"
+                onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}
+                aria-label={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
+                title={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}>
+                <IconRefresh />
+              </button>
+            </div>
+          </div>
           <SidebarGithubRow
             apiBase={API_BASE}
             onOpenUpdate={() => {
@@ -310,7 +340,7 @@ export default function App() {
             {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
             {page === "startup" && <Startup apiBase={API_BASE} />}
             {page === "providers" && <Providers apiBase={API_BASE} />}
-            {page === "models" && <Models key={API_BASE} apiBase={API_BASE} />}
+            {page === "models" && <Models key={API_BASE} apiBase={API_BASE} restartEpoch={codexRestartEpoch} />}
             {page === "subagents" && <Subagents key={API_BASE} apiBase={API_BASE} />}
             {page === "favorites" && <Favorites apiBase={API_BASE} />}
             {page === "orchestrator" && <Orchestrator apiBase={API_BASE} />}

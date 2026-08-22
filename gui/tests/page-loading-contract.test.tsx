@@ -8,7 +8,7 @@ import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { writeSessionListCache } from "../src/session-list-cache";
 
 /**
- * WP3 (devlog/_plan/260730_gui_hydration_loading_unify/020_page_migration.md).
+ * WP3 (devlog/_fin/260730_gui_hydration_loading_unify/020_page_migration.md).
  *
  * Every migrated surface answers the same three questions the same way: replace the content
  * while cold, report progress next to content that is already on screen, and keep a failure

@@ -20,6 +20,11 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 | **base** (default) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
 | **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow and understand model inheritance and the encrypted-task limitation below. |
 
+On **v2**, an optional **Keep ChatGPT on v1** switch (`keepNativeChatGptOnV1`) leaves Sol/Terra
+on the v1 surface so they can still spawn Grok or Claude. ChatGPT-native parents encrypt v2
+`NEW_TASK` bodies; routed models cannot read them. Routed parents stay on v2, where child tasks
+are plaintext. This is a switch *inside* v2, not a fourth catalog mode.
+
 :::tip[Not sure?]
 Start with **base**. Choose **v1** when cross-provider delegation must work predictably. Force **v2**
 only when you specifically want its newer session model across every catalog entry.
@@ -31,7 +36,7 @@ The selected mode controls the `multi_agent_version` field in every catalog entr
 
 - **v1** stamps `multi_agent_version = "v1"` on every model.
 - **base** restores upstream pins. Unpinned entries follow the native `multi_agent_v2` feature flag.
-- **v2** stamps `multi_agent_version = "v2"` on every model.
+- **v2** stamps `multi_agent_version = "v2"` on every model, except when **Keep ChatGPT on v1** is enabled: ChatGPT-native rows stay `"v1"` and routed or combo rows stay `"v2"`.
 
 opencodex applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
 to disk. That is why a mode change affects newly created App, CLI, and TUI sessions consistently.
@@ -253,6 +258,13 @@ may well be fresh. The active tool schema stays authoritative.
 timestamp, an unreadable process start time, or a failed process enumeration — and it is reported
 separately by `ocx doctor`. `stale` clears only after every detected Codex app-server starts after
 the final catalog write; it does not necessarily clear `unknown`.
+
+On Windows, this advisory check uses asynchronous PowerShell/CIM discovery on the v2 request path.
+Concurrent cold checks share one in-flight discovery. Observed states are cached for five seconds;
+an `unknown` failure is cached for only 250 milliseconds so a transient CIM error retries quickly. A
+slow or failing CIM query can delay or suppress only OpenCodex-authored model guidance; it does not
+block the Bun event loop, `/healthz`, or unrelated proxy traffic. Explicit CLI/service lifecycle
+operations retain the synchronous, fail-closed process collector because they may signal processes.
 
 Only a real change counts. A sync whose result is byte-identical to the catalog already on disk
 leaves the file untouched, so restarting the proxy or re-syncing an unchanged model set does not

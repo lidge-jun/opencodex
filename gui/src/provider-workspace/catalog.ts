@@ -38,6 +38,8 @@ export interface WorkspaceProvider {
   models?: string[];
   /** Whether the proxy fetches the provider's live model catalog (default true). */
   liveModels?: boolean;
+  /** Optional upstream HTTP version pin. Cursor defaults to HTTP/2 when omitted. */
+  upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
   authMode?: "key" | "forward" | "oauth" | "local" | string;
   keyOptional?: boolean;
   /** Free pricing (may still require an API key). */
@@ -45,8 +47,16 @@ export interface WorkspaceProvider {
   disabled?: boolean;
   note?: string;
   allowPrivateNetwork?: boolean;
+  requestPacing?: {
+    enabled?: boolean;
+    requestsPerMinute?: number;
+    minIntervalMs?: number;
+    models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number }>;
+  };
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
+  /** Derived state of the two xAI Grok Responses model-adapter entries. */
+  xaiResponsesOptInState?: boolean | "mixed";
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */
@@ -95,6 +105,23 @@ function normalizedBaseUrl(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+const CANONICAL_PROVIDER_PROTOCOL = new URL(CODEX_FORWARD_BASE_URL).protocol;
+function providerEndpoint(host: string, ...path: string[]): string {
+  return `${CANONICAL_PROVIDER_PROTOCOL}//${host}/${path.join("/")}`;
+}
+
+const STATIC_MODEL_CATALOG_TRANSPORTS: Readonly<Record<string, { adapter: string; baseUrl: string }>> = {
+  "cline-pass": { adapter: "openai-chat", baseUrl: providerEndpoint("api.cline.bot", "api", "v1") },
+  "mimo-free": { adapter: "mimo-free", baseUrl: providerEndpoint("api.xiaomimimo.com", "api", "free-ai", "openai", "chat") },
+};
+
+/** Keep the Providers toggle aligned with the backend's canonical static-catalog boundary. */
+export function providerSupportsLiveModelDiscovery(name: string, provider: WorkspaceProvider): boolean {
+  const canonical = STATIC_MODEL_CATALOG_TRANSPORTS[name];
+  if (!canonical || provider.adapter !== canonical.adapter) return true;
+  return normalizedBaseUrl(provider.baseUrl) !== normalizedBaseUrl(canonical.baseUrl);
 }
 
 /** Loopback host check shared with the provider-kind classifier (WP080a). */

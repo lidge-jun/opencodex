@@ -35,16 +35,21 @@ interface ProviderAdapter {
   プロバイダーが明示的に alias を設定しない限り、`xhigh` と `max` は異なるラベルのまま保ちます。`provider.noReasoningModels` に含まれる id には値を **一切送りません**。
 - `delta.content`（テキスト）、`delta.reasoning_content`（thinking）、`delta.tool_calls[]` を
   ストリーミングし、`usage` を収集します。
-- ClinePass は、ライブ検証済みのゲートウェイ形式 `reasoning: { enabled: true, effort: "low" }`
+- ClinePass は、ライブ検証済みのゲートウェイ形式 `reasoning: { enabled: true, effort }`
   （reasoning を無効にする場合は `{ enabled: false }`）を使用します。公開 API ドキュメントには
-  現在このリクエスト形式が明記されていません。アダプターは他の effort リクエストを検証済みの
-  `low` に調整し、`delta.reasoning_content` または `delta.reasoning` を reasoning delta として扱い、
-  `stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
+  現在このリクエスト形式が明記されていません。アダプターは要求された `low`、`medium`、`high`、
+  `xhigh`、`max` tier をそのまま保持し、`delta.reasoning_content` または `delta.reasoning` を
+  reasoning delta として扱い、`stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
 
 ## `openai-responses`
 
-**対象:** OpenAI **Responses API**。**`passthrough: true`** — 元のリクエスト本文をそのまま渡し、レスポンスを **変換せずに** ストリーミングします。
-**認証:** `forward`（呼び出し元ヘッダー中継）または `key`。
+**対象:** OpenAI **Responses API**。**`passthrough: true`** — 通常は元のリクエストとレスポンスをそのまま渡し、ルーティング先ゲートウェイに必要な限定的な互換変換だけを適用します。
+**認証:** canonical OpenAI `forward` は安全な呼び出し元ヘッダー許可リストだけを中継します。非 canonical な `forward` は呼び出し元の authorization を中継せず、設定済みの静的ヘッダーだけを使用します。`key` は設定済み provider key を使用します。
+
+非 canonical な Responses ゲートウェイには、Codex のクライアント実行型 `tool_search`
+宣言を既存の公開 function tool と衝突しない名前で送り、対応するリクエスト履歴と JSON/SSE
+function call をクライアント向けの非公開 `tool_search` ライフサイクルに復元します。
+canonical OpenAI forward はネイティブな非公開型を維持します。
 
 `key` 認証では、[`retryOn429`](/ja/reference/configuration/) もここに適用されます: プリストリームの
 429 は、翻訳された `openai-chat` / Anthropic リクエスト経路と同様に、他の処理やフェイルオーバーに

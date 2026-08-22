@@ -56,7 +56,7 @@ test("Subagents workspace assets and i18n keys are present", async () => {
   const workspaceCss = Bun.file(new URL("../src/styles-subagents-workspace.css", import.meta.url));
   expect(await workspaceCss.exists()).toBe(true);
 
-for (const locale of ["en", "ko", "ja", "de", "ru", "zh", "zh-TW"]) {
+  for (const locale of ["en", "fr", "ko", "ja", "de", "ru", "zh", "zh-TW"]) {
     const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
     expect(src).toContain("sub.workspace.");
   }

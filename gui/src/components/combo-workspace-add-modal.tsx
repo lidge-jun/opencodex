@@ -10,7 +10,7 @@ import { IconX } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
-import { EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { clampedNumberInput } from "./combo-workspace-utils";
 
 export function AddComboModal({
@@ -204,6 +204,13 @@ export function AddComboModal({
               {draft.strategy === "failover" ? t("cws.targets.failoverHint") : t("cws.targets.roundRobinHint")}
             </p>
           </div>
+          <ComboCapabilities
+            targets={draft.targets}
+            models={models}
+            imageInput={draft.imageInput ?? "auto"}
+            disabled={busy}
+            onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+          />
         </div>
         <div className="cwi-modal-actions">
           <button type="button" className="btn btn-ghost" onClick={requestClose} disabled={busy}>{t("common.cancel")}</button>

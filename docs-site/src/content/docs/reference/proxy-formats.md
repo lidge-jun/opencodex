@@ -155,6 +155,14 @@ non-empty `messages` array. It translates system, user, assistant, and tool mess
 Responses items; translates function tools, tool choice, images, reasoning effort, and supported
 response formats; runs the normal Responses routing pipeline; then translates the result back.
 
+Reasoning is part of that translation. `reasoning_effort` (or `reasoning.effort`) becomes
+internal `reasoning.effort`. Because the Responses parser hides thinking unless
+`reasoning.summary` is set and is not `none`, Chat Completions requests that ask for an
+effort default to `reasoning.summary: "auto"` so thinking streams back as
+`delta.reasoning_content`. Clients can still hide traces with `include_reasoning: false` or
+`reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
+`detailed`, or `none` wins over `include_reasoning`.
+
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
 equivalent request field is `text.format`: native Responses routes preserve it in the raw

@@ -1,6 +1,10 @@
+import { CodexStaleBanner } from "../components/codex-stale-banner";
+import { fetchCodexAppServerState } from "../codex-app-server-state";
+import type { AppServerStateOutcome } from "../codex-app-server-state";
+import { useCodexRestart } from "../use-codex-restart";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
-import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert } from "../icons";
+import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
@@ -8,6 +12,8 @@ import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
+import { createBoundedFetch } from "../bounded-fetch";
+import { startVisibilityPoll } from "../visibility-poll";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -43,12 +49,17 @@ import {
   collectDisabledNamespaced,
   CUSTOM_OPTION,
   fmtK,
+  NATIVE_CAP_OPTIONS,
+  NATIVE_CAP_OPTION_SET,
+  NATIVE_GPT56_DEFAULT_WINDOW,
+  NATIVE_GPT56_OPT_IN_WINDOW,
   PAGE,
   readCollapsedProviders,
   THREAD_OPTION_SET,
   THREAD_OPTIONS,
   writeCollapsedProviders,
   discoveryFailureLabel,
+  REASONING_EFFORT_LEVELS,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -91,7 +102,44 @@ function parseContextWindowDraft(raw: string): number | null | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-export default function Models({ apiBase }: { apiBase: string }) {
+export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string; restartEpoch?: number }) {
+  // Codex app-server staleness (devlog/_fin/260815_gui_codex_restart). Named
+  // appServerState, not catalogState: this file already binds that name to the
+  // model-catalog resource state, which is an unrelated concept. (Spelling the
+  // catalog route here would register a phantom endpoint with the CLI parity
+  // sweep, which reads GUI sources for api paths.)
+  const [appServerState, setAppServerState] = useState<AppServerStateOutcome["state"]>(null);
+  // A restart request outlives a navigation away from this page, so its completion
+  // callback must not set state after unmount.
+  const appServerMounted = useRef(true);
+  useEffect(() => {
+    appServerMounted.current = true;
+    return () => { appServerMounted.current = false; };
+  }, []);
+
+  const reloadAppServerState = useCallback((signal?: AbortSignal) => {
+    void fetchCodexAppServerState(apiBase, { signal }).then(outcome => {
+      if (signal?.aborted || !appServerMounted.current) return;
+      setAppServerState(outcome.state);
+    });
+  }, [apiBase]);
+
+  // onSettled, not a per-button callback: the sidebar control knows nothing about
+  // this page, and a restart succeeding there must still clear the banner here.
+  const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
+    onSettled: () => reloadAppServerState(),
+  });
+
+  useEffect(() => {
+    // Once on mount, on apiBase change, and when a restart settles anywhere in the
+    // app (restartEpoch) — never a timer.
+    const controller = new AbortController();
+    reloadAppServerState(controller.signal);
+    return () => controller.abort();
+  }, [reloadAppServerState, restartEpoch]);
+
+
+
   /*
    * Tab state. The hash is the source of truth, so refresh, bookmark, and
    * Back/Forward keep the choice — same contract as `#logs` / `#logs/debug`.
@@ -193,6 +241,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [customFormContextWindow, setCustomFormContextWindow] = useState("");
   const [customFormShowCustomCtx, setCustomFormShowCustomCtx] = useState(false);
   const [customFormModalities, setCustomFormModalities] = useState<string[]>(["text"]);
+  const [customFormReasoning, setCustomFormReasoning] = useState(false);
+  const [customFormReasoningEfforts, setCustomFormReasoningEfforts] = useState<string[]>([]);
+  // Whether the ladder has been seeded at least once. `[]` is a MEANINGFUL explicit
+  // no-reasoning override, so initialization is tracked separately from the array contents:
+  // once seeded (an edit's stored ladder — including an explicit empty one — or a new form's
+  // first enable), re-enabling the override preserves the current array even when empty.
+  const customFormReasoningInitializedRef = useRef(false);
   const [customSaving, setCustomSaving] = useState(false);
   const [customError, setCustomError] = useState("");
   const [contextModalProvider, setContextModalProvider] = useState<string | null>(null);
@@ -235,18 +290,21 @@ export default function Models({ apiBase }: { apiBase: string }) {
   }, [models, shadowCall?.model, shadowModelOptions]);
 
   const loadShadowCall = useCallback(async () => {
+    const bounded = createBoundedFetch(15_000);
     try {
-      const r = await fetch(`${apiBase}/api/shadow-call-settings`);
+      const r = await fetch(`${apiBase}/api/shadow-call-settings`, { signal: bounded.signal });
       const data = await readJsonIfOk<ShadowCallData>(r);
       if (data) setShadowCall(data);
     } catch { /* old server / network: keep the section disabled */ }
+    finally { bounded.clear(); }
   }, [apiBase]);
 
   const loadV2 = useCallback(async () => {
     // Never let a toggle in flight be clobbered by the poll (same single-flight rule as models).
     if (v2BusyRef.current) return;
+    const bounded = createBoundedFetch(15_000);
     try {
-      const r = await fetch(`${apiBase}/api/v2`);
+      const r = await fetch(`${apiBase}/api/v2`, { signal: bounded.signal });
       if (!(r.headers.get("content-type") ?? "").includes("application/json")) { setV2(null); return; }
       const data = await readJsonIfOk<V2Status>(r);
       if (!data || typeof data.enabled !== "boolean") { setV2(null); return; }
@@ -255,10 +313,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
         agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
         maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
         multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+        keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
       });
     } catch {
       setV2(null); // old server / network: hide the section instead of guessing
     } finally {
+      bounded.clear();
       setV2Loading(false);
     }
   }, [apiBase]);
@@ -326,7 +386,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
     },
     // Gated on the catalog tab: a 10-second poll that keeps running while the user
     // reads Combos or Routing is exactly the hidden work this workspace avoids.
-    { isEmpty: () => false, pollMs: 10_000, initialData: cached ?? undefined, enabled: catalogActive },
+    // Live model discovery is slow; the catalog gets a raised deadline so a slow
+    // response is never misread as a hung one.
+    { isEmpty: () => false, pollMs: 10_000, initialData: cached ?? undefined, enabled: catalogActive, deadlineMs: 60_000 },
   );
   const catalogState = catalogResource.state;
 
@@ -360,12 +422,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
       void loadShadowCall();
       void loadV2();
     }, 0);
-    const timer = window.setInterval(() => {
+    // Hidden tab: no timer, no /api/v2 traffic; the make-up tick refreshes on return.
+    const stop = startVisibilityPoll(() => {
       if (!v2BusyRef.current) void loadV2();
-    }, 10000);
+    }, 10_000);
     return () => {
       window.clearTimeout(timeout);
-      window.clearInterval(timer);
+      stop();
     };
   }, [catalogActive, loadShadowCall, loadV2]);
 
@@ -568,7 +631,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const toggleProviderCap = async (provider: string) => {
+  const toggleProviderCap = async (provider: string, nativeGroup = false) => {
     setBusy(true);
     busyRef.current = true;
     setStatus("");
@@ -579,7 +642,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
       const r = await fetch(`${apiBase}/api/provider-context-caps`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, enabled }),
+        body: JSON.stringify(enabled && nativeGroup
+          ? { provider, enabled, value: NATIVE_GPT56_OPT_IN_WINDOW }
+          : { provider, enabled }),
       });
       try {
         const data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
@@ -722,9 +787,15 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
+  /**
+   * Both v2 surface writes adopt the response directly instead of calling
+   * `loadV2()`. `loadV2` returns early while `v2BusyRef` is still held by the
+   * in-flight write, so the refetch was a no-op and the control kept its old
+   * value until the next 10s poll. That is visible here: "Keep ChatGPT on v1"
+   * only renders while the mode is v2, so a stale mode also delayed the row.
+   */
+  const putV2Setting = async (body: Record<string, unknown>) => {
     if (!v2 || v2BusyRef.current) return;
-    if (v2.multiAgentMode === mode) return;
     setV2Busy(true);
     v2BusyRef.current = true;
     setV2Note("");
@@ -733,14 +804,25 @@ export default function Models({ apiBase }: { apiBase: string }) {
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ multiAgentMode: mode }),
+        body: JSON.stringify(body),
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        void loadV2();
+        if (!data || typeof data.enabled !== "boolean") {
+          setOk(false);
+          setStatus(t("models.saveFailed"));
+          return;
+        }
+        setV2({
+          enabled: data.enabled,
+          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
+          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
+          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
+        });
         setOk(true);
         setStatus(t("models.v2Applied"));
-        setV2Note((data?.warnings ?? []).join(" "));
+        setV2Note((data.warnings ?? []).join(" "));
       } catch (e) {
         setOk(false);
         setStatus(e instanceof Error ? e.message : t("models.saveFailed"));
@@ -751,6 +833,16 @@ export default function Models({ apiBase }: { apiBase: string }) {
       setV2Busy(false);
       v2BusyRef.current = false;
     }
+  };
+
+  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
+    if (!v2 || v2.multiAgentMode === mode) return;
+    await putV2Setting({ multiAgentMode: mode });
+  };
+
+  const setKeepNativeChatGptOnV1 = async (next: boolean) => {
+    if (!v2 || v2.keepNativeChatGptOnV1 === next) return;
+    await putV2Setting({ keepNativeChatGptOnV1: next });
   };
 
   const putV2Threads = async (value: number) => {
@@ -782,6 +874,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
           maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
           multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
         });
         setOk(true);
         setStatus(t("models.v2ThreadsApplied"));
@@ -831,6 +924,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     displayName?: string,
     contextWindow?: number,
     inputModalities?: string[],
+    reasoningEfforts?: string[],
   ) => {
     setCustomSaving(true);
     setCustomError("");
@@ -838,7 +932,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       const r = await fetch(`${apiBase}/api/custom-models`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, modelId, displayName, contextWindow, inputModalities }),
+        body: JSON.stringify({ provider, modelId, displayName, contextWindow, inputModalities, reasoningEfforts }),
       });
       try {
         await readJsonOrThrow(r, t("models.customSaveFailed"));
@@ -912,7 +1006,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const selectedModelMap = selectedModels ?? {};
 
   const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
-    const { provider, rows, native, liveModels, discovery } = group;
+    const { provider, rows, nativeProviderGroup, liveModels, discovery } = group;
     const isCollapsed = collapsed.has(provider);
     // Final visibility, not just the disable flag: a model is visible to Codex only when the
     // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
@@ -927,7 +1021,22 @@ export default function Models({ apiBase }: { apiBase: string }) {
     const activeCount = rows.filter(isVisible).length;
     const capOn = contextCaps[provider] !== undefined;
     const providerCap = contextCaps[provider] ?? contextCapValue;
-    const isNative = native;
+    // With the cap off, `providerCap` is only the value a future toggle would apply — for the
+    // native group that is the 350k default, which says nothing true about what Codex sees.
+    // The honest number there is the largest window the rows actually advertise.
+    const widestRowWindow = rows.reduce<number | undefined>((widest, row) => {
+      const window = typeof row.contextWindow === "number" && row.contextWindow > 0 ? row.contextWindow : undefined;
+      if (window === undefined) return widest;
+      return widest === undefined || window > widest ? window : widest;
+    }, undefined);
+    const capDisplayValue = capOn
+      ? providerCap
+      : (nativeProviderGroup ? NATIVE_GPT56_DEFAULT_WINDOW : (widestRowWindow ?? providerCap));
+    // The native group offers only the three windows GPT-5.6 actually has contracts for
+    // (272k live, 372k legacy, 1.05M measured); routed providers keep the generic ladder.
+    // The set has to follow the list, or a saved value outside it loses its option.
+    const capOptions = group.nativeProviderGroup ? NATIVE_CAP_OPTIONS : CAP_OPTIONS;
+    const capOptionSet = group.nativeProviderGroup ? NATIVE_CAP_OPTION_SET : CAP_OPTION_SET;
     const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
     const q = (search[provider] ?? "").trim().toLowerCase();
     const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
@@ -965,7 +1074,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           >
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
           <span className="text-body font-semibold">{providerDisplaySlug(provider)}</span>
-          {isNative && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
+          {nativeProviderGroup && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
              className="badge badge-amber"
@@ -978,21 +1087,23 @@ export default function Models({ apiBase }: { apiBase: string }) {
           <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
           </button>
            <div className="row models-provider-actions">
-             {!isNative && (
-               <button
-                 type="button"
-                 className="btn btn-ghost btn-sm text-caption"
-                 onClick={() => openContextSettings(group)}
-                 aria-haspopup="dialog"
-               >{t("models.contextSettings")}</button>
-             )}
-             {!isNative && (
-               <button
-                 type="button"
-                 className="btn btn-ghost btn-sm text-caption"
-                 onClick={(e) => {
-                   e.stopPropagation();
-                   setCustomModalMode("add");
+             {/* Available on every card, including the native one: the canonical `openai` seed
+                 check now admits contextWindow/modelContextWindows as user-owned overlays, and
+                 the native accessors only ever narrow the measured window with them. The cap
+                 next to it is the coarser sibling — one value for the whole provider. */}
+             <button
+               type="button"
+               className="btn btn-ghost btn-sm text-caption"
+               onClick={() => openContextSettings(group)}
+               aria-haspopup="dialog"
+             >{t("models.contextSettings")}</button>
+             {
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm text-caption"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCustomModalMode("add");
                    setCustomModalProvider(provider);
                    setCustomModalId("");
                    setCustomFormModelId("");
@@ -1000,34 +1111,41 @@ export default function Models({ apiBase }: { apiBase: string }) {
                    setCustomFormContextWindow("");
                    setCustomFormShowCustomCtx(false);
                    setCustomFormModalities(["text"]);
+                   setCustomFormReasoning(false);
+                   setCustomFormReasoningEfforts([]);
+                   customFormReasoningInitializedRef.current = false;
                    setCustomError("");
                    setCustomModalOpen(true);
                  }}
-                 aria-label={t("models.customAdd")}
-                 aria-haspopup="dialog"
-               >+</button>
-             )}
+                aria-label={t("models.customAdd")}
+                aria-haspopup="dialog"
+              >+</button>
+             }
              <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
              <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
-             {!isNative && <>
-               <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(providerCap) })} />
-               {capOn && (
+             <>
+               <Switch on={capOn} onClick={() => toggleProviderCap(provider, nativeProviderGroup)} disabled={busy} label={t("models.capValue", { value: fmtK(capDisplayValue) })} />
+               {/* The native group keeps the value visible with the cap off: its rows always
+                   advertise SOME window, so hiding the number leaves the card saying nothing
+                   about the context Codex will actually see. Routed providers keep the old
+                   behaviour, where an off cap genuinely means "no opinion". */}
+               {(capOn || nativeProviderGroup) && (
                  <>
                    <Select
                      // A saved cap outside CAP_OPTIONS is still a real selectable option
                      // (inserted below), so select it instead of falling back to "Custom";
                      // otherwise the trigger hides the persisted 128k value behind the
                      // custom-editor label.
-                     value={providerCapCustomOpen[provider] ? CUSTOM_OPTION : String(providerCap)}
-                     options={[
-                       ...(!CAP_OPTION_SET.has(providerCap) && !providerCapCustomOpen[provider]
-                         ? [{ value: String(providerCap), label: fmtK(providerCap) }] : []),
-                       ...CAP_OPTIONS.map(v => ({ value: String(v), label: fmtK(v) })),
-                       { value: CUSTOM_OPTION, label: t("models.custom") },
-                     ]}
+                    value={providerCapCustomOpen[provider] ? CUSTOM_OPTION : String(capDisplayValue)}
+                    options={[
+                      ...(!capOptionSet.has(capDisplayValue) && !providerCapCustomOpen[provider]
+                        ? [{ value: String(capDisplayValue), label: fmtK(capDisplayValue) }] : []),
+                      ...capOptions.map(v => ({ value: String(v), label: fmtK(v) })),
+                      { value: CUSTOM_OPTION, label: t("models.custom") },
+                    ]}
                      onChange={v => onSelectProviderCap(provider, v)}
-                     disabled={busy}
-                     label={t("models.capValue", { value: fmtK(providerCap) })}
+                     disabled={busy || !capOn}
+                     label={t("models.capValue", { value: fmtK(capDisplayValue) })}
                    />
                    {providerCapCustomOpen[provider] && (
                      <>
@@ -1047,12 +1165,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
                    )}
                  </>
                )}
-             </>}
+             </>
            </div>
         </div>
         {!isCollapsed && (
           <div className="models-provider-body">
-            {isNative && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
+            {nativeProviderGroup && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
             {rows.length === 0 && (
               <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}
@@ -1146,6 +1264,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
                                  setCustomFormContextWindow(m.contextWindow ? String(m.contextWindow) : "");
                                  setCustomFormShowCustomCtx(false);
                                  setCustomFormModalities(m.inputModalities ?? ["text"]);
+                                 // Only a STORED ladder counts as "configured": an inherited one
+                                 // would show a phantom override that saves "inherit" over the
+                                 // provider row's current metadata.
+                                 setCustomFormReasoning(Array.isArray(m.reasoningEfforts));
+                                 setCustomFormReasoningEfforts(m.reasoningEfforts ?? []);
+                                 // A stored ladder — even an explicit empty one — is a real
+                                 // configuration: re-enabling must preserve it, not reseed.
+                                 customFormReasoningInitializedRef.current = Array.isArray(m.reasoningEfforts);
                                  setCustomError("");
                                  setCustomModalOpen(true);
                                  setHoveredModel(null);
@@ -1229,6 +1355,24 @@ export default function Models({ apiBase }: { apiBase: string }) {
             >
               <IconInfo width={14} height={14} aria-hidden="true" />
             </button>
+          </div>
+        )}
+        {v2 && v2.multiAgentMode === "v2" && (
+          <div className="models-v2-keep-native-row">
+            <div className="models-v2-keep-native">
+              <span className="models-v2-keep-native-label text-caption">{t("models.keepNativeOnV1")}</span>
+              <Switch
+                on={v2.keepNativeChatGptOnV1 === true}
+                onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
+                disabled={v2Busy}
+                label={t("models.keepNativeOnV1")}
+              />
+              <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
+                <span className="models-v2-keep-native-info" aria-label={t("models.keepNativeOnV1Hint")}>
+                  <IconInfo width={13} height={13} aria-hidden="true" />
+                </span>
+              </Tooltip>
+            </div>
           </div>
         )}
       </div>
@@ -1595,6 +1739,56 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   ))}
                 </div>
               </div>
+
+              <div className="text-label models-field">
+                {t("models.customFieldReasoning")}
+                <div className="row models-field-row">
+                  <label className="row models-modality-option">
+                    <input
+                      type="checkbox"
+                      checked={customFormReasoning}
+                      onChange={e => {
+                        setCustomFormReasoning(e.target.checked);
+                        if (e.target.checked && !customFormReasoningInitializedRef.current) {
+                          customFormReasoningInitializedRef.current = true;
+                          // First enable: seed from the model's advertised ladder when the
+                          // row is known (a provider may support only a subset of levels —
+                          // preselecting the full shared list would persist levels the model
+                          // does not accept). Unknown model ids fall back to the full set:
+                          // the common intent of enabling the override is "allow every known
+                          // step", and the wire clamp still bounds what is actually sent.
+                          const row = models.find(m => m.provider === customModalProvider && m.id === customFormModelId);
+                          const advertised = Array.isArray(row?.reasoningEfforts)
+                            ? row.reasoningEfforts
+                            : undefined;
+                          setCustomFormReasoningEfforts(advertised ?? [...REASONING_EFFORT_LEVELS]);
+                        }
+                      }}
+                      disabled={customSaving}
+                    />
+                    <span className="text-control">{t("models.customFieldReasoningOverride")}</span>
+                  </label>
+                </div>
+                {customFormReasoning && (
+                  <div className="row models-field-row" style={{ flexWrap: "wrap" }}>
+                    {REASONING_EFFORT_LEVELS.map(effort => (
+                      <label key={effort} className="row models-modality-option">
+                        <input
+                          type="checkbox"
+                          checked={customFormReasoningEfforts.includes(effort)}
+                          onChange={e => {
+                            setCustomFormReasoningEfforts(prev => (
+                              e.target.checked ? [...prev, effort] : prev.filter(level => level !== effort)
+                            ));
+                          }}
+                          disabled={customSaving}
+                        />
+                        <span className="text-control">{t(`models.reasoningEffort.${effort}` as TKey)}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="modal-actions">
@@ -1611,19 +1805,24 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   const ctxVal = customFormContextWindow ? Number(customFormContextWindow.replace(/[_,\s]/g, "")) : undefined;
                   const contextWindow = ctxVal && ctxVal > 0 ? Math.floor(ctxVal) : undefined;
                   if (customModalMode === "add") {
+                    const reasoningEfforts = customFormReasoning ? customFormReasoningEfforts : undefined;
                     void addCustomModel(
                       customModalProvider,
                       modelId,
                       displayName || undefined,
                       contextWindow,
                       customFormModalities.length > 0 ? customFormModalities : undefined,
+                      reasoningEfforts,
                     );
                   } else {
+                    // `null` clears a stored override back to "inherit from the provider row";
+                    // an explicit empty ladder stays stored as "no reasoning".
                     void updateCustomModel(customModalId, {
                       modelId,
                       displayName,
                       contextWindow: contextWindow ?? null,
                       inputModalities: customFormModalities,
+                      reasoningEfforts: customFormReasoning ? customFormReasoningEfforts : null,
                     });
                   }
                 }}
@@ -1715,7 +1914,19 @@ export default function Models({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head">
         <h2>{t("nav.models")}</h2>
+        <div className="page-head-actions">
+          <button type="button" className="sidebar-orb"
+            onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}
+            aria-label={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
+            title={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}>
+            <IconRefresh />
+          </button>
+        </div>
       </div>
+      <CodexStaleBanner
+        state={appServerState}
+        controller={{ restarting: codexRestarting, restart: handleCodexRestart }}
+      />
       <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />
       {/*
         One subtitle for the active tab, rendered between the strip and the panels.

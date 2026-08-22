@@ -322,6 +322,34 @@
   overflow-wrap: anywhere;
 }
 
+.cwi-capabilities {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.cwi-capability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cwi-capability-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cwi-capability-hint {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
+
 .cwi-target-list {
   display: flex;
   flex-direction: column;
@@ -487,6 +515,10 @@
     position: relative;
     border-right: none;
     border-bottom: 1px solid var(--border);
+  }
+
+  .cwi-capability-row {
+    align-items: flex-start;
   }
 
   .cwi-target-row,

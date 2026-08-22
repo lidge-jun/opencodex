@@ -113,8 +113,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     }
   }, [loadUltraMode, t]);
 
-  const loadSubagents = useCallback(async (): Promise<CachedSubagents> => {
-    const res = await fetch(`${apiBase}/api/subagent-models`);
+  const loadSubagents = useCallback(async (signal?: AbortSignal): Promise<CachedSubagents> => {
+    // The resource layer's deadline abort must reach the wire — a signal dropped
+    // here is a store that can only settle by race timeout.
+    const res = await fetch(`${apiBase}/api/subagent-models`, { signal });
     const response = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(res, t("sub.loadFail"));
     if (!response) throw new Error(t("sub.loadFail"));
     const available = response.available ?? [];

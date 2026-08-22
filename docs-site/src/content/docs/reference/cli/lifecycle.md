@@ -204,6 +204,11 @@ Run opencodex as a login-managed background service (macOS **launchd**, Linux **
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
 `OCX_SERVICE=1` so a restart does not churn the Codex config.
 
+The Windows wrapper verifies its baked Bun runtime and CLI entry before every start attempt. If an
+interrupted package update removed either file, it logs one `installation is incomplete` message and
+stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
+run `ocx service repair` to refresh the task with the restored package paths.
+
 | Subcommand | Action |
 | --- | --- |
 | none | Create/update and start the service. |

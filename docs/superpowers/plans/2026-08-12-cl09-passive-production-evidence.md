@@ -2,7 +2,7 @@
 
 **Goal:** Implement the approved CL-09 V1 contract on `feat/cl-09-passive-production-evidence` without changing canonical Compatibility Lab verdict semantics or production routing behavior.
 
-**Authority:** `devlog/_plan/260807_compatibility_lab/009_cl09_passive_production_evidence.md`
+**Authority:** `devlog/_fin/260807_compatibility_lab/009_cl09_passive_production_evidence.md`
 
 **Current base:** `dev@e8db4e0365b12a314d1c08ec2cf81599efe5b2d3`, a later `dev` descendant of the CL-08 merge `3b8f9487676fe258d76295e49e7db75aca26a4cb` used as the implementation snapshot.
 

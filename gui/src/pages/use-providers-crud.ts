@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
-import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
+import type { ProviderUpdatePatch, ProviderUpdateResult } from "../components/provider-workspace/types";
 import { apiErrorMessage } from "../api-error";
 
 type ProviderError = { code?: unknown; combos?: unknown; error?: unknown };
@@ -93,7 +93,7 @@ export function useProvidersCrud({
     fetchProviderQuotas(true);
   }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, t]);
 
-  const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<{ ok: boolean; error?: string }> => {
+  const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
     try {
       const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
@@ -103,6 +103,7 @@ export function useProvidersCrud({
       if (!res.ok) {
         return { ok: false, error: await apiErrorMessage(res, t("prov.updateFail")) };
       }
+      const data = await res.json().catch(() => ({})) as { xaiResponsesOptInState?: unknown };
       // Await refresh so callers (e.g. notes editor) only leave edit mode once
       // item.note reflects the saved value.
       await fetchConfig();
@@ -113,7 +114,13 @@ export function useProvidersCrud({
         if (refreshCodexAccount) refreshes.push(Promise.resolve(refreshCodexAccount()));
         await Promise.all(refreshes);
       }
-      return { ok: true };
+      const state = data.xaiResponsesOptInState;
+      return {
+        ok: true,
+        ...(state === true || state === false || state === "mixed"
+          ? { xaiResponsesOptInState: state }
+          : {}),
+      };
     } catch {
       return { ok: false, error: t("prov.networkError") };
     }

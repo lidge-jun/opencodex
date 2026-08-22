@@ -1,5 +1,5 @@
 ---
-// Landing page shared by the three locales. Liquid Editorial composition:
+// Landing page shared by the localized home pages. Liquid Editorial composition:
 // type-led centered hero, provider pill chips as content, product-as-stage
 // media band, quickstart terminal, bento feature slab, docs link row.
 // Styling lives in src/styles/custom.css under the `.lp` namespace.
@@ -20,15 +20,81 @@ import heroFieldDark from '../assets/hero-route-dark.png';
 import SiteJsonLd from './SiteJsonLd.astro';
 
 interface Props {
-	locale?: 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
+	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
 }
 const { locale } = Astro.props;
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const prefix = locale ? `${base}${locale}/` : base;
 
-const t = (en: string, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string) =>
-	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+const fr = {
+	'Install': 'Installer',
+	'Start the proxy': 'Démarrer le proxy',
+	'Inject a provider into Codex': 'Ajouter un fournisseur à Codex',
+	'Codex now routes through ocx': 'Codex passe maintenant par ocx',
+	'Getting Started': 'Démarrage',
+	'Installation': 'Installation',
+	'Quickstart': 'Démarrage rapide',
+	'How It Works': 'Fonctionnement',
+	'Agent Quickstart': 'Démarrage rapide pour les agents',
+	'Guides': 'Guides',
+	'Providers': 'Fournisseurs',
+	'Model Routing': 'Routage des modèles',
+	'Combos': 'Combinaisons',
+	'Codex Integration': 'Intégration de Codex',
+	'Codex App Model Picker': 'Sélecteur de modèles de Codex App',
+	'Sidecars: Search & Vision': 'Services auxiliaires : recherche et vision',
+	'Image Bridge': 'Pont d’images',
+	'Video Bridge': 'Pont vidéo',
+	'Web Dashboard': 'Tableau de bord web',
+	'Sub-agent Surface': 'Interface des sous-agents',
+	'Reference': 'Référence',
+	'Configuration': 'Configuration',
+	'Adapters': 'Adaptateurs',
+	'Architecture': 'Architecture',
+	'Proxy API Formats': 'Formats de l’API proxy',
+	'Management API': 'API de gestion',
+	'Project': 'Projet',
+	'Contributing': 'Contribuer',
+	'Run ': 'Exécutez ',
+	' on any LLM.': ' sur n’importe quel LLM.',
+	'opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.': 'opencodex est un proxy local qui fournit Codex et Claude Code sur un même port. Il traduit chaque format de protocole vers n’importe quel fournisseur, dans les deux sens, avec la diffusion en continu, les appels d’outils, le raisonnement et les images. Aucune modification des clients.',
+	'Get Started': 'Commencer',
+	'Supported providers': 'Fournisseurs pris en charge',
+	'40+ providers': 'Plus de 40 fournisseurs',
+	'The opencodex dashboard — live proxy status, routed providers, and available models': 'Le tableau de bord opencodex : état du proxy en direct, fournisseurs routés et modèles disponibles',
+	'Install. Start. Codex, rerouted.': 'Installez. Démarrez. Codex est redirigé.',
+	'Install.': 'Installez.',
+	'Start.': 'Démarrez.',
+	'Codex, rerouted.': 'Codex est redirigé.',
+	'Full quickstart': 'Démarrage rapide complet',
+	'Watch Codex run on a routed model.': 'Regardez Codex exécuter une tâche sur un modèle routé.',
+	'Codex App running a task on a routed non-OpenAI model': 'Codex App exécutant une tâche sur un modèle routé autre qu’OpenAI',
+	'One task, streamed end to end through opencodex.': 'Une tâche diffusée de bout en bout par opencodex.',
+	'One proxy, the whole surface.': 'Un seul proxy pour toute la plateforme.',
+	'Any provider': 'N’importe quel fournisseur',
+	'Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.': 'Cinq adaptateurs couvrent Anthropic Messages, Google Gemini, Azure, le transfert direct des Responses d’OpenAI et tous les points de terminaison Chat Completions compatibles avec OpenAI, soit plus de 40 fournisseurs intégrés.',
+	'OAuth or API key': 'OAuth ou clé API',
+	'Log in with your xAI, Anthropic, or Kimi account — auto-refreshed — forward your ChatGPT login, or paste a key.': 'Connectez votre compte xAI, Anthropic ou Kimi avec actualisation automatique, transférez votre connexion ChatGPT ou collez une clé.',
+	'ChatGPT account pool': 'Groupe de comptes ChatGPT',
+	'Existing threads keep their account; new sessions auto-route to the lowest-usage healthy one after quota refresh.': 'Les fils existants conservent leur compte ; après actualisation des quotas, les nouvelles sessions sont automatiquement dirigées vers le compte opérationnel le moins utilisé.',
+	'Native in the model picker': 'Intégré au sélecteur de modèles',
+	'Routed models show up in Codex App with reasoning effort levels, next to the native ones.': 'Les modèles routés apparaissent dans Codex App avec leurs niveaux d’effort de raisonnement, aux côtés des modèles natifs.',
+	'Codex App model picker with reasoning effort levels': 'Sélecteur de modèles de Codex App avec niveaux d’effort de raisonnement',
+	'Sub-agents': 'Sous-agents',
+	'Pin up to five routed or native models for Codex spawn_agent, and switch the v1 / base / v2 surface globally.': 'Épinglez jusqu’à cinq modèles routés ou natifs pour spawn_agent dans Codex et changez globalement d’interface v1, base ou v2.',
+	'ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.': 'ocx claude lance Claude Code sur le même port : tous les modèles routés figurent dans le sélecteur /model, le contexte automatique atteint 1 M, la liste de sous-agents est disponible et votre connexion claude.ai reste active.',
+	'Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar': 'Claude Code exécutant un modèle routé par opencodex, avec gpt-5.6-luna-medium actif dans la barre d’état',
+	'Search & vision sidecars': 'Services auxiliaires de recherche et de vision',
+	'Give non-OpenAI models real web search and image understanding through a gpt-5.4-mini sidecar.': 'Ajoutez aux modèles autres qu’OpenAI une véritable recherche web et la compréhension des images grâce à un service auxiliaire gpt-5.4-mini.',
+	'ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.': 'ocx init ajoute un fournisseur à votre configuration Codex et partage un catalogue de modèles unique entre Codex CLI, TUI, App et SDK. ocx stop restaure proprement Codex dans son état natif.',
+	'Documentation map': 'Plan de la documentation',
+	'Explore the docs': 'Explorer la documentation',
+	'opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider’s Terms of Service before connecting.': 'opencodex est un projet communautaire indépendant, sans affiliation avec OpenAI, Anthropic ou tout autre fournisseur, et sans approbation de leur part. Certains fournisseurs peuvent restreindre les comptes qui acheminent leur trafic par des proxys tiers ; consultez les conditions d’utilisation de chaque fournisseur avant de vous connecter.',
+} as const;
+
+const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
+	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
 
 const icons: Record<string, string> = {
 	// Lucide outline paths (24x24, stroke)

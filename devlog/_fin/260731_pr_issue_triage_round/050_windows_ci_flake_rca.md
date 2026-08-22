@@ -164,7 +164,7 @@ macOS의 claude 핑 테스트도 같은 계열이다. 90ms 침묵에 25ms 핑 �
 ## 병행 단위 — `260731_windows_bun_stability`
 
 같은 문제를 다른 사람(`bitkyc08-arch`)이 독립적으로 조사해
-`devlog/_plan/260731_windows_bun_stability/000_research.md`에 남겼다. 결론이
+`devlog/_fin/260731_windows_bun_stability/000_research.md`에 남겼다. 결론이
 수렴한다 — 하나의 플레이크가 아니라 원인이 다른 여러 모드라는 것.
 
 그쪽이 **더 정확한 부분이 둘** 있어서 여기 반영한다.

@@ -38,7 +38,7 @@ ocx start        # proxy + dashboard on localhost:10100
 </table>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.zh-TW.md">繁體中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · <a href="readme/README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
+  <a href="README.md">English</a> · <a href="readme/README.fr.md">Français</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.zh-TW.md">繁體中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · <a href="readme/README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
 </p>
 
 opencodex is a lightweight local proxy that translates Codex's Responses API into whatever your
@@ -129,8 +129,16 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 
 - **Use any LLM with Codex, Claude Code, Claude Desktop, and Grok Build** — 40+ providers out of
   the box, each keeping its own native UI.
-- **Pool ChatGPT accounts safely** — thread affinity, quota-aware auto-switching, cooldown and
+- **Pool ChatGPT accounts** — thread affinity, quota-aware auto-switching, cooldown and
   fail-closed auth handling.
+
+  > **Provider-policy note:** Account pooling is for routing and operational resilience only; it does
+  > not guarantee protection from provider rate limits, enforcement, suspension, or other account
+  > actions. OpenCodex does not endorse using additional accounts to circumvent provider limits or
+  > sharing account credentials between people. You are responsible for complying with each
+  > provider's current terms. See the
+  > [Codex Auth account-pool guidance](https://opencodex.me/guides/web-dashboard/#codex-auth-and-account-pools)
+  > and [OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/).
 - **Combos** — one virtual model id with failover or weighted round-robin across providers. See
   the [combo guide](https://opencodex.me/guides/combos/).
 - **Sub-agents on any model** — feature routed models in Codex's sub-agent picker, with v1/v2

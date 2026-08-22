@@ -28,7 +28,7 @@ ocx init
 :::note[GPT-5.6 釋出條目]
 目前的穩定版本會為 ChatGPT 直通、OpenAI API key、OpenRouter 以及實驗性 Cursor adapter
 預置 GPT-5.6 Sol/Terra/Luna。只有該上游帳號具備權限時才能實際呼叫。OpenAI API key 與
-OpenRouter 預設會宣告 372,000 token 的可用 context window；Cursor 則保留自身 adapter 的
+OpenRouter 預設會宣告 922,000 token 的可用 context window；Cursor 則保留自身 adapter 的
 後設資料。
 :::
 

@@ -18,7 +18,8 @@
   and all account-selector clones and drop that model family from raw `/v1/models`);
 - applies exact provider/model compatibility exclusions after live discovery and metadata
   augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
-- strips native-only service tier and WebSocket metadata unless explicitly enabled;
+- strips native-only service tier and WebSocket metadata unless the final routed provider/model
+  explicitly enables the verified OpenAI-compatible service tier;
 - backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
   (`catalog-backup-<id>.json`), and the legacy unsuffixed `catalog-backup.json` is retained in
   addition for the default catalog, so a restore resolves the backup for the catalog it is restoring
@@ -43,6 +44,13 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
+Account-gated native ids are a stricter subset. Their authenticated ChatGPT `/models` roster is
+cached per credential generation with a bounded timeout. A bare gated row is emitted only when at
+least one confirmed eligible account reports it; a selector-qualified row is emitted only when the
+mapped account reports it. A failed or malformed discovery is not positive evidence and therefore
+hides the gated row until a later refresh. The same snapshot gates Pool selection, so the catalog
+and runtime cannot disagree by advertising through one account and dispatching through another.
+
 The app-server's model list comes from this shared catalog, not from patching the App. Codex Desktop
 may still apply its remote native-only allowlist after `model/list`; an explicitly configured combo
 `nativeAlias` is the bounded compatibility path. It replaces one supported bare native row with a
@@ -58,10 +66,22 @@ deleting, or editing a provider's shape clears that per-provider cache; a disabl
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
 
+### Windows request-path catalog-state discovery
+
+[Decision Log]
+- 목적과 의도: Prevent Windows PowerShell/CIM process discovery from blocking Bun's event loop while v2 sub-agent guidance is assembled.
+- 기존 구현 및 제약 조건: The stale-catalog check is advisory on the request path, but CLI/service lifecycle operations use the same process evidence before warning or terminating narrowly matched app-servers.
+- 검토한 주요 대안: Remove stale-catalog guidance, move every platform collector into workers, or isolate only the Windows request path behind asynchronous child processes.
+- 선택한 방식: Keep the synchronous fail-closed collector for explicit lifecycle operations; v2 requests use asynchronous trusted-System32 PowerShell, one identity-scoped in-flight refresh, and the existing short cache. Cache invalidation advances a generation so a pre-write CIM result cannot repopulate post-write state.
+- 다른 대안 대신 이 방식을 선택한 이유: This preserves process ownership and matching invariants while preventing a slow CIM query from starving `/healthz` and unrelated proxy traffic.
+- 장점, 단점 및 영향: Concurrent v2 turns do not multiply CIM walks and the event loop remains responsive. A cold request can still await the bounded advisory check, and collection failure suppresses OpenCodex-authored model guidance as `unknown`.
+
 ## Startup readiness
 
 Each `startServer` invocation owns a private, one-shot readiness gate created before the listener
-binds. `handleStart` supplies its gate and transitions it after the shared catalog sync settles.
+binds. `handleStart` supplies its gate and transitions it only after the shared catalog sync and
+best-effort Claude Code roster reconciliation have both settled. The catalog sync remains the
+authority for ready versus failed; a roster warning does not make an otherwise healthy proxy fail.
 Calls without a supplied gate receive a fresh private gate that intentionally remains pending. Only
 `ok: true` with no nonempty warning becomes ready; `null`, a throw, `ok !== true`, or a nonempty
 warning becomes failed. State is isolated per server instance.
@@ -151,26 +171,83 @@ The `multi_agent_v2` feature flag and the logical maximum thread count are separ
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 
+### What the five-model `spawn_agent` window is, and how V1 differs from V2
+
+`MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/sync.ts`) is **not** a
+subagent concurrency limit and **not** an eligibility limit. Upstream uses it in exactly two
+places: the model list rendered into the `spawn_agent` tool description
+(`multi_agents_spec.rs:789`) and the "Available models:" suggestions in an unknown-model error
+(`multi_agents_common.rs:448`, inside the `ok_or_else` closure that runs only *after* the lookup
+already failed). The success path `find_spawn_agent_model_name` (`:431-442`) scans the whole
+catalog with neither the cap nor a `show_in_picker` filter, so a model outside the advertised
+five is still accepted when named exactly.
+
+Three different numbers, often conflated:
+
+| Quantity | Value | Source |
+| --- | --- | --- |
+| Models **advertised** as overrides | `min(5, picker-visible eligible rows)` | `multi_agents_spec.rs:785-790` |
+| Models **eligible** as targets | no numeric cap (only `"disabled"` is excluded, and only on V2) | `multi_agents_common.rs:36-42` |
+| **Concurrent** subagents | V1 6 children (root excluded); V2 total 4 including root → 3 children | `config/mod.rs:211-212`, `:1497-1506` |
+
+**The cap is the same 5 on both surfaces, but the window's contents are not.** The eligibility
+filter runs *before* `.take(5)`, and it behaves differently per surface: on a V1 call
+`model_supports_multi_agent_backend` short-circuits true for every row (including `disabled`
+ones), while a V2 call drops `Some(Disabled)` first — which lets a later row move into the five.
+Same catalog, different advertised list:
+
+| # | Model | pin | V1 advertises | V2 advertises |
+| ---: | --- | --- | :---: | :---: |
+| 1 | `v2-a` | `v2` | ✅ | ✅ |
+| 2 | `disabled-a` | `disabled` | ✅ | — |
+| 3 | `v1-a` | `v1` | ✅ | ✅ |
+| 4 | `null-a` | absent | ✅ | ✅ |
+| 5 | `v2-b` | `v2` | ✅ | ✅ |
+| 6 | `disabled-b` | `disabled` | — | — |
+| 7 | `null-b` | absent | — | ✅ |
+
+opencodex already matches this: `effectiveSubagentRoster` filters with
+`surface !== "v2" || isEligibleV2SubagentEntry(entry)`, so the V1 path skips the eligibility
+filter exactly as upstream does. opencodex also injects no roster on V1
+(`src/server/responses/collaboration.ts` emits only proactive text at the top effort tier), so
+the upstream tool description remains the authority there.
+
+Two further V1/V2 differences worth knowing: the list gate is
+`hide_agent_type_model_reasoning` on V1 (hard-coded `false` at registration, so V1 always
+advertises) but `expose_spawn_agent_model_overrides` on V2 (default `true`; when false the list
+is omitted *and* the `model`/`reasoning_effort` schema fields are removed). And V2's
+`hide_spawn_agent_metadata` defaults true, which removes `service_tier`.
+
+`modelPickerOrder` (#1649) deliberately does **not** feed this window: it rewrites only the
+Codex-visible `priority` while `SPAWN_PRIORITY_FIELD` preserves the natural priority the roster
+sorts by, so a display reorder can never change candidate membership. That divergence from
+upstream's own ordering is the feature's purpose, not a defect —
+`tests/codex-catalog-model-picker-order.test.ts` pins it.
+
+Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
+
 ## Routed tool discovery and hosted search
 
-Non-Cursor routed catalog rows advertise `supports_search_tool: true` together with
+All routed catalog rows advertise `supports_search_tool: true` together with
 `tool_mode: "code_mode_only"` — the pair is load-bearing. The field selects Codex's deferred
 tool-discovery surface; it does not describe the hosted web-search sidecar. Under code mode,
 deferred MCP tools remain callable through exec's `tools` global / `ALL_TOOLS` without a
 `tool_search` round-trip (upstream codex-rs code_mode suite; live canary 2026-08-13: routed
 kimi/k3 executed `tools.mcp__node_repl__js`, devlog `260813_tool_catalog_deferral/010+020`).
 Stamping `false` instead forces every MCP declaration into `exec.description` — a measured 2.7x
-turn-1 payload regression (96,699 → 258,929 chars). Non-Cursor routed rows independently keep
-`web_search_tool_type: "text_and_image"` for the OpenCodex search sidecar; Cursor advertises
-neither flag because its runTurn transport bypasses that sidecar and has no proven deferred path.
+turn-1 payload regression (96,699 → 258,929 chars). For Cursor this can also make the unified
+`exec` exceed the 120,000-byte serialized `McpTools` ceiling; the budget then drops `exec` and
+its companion `wait` (#1830). Hosted search remains independent: non-Cursor routes keep
+`web_search_tool_type: "text_and_image"`, while Cursor omits it because runTurn bypasses the
+search sidecar.
 
 [Decision Log]
-- 목적과 의도: keep routed plugin/MCP tools reachable without paying the full-catalog turn-1 payload tax.
-- 기존 구현 및 제약 조건: #1529 stamped `supports_search_tool: false` on all routed rows to fix #1522-era plugin invisibility; routed rows already carry `tool_mode: code_mode_only` (f60dd981d), and codex-rs keeps Deferred-exposure tools callable inside the exec isolate.
-- 검토한 주요 대안: keep the blanket false (2.7x payload regression), per-provider opt-in flags, or hybrid `direct_only_tool_namespaces` allowlists.
-- 선택한 방식: non-Cursor routed rows advertise deferred discovery again, paired with code-mode-only; Cursor stays opted out; a dual-seam regression test pins the pair on both the template and the template-less fallback paths.
-- 다른 대안 대신 이 방식을 선택한 이유: WP2 measurement (devlog `260813_tool_catalog_deferral/010`) showed the search=true code-mode profile is the cheapest shape (~97K vs ~259K chars turn-1), and the live canary showed reachability rides the code-mode isolate, not the tool_search round-trip — so the fail-closed flag paid the tax without buying the safety.
-- 장점, 단점 및 영향: turn-1 payload stays at the measured minimum and deferred tools stay reachable; residual risk is model compliance (a weak routed model may not use `exec` well) — the mechanism itself is client-side and model-independent. #1522's exact DeepSeek-compatible pairing remains unverified on this machine and is documented in the PR.
+- 목적과 의도: keep routed plugin/MCP tools reachable without paying the full-catalog turn-1 payload tax or starving Cursor's unified execution bridge.
+- 기존 구현 및 제약 조건: #1596 restored deferred discovery only for non-Cursor rows because Cursor bypasses the hosted-search sidecar; codex-rs treats deferred exposure and hosted search as separate capabilities, and Cursor independently enforces a 120,000-byte serialized tool-catalog limit.
+- 검토한 주요 대안: keep Cursor opted out, raise/disable Cursor's transport ceiling, synthesize another execution bridge, or enable Cursor-native local exec only when the bridge disappears.
+- 선택한 방식: enable Codex deferred exposure for Cursor code-mode rows too, while continuing to omit Cursor's hosted `web_search_tool_type`.
+- 다른 대안 대신 이 방식을 선택한 이유: it removes the known exec-description inflation before Cursor budgeting without weakening the measured transport limit, inventing caller tools, or turning bridge absence into local-execution authority.
+- 장점, 단점 및 영향: Cursor keeps a compact Responses-owned `exec` path under rich tool catalogs and hosted-search behavior remains unchanged; the existing Cursor budget and native-local-exec fail-closed policy remain authoritative.
 
 ## Ultra reasoning level
 
@@ -196,6 +273,21 @@ the request, and they never raise it.
 - 장점, 단점 및 영향: 공식 endpoint에서 안전한 picker/wire 계약을 제공하고,
   `preserveCustomDestination`으로 같은 이름의 다른 host/key를 보호한다. 대신 새 preset 표면을
   문서와 registry parity에서 함께 유지해야 한다.
+
+[Decision Log]
+- 목적과 의도: Xiaomi token-plan에서 image input을 거부하는 `mimo-v2.5-pro`만 vision
+  sidecar로 우회하고, 실제 image input을 받는 `mimo-v2.5`는 native vision 경로에 남긴다.
+- 기존 구현 및 제약 조건: upstream `/v1/models`는 input modality를 제공하지 않으며,
+  `noVisionModels`는 text-only 모델을 sidecar로 보내면서 Codex catalog에는 image input을
+  광고하는 provider-scoped 계약이다.
+- 검토한 주요 대안: MiMo 전체를 text-only로 분류하기, live discovery에서 modality를
+  추측하기, `mimo-v2.5-pro` 하나만 registry에 고정 분류하기.
+- 선택한 방식: canonical `mimo` preset의 `noVisionModels`에 `mimo-v2.5-pro`만 추가한다.
+- 다른 대안 대신 이 방식을 선택한 이유: live endpoint 검증으로 확인된 최소 범위만
+  적용하며, 정상 동작하는 `mimo-v2.5`의 native image 경로를 훼손하지 않는다.
+- 장점, 단점 및 영향: Pro image 요청의 404를 sidecar 설명 경로로 바꾸고 base 모델은
+  그대로 유지한다. `preserveCustomDestination` guard 때문에 같은 provider id를 다른 host에
+  연결한 사용자 설정에는 이 capability 분류가 전파되지 않는다.
 
 [Decision Log]
 - 목적과 의도: bare `defaultModel` selectors that route into third-party providers must keep their
@@ -250,3 +342,23 @@ native passthrough is enabled; `modelMap` claims and `nativePassthrough:false` r
 guard avoids creating oversized skill messages before the proxy can intervene; inbound elision remains
 the fallback if a client still sends a blocked bundle. An explicit empty list disables both routed-model
 behaviors.
+
+[Decision Log]
+- 목적과 의도: keep generated Claude Code `ocx-*.md` roster files synchronized when the proxy is
+  started or ensured on Linux, Windows, and macOS, including background service restarts.
+- 기존 구현 및 제약 조건: explicit `ocx claude` launches and Management API writes reconciled the
+  files, while the startup call inside `injectSystemEnv` ran only on macOS with system-env enabled.
+  `startServer` is also used as an in-process library/test primitive and cannot safely mutate the
+  real user home on every invocation.
+- 검토한 주요 대안: write from `startServer`; duplicate hooks in each OS service manager; reconcile
+  once from the owning CLI lifecycle after the listener becomes available.
+- 선택한 방식: the foreground/service start and live-proxy ensure paths call one best-effort helper
+  after bind, using the live Management API context-window map and the existing marker-verified
+  atomic roster writer. macOS system-env startup keeps its existing shared-window sync and skips the
+  duplicate call.
+- 다른 대안 대신 이 방식을 선택한 이유: it covers every supported service entrypoint without
+  adding home-directory side effects to server-library consumers or creating a second roster format.
+- 장점, 단점 및 영향: stale OpenCodex-owned definitions converge on every daemon start, disabled integration
+  prunes them without provider discovery, and catalog failure falls back to unmarked definitions so
+  startup remains available. A later dashboard save or `ocx claude` launch restores missing context
+  markers after a transient failure.

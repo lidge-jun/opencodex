@@ -55,7 +55,7 @@ route fail closed, пока аккаунт отсутствует, а повто
 использует только текущий login вызывающей стороны / основной login. Уровень API использует только
 свой настроенный API-key или key-pool. Используйте bare-model либо `openai-apikey/<model>`;
 cross-route credential fallback не существует. Строки API GPT-5.6 несут метаданные контекста
-1,050,000 / max input 922,000, а виртуальные Pro-id переписываются в базовую wire-модель с
+922,000 / max input 922,000, а виртуальные Pro-id переписываются в базовую wire-модель с
 `reasoning.mode: "pro"`.
 
 `openaiProviderTierVersion: 2` отмечает текущую single-provider projection. Перед миграцией
@@ -69,6 +69,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | --- | --- | --- |
 | `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (или alias `azure`). |
 | `baseUrl` | `string` | Базовый URL API upstream'а. Большинство built-in fixed-endpoint'ов игнорируют несовпадение; collision-safe key-preset'ы сохраняют старый custom destination с тем же именем. |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Опциональное клиентское выравнивание начала исходящих запросов, отдельное от учёта использования, биллинга и индикаторов rate limit апстрима. Лимит провайдера действует на все модели, а `models` сопоставляется с точными ID моделей апстрима и может только увеличить задержку. Ожидание очереди не расходует таймаут заголовков ответа. Поддерживаются HTTP, Responses WebSocket и явные вызовы адаптеров `fetchResponse`/`runTurn`. |
 | `responsesPath?` | `string` | Relative resource path для key-auth запросов `openai-responses`. Должен начинаться с `/` и не может содержать scheme, query или fragment. |
 | `supportsServiceTier?` | `boolean` | Три состояния поддержки `service_tier`. `true`: fast mode может подставлять поле, значения вызывающего сохраняются. `false`: поле удаляется и никогда не подставляется (апстрим, для которого задокументировано отсутствие поддержки, не должен его получать). Не задано: провайдер не классифицирован — значения вызывающего сохраняются без изменений, fast mode не подставляет. Registry классифицирует canonical OpenAI (`true`), DeepSeek и Volcengine Ark (`false`); задавайте явно только для custom gateway'ев, реально поддерживающих tier'ы. |
 | `preserveResponsesReasoningContent?` | `boolean` | Сохранять plaintext reasoning content в replay'нутых Responses reasoning item'ах вместо очистки (очистка — правило ChatGPT backend'а). Включайте для upstream'ов, чей контракт принимает reasoning replay, например DeepSeek. Proxy-minted `ocxr1` envelope'ы удаляются всегда. |
@@ -98,6 +99,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Установите `false` для модели, чтобы перестать рекламировать summary и вырезать поля доставки summary. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Responses delivery enum по моделям; переписывает уже существующее поле delivery. |
 | `modelAdapters?` | `Record<string, string>` | Wire-override по модели для `openai-chat` или `openai-responses` в gateway с несколькими wire-форматами. Явные записи имеют приоритет над default'ами registry; preset DeepSeek может выбирать native Responses для `deepseek-v4-flash`, а GitHub Copilot объявляет Responses-only default'ы для семейства GPT-5 (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`), потому что эти модели отклоняют `/chat/completions` для агентного трафика. Модели без встроенного default'а (например, `gpt-5.4-nano`) можно включить здесь. Single-wire upstream pin'ы и canonical ChatGPT forward override не принимают. |
+| Opt-in xAI Responses (панель) | переключатель | Только для `xai`: атомарно задаёт или удаляет записи `modelAdapters` для `grok-4.5` и `grok-4.6`. Одна запись отображается как смешанное состояние до следующего переключения. Остальные override и поведение tier не меняются. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Opt-in для точного model ID в non-forward Responses gateway, который резервирует namespace hosted tool. Сейчас допускается только `["image_generation"]`; совпавшая модель должна использовать wire `openai-responses` и поддерживать этот hosted tool. Прокси удаляет конфликтующие клиентские объявления `image_gen` и переписывает их selectors, сохраняя caller tool choice. Для виртуальных моделей OpenAI API `-pro` сначала сопоставляется выбранный публичный ID, а затем в качестве fallback используется ID базовой wire-модели. `modelAdapters` сначала разрешается по публичному ID, затем по базовому ID; второй результат определяет итоговый wire. Остальные модели сохраняют обычное alias-поведение. |
 | `reasoningEffortMap?` | `Record<string, string>` | Provider-wide wire-alias'ы для reasoning-label'ов. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Wire-alias'ы для reasoning-label'ов по отдельным моделям. |
@@ -382,9 +384,9 @@ malformed-результаты откатываются к stale/configured fall
 дальнейших изменений allowlist'а.
 
 Preview fallback-записи GPT-5.6 используют тот же механизм. Preset OpenAI API-key заранее засевает
-base- и Pro-id с context `1050000` и max input `922000`; OpenRouter заранее засевает
-`openai/gpt-5.6-sol`, `openai/gpt-5.6-terra` и `openai/gpt-5.6-luna` с context `1050000`.
-Pool/Direct рекламирует `372000`; синхронизированный каталог показывает `max`, сохраняя при этом
+base- и Pro-id с context `922000` и max input `922000`; OpenRouter заранее засевает
+`openai/gpt-5.6-sol`, `openai/gpt-5.6-terra` и `openai/gpt-5.6-luna` с context `922000`.
+Pool/Direct рекламирует `922000`; синхронизированный каталог показывает `max`, сохраняя при этом
 отдельную ступень `xhigh`.
 
 ```json

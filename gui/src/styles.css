@@ -384,9 +384,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .stop-toggle { color: var(--red); }
 .stop-toggle:hover { background: var(--red-soft); color: var(--red); }
 .stop-toggle:disabled { opacity: 0.5; cursor: default; }
+/* Proxy lifecycle actions: two circular satellites (stop, restart Codex) sharing the
+   row with a quiet label. The stop control used to be a full-width button; pairing it
+   with restart as icons keeps the foot from growing a fifth stacked row and puts the
+   destructive action next to the recovery action it is most often confused with. */
+.sidebar-action-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 8px 10px; }
+.sidebar-action-label { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: var(--text-control); }
+.sidebar-action-orbs { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.sidebar-orb--danger { color: var(--red); }
+.sidebar-orb--danger:hover:not(:disabled) { background: var(--red-soft); color: var(--red); border-color: var(--red); }
+.sidebar-orb:disabled { opacity: 0.5; cursor: default; }
 
 .main { min-width: 0; }
-.main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; }
+.main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; container-type: inline-size; }
 .main-inner.main-inner--combos {
   max-width: none;
   margin: 0;
@@ -426,6 +436,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 */
 .main-inner.main-inner--combos > .page-head,
 .main-inner.main-inner--combos > .page-tabs,
+.main-inner.main-inner--combos > .codex-stale-banner,
 .main-inner.main-inner--combos > .page-sub {
   flex-shrink: 0;
   padding-inline: 36px;
@@ -435,6 +446,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* ---- page header ---- */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
 .page-head h2 { font-size: var(--text-title); }
+/* Staleness banner: shown only when the proxy reports a running app-server older
+   than the catalog. It sits above the tab strip so it is visible on every models
+   sub-tab, not only the catalog one. */
+.page-head-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.codex-stale-banner { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); color: var(--text); }
+.codex-stale-banner-text { flex: 1 1 auto; min-width: 0; font-size: var(--text-control); }
 .page-sub { color: var(--muted); font-size: var(--text-body); margin: 4px 0 22px; max-width: var(--prose-measure); }
 
 /* Page-level underline tabs (Logs & Debug / Dashboard). Distinct from pill .segmented filters. */
@@ -795,8 +812,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 /* Explicit column counts for balanced rows at every width */
 .stat-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 28px; }
 .stat-row > .stat { min-height: 80px; display: flex; flex-direction: column; justify-content: center; }
-@media (max-width: 1100px) { .stat-row { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 640px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+@container (max-width: 820px) { .stat-row { grid-template-columns: repeat(3, 1fr); } }
+@container (max-width: 480px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; transition: border-color var(--motion-fast); }
 .stat:hover { border-color: var(--faint); }
 .stat .label { font-size: var(--text-label); color: var(--muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; font-weight: var(--weight-medium); }
@@ -872,8 +889,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 /* Four scalars in the shared 6-column .stat-row left a third of the panel empty
    and squeezed each figure into two lines. Give this row its own track count. */
 .mem-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0; }
-@media (max-width: 900px) { .mem-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 520px) { .mem-stats { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 660px) { .mem-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 380px) { .mem-stats { grid-template-columns: minmax(0, 1fr); } }
 .mem-stats .stat-sub {
   font-size: var(--text-caption);
   color: var(--faint);
@@ -1073,7 +1090,14 @@ select.input { appearance: none; }
 .select-dropdown {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--z-popover);
   min-width: 100%; max-height: 280px; overflow-y: auto;
-  background: color-mix(in oklab, canvas 84%, transparent);
+  /*
+    Opaque fill, not glass. A portaled menu opens over rows beneath its trigger
+    (Subagents → Settings: Preferred model covers the Tell Codex switch). A
+    translucent canvas mix let those controls show through and look like they
+    floated above every layer. Keep backdrop-filter for edge refraction only —
+    the fill itself must hide what sits behind the panel.
+  */
+  background: var(--surface);
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   border: 1px solid var(--border); border-radius: var(--radius);
@@ -1135,6 +1159,7 @@ select.input { appearance: none; }
   -webkit-appearance: none;
 }
 .switch.on { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
+.switch.mixed { background: var(--amber-soft); border-color: var(--amber); }
 .switch:disabled { opacity: 0.6; cursor: default; }
 .switch .knob {
   width: 14px;
@@ -1155,6 +1180,7 @@ select.input { appearance: none; }
   background: var(--toggle-dot-color);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
+.switch.mixed .knob { transform: translateX(7px); }
 
 /* ---- misc ---- */
 .muted { color: var(--muted); }
@@ -1267,12 +1293,14 @@ select.input { appearance: none; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .sidebar { background: var(--rail); }
   .lang-toggle .select-dropdown { background: var(--rail); }
+  .select-dropdown { background: var(--surface); }
   .modal-card { background: var(--surface); }
 }
 @media (prefers-reduced-transparency: reduce) {
   body::before { display: none; }
   .sidebar { background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .lang-toggle .select-dropdown { background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .select-dropdown { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .modal-card { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .modal-overlay { backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
@@ -1428,7 +1456,7 @@ dialog.modal-overlay::backdrop {
 .quota-skel--time { width: 34px; }
 .quota-skel--bar { width: 100%; height: 5px; align-self: center; }
 .quota-skel--val { width: 28px; justify-self: end; }
-.quota-row { display: grid; grid-template-columns: minmax(34px, max-content) minmax(58px, 1fr) minmax(30px, max-content); align-items: center; gap: 8px; min-width: 0; }
+.quota-row { display: grid; grid-template-columns: minmax(34px, max-content) max-content minmax(34px, max-content) minmax(38px, max-content) minmax(58px, 1fr) minmax(30px, max-content); align-items: center; gap: 8px; min-width: 0; }
 .quota-label { font-size: var(--text-caption); color: var(--muted); font-weight: var(--weight-semibold); }
 .quota-val { font-size: var(--text-caption); font-family: var(--font-code); color: var(--text); text-align: right; }
 .quota-reset-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-caption); color: var(--faint); }
@@ -2113,6 +2141,11 @@ button.prov-account-row.active { cursor: default; }
   }
   .mobile-topbar .brand { flex: 1 1 auto; min-width: 0; padding: 4px; }
   .mobile-topbar .stop-toggle { width: auto; min-width: 44px; min-height: 44px; justify-content: center; padding: 8px; }
+  /* Both orbs keep the 44x44 touch target the single stop button had; a bare 28px
+     .sidebar-orb would be a regression on the surface where it matters most. */
+  .mobile-topbar-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .mobile-topbar-actions .sidebar-orb { width: 44px; height: 44px; flex: 0 0 44px; min-width: 44px; min-height: 44px; }
+  .mobile-topbar-actions .sidebar-orb svg { width: 18px; height: 18px; }
   .menu-toggle { display: inline-flex; }
   /* drawer: the desktop sidebar kept intact (nav groups + foot + GitHub link), off-canvas */
   .sidebar {

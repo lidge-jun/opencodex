@@ -3,6 +3,7 @@
  * 260720_claude_authmode_persist/020): extracted from ClaudeCode.tsx so the
  * copy-paste shell block is directly unit-testable (tests/claude-manual-env.test.ts).
  */
+import { AUTO_COMPACT_WINDOW_DEFAULT } from "./claude-code-types";
 
 export type SidecarBackend = "openai" | "anthropic";
 export interface SidecarOverride { backend?: SidecarBackend; model?: string }
@@ -53,7 +54,9 @@ export function buildManualEnv(state: ClaudeManualEnvState): string {
     ...(marker === "proxy"
       ? ['[ -z "${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST+x}" ] && export CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1']
       : []),
-    ...(autoCompactActive ? [`export CLAUDE_CODE_AUTO_COMPACT_WINDOW=${state.autoCompactWindow ?? 350000}`] : []),
+    // The copy a user pastes has to match what the runtime injects, or the manual path
+    // compacts somewhere else entirely.
+    ...(autoCompactActive ? [`export CLAUDE_CODE_AUTO_COMPACT_WINDOW=${state.autoCompactWindow ?? AUTO_COMPACT_WINDOW_DEFAULT}`] : []),
     ...modelEnvExports,
     "claude",
   ].join("\n");

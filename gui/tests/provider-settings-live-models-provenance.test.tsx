@@ -91,6 +91,7 @@ test("an unrelated settings save does not materialize an omitted liveModels valu
 
   expect(patches).toHaveLength(1);
   expect(Object.hasOwn(patches[0]!, "liveModels")).toBe(false);
+  expect(Object.hasOwn(patches[0]!, "requestPacing")).toBe(false);
   await act(async () => { root.unmount(); });
 });
 
@@ -113,5 +114,48 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
   await save(container);
 
   expect(patches[0]?.liveModels).toBe(true);
+  await act(async () => { root.unmount(); });
+});
+
+test("canonical ClinePass shows the static catalog as disabled even with stale liveModels true", async () => {
+  const { root, container } = await mountSettings({
+    name: "cline-pass",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cline.bot/api/v1",
+    authMode: "key",
+    liveModels: true,
+  } as WorkspaceItem);
+  const toggles = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+
+  expect(toggles[1]?.disabled).toBe(true);
+  expect(toggles[1]?.checked).toBe(false);
+  await act(async () => { root.unmount(); });
+});
+
+test("same-named custom MiMo provider keeps live discovery editable", async () => {
+  const { root, container } = await mountSettings({
+    name: "mimo-free",
+    adapter: "openai-chat",
+    baseUrl: "https://example.test/v1",
+    authMode: "key",
+    liveModels: true,
+  } as WorkspaceItem);
+  const toggles = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+
+  expect(toggles[1]?.disabled).toBe(false);
+  expect(toggles[1]?.checked).toBe(true);
+  await act(async () => { root.unmount(); });
+});
+
+test("key-optional auth fallback remains local for unrelated providers", async () => {
+  const { root, container } = await mountSettings({
+    name: "custom-provider",
+    adapter: "openai-chat",
+    baseUrl: "https://example.test/v1",
+    keyOptional: true,
+  } as WorkspaceItem);
+  const selects = container.querySelectorAll<HTMLSelectElement>("select.input");
+
+  expect(selects[1]?.value).toBe("local");
   await act(async () => { root.unmount(); });
 });

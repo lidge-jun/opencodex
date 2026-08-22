@@ -101,10 +101,12 @@ src/
 | `done` | `response.completed`（带 usage） |
 | `error` | `response.failed`（带 `last_error`） |
 
-桥接器还会运行**心跳保活**（RC3）：上游没有数据时，每 2 秒发送一次解析器会忽略的
-`response.heartbeat` SSE event，以重新启动 Codex 的空闲计时器。默认**停滞截止时间**为 300 秒
-（`stallTimeoutSec`）；达到该时限后会中止上游，并发出 reason 为
-`upstream_stall_timeout` 的 `response.incomplete`，避免挂起的连接无限期阻塞 Codex。
+桥接器还会运行**心跳保活**（RC3）：上游没有数据时，每 2 秒发送一个 SSE 注释行
+（`: opencodex heartbeat`）来重新启动 Codex 的空闲计时器。注释行会被每个
+eventsource 解析器丢弃而不会产生任何事件，因此严格的 Responses 解码器永远不会
+遇到未知 variant。默认**停滞截止时间**为 300 秒（`stallTimeoutSec`）；达到该时限后
+会中止上游，并发出 reason 为 `upstream_stall_timeout` 的 `response.incomplete`，
+避免挂起的连接无限期阻塞 Codex。
 
 解析器捕获的命名空间映射、freeform 集合与 tool-search 集合会把工具调用区分为三种 Responses
 item，因此 MCP 命名空间、`apply_patch` 风格的 freeform 工具和客户端执行的 `tool_search` 都能

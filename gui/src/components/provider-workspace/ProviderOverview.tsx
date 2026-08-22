@@ -11,7 +11,7 @@ import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, format
 import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
-import type { ProviderUpdatePatch } from "./types";
+import type { ProviderUpdatePatch, ProviderUpdateResult } from "./types";
 import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
 
 type ConnectionTestResult = {
@@ -46,7 +46,7 @@ export default function ProviderOverview({
   connectionIdentity?: string;
   onEditSettings?: () => void;
   onViewUsage?: () => void;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
   onReauthenticate?: () => void;
   onCancelLogin?: () => void;
   reauthBusy?: boolean;
@@ -306,7 +306,7 @@ export default function ProviderOverview({
 
 function NotesSection({ item, onUpdateProvider }: {
   item: WorkspaceItem;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
 }) {
   const t = useT();
   const [editing, setEditing] = useState(false);

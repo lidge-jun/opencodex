@@ -9,11 +9,11 @@ format. Every adapter implements the `ProviderAdapter` interface (`src/adapters/
 ```ts
 interface ProviderAdapter {
   name: string;
-  buildRequest(parsed, incoming?): AdapterRequest | Promise<AdapterRequest>;
-  fetchResponse?(request, context): Promise<Response>;   // custom retry/transport
-  parseStream(response): AsyncGenerator<AdapterEvent>;
-  parseResponse?(response): Promise<AdapterEvent[]>;   // non-streaming
-  runTurn?(parsed, incoming, emit): Promise<void>;      // bidirectional transport
+  buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
+  fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
+  parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
+  parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
+  runTurn?(parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void): Promise<void>;
 }
 ```
 
@@ -41,17 +41,24 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   adapter **omits it entirely** for ids in `provider.noReasoningModels`.
 - Streams `delta.content` (text), `delta.reasoning_content` (thinking), and `delta.tool_calls[]`;
   collects `usage`.
-- ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort: "low" }`
-  (or `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
-  this request shape. The adapter clamps other effort requests to the verified `low` tier, accepts
-  reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests streamed
-  usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
+- ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort }` (or
+  `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
+  this request shape. The adapter preserves requested `low`, `medium`, `high`, `xhigh`, and `max`
+  tiers, accepts reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests
+  streamed usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
 
 ## `openai-responses`
 
-**Targets:** the OpenAI **Responses API**. **`passthrough: true`** — forwards the raw request body and
-streams the response back **untranslated**.
-**Auth:** `forward` (relay the caller's headers) or `key`.
+**Targets:** the OpenAI **Responses API**. **`passthrough: true`** — normally forwards the raw request
+body and response, with narrow compatibility rewrites for routed gateways.
+**Auth:** canonical OpenAI `forward` relays only the safe caller-header allowlist; noncanonical
+`forward` uses configured static headers without relaying caller authorization; `key` uses the
+configured provider key.
+
+Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
+collision-safe public function tool. Matching request history and JSON/SSE function calls are
+translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
+keeps the native private type unchanged.
 
 For `key` auth, [`retryOn429`](/reference/configuration/) applies here too: a pre-stream 429
 waits and replays the identical request on the same key before any other handling, exactly like
@@ -109,6 +116,19 @@ of the HTTP retry loop.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
+  `content.parts` that is not the documented container terminates the turn with a
+  `google response contained invalid …` error naming the structural reason and the offending
+  value's type — never its contents. Absence is handled separately from corruption: an absent,
+  `null` or empty `content` or `parts` still completes the turn normally, a streaming chunk whose
+  `candidates` is absent, `null` or empty is skipped so the turn completes on a later terminal
+  frame, and a buffered response that carries no candidate at all returns
+  `google response contained no candidates`. A root `data: null` keepalive frame is still skipped as
+  padding.
+- Tool-call batches are closed by one immediately adjacent user turn containing one ordered
+  `functionResponse` per representable call. Interrupted histories receive an explicit missing-result marker;
+  duplicate or standalone results are preserved as marked text (and image siblings) rather than
+  emitted as invalid unpaired `functionResponse` parts.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
@@ -186,7 +206,10 @@ advertised effort control on those models as proof of upstream-native reasoning 
 
 ## `cursor`
 
-**Targets:** Cursor's `agent.v1.AgentService/Run` over HTTP/2 Connect streaming at `api2.cursor.sh`.
+**Targets:** Cursor's `agent.v1.AgentService/Run` over HTTP/2 Connect streaming at `api2.cursor.sh`
+by default. With `upstreamHttpVersion: "http1.1"` (or `"h1"`), uses Cursor's HTTP/1.1
+compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
+`aiserver.v1.BidiService/BidiAppend` for client messages.
 **Auth:** Cursor OAuth/access token from `provider.apiKey` or the forwarded authorization header.
 
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests, server events, tool arguments,
@@ -195,6 +218,16 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Replays conversation state through content-addressed blobs, maps server tool calls back to Codex,
   discovers live Cursor models through the protobuf `GetUsableModels` RPC, and retries only before a
   run request is committed to the wire.
+- After a successful no-tool turn, the adapter keeps Cursor's returned ConversationStateStructure
+  in a process-local store and reuses that checkpoint on the next validated linear continuation
+  instead of rebuilding the full root history. Tool-result turns reuse the last completed-turn
+  checkpoint plus only the uncovered suffix when the covered message boundary is known.
+  Compaction, helper/shadow isolation, account/model mismatch, missing refs, decode failures,
+  forced-fresh recovery, and invalid_argument retries fall back to the existing full replay. A
+  process restart drops the in-memory store and full-replays. Cursor Connect still does not expose
+  authoritative cache_read_tokens, so OpenCodex usage is not a cache-hit counter.
+- Honors `upstreamHttpVersion` for both live model discovery and inference. `auto`, `http2`, and `h2`
+  preserve the existing HTTP/2 transport; only `http1.1` and `h1` select compatibility mode.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
   `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.

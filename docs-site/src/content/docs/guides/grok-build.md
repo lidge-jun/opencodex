@@ -3,10 +3,10 @@ title: Grok Build
 description: Use any opencodex-routed model from xAI's Grok Build CLI — models are auto-registered into ~/.grok/config.toml while the proxy runs.
 ---
 
-opencodex serves an OpenAI-compatible `POST /v1/chat/completions` (and `/v1/responses`) on its
-local port, and Grok Build supports custom models against OpenAI-compatible servers. Starting
-with this integration, opencodex registers its whole visible catalog into Grok Build
-automatically — no manual config editing required.
+opencodex serves an OpenAI-compatible `POST /v1/responses` on its local port, and Grok Build
+supports custom models against OpenAI-compatible servers. Starting with this integration,
+opencodex registers its whole visible catalog into Grok Build automatically — no manual config
+editing required.
 
 ## Auto-registration
 
@@ -18,7 +18,7 @@ into `~/.grok/config.toml`:
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... one [model.ocx-*] table per visible model ...
@@ -61,6 +61,12 @@ in Codex. Models with an empty tier list keep no effort control, matching Codex
 behavior. Native GPT-5.6 entries are separate: they preserve and expose their pinned
 upstream reasoning ladders rather than provider-configured routed metadata.
 
+Grok Build talks to opencodex over the Responses API. When the route advertises a reasoning
+ladder, the Responses passthrough forwards `reasoning.summary` as configured, so thinking
+traces reach Grok natively as Responses reasoning items. Set `reasoning.summary: "none"` if
+a client wants the model to think without returning the trace. An explicit `reasoning.summary`
+wins over the route default.
+
 ## Authentication note
 
 Grok Build requires a non-empty API key for custom models even on loopback. The injected
@@ -97,7 +103,7 @@ per-model tables with **direct fields**, outside the `# >>> opencodex managed bl
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -108,7 +114,7 @@ dial and use your admission token:
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ```
 
@@ -122,11 +128,6 @@ the id `grok-4.5`. Generated aliases avoid dots entirely for this reason.
 
 ## Known limitations
 
-- **Responses backend and keep-alives:** opencodex emits a `response.heartbeat` keep-alive
-  on `/v1/responses` streams during upstream silence. Grok Build's Responses decoder
-  rejects unknown event types, so a manually configured `api_backend = "responses"` model
-  can fail mid-turn on slow upstreams. The auto-registered entries pin
-  `api_backend = "chat_completions"`, which never surfaces raw heartbeat frames.
 - **Service-installed `ocx restart`:** the running proxy owns restart authorization and drain
   coordination, while the installed service manager launches the replacement after the old process
   exits. Service supervision remains installed. On loopback auto-registration, the managed block

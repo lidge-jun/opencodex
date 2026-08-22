@@ -1,11 +1,11 @@
 # Default reviewers
-* @lidge-jun @Ingwannu @Wibias
+* @lidge-jun @Ingwannu
 
 # High-impact runtime behavior
-/src/adapters/ @lidge-jun @Ingwannu @Wibias
-/src/providers/ @lidge-jun @Ingwannu @Wibias
-/src/codex/ @lidge-jun @Ingwannu @Wibias
-/src/server/ @lidge-jun @Ingwannu @Wibias
+/src/adapters/ @lidge-jun @Ingwannu
+/src/providers/ @lidge-jun @Ingwannu
+/src/codex/ @lidge-jun @Ingwannu
+/src/server/ @lidge-jun @Ingwannu
 
 # Repository automation and release security
 /.github/ @lidge-jun @Ingwannu
@@ -38,7 +38,7 @@
 # subsystem. Optional subsystems (Compatibility Lab and anything added later) register
 # into core-owned slots at activation instead of being imported here; the invariant is
 # enforced by tests/core-lab-boundary.test.ts and designed in
-# devlog/_plan/260814_lab_core_decoupling/.
+# devlog/_fin/260814_lab_core_decoupling/.
 # Last-match-wins: this block must stay below /src/server/ to take effect.
 /src/router.ts @lidge-jun
 /src/server/index.ts @lidge-jun

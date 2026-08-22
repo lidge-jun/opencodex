@@ -118,6 +118,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       if (!res.ok) throw new Error(String(res.status));
       return await res.json() as { providers?: Array<{ provider: string; requests: number }> };
     },
+    { deadlineMs: 60_000 }, // shared usage-summary key: all four subscribers raise the deadline together
   );
   /*
    * Quota revalidation is driven by an explicit revision, not by anything derived from

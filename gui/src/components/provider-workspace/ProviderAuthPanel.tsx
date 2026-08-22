@@ -22,12 +22,79 @@ import { LoginUrlBlock } from "../login-url-block";
 import QuotaBars from "../QuotaBars";
 import { useCopyFeedback } from "../use-copy-feedback";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
-import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
+import { Switch } from "../../ui";
+import type {
+  AccountLoadState,
+  OAuthAccountRow,
+  ApiKeyRow,
+  LoginHint,
+  ProviderAuthHandlers,
+  ProviderUpdatePatch,
+  ProviderUpdateResult,
+} from "./types";
 
 const QUOTA_ENRICH_RESERVE_MS = 4_000;
 const COCKPIT_IMPORT_MAX_BYTES = 256 * 1024;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
+
+function XaiResponsesOptInControl({
+  initialState,
+  onUpdateProvider,
+}: {
+  initialState: NonNullable<WorkspaceItem["xaiResponsesOptInState"]>;
+  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+}) {
+  const t = useT();
+  const [state, setState] = useState(initialState);
+  const [seenInitialState, setSeenInitialState] = useState(initialState);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  if (initialState !== seenInitialState) {
+    setSeenInitialState(initialState);
+    setState(initialState);
+  }
+  const mixed = state === "mixed";
+
+  const toggle = async () => {
+    if (!onUpdateProvider || saving) return;
+    const next = state !== true;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await onUpdateProvider("xai", { xaiResponsesOptIn: next });
+      if (!result.ok) {
+        setError(result.error ?? t("prov.updateFail"));
+        return;
+      }
+      setState(result.xaiResponsesOptInState ?? next);
+    } catch {
+      setError(t("prov.networkError"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="pwi-auth-optin-row">
+      <div className="pwi-auth-optin-copy">
+        <span className="pwi-auth-optin-label">{t("pws.xaiResponsesOptIn")}</span>
+        <span className="pwi-auth-row-secondary">
+          {t("pws.xaiResponsesOptInDesc")}
+          {mixed && <span className="pwi-auth-optin-mixed"> {t("pws.xaiResponsesOptInMixed")}</span>}
+        </span>
+        {error && <span className="pwi-auth-optin-error" role="alert">{error}</span>}
+      </div>
+      <Switch
+        on={state === true}
+        mixed={mixed}
+        onClick={() => { void toggle(); }}
+        disabled={!onUpdateProvider || saving}
+        label={t("pws.xaiResponsesOptIn")}
+      />
+    </div>
+  );
+}
 
 type CockpitImportResult = {
   importedCount: number;
@@ -99,7 +166,7 @@ function safeCockpitImportResult(value: unknown): CockpitImportResult | null {
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
   switchingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
-  codexController,
+  codexController, onUpdateProvider,
 }: {
   item: WorkspaceItem;
   apiBase: string;
@@ -112,6 +179,7 @@ export default function ProviderAuthPanel({
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
+  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
   /** Shared Codex account state owned by Providers (WP3). */
   codexController?: CodexAccountPoolController;
 }) {
@@ -248,6 +316,12 @@ export default function ProviderAuthPanel({
     <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}>
       <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
       <div className="pwi-auth-body">
+        {item.name === "xai" && (
+          <XaiResponsesOptInControl
+            initialState={item.xaiResponsesOptInState ?? false}
+            onUpdateProvider={onUpdateProvider}
+          />
+        )}
         {isOauth && (
           <>
             {item.name === "anthropic" && (

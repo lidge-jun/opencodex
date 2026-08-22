@@ -36,7 +36,7 @@ dosyasına kaydedilir.
 Mevcut kararlı sürüm; ChatGPT doğrudan geçişi, OpenAI API anahtarı, OpenRouter
 ve deneysel Cursor adaptörü için GPT-5.6 Sol/Terra/Luna modellerini tohumlar.
 Bunlar yalnızca yukarı akış hesabının erişimi olduğunda çalışır. OpenAI API
-anahtarı ve OpenRouter önayarları 372.000 tokenlik kullanılabilir bir bağlam
+anahtarı ve OpenRouter önayarları 922.000 tokenlik kullanılabilir bir bağlam
 penceresi bildirir; Cursor kendi adaptör meta verilerini korur.
 :::
 

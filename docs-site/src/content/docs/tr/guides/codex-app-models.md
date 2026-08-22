@@ -48,11 +48,11 @@ aynı hat kimliğini `openai/gpt-daybreak-blue-latest` olarak ortaya çıkarabil
 ```
 
 Yalnızca bu tam sağlayıcı, uç nokta ve model kimliği sabitlenmiş Sol yetenek
-anlık görüntüsünü alır: 372.000 bağlam, 334.800 otomatik sıkıştırma, yerel akıl
+anlık görüntüsünü alır: 922.000 bağlam, 829.800 otomatik sıkıştırma, yerel akıl
 yürütme merdiveni ve yerel Codex araç meta verileri. İstek yine de
 `gpt-daybreak-blue-latest` gönderir; opencodex bunu Sol'a yeniden yazmaz, yalın
 bir satır oluşturmaz ve hesap yetkisi vermez. Ayrı olarak faturalandırılan
-`openai-apikey/daybreak-blue-latest` API satırı farklı bir rotadır ve 1.050.000
+`openai-apikey/daybreak-blue-latest` API satırı farklı bir rotadır ve 922.000
 / 922.000 sınırları asla Codex girişi satırına kopyalanmaz.
 
 `codexAccountNamespaces` haritası boş olduğunda, hesap nitelikli seçici
@@ -62,7 +62,7 @@ silmeden veya tam `<seçici>/<yerel-openai-modeli>` yönlendirmesini devre dış
 bırakmadan oluşturulan nitelikli satırları gizlemek ve seçicideki yalın yerel
 satırları geri yüklemek için `false` olarak ayarlayın.
 
-API GPT-5.6 ve Daybreak girdileri 1.050.000 bağlam / 922.000 maksimum girdi
+API GPT-5.6 ve Daybreak girdileri 922.000 bağlam / 922.000 maksimum girdi
 kullanır ve `*-pro` seçici kimlikleri, günlükler, kullanım ve seçici durumu
 sanal kimliği korurken `reasoning.mode: "pro"` ile temel hat modeline
 çözümlenir. API kataloğu tam olarak on kimliğe sabitlenmiştir: `gpt-5.5`,
@@ -80,9 +80,9 @@ bir etikettir:
 gpt-5.6-sol                         # Pool veya Direct üzerinden yalın Codex girişi rotası
 <seçici>/gpt-5.6-sol                # bu seçici tarafından eşlenen saklanan Codex hesabı
 openai-apikey/gpt-5.6-sol           # API anahtarı
-openai/gpt-daybreak-blue-latest     # açık Codex iletme özel satırı (372.000)
+openai/gpt-daybreak-blue-latest     # açık Codex iletme özel satırı (922.000)
 <seçici>/gpt-daybreak-blue-latest   # kullanılabilir olduğunda gözlemlenen hesap nitelikli yerel kimlik
-openai-apikey/daybreak-blue-latest  # ayrı API anahtarı rotası (1.050.000 / 922.000)
+openai-apikey/daybreak-blue-latest  # ayrı API anahtarı rotası (922.000 / 922.000)
 ```
 
 Yeni kurulumlar ve kayıtlı modu olmayan yapılandırmalar varsayılan olarak
@@ -153,11 +153,11 @@ meta verileri sağladığı GPT-5.6 için kullanılır.
 
 | Rota | Seçici kimlikleri ve katalog meta verileri |
 | --- | --- |
-| Codex girişi (hesap nitelikli satırlar devre dışı) | `gpt-5.6-sol`, `gpt-5.6-terra` ve `gpt-5.6-luna` gibi yalın yerel kimlikler; Pool veya Direct `codexAccountMode` aracılığıyla seçilir. GPT-5.6 satırları 372.000 tokenlik bir katalog penceresi kullanır. |
+| Codex girişi (hesap nitelikli satırlar devre dışı) | `gpt-5.6-sol`, `gpt-5.6-terra` ve `gpt-5.6-luna` gibi yalın yerel kimlikler; Pool veya Direct `codexAccountMode` aracılığıyla seçilir. GPT-5.6 satırları 922.000 tokenlik bir katalog penceresi kullanır. |
 | Codex girişi (uygun seçicilerle hesap nitelikli satırlar etkin) | Uygun seçici ve desteklenen yerel model başına bir `<seçici>/<yerel-openai-modeli>` satırı; her satır yalnızca eşlenen hesabını kullanır ve yalın yerel satırlar seçiciden gizlenir. Yerel meta veriler ve bağlam pencereleri korunur. |
-| Codex girişi (açık Daybreak iletme satırı) | Yalnızca tam `customModels` satırı kurallı `openai` sağlayıcısında yapılandırıldığında `openai/gpt-daybreak-blue-latest`. Daybreak hat kimliğini korur ve sabitlenmiş Sol yetenek anlık görüntüsünü kullanır (372.000 bağlam; 334.800 otomatik sıkıştırma). |
-| OpenAI (API anahtarı) | Tam olarak on ad alanlı satır: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, üç `*-pro` sanal kimliği ve iki Daybreak takma adı (onunun tümü için 1.050.000 bağlam; 922.000 maksimum girdi) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1.050.000) |
+| Codex girişi (açık Daybreak iletme satırı) | Yalnızca tam `customModels` satırı kurallı `openai` sağlayıcısında yapılandırıldığında `openai/gpt-daybreak-blue-latest`. Daybreak hat kimliğini korur ve sabitlenmiş Sol yetenek anlık görüntüsünü kullanır (922.000 bağlam; 829.800 otomatik sıkıştırma). |
+| OpenAI (API anahtarı) | Tam olarak on ad alanlı satır: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, üç `*-pro` sanal kimliği ve iki Daybreak takma adı (onunun tümü için 922.000 bağlam; 922.000 maksimum girdi) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922.000) |
 | Cursor | Statik geri dönüş `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` ve `cursor/gpt-5.6-luna` (1.000.000) artı `cursor/grok-4.5` ve `cursor/grok-4.5-fast` (500.000) içerir; canlı hesap keşfi hangilerinin görünür kalacağına karar verir. |
 | xAI | Canlı keşif yetkilidir. Geri dönüş kataloğu `xai/grok-4.6` içerir ve varsayılan olarak `xai/grok-4.5`'tir; her ikisinin de 500.000 tokenlik pencereleri vardır. Grok 4.6, `low` / `medium` / `high` / `xhigh` (yukarı akış varsayılanı: `high`) sunarken, Grok 4.5 `high` ile durur. |
 

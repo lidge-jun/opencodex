@@ -16,6 +16,17 @@ export function createIsolatedTestEnvironment(
   const codexHome = join(root, ".codex");
   mkdirSync(opencodexHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
+  if (process.platform === "win32") {
+    // A Windows sandbox has to look like a real profile, because the known-folder APIs
+    // resolve relative to USERPROFILE and .NET returns an EMPTY STRING — not an error —
+    // when the folder it computes does not exist. `resolveWindowsRuntimeRoot` asks
+    // PowerShell for `GetFolderPath(LocalApplicationData)`, so without these directories
+    // every Codex coordinator lookup refuses with "Windows effective-account lookup
+    // returned an empty value" and each refusal surfaces as an unrelated assertion in
+    // whichever suite happened to touch a Codex home.
+    mkdirSync(join(root, "AppData", "Local"), { recursive: true });
+    mkdirSync(join(root, "AppData", "Roaming"), { recursive: true });
+  }
 
   return {
     root,
@@ -26,6 +37,17 @@ export function createIsolatedTestEnvironment(
       // real-home write guard can still know which path to protect.
       // (devlog 260730_codex_rs_upstream_v2_live_handoff/070.)
       OCX_REAL_HOME: baseEnv.OCX_REAL_HOME ?? homedir(),
+      // Pin git's global config to the developer's real one before HOME moves.
+      //
+      // git resolves ~/.gitconfig from HOME, so a sandboxed HOME makes it invisible.
+      // That silently drops `safe.directory`, and on a checkout whose directory owner
+      // differs from the running account -- ordinary on Windows when a tool or
+      // installer created the tree -- every `git` call a test makes then fails with
+      // "detected dubious ownership". The test reads that as "this is not a git
+      // repository" and asserts against a fallback, which looks like a product bug in
+      // whichever adapter collected the metadata. Naming the file keeps the sandbox
+      // (git still writes nothing here) while leaving git's own trust decisions intact.
+      GIT_CONFIG_GLOBAL: baseEnv.GIT_CONFIG_GLOBAL ?? join(homedir(), ".gitconfig"),
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,

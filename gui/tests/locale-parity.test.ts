@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-const LOCALES = ["en", "de", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
+const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
 
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
@@ -108,6 +108,12 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.kimi",
   "integrations.tab.gajae",
   "integrations.tab.dsh",
+  "integrations.tab.mcode",
+  "integrations.tab.zcode",
+  "api.clientConfig.clientMcode",
+  "api.clientConfig.clientZcode",
+  "integrations.tab.prime",
+  "api.clientConfig.clientPrime",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",
@@ -120,6 +126,12 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "routing.analyticsP99",
   // Format template with placeholder only; other locales (zh/ja/ko) keep it identical to en
   "models.shadowCallOriginal",
+  // A one-glyph marker plus the model id, sitting inside a narrow table column. The glyph is
+  // an icon-shaped affordance rather than a word, and its meaning is carried by the tooltip
+  // (`logs.badge.interceptedHelperTitle`), which IS translated. Localizing the glyph per
+  // locale would make the same badge unrecognizable across a screenshot or a bug report for
+  // no gain in comprehension.
+  "logs.badge.interceptedHelper",
   "models.v2Mode_default",
   "models.v2Mode_v1",
   "models.v2Mode_v2",
@@ -170,6 +182,11 @@ const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, strin
     "DeepSeek Harness (DSH)",
     "DeepSeek Harness (DSH)",
     "OpenCodex manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
+  ],
+  fr: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex gère uniquement llm-pi-ai.providers.opencodex dans $DSH_HOME/settings.yaml. DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
   ],
   de: [
     "DeepSeek Harness (DSH)",

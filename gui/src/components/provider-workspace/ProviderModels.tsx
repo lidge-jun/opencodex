@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
+import { encodedModelIdCollides } from "../../../../src/providers/slug-codec";
 
 export default function ProviderModels({
   item,
@@ -48,13 +49,19 @@ export default function ProviderModels({
   const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
   const configuredModels = useMemo(() => item.models ?? [], [item.models]);
   const trimmedCustomModelId = customModelId.trim();
+  const knownModelIds = [
+    ...availableModels,
+    ...customModelIds,
+    ...configuredModels,
+    ...(item.defaultModel ? [item.defaultModel] : []),
+  ];
   const customModelInvalid = !customModelsReady
     || !trimmedCustomModelId
-    || trimmedCustomModelId.includes("/")
     || availableModels.includes(trimmedCustomModelId)
     || customModelIds.includes(trimmedCustomModelId)
     || configuredModels.includes(trimmedCustomModelId)
-    || item.defaultModel === trimmedCustomModelId;
+    || item.defaultModel === trimmedCustomModelId
+    || encodedModelIdCollides(trimmedCustomModelId, knownModelIds);
   const models = useMemo(
     () => filterModels(availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels),
     [availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels],

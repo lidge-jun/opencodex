@@ -16,7 +16,7 @@ description: Все способы, которыми opencodex аутентиф�
 
 Используйте «голый» `gpt-5.6-sol` с опцией Pool/Direct на странице Providers или
 `openai-apikey/gpt-5.6-sol` для API. Между маршрутами учётных данных нет сквозного фолбэка.
-Маршрут API публикует метаданные: контекст 1,050,000 / максимум входных токенов 922,000. Его
+Маршрут API публикует метаданные: контекст 922,000 / максимум входных токенов 922,000. Его
 виртуальные id `sol-pro`, `terra-pro` и `luna-pro` сохраняют выбранную публичную идентичность, тогда
 как в фактическом запросе используется базовая модель плюс `reasoning.mode: "pro"`.
 
@@ -298,6 +298,8 @@ Service token Nscale создаётся в [Nscale Console](https://console.nsca
 аутентифицированного discovery endpoint после входа. Запросы чата используют настроенный bearer-ключ.
 Ключи создаются в [Command Code Studio](https://commandcode.ai/studio/).
 
+**Квота Command Code.** Дашборд и `ocx account refresh` опрашивают окна `/alpha/billing/credits` (5 часов и неделя) на каноническом хосте `https://api.commandcode.ai`. OAuth-пресет (`command-code`) использует сохранённый bearer аккаунта; пресет Provider-API ключа (`commandcode`) — активный настроенный ключ. Пользовательски изменённый похожий base URL не опрашивается. Если Command Code также сообщает расход за период, оставшиеся monthly / purchased / free credits показываются как USD-окно.
+
 **Discovery для SambaNova Cloud.** Пресет читает общедоступный список SambaNova Cloud `/v1/models` на
 фиксированном API-хосте, сохраняет нативные id провайдера и ограничивает discovery размером 128 KiB
 и 128 исходными строками. Каталог не требует аутентификации, поэтому процедура входа CLI сообщает, что
@@ -388,9 +390,9 @@ GPT-5.6 Sol/Terra/Luna заранее внесены в резервные сп�
 
 | Маршрут Codex | Предзаданные id моделей | Контекст, видимый Codex |
 | --- | --- | --- |
-| Вход Codex (Pool или Direct) | `gpt-5.6-*` | 372,000 |
-| OpenAI (API key) | `openai-apikey/gpt-5.6-*` плюс `*-pro` | 1,050,000 (макс. вход 922,000) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 1,050,000 |
+| Вход Codex (Pool или Direct) | `gpt-5.6-*` | 922,000 |
+| OpenAI (API key) | `openai-apikey/gpt-5.6-*` плюс `*-pro` | 922,000 (макс. вход 922,000) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
 Нативные записи GPT-5.6 сохраняют закреплённые вышестоящие шкалы уровней рассуждений (например, у

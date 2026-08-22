@@ -83,8 +83,106 @@ function detectIssueKind(issue) {
   return core.detectIssueKind(normalizeEquivalentBugEvidence(issue));
 }
 
+/**
+ * Ordered-list numbers are presentation, not evidence, but numeric output in a
+ * fenced or indented code block may be the failure itself (for example
+ * `404. Not Found`). Strip list prefixes only from prose lines.
+ */
+function stripOrderedListPrefixes(text) {
+  let fence = null;
+
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => {
+      if (fence) {
+        const closing = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+        if (
+          closing &&
+          closing[1][0] === fence.char &&
+          closing[1].length >= fence.length
+        ) {
+          fence = null;
+        }
+        return line;
+      }
+
+      const opening = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (opening) {
+        fence = { char: opening[1][0], length: opening[1].length };
+        return line;
+      }
+
+      if (/^(?: {4,}|\t)/.test(line)) return line;
+      return line.replace(/^\s{0,3}\d+[.)]\s+/, "");
+    })
+    .join("\n");
+}
+
+function independentReproductionText(summary, reproduction) {
+  const summaryCan = core.canonicalise(stripOrderedListPrefixes(summary));
+  return stripOrderedListPrefixes(reproduction)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const lineCan = core.canonicalise(line);
+      return lineCan && !summaryCan.includes(lineCan);
+    })
+    .join("\n");
+}
+
+/**
+ * Reject the narrow #1672 class: Reproduction is only text already present in
+ * Summary and contributes no independent actionable evidence. Compute the
+ * actionable check only over reproduction-only lines so phrases like
+ * "Codex config" inside the shared generic error cannot be misread by the
+ * legacy command heuristic as a `codex config` invocation.
+ */
+function reproductionOnlyEchoesSummary(summary, reproduction) {
+  // Ordered step numbers are presentation, not evidence. Normalize both sides
+  // consistently while preserving numeric output inside code blocks.
+  const summaryCan = core.canonicalise(stripOrderedListPrefixes(summary));
+  const reproductionCan = core.canonicalise(stripOrderedListPrefixes(reproduction));
+  if (!summaryCan || !reproductionCan) return false;
+
+  if (summaryCan === reproductionCan || summaryCan.includes(reproductionCan)) {
+    return true;
+  }
+  if (!reproductionCan.includes(summaryCan)) return false;
+
+  const independent = independentReproductionText(summary, reproduction);
+  if (!independent) return true;
+
+  const explicitOcxAction =
+    /\b(?:run|execute|invoke|retry)\s+[`'"*_~]*ocx\s+(?:sync|restore|update|doctor|start|stop|restart)\b/i.test(
+      independent,
+    );
+  return !(explicitOcxAction || core.hasActionableReproductionDetail(independent));
+}
+
 function validateIssue(issue) {
-  return core.validateIssue(normalizeEquivalentBugEvidence(issue));
+  const normalizedIssue = normalizeEquivalentBugEvidence(issue);
+  const result = core.validateIssue(normalizedIssue);
+
+  if (result.kind !== "bug" || result.softPass || !result.valid) return result;
+
+  const body = String(normalizedIssue?.body || "");
+  const summary = core.extractSection(body, "Summary");
+  const reproduction = core.extractSection(body, "Reproduction");
+  if (!reproductionOnlyEchoesSummary(summary, reproduction)) return result;
+
+  return {
+    ...result,
+    valid: false,
+    reasons: [
+      ...result.reasons,
+      "Reproduction only echoes the Summary and does not add actionable steps or failure evidence.",
+    ],
+    guidance: [
+      ...result.guidance,
+      "List the exact command or steps that trigger the problem and include the underlying error or observed output, not only the final summary message.",
+    ],
+  };
 }
 
 module.exports = {
@@ -92,4 +190,7 @@ module.exports = {
   detectIssueKind,
   validateIssue,
   normalizeEquivalentBugEvidence,
+  stripOrderedListPrefixes,
+  independentReproductionText,
+  reproductionOnlyEchoesSummary,
 };

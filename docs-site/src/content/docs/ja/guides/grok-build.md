@@ -14,7 +14,7 @@ opencodex はローカル ポート上で OpenAI 互換の `POST /v1/chat/comple
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... one [model.ocx-*] table per visible model ...
@@ -56,7 +56,7 @@ Grok Build では、ループバックでもカスタム モデルに対して�
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -66,7 +66,7 @@ api_key = "opencodex-loopback"
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ```
 
@@ -76,8 +76,6 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 
 ## 既知の制限事項
 
-- **バックエンドとキープアライブの応答:** opencodex は `response.heartbeat` キープアライブを発行します
-アップストリーム沈黙中の `/v1/responses` ストリーム。 Grok Build の Responses デコーダは未知のイベント タイプを拒否するため、手動で構成された `api_backend = "responses"` モデルは低速なアップストリームではターン中に失敗する可能性があります。自動登録されたエントリは `api_backend = "chat_completions"` をピン留めしますが、生のハートビート フレームが表示されることはありません。
 - **サービスでインストールされた `ocx restart`:** 実行中のプロキシが再起動の認可とドレインの調整を担当し、古いプロセスの終了後はインストール済みのサービス マネージャーが置換プロセスを起動します。サービス監視は維持されます。ループバックの自動登録を使用している場合に限り、マネージド ブロックもハンドオフ中に維持されます。非ループバック構成では Grok 設定を手動管理します。同じポートで、別の ID 検証済みプロセスが正常になったことを確認した場合にのみ成功します。
 - **構成読み取りタイミング:** 最初に opencodex を起動し、その後 `grok` を起動します。
 予測可能な結果。 Grok Build は `~/.grok/config.toml` を監視し、`[model]` テーブルが実際に変更されると (内容で比較すると約 1 秒のデバウンス) 再ロードするため、更新されたブロックは再起動せずに開いているセッションに到達します。 Grok が解析した内容を確認するには、`grok inspect` を実行します。ロードされた設定ソースがリストされ、拒否されたフィールドについて警告が表示されます。解決されたモデルのリストは出力されません。単一の TOML エラーがユーザー設定レイヤー「全体」を無効にすることに注意してください。これが、opencodex がファイルをアトミックに書き込む理由です。Grok は書きかけの設定を決して認識しません。

@@ -43,7 +43,7 @@ test("missing or unusable vision capability metadata stays permissive", () => {
 });
 
 test("vision reasoning labels are localized for every supported locale and effort", () => {
-  const locales = ["en", "de", "ko", "zh", "ru", "ja"] as const;
+  const locales = ["en", "de", "fr", "ko", "zh", "ru", "ja"] as const;
   for (const locale of locales) {
     for (const level of VISION_REASONING_LEVELS) {
       const label = visionReasoningLabel(locale, level);

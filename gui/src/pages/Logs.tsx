@@ -15,7 +15,10 @@ import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
+import { modelTitle } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
+import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
+import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
 import {
@@ -51,7 +54,8 @@ type CostEstimateReason =
   | "usage_estimated"
   | "cache_detail_missing"
   | "expected_price_overlay"
-  | "provider_cost_overlay";
+  | "provider_cost_overlay"
+  | "priority_lower_bound";
 
 type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -73,6 +77,7 @@ type CostResult =
     estimate: {
       cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
       estimated: boolean;
+      priorityLowerBound?: boolean;
       price?: MatchedPriceInfo;
       attempts?: Array<{ ordinal: number; price: MatchedPriceInfo }>;
     };
@@ -96,7 +101,8 @@ type AttemptRecoveryKind =
   | "key-429"
   | "rate-limit-429"
   | "anthropic-oauth-429"
-  | "image-413";
+  | "image-413"
+  | "empty-completion";
 
 interface LogAttempt {
   ordinal: number;
@@ -127,6 +133,15 @@ export interface LogEntry {
   provider: string;
   surface?: LogSurface;
   conversationId?: string;
+  /**
+   * The original helper model, when Shadow Call Intercept rewrote this request.
+   *
+   * Present ONLY for an intercepted request. A helper request that was not intercepted --
+   * interception off, no replacement model, or a slug the matcher does not recognize -- is
+   * indistinguishable here from ordinary traffic, which is why the filter below says
+   * "intercepted" rather than "helper".
+   */
+  shadowCallRewrittenFrom?: string;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -168,36 +183,13 @@ function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
       || typeof entry.provider !== "string"
       || typeof entry.status !== "number"
       || typeof entry.durationMs !== "number"
+      || (entry.shadowCallRewrittenFrom !== undefined && typeof entry.shadowCallRewrittenFrom !== "string")
       || !validCachedRouteDecision(entry.routeDecision)
     ) {
       return null;
     }
   }
   return cached;
-}
-
-function isCursorUsageProvider(provider: string): boolean {
-  return provider === "cursor" || provider.startsWith("cursor-");
-}
-
-function tokensTitle(log: LogEntry, t: TFn): string | undefined {
-  if (!log.usage) return undefined;
-  const split = cacheSplit(log);
-  const parts = [
-    `${t("logs.tokens.input")}=${log.usage.inputTokens}`,
-    `${t("logs.tokens.output")}=${log.usage.outputTokens}`,
-  ];
-  if (split.read !== undefined) parts.push(`${t("logs.tokens.cacheRead")}=${split.read}`);
-  if (split.write !== undefined) parts.push(`${t("logs.tokens.cacheWrite")}=${split.write}`);
-  if (typeof log.usage.contextTotalTokens === "number") {
-    parts.push(`${t("logs.tokens.contextTotal")}=${log.usage.contextTotalTokens}`);
-  }
-  if (typeof log.usage.reasoningOutputTokens === "number") parts.push(`${t("logs.tokens.reasoning")}=${log.usage.reasoningOutputTokens}`);
-  if (log.usageStatus === "estimated") parts.push(t("logs.tokens.estimatedNote"));
-  if (log.usageStatus === "estimated" && split.read === undefined && split.write === undefined) {
-    parts.push(t(isCursorUsageProvider(log.provider) ? "logs.tokens.noCacheCursorNote" : "logs.tokens.noCacheNote"));
-  }
-  return parts.join(" \xC2\xB7 ");
 }
 
 function displayTokenTotal(log: LogEntry): number | undefined {
@@ -224,19 +216,6 @@ function displayContextTokenTotal(log: LogEntry): number | undefined {
   const contextTotal = log.usage?.contextTotalTokens;
   if (typeof contextTotal !== "number") return base;
   return Math.max(base ?? 0, contextTotal) || undefined;
-}
-
-/** Cache read/write split; recovers reads from legacy rows that stored read+write combined. */
-function cacheSplit(log: LogEntry): { read?: number; write?: number } {
-  const u = log.usage;
-  if (!u) return {};
-  const write = typeof u.cacheCreationInputTokens === "number" ? u.cacheCreationInputTokens : undefined;
-  const read = typeof u.cacheReadInputTokens === "number"
-    ? u.cacheReadInputTokens
-    : typeof u.cachedInputTokens === "number" && write !== undefined
-      ? Math.max(0, u.cachedInputTokens - write)
-      : u.cachedInputTokens;
-  return { read, write };
 }
 
 interface ReasoningLogFields {
@@ -271,23 +250,6 @@ function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: 
   return `${result.estimated ? "~" : ""}${value}`;
 }
 
-function formatEstimatedUsd(result: CostResult | undefined, localeTag?: string): string {
-  if (!result || result.kind === "unavailable" || !Number.isFinite(result.estimate.cost.total) || result.estimate.cost.total < 0) return "\u2014";
-  const totalUsd = result.estimate.cost.total;
-  return `~$${new Intl.NumberFormat(localeTag, {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  }).format(totalUsd)}`;
-}
-
-function formatEstimatedUsdValue(value: number, localeTag?: string): string {
-  if (!Number.isFinite(value) || value < 0) return "\u2014";
-  return `~$${new Intl.NumberFormat(localeTag, {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  }).format(value)}`;
-}
-
 /** Consecutive failed polls before a stale table is called out. Two seconds each, so ~6s. */
 const STALE_POLL_FAILURE_LIMIT = 3;
 
@@ -307,6 +269,7 @@ const ESTIMATE_REASON_KEYS = {
   cache_detail_missing: "logs.detail.estimate.cache_detail_missing",
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
   provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
+  priority_lower_bound: "logs.detail.estimate.priority_lower_bound",
 } as const satisfies Record<CostEstimateReason, string>;
 
 /**
@@ -321,6 +284,7 @@ const RECOVERY_KIND_KEYS = {
   "rate-limit-429": "logs.detail.attempt.recovery.rateLimit429",
   "anthropic-oauth-429": "logs.detail.attempt.recovery.anthropicOauth429",
   "image-413": "logs.detail.attempt.recovery.image413",
+  "empty-completion": "logs.detail.attempt.recovery.emptyCompletion",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
 /** Map a metric-unavailable reason to its i18n key. */
@@ -374,45 +338,24 @@ function formatLogDateTime(ts: number, localeTag?: string, timeZone?: string): s
   return `${date} ${time}`;
 }
 
-function modelTitle(log: LogEntry): string {
-  const details = [
-    `model=${log.model}`,
-    log.resolvedModel ? `resolved=${log.resolvedModel}` : undefined,
-    log.requestedServiceTier ? `requestedTier=${log.requestedServiceTier}` : undefined,
-    log.configuredServiceTier ? `configuredTier=${log.configuredServiceTier}` : undefined,
-    log.responseServiceTier ? `responseTier=${log.responseServiceTier}` : undefined,
-    log.modelSupportsServiceTier !== undefined ? `supportsTier=${log.modelSupportsServiceTier}` : undefined,
-  ].filter(Boolean);
-  return details.join(" \xC2\xB7 ");
-}
-
 function summarizeFilteredLogs(entries: LogEntry[]): {
   requests: number;
   totalTokens: number;
   estimatedCostUsd: number;
+  priorityLowerBound: boolean;
   unpricedRequests: number;
   unmeteredRequests: number;
 } {
   let totalTokens = 0;
-  let estimatedCostUsd = 0;
-  let unpricedRequests = 0;
-  let unmeteredRequests = 0;
   for (const entry of entries) {
     const tokens = displayTokenTotal(entry);
     if (tokens !== undefined) totalTokens += tokens;
-    if (entry.usageStatus === "unsupported") {
-      unmeteredRequests += 1;
-      continue;
-    }
-    const cost = entry.displayMetrics?.cost;
-    const total = cost?.kind === "value" ? cost.estimate.cost.total : undefined;
-    if (total !== undefined && Number.isFinite(total) && total >= 0) {
-      estimatedCostUsd += total;
-      continue;
-    }
-    unpricedRequests += 1;
   }
-  return { requests: entries.length, totalTokens, estimatedCostUsd, unpricedRequests, unmeteredRequests };
+  return {
+    requests: entries.length,
+    totalTokens,
+    ...summarizeEstimatedCosts(entries),
+  };
 }
 
 export default function Logs({ apiBase }: { apiBase: string }) {
@@ -422,6 +365,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
   const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
+  const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -539,6 +483,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
 
   const filteredLogs = logs.filter(log => (
     logMatchesSurface(log, surfaceFilter)
+    && (!interceptedHelpersOnly || Boolean(log.shadowCallRewrittenFrom))
     && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
   ));
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
@@ -633,6 +578,20 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             </button>
           ))}
         </div>
+        {/*
+          "Intercepted", not "helper". The marker only exists when Shadow Call Intercept
+          rewrote the request, so a helper request that was not intercepted looks exactly like
+          ordinary traffic here. A broader label would promise a classification this data
+          cannot support.
+        */}
+        <label className="muted text-control logs-filter-field">
+          <input
+            type="checkbox"
+            checked={interceptedHelpersOnly}
+            onChange={event => setInterceptedHelpersOnly(event.target.checked)}
+          />
+          {t("logs.filter.interceptedHelpersOnly")}
+        </label>
         <label className="muted text-control logs-filter-field">
           {t("logs.filter.conversation.label")}
           <input
@@ -657,7 +616,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             {t("logs.conversation.totals", {
               requests: conversationTotals.requests,
               tokens: formatTokens(conversationTotals.totalTokens, localeTag ?? locale),
-              cost: formatEstimatedUsdValue(conversationTotals.estimatedCostUsd, localeTag),
+              cost: formatEstimatedUsdValue(
+                conversationTotals.estimatedCostUsd,
+                t,
+                localeTag,
+                conversationTotals.priorityLowerBound,
+              ),
             })}
             {" "}
             <span className="muted">
@@ -776,11 +740,20 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                     {formatTokPerSecond(log.displayMetrics?.tokPerSecond, localeTag)}
                   </td>
                   <td className="num mono log-col-cost">
-                    {formatEstimatedUsd(log.displayMetrics?.cost, localeTag)}
+                    {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
                   </td>
-                 <td className="mono log-col-model" title={modelTitle(log)}>
-                   <span className="logs-model-cell">
-                    <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                 <td className="mono log-col-model" title={modelTitle(log, t)}>
+                  <span className="logs-model-cell">
+                   <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                      {log.shadowCallRewrittenFrom && (
+                        <span
+                          className="badge badge-muted"
+                          style={{ whiteSpace: "nowrap" }}
+                          title={t("logs.badge.interceptedHelperTitle")}
+                        >
+                          {t("logs.badge.interceptedHelper", { model: log.shadowCallRewrittenFrom })}
+                        </span>
+                      )}
                       {(log.surface === "claude" || log.surface === "claude-desktop") && (
                         <span className="badge badge-accent">{t("logs.badge.claude")}</span>
                       )}
@@ -1001,11 +974,11 @@ function LogDetailDialog({
           {cost?.kind === "value" ? (
             <>
               <div className="log-detail-grid">
-                <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, localeTag)}</span>
-                <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, localeTag)}</span>
-                <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, localeTag)}</span>
-                <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, localeTag)}</span>
-                <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, localeTag)}</span>
+                <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, cost.estimate.priorityLowerBound)}</span>
                 {cost.estimate.price && (
                   <>
                     <span className="muted">{t("logs.detail.matchedKey")}</span>
@@ -1023,7 +996,7 @@ function LogDetailDialog({
             </>
           ) : (
             <div className="log-detail-grid">
-              <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{"\u2014"}</span>
+              <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{t("logs.cost.unavailable")}</span>
               <span className="muted">{t("logs.detail.unavailableReason")}</span>
               <span>{cost?.kind === "unavailable" ? t(metricReasonKey(cost.reason)) : t("logs.detail.reason.usage_missing")}</span>
             </div>
@@ -1078,7 +1051,7 @@ function LogDetailDialog({
                       </td>
                       <td className="num mono">{attempt.durationMs}ms</td>
                       <td className="num mono">{formatTokPerSecond(attempt.displayMetrics?.tokPerSecond, localeTag)}</td>
-                      <td className="num mono">{formatEstimatedUsd(attemptCost, localeTag)}</td>
+                      <td className="num mono">{formatEstimatedUsd(attemptCost, t, localeTag)}</td>
                       <td className="log-detail-break">{reason}</td>
                     </tr>
                   );

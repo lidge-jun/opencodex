@@ -5,18 +5,18 @@ needed provider discovery outside the per-`CODEX_HOME` lock and catalog/cache
 mutation inside it, but the only management dependency returns `Promise<void>`
 and the production function performs both halves before it resolves
 (`src/server/management/context.ts:9-18`,
-`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:17-24`).
+`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:17-24`).
 Calling that operation outside the lock leaves native writes after OFF can
 linearize; calling it inside the lock admits provider I/O and a 10-second bundled
 catalog subprocess under a rule that forbids slow work there
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:250-310`,
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:250-310`,
 `src/codex/catalog/bundled.ts:127-143`).
 
 This document specifies only the catalog substrate needed to remove that
 contradiction. It does not specify the desired-state flag, lock implementation,
 history writer, ownership preflight, management toggle, or GUI; those were
 separate responsibilities in the failed design
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:53-84`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:53-84`).
 
 ## 1. Current call graph
 
@@ -91,7 +91,7 @@ catch and warn, `restore back` and explicit `sync` inspect `ok`, and `POST
 `src/server/management/config-routes.ts:261-268`). A typed desired-OFF or native
 lock-busy result must stop before `injectCodexConfig`; network/auth catalog
 degradation must retain the existing injection fallback
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:372-423`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:372-423`).
 
 ## 2. Where gathering ends and committing begins
 
@@ -156,7 +156,7 @@ it, and scrubs/removes a failed temporary file before rethrowing
 (`src/config.ts:178-230`). The number of candidate writes is fixed by the payload
 set rather than provider/model count, which is the bounded property required by
 the failed lock design
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:250-310`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:250-310`).
 
 `syncCodexModelsCacheFromCatalog` is not in the production refresh path and must
 not become the commit primitive: it rereads the catalog and writes raw catalog
@@ -167,7 +167,7 @@ bytes to the cache path, while the active invalidator requires an expired wrappe
 
 **INFERRED contract:** expose exactly these two operations from the catalog owner,
 because the audit requires the lock owner to schedule them separately
-(`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:46-58`).
+(`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:46-58`).
 
 ```ts
 export interface CodexCatalogCandidate { /* opaque, readonly, branded */ }
@@ -207,7 +207,7 @@ The candidate must not carry a mutable `OcxConfig` reference, an open file handl
 or a callback. **INFERRED:** those would allow mutation after gather or smuggle
 slow work back into commit, recreating the opaque all-in-one dependency rejected
 by the audit
-(`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:19-24`).
+(`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:19-24`).
 
 The payload fields are mostly JSON-compatible, but the candidate is deliberately
 not a persistence or IPC format. **INFERRED:** a private brand/one-shot token and
@@ -228,7 +228,7 @@ pair.
 A candidate can become stale between gather and commit. The lock serializes
 commits; it does not freeze the config, target path, or catalog while gathering
 happens outside it
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:250-310`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:250-310`).
 
 **INFERRED invalidators:** commit must refuse with `stale_candidate` when any of
 these differ under the lock from the candidate's evidence:
@@ -244,7 +244,7 @@ these differ under the lock from the candidate's evidence:
 The need for checks 1 and 5 comes from the failed OFF ordering, while checks 2-4
 close the stale-config and stale-merge window created by gathering outside the
 lock
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:250-310`,
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:250-310`,
 `src/codex/catalog/sync.ts:513-525,430-468`). A newly appearing valid pristine
 backup is not permission to overwrite it: current behavior is create-once, so
 commit skips that prepared backup write if another commit created it first
@@ -281,8 +281,8 @@ The real dispositions and caller meanings are:
 | Missing OAuth token | Discovery returns configured rows (`src/codex/catalog/provider-fetch.ts:475-479`). | A committed candidate with `provider_auth` notice, not a route failure. |
 | Auth/token resolution throws before fetch fallback | Token resolution occurs before the fetch `try` (`src/codex/catalog/provider-fetch.ts:428,512-516`). | `failed/provider_auth`, no commit; management returns primary success plus warning, sync may continue injection fallback. |
 | Gather admission occupied | `tryAcquire` throws `CatalogGatherBusyError` (`src/codex/catalog/provider-fetch.ts:670-684`). | `skipped/gather_busy`, retryable; best-effort mutation routes do not become 503 after their primary write, but report retryable skip. |
-| Desired Codex state is OFF | The failed design requires a fresh desired-state check under the shared lock before any native write (`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:250-310,372-423`). | `skipped/desired_off`, not retryable until intent changes; no catalog, cache, or injection write. |
-| Native write lock is occupied | The failed design classifies lock timeout as a no-write result (`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:372-423`). | `skipped/lock_busy`, retryable; no commit and no injection. |
+| Desired Codex state is OFF | The failed design requires a fresh desired-state check under the shared lock before any native write (`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:250-310,372-423`). | `skipped/desired_off`, not retryable until intent changes; no catalog, cache, or injection write. |
+| Native write lock is occupied | The failed design classifies lock timeout as a no-write result (`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:372-423`). | `skipped/lock_busy`, retryable; no commit and no injection. |
 | Candidate revision changed | Gathering reads and merges current on-disk rows before its write (`src/codex/catalog/sync.ts:513-525,430-468`). | `skipped/stale_candidate`, retryable after regather; never commit against changed config/catalog. |
 | No usable catalog source | Current sync returns `catalogWritten:false`, and refresh reports absent without touching cache (`src/codex/catalog/sync.ts:513-515`, `src/codex/refresh.ts:44-52`). | `skipped/catalog_unavailable`; retain current native catalog/injection fallback. |
 | Backup/catalog/cache filesystem failure | Backup errors are currently swallowed, catalog write throws, and cache write is caught as `false` (`src/codex/catalog/sync.ts:527-531,568`, `src/codex/catalog/sync.ts:601-616`). | `failed/disk` with per-write receipt. Do not claim rollback across files; report partial catalog/cache state and let convergence retry. |
@@ -314,11 +314,11 @@ and ordinary disk failure preserve the tested injection fallback and return a
 warning/receipt; desired OFF, native lock busy, or stale locked approval return
 `ok:false` before injection because those mean native writes are not authorized
 (`src/codex/sync.ts:83-129`, `tests/codex-sync-api.test.ts:148-166`,
-`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:372-423`). Explicit
+`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:372-423`). Explicit
 `POST /api/sync` can then map desired OFF to 409, retryable busy to 409/503, and
 non-retryable disk failure to 500 instead of mapping every `ok:false` to 500
 (`src/server/management/config-routes.ts:261-268`,
-`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:396-407`).
+`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:396-407`).
 
 ## 6. Existing tests and contract breakage
 
@@ -386,7 +386,7 @@ another process can change either input
 (`src/codex/catalog/sync.ts:513-526,430-468`). A lock acquired only for commit
 orders writers but does not prove that the candidate was built from the state now
 being overwritten
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:250-310`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:250-310`).
 
 **INFERRED:** the single hardest problem is defining the revision key that makes
 that proof exact without rerunning slow work under the lock. A config-only digest
@@ -425,5 +425,5 @@ The seam is sufficient only when gather can be paused indefinitely with zero
 native write, OFF or a config/catalog revision change can win during that pause,
 and commit either performs the fixed prepared write set or returns a typed no-write
 or partial-write receipt
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:585-597`,
-`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:19-24`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:585-597`,
+`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:19-24`).

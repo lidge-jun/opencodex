@@ -5,13 +5,14 @@ description: 네이티브 ChatGPT 사이드카를 통해 라우팅 모델에 실
 
 라우팅 모델마다 호스팅 **웹 검색**이나 네이티브 **이미지 입력** 지원 범위가 다릅니다. opencodex는
 ChatGPT 로그인(`forward`) 프로바이더나 저장된 Anthropic OAuth 프로바이더를 사용하는 두
-사이드카로 부족한 기능을 보완합니다. 사이드카 오류는 턴 전체를 실패시키지 않고 길이가 제한된 도구
+사이드카로 부족한 기능을 보완하며, 웹 검색은 명시적인 `xai` 백엔드로 저장된 Grok OAuth도 사용할 수
+있습니다. 사이드카 오류는 턴 전체를 실패시키지 않고 길이가 제한된 도구
 결과나 이미지 안내문으로 바뀝니다.
 
 :::note[백엔드 자동 선택]
-`backend`를 명시하면 그 값이 우선합니다. 생략하면 활성 계정이 `needsReauth` 상태가 아닌 Anthropic
-OAuth 프로바이더가 있을 때 `anthropic`, 없을 때 `openai`를 사용합니다. 쓸 수 있는 자격 증명 없이
-`anthropic`을 명시하면 실패 후 중단합니다. `openai`는 ChatGPT 로그인과 활성화된 `forward`
+`backend`를 명시하면 그 값이 우선합니다. 웹 검색은 생략 시 항상 `openai`를 사용하고, 비전은 사용
+가능한 Anthropic OAuth 계정이 있으면 `anthropic`, 없으면 `openai`를 사용합니다. 쓸 수 있는 자격
+증명 없이 `anthropic` 또는 `xai`를 명시하면 폴백 없이 실패합니다. `openai`는 ChatGPT 로그인과 활성화된 `forward`
 프로바이더가 모두 필요합니다.
 :::
 
@@ -24,8 +25,9 @@ Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 �
    노출합니다. 원래 호스팅 도구의 옵션은 사이드카 호출에 그대로 사용합니다.
 2. 라우팅 모델을 작은 **에이전트 루프**에서 실행합니다. 모델이 `web_search`를 호출하면 선택한
    백엔드를 사용합니다. OpenAI는 기본 `gpt-5.6-luna`로 호스팅 `web_search`를 실행하고,
-   Anthropic은 기본 `claude-sonnet-5`로 `web_search_20250305`를 실행합니다. 스트리밍 답변과
-   인용을 파싱한 결과는 도구 결과로 돌려줍니다.
+   Anthropic은 기본 `claude-sonnet-5`로 `web_search_20250305`를 실행합니다. xAI는 기본
+   `grok-4.6`으로 호스팅 `web_search`를 실행하고, `xSearch.enabled`가 true이면 같은 요청에
+   `x_search`를 추가합니다. 스트리밍 답변과 인용을 파싱한 결과는 도구 결과로 돌려줍니다.
 3. 모델이 답하거나 실제 검색 쿼리의 총합이 `maxSearchesPerTurn`(기본값 3)에 도달할 때까지
    **반복**합니다. 한도에 닿으면 검색 도구를 제거하고 최종 답변을 강제합니다. `apply_patch`나 shell
    같은 실제 클라이언트 도구가 나오면 턴을 끝내 해당 호출이 Codex에 전달되게 합니다.

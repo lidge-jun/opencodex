@@ -29,6 +29,7 @@ The relevant no-selector priorities are:
 | --- | ---: | --- |
 | `subagentModels[i]` | `i` (`0` through `4`) | The featured rank map in `src/codex/catalog/sync.ts` |
 | Other routed models | `5` | Routed entry creation in `src/codex/catalog/sync.ts` |
+| Non-featured routed models listed in `modelPickerOrder` | `1000 + i` | Display-only picker rank in `src/codex/catalog/sync.ts` |
 | Native GPT slugs by default | `9` | Native entry creation in `src/codex/catalog/sync.ts` |
 | Unselected native models while a featured list exists | At least `featured.length + 100` | Native catalog merge in `src/codex/catalog/sync.ts` |
 
@@ -108,14 +109,34 @@ have expanded into selector-qualified groups.
 
 ## Changing the order
 
-The supported way to customize leading model order is to reorder `subagentModels`. The dashboard's
-**Sub-agents** page can reorder bare native and routed ids. Use `ocx agent subagents set` or edit the
-opencodex configuration for exact `<selector>/<native-openai-model>` choices; the dashboard does not
-list those choices and omits them if it saves the roster. Use at most five configured ids. With
-account selectors, one bare native choice can expand into multiple selector-qualified catalog rows,
-so configured choices and advertised rows are not necessarily one-to-one.
+Use `subagentModels` to choose and order the leading models that Codex also advertises to
+`spawn_agent`. The dashboard's **Sub-agents** page can reorder bare native and routed ids. Use
+`ocx agent subagents set` or edit the opencodex configuration for exact
+`<selector>/<native-openai-model>` choices; the dashboard does not list those choices and omits them
+if it saves the roster. Use at most five configured ids. With account selectors, one bare native
+choice can expand into multiple selector-qualified catalog rows, so configured choices and
+advertised rows are not necessarily one-to-one.
 
-There is currently no general `modelOrder`, `providerOrder`, or priority-map setting in `OcxConfig`.
-The supported ordering field is `subagentModels`; `disabledModels` and each provider's
-`selectedModels` are visibility fields. Changing the remaining picker order would require a
-code-level behavior change rather than a configuration edit.
+Use `modelPickerOrder` for display-only ordering of routed `<provider>/<model>` rows beyond that
+featured block:
+
+```json
+{
+  "modelPickerOrder": [
+    "tyler/deepseek-v4-pro",
+    "jd-chat/kimi-k3",
+    "jd-chat/glm-5.2"
+  ]
+}
+```
+
+Listed routed rows appear in the configured order. A routed row omitted from the array keeps its
+normal priority, so it remains ahead of the `modelPickerOrder` display band; list every routed row
+whose relative position you want to control. A row also present in `subagentModels` keeps its
+featured priority. Bare native and account-qualified native rows are not reordered by
+`modelPickerOrder`; use `subagentModels` for those rows.
+
+`modelPickerOrder` never changes the `spawn_agent` candidate set. It changes only the
+Codex-visible picker priority while opencodex retains each moved row's natural priority for
+sub-agent selection. `disabledModels` and each provider's `selectedModels` remain visibility fields,
+not ordering controls. There is no separate `modelOrder`, `providerOrder`, or priority-map setting.

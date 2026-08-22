@@ -109,6 +109,51 @@ test("Claude Desktop: applied but not the served profile reads as stale", () => 
     sources({ native: desktopNative, claudeDesktop: { desiredEnabled: true, installed: true, applied: true, stale: false, activeProfile: null } }),
   );
   expect(rowById(unknownProfile, "claudeDesktop").state).toBe("current");
+
+  // Desired OFF with the gateway gone is absent.
+  const desiredOff = buildOverviewRows(
+    sources({
+      native: [{ ...desktopNative[0]!, desiredEnabled: false, state: "absent" }],
+      claudeDesktop: { desiredEnabled: false, installed: true, applied: false, stale: false, activeProfile: false },
+    }),
+  );
+  expect(rowById(desiredOff, "claudeDesktop")).toMatchObject({
+    state: "absent",
+    applied: false,
+    toggleOn: false,
+    detailKey: "integrations.detail.desktopDesiredOff",
+  });
+});
+
+test("Claude Desktop: desired-off with a still-selected gateway is stale cleanup-pending", () => {
+  const desktopNative = [{
+    clientId: "claude-desktop" as const,
+    state: "current" as const,
+    installed: true,
+    configPath: "/tmp/desktop",
+    desiredEnabled: false,
+    disableBlocked: null,
+  }];
+  const leftoverGateway = buildOverviewRows(
+    sources({
+      native: desktopNative,
+      claudeDesktop: {
+        desiredEnabled: false,
+        installed: true,
+        applied: true,
+        stale: false,
+        drift: true,
+        driftReason: "desired_off_gateway_selected",
+        activeProfile: true,
+      },
+    }),
+  );
+  expect(rowById(leftoverGateway, "claudeDesktop")).toMatchObject({
+    state: "stale",
+    applied: true,
+    toggleOn: false,
+    detailKey: "integrations.detail.desktopDesiredOffCleanupPending",
+  });
 });
 
 test("file clients keep their existing badge and applied semantics", () => {
@@ -178,8 +223,11 @@ test("every client counts toward the summary, not just the file clients", () => 
 
 test("an unsettled file list renders unknown rows instead of dropping them", () => {
   const built = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
-  expect(built.rows).toHaveLength(12);
+  expect(built.rows).toHaveLength(15);
   expect(rowById(built, "omp").state).toBe("unknown");
+  expect(rowById(built, "mcode").state).toBe("unknown");
+  expect(rowById(built, "zcode").state).toBe("unknown");
+  expect(rowById(built, "prime").state).toBe("unknown");
   expect(rowById(built, "kimi").state).toBe("unknown");
   expect(rowById(built, "dsh")).toMatchObject({
     hash: "integrations/dsh",

@@ -11,18 +11,19 @@
 const SITE_URL = 'https://opencodex.me';
 
 interface Props {
-	locale?: 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
+	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
 }
 const { locale } = Astro.props;
 
 // Locale path segment (root/English has none) mapped to its BCP-47 tag.
-const langs = { ko: 'ko', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ru: 'ru', ja: 'ja', tr: 'tr' } as const;
+const langs = { fr: 'fr', ko: 'ko', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ru: 'ru', ja: 'ja', tr: 'tr' } as const;
 
 const homeUrl = locale ? `${SITE_URL}/${locale}/` : `${SITE_URL}/`;
 const inLanguage = locale ? langs[locale] : 'en';
 
 const descriptions = {
 	en: 'Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.',
+	fr: 'Proxy universel de fournisseurs pour OpenAI Codex et Claude Code — utilisez n’importe quel LLM avec Codex CLI, App, SDK et Claude Code.',
 	ko: 'OpenAI Codex & Claude Code를 위한 범용 프로바이더 프록시 — Codex CLI, App, SDK와 Claude Code에서 어떤 LLM이든 사용하세요.',
 	'zh-CN': '面向 OpenAI Codex 与 Claude Code 的通用 provider 代理 —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。',
 	'zh-TW': '適用於 OpenAI Codex 與 Claude Code 的通用 provider 代理 —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。',

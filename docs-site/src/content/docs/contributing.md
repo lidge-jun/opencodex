@@ -191,8 +191,9 @@ preset it cannot stand behind. Promote the row to the registry once the evidence
 ## Adding an adapter
 
 Implement `ProviderAdapter` (see [Adapters](/reference/adapters/)) in `src/adapters/`,
-register its name in `src/server/adapter-resolve.ts`, and bridge its output to internal
-`AdapterEvent`s. Reuse `image.ts` for image handling and follow `openai-chat.ts` for ordinary
+register its factory in `src/adapters/registry.ts`, and bridge its output to internal
+`AdapterEvent`s. `src/server/adapter-resolve.ts` selects the effective protocol before delegating
+to the registry. Reuse `image.ts` for image handling and follow `openai-chat.ts` for ordinary
 streaming/tool calls; use `fetchResponse` only when the adapter owns transport retries, or `runTurn`
 for a genuinely bidirectional transport such as Cursor. Add focused tests under `tests/` and export
 the factory from `src/index.ts` when it belongs to the public package API.

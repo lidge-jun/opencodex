@@ -17,7 +17,23 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
+`ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
+server currently offers for each sidecar — the exact filtered set the dashboard picker shows
+(picker-visible rows plus the login-entitled Luna/Haiku auth slots, intersected with executor
+availability for web search, minus provably text-only models for vision). Human-readable lists
+show each model's backend in brackets. A web-search `--model` write resolves that server-offered
+row and persists its backend and model together, so switching to an Anthropic option cannot keep
+an OpenAI backend (or vice versa). Writes go to the same management route as the GUI and are
+subject to the same per-sidecar gate: web search refuses a backend/model pair outside the listed
+set (closed membership), while vision refuses only a model provably unable to see (unknown ids
+stay writable).
+
+```bash
+ocx agent sidecar web --list
+ocx agent sidecar web --model gpt-5.6-luna
+```
+
+### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
 
@@ -28,7 +44,8 @@ Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent s
 | `off` | Disable the `multi_agent_v2` feature and resync the catalog. |
 | `mode v1` | Force all models to v1, disable native v2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
-| `mode v2` | Force all models to v2, enable native v2, and preserve the active thread limit. |
+| `mode v2` | Force models to v2, enable native v2, and preserve the active thread limit. ChatGPT-native models are exempt while `keep-native-v1` is on. |
+| `keep-native-v1 on\|off` | Under `mode v2`, keep ChatGPT-native models on v1 instead of stamping them v2. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
 | `mode-hint <text>` | Set the Proactive delegation hint (Ultra mode) for every model and effort. |
 | `mode-hint --clear` | Remove the hint so the effort-derived policy (ultra = proactive) resumes. |
@@ -168,7 +185,7 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime>`
 
 Print a client config wired to the running proxy. The command serializes the
 `opencodex` provider block — base URL, model list, and the client's credential
@@ -179,7 +196,7 @@ models Codex can currently see.
 
 | Flag | Action |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh>` | Required. Selects the client config dialect. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime>` | Required. Selects the client config dialect. |
 | `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
 | `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
@@ -198,13 +215,16 @@ client applies its own defaults for those).
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
+| `pi` | `~/.pi/agent/models.json` (`PI_CODING_AGENT_DIR` wins when set; a relative value is refused) | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
 | `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE` wins over `PI_PROFILE`, even when empty; named profiles use the home-relative `PI_CONFIG_DIR` directory name and ignore `PI_CODING_AGENT_DIR`, while the default profile lets `PI_CODING_AGENT_DIR` win) | `omp-models.yaml` | none — loopback placeholder |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | none — loopback placeholder |
 | `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 | `dsh` | `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`) | `settings.yaml` | none — non-secret loopback bearer placeholder |
+| `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, then the legacy `MAVIS_DATA_DIR`, win when set; a relative value is refused) | `mcode-config.yaml` | none — loopback placeholder |
+| `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` wins when set; a relative value is refused) | `config.json` | none — loopback placeholder |
+| `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` wins when set; a relative value is refused) | `prime-models.json` | none — loopback placeholder |
 
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
@@ -216,6 +236,13 @@ This is load-bearing because both clients resolve `apiKey` while building their 
 hide the whole provider when an existing config contains an unset env reference. The proxy never
 checks the generated placeholder on loopback. OMP supports provider-level headers, but this initial
 integration deliberately remains loopback-only; remote `x-opencodex-api-key` wiring is deferred.
+
+The MCode, ZCode and Prime exports are loopback-only for the same reason and likewise carry the
+`opencodex-loopback` placeholder rather than a real credential. Prime Agent reads the same
+`models.json` contract Pi does, so the two exports produce the same document; only the destination
+differs. A relative path in any of those three environment overrides is refused, because the proxy
+and the client can have different working directories and would otherwise disagree about which
+file is meant.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by

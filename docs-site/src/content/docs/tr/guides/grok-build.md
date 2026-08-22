@@ -19,7 +19,7 @@ gerekmez.
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... görünür model başına bir [model.ocx-*] tablosu ...
@@ -111,7 +111,7 @@ işaretçilerinin dışına **doğrudan alanlarla** model başına tablolar ekle
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -122,7 +122,7 @@ Ağ üzerinden erişilebilen bir proxy için `base_url`'i `grok`'un gerçekten
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # 127.0.0.1 değil, erişilebilir ana bilgisayar
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "OPENCODEX_API_AUTH_TOKEN_DEGERINIZ"
 ```
 
@@ -137,13 +137,6 @@ adlar bu nedenle noktalardan tamamen kaçınır.
 
 ## Bilinen sınırlamalar
 
-- **Responses arka ucu ve canlı tutmalar (keep-alives):** opencodex, yukarı akış
-  sessizliği sırasında `/v1/responses` akışlarında bir `response.heartbeat`
-  canlı tutma yayar. Grok Build'in Responses kod çözücüsü bilinmeyen olay
-  türlerini reddeder, bu nedenle manuel olarak yapılandırılmış bir `api_backend
-  = "responses"` modeli yavaş yukarı akışlarda tur ortasında başarısız olabilir.
-  Otomatik olarak kaydedilen girdiler, ham kalp atışı çerçevelerini asla
-  göstermeyen `api_backend = "chat_completions"` değerini sabitler.
 - **Servis kurulu `ocx restart`:** çalışan proxy yeniden başlatma
   yetkilendirmesine ve tahliye koordinasyonuna sahiptir, kurulu servis
   yöneticisi ise eski süreç çıktıktan sonra yenisini başlatır. Servis denetimi
@@ -166,5 +159,4 @@ adlar bu nedenle noktalardan tamamen kaçınır.
 - **Katalog güncellemeleri:** çitle çevrili blok, enjeksiyon anındaki kataloğu
   yansıtır. Sağlayıcılar veya modeller ekledikten sonra yenilemek için `ocx
   ensure` çalıştırın (veya proxy'yi yeniden başlatın).
-
 

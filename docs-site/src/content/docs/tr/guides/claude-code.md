@@ -55,7 +55,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:<port>` |
 | `ANTHROPIC_AUTH_TOKEN` | Yalnızca proxy bir API anahtarı gerektirdiğinde — aksi takdirde AYARLANMAZ, böylece claude.ai girişiniz (abonelik + bağlayıcılar) aktif kalır |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1` (yerel `/model` seçici keşfi) |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Otomatik bağlam sıkıştırma eşiği (varsayılan `350000`); yalnızca otomatik bağlam etkinleştirildiğinde enjekte edilir |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Otomatik bağlam sıkıştırma eşiği (varsayılan `829800`); yalnızca otomatik bağlam etkinleştirildiğinde enjekte edilir |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (isteğe bağlı) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (isteğe bağlı; eski `ANTHROPIC_SMALL_FAST_MODEL` da geçerlidir) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (isteğe bağlı) |
@@ -172,8 +172,11 @@ olan kabuklar etkilenmez ve yeniden açılmalıdır.
 `ocx stop` ve proxy'nin kapatılması **enjekte edilen anahtarları kaldırır**
 (önceki değerleri geri yüklemez — yalnızca opencodex'in enjekte ettiği
 anahtarlar kaldırılır). Proxy ayrıca `~/.opencodex/claude-env.sh` dosyasını
-yazar; `ocx start`, bunu otomatik olarak yükleyen bir `.zshrc` kaynak kancası
-kurar.
+yazar; `ocx start`, bunu otomatik olarak yükleyen `.zshrc` kaynak kancasını
+yalnızca çalıştırılabilir Claude Code CLI `PATH` içinde bulunduğunda kurar.
+Claude Code yoksa veya sistem ortamı entegrasyonu etkin değilse başlangıç işlemi
+ve `ocx ensure`, OpenCodex tarafından eklenen kancayı kaldırır. Claude Desktop ayrı
+bir profil kullanır ve shell kancasının kurulmasını tetiklemez.
 
 Yapılandırmada `claudeCode.systemEnv: false` ile veya GUI anahtarıyla devre dışı
 bırakın. Bu özellik yalnızca macOS içindir; diğer platformlarda `ocx claude`
@@ -287,7 +290,7 @@ Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
    olan modeller, seçici satırlarında ve ortam yuvalarında `[1m]` işaretçisini
    alır.
 2. Görüşmenin bu noktada otomatik olarak özetlenmesi için
-   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (varsayılan `350000`, aralık
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (varsayılan `829800`, aralık
    `100000`–`1000000`) enjekte edilir.
 
 Üç yapılandırma durumu:
@@ -304,7 +307,7 @@ penceresinin üzerine çıkarmak o modeli bozar — sohbet özetleme tetiklenmed
 1M altı yerel Anthropic modelleri hiçbir zaman otomatik olarak işaretlenmez.
 Kendi dışa aktardığınız değerler her zaman kazanır (proxy hangi modellerin
 işaretlenmesinin güvenli olduğuna karar vermek için SİZİN değerinizi kullanır).
-Geçersiz elle düzenlenen yapılandırma değerleri 350k'ya geri döner.
+Geçersiz elle düzenlenen yapılandırma değerleri 829,800'ya geri döner.
 
 ### Geçerli model ortamı (Effective model environment)
 
@@ -604,5 +607,4 @@ modellerde opencodex varsayılan olarak bunu taslakla değiştirir (`blockedSkil
 aracının `model` argümanını değil, `<!-- ocx-route: ... -->` yönergelerini
 kullanır. Yönergenin hedeflenen rotayla eşleştiğinden emin olun. Model yer
 tutucusu olarak `"haiku"` iletin.
-
 

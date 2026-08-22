@@ -5,10 +5,10 @@ import { IconCheck, IconAlert } from "./icons";
 import { IconChevron } from "./icons";
 import { computeSelectMenuStyle } from "./select-position";
 
-export function Switch({ on, onClick, disabled, label }: { on: boolean; onClick: () => void; disabled?: boolean; label?: string }) {
+export function Switch({ on, mixed = false, onClick, disabled, label }: { on: boolean; mixed?: boolean; onClick: () => void; disabled?: boolean; label?: string }) {
   return (
-    <button type="button" className={`switch${on ? " on" : ""}`} onClick={onClick} disabled={disabled}
-      aria-pressed={on} aria-label={label ?? (on ? "enabled" : "disabled")}>
+    <button type="button" className={`switch${on ? " on" : ""}${mixed ? " mixed" : ""}`} onClick={onClick} disabled={disabled}
+      aria-pressed={mixed ? "mixed" : on} aria-label={label ?? (on ? "enabled" : "disabled")}>
       <span className="knob" />
     </button>
   );

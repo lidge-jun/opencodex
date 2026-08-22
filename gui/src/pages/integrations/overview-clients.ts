@@ -107,6 +107,8 @@ export interface ClaudeDesktopPayload {
   observedKind?: string;
   applied?: boolean;
   stale?: boolean;
+  drift?: boolean;
+  driftReason?: string | null;
   activeProfile?: boolean | null;
   appliedAt?: string | null;
 }
@@ -142,6 +144,9 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   kimi: "integrations.tab.kimi",
   gajae: "integrations.tab.gajae",
   dsh: "integrations.tab.dsh",
+  mcode: "integrations.tab.mcode",
+  zcode: "integrations.tab.zcode",
+  prime: "integrations.tab.prime",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */
@@ -302,6 +307,30 @@ function claudeDesktopRow(
     return { ...base, toggle: null, state: "unknown", installed: false, applied: false, detailKey: null };
   }
   const toggleOn = payload.desiredEnabled;
+  // Desired OFF keeps the switch off, but a still-selected gateway is not
+  // "absent": Desktop is still routing through OpenCodex until cleanup lands.
+  if (!toggleOn) {
+    const gatewayStillSelected = payload.applied === true
+      || payload.driftReason === "desired_off_gateway_selected";
+    if (gatewayStillSelected) {
+      return {
+        ...base,
+        state: "stale",
+        installed: payload.installed === true,
+        applied: true,
+        toggleOn: false,
+        detailKey: "integrations.detail.desktopDesiredOffCleanupPending",
+      };
+    }
+    return {
+      ...base,
+      state: "absent",
+      installed: payload.installed === true,
+      applied: false,
+      toggleOn: false,
+      detailKey: "integrations.detail.desktopDesiredOff",
+    };
+  }
   if (payload.applied !== true) {
     return {
       ...base,
@@ -309,7 +338,7 @@ function claudeDesktopRow(
       installed: payload.installed === true,
       applied: false,
       toggleOn,
-      detailKey: toggleOn ? "integrations.detail.desktopDesiredOnNotApplied" : "integrations.detail.desktopDesiredOff",
+      detailKey: "integrations.detail.desktopDesiredOnNotApplied",
     };
   }
   const drifted = payload.stale === true || payload.activeProfile === false;

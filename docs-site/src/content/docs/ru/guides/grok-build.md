@@ -18,7 +18,7 @@ Grok Build — вручную редактировать конфигураци�
 [model.ocx-gpt-5-6-sol]
 model = "gpt-5.6-sol"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
 # ... one [model.ocx-*] table per visible model ...
@@ -83,7 +83,7 @@ admission token, а управляемый блок не может безопа
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://127.0.0.1:10100/v1"
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "opencodex-loopback"
 ```
 
@@ -94,7 +94,7 @@ api_key = "opencodex-loopback"
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
-api_backend = "chat_completions"
+api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ```
 
@@ -107,12 +107,6 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 
 ## Известные ограничения
 
-- **Responses backend и keep-alive:** во время тишины upstream opencodex посылает keep-alive
-  `response.heartbeat` в потоках `/v1/responses`. Декодер Responses в Grok Build отвергает
-  неизвестные типы событий, поэтому вручную настроенная модель с
-  `api_backend = "responses"` может оборваться посреди хода на медленных upstream. Автоматически
-  зарегистрированные записи жёстко используют `api_backend = "chat_completions"`, где сырые
-  heartbeat-кадры никогда не видны.
 - **`ocx restart` при установленной службе:** работающий прокси сам управляет drain и заменой,
   поэтому supervision службы и managed block сохраняются. Команда завершается успешно только после
   того, как на том же порту станет здоровым другой процесс с проверенной идентичностью.

@@ -45,11 +45,11 @@ interface ProviderAdapter {
 - Стримит `delta.content` (текст), `delta.reasoning_content` (thinking) и `delta.tool_calls[]`;
   собирает `usage`.
 - ClinePass использует проверенный на живом API формат шлюза
-  `reasoning: { enabled: true, effort: "low" }` (или `{ enabled: false }`, когда reasoning отключён);
-  в публичной документации API этот формат запроса пока не указан. Адаптер прижимает другие
-  уровни effort к проверенному `low`, принимает reasoning delta из `delta.reasoning_content` или
-  `delta.reasoning`, запрашивает usage потока через `stream_options.include_usage` и читает usage
-  из envelope нестримингового ответа.
+  `reasoning: { enabled: true, effort }` (или `{ enabled: false }`, когда reasoning отключён);
+  в публичной документации API этот формат запроса пока не указан. Адаптер сохраняет запрошенный
+  уровень `low`, `medium`, `high`, `xhigh` или `max`, принимает reasoning delta из
+  `delta.reasoning_content` или `delta.reasoning`, запрашивает usage потока через
+  `stream_options.include_usage` и читает usage из envelope нестримингового ответа.
 
 ## `openai-responses`
 

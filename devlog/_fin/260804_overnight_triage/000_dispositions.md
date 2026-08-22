@@ -96,7 +96,7 @@ exactly one test — the #962 regression — which is what a focused fix looks l
 ## #966 — a fifth design, still falsified
 
 #966 targets #914, which four prior designs already failed at an audit gate
-(`devlog/_plan/260803_transport_attribution/000_plan.md`). It is a genuine
+(`devlog/_fin/260803_transport_attribution/000_plan.md`). It is a genuine
 advance: it uses the real Bun 1.3.14 error labels including both alternating
 ones, it does **not** repeat the hostname-resolution design, and it closes the
 redirect counterexample on the pool Responses and Compact paths with manual

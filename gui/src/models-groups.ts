@@ -23,6 +23,15 @@ export interface ProviderModelGroup<Row> {
   provider: string;
   rows: Row[];
   native: boolean;
+  /**
+   * The provider itself is the Codex-login native passthrough, independent of what its rows
+   * currently look like.
+   *
+   * `native` above answers "is every row native", which flips to false the moment a user adds
+   * one custom model. Card identity — the native badge, the native hint, the sort — has to
+   * survive that, so it keys off this instead.
+   */
+  nativeProviderGroup: boolean;
   liveModels: boolean;
   configuredModels: string[];
   contextWindow?: number;
@@ -58,6 +67,7 @@ export function buildProviderModelGroups<Row extends { provider: string; native?
         provider,
         rows: providerRows,
         native: providerRows.length > 0 && providerRows.every(row => row.native === true),
+        nativeProviderGroup: providerRows.some(row => row.native === true),
         liveModels: configured?.liveModels !== false,
         configuredModels: configured?.models ?? [],
         contextWindow: configured?.contextWindow,
@@ -66,7 +76,7 @@ export function buildProviderModelGroups<Row extends { provider: string; native?
       };
     })
     .sort((a, b) => {
-      if (a.native !== b.native) return a.native ? -1 : 1;
+      if (a.nativeProviderGroup !== b.nativeProviderGroup) return a.nativeProviderGroup ? -1 : 1;
       return a.provider.localeCompare(b.provider);
     });
 }

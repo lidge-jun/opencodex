@@ -6,9 +6,9 @@ for one symlinked default home, and could let a hostile entry in a shared temp
 directory decide where SQLite opened. Its own race test also required an OFF
 setter to wait for an apply and then remove it, but the proposed synchronous API
 never said whether contention waited, timed out, or failed immediately
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:284-303,344-350`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:284-303,344-350`).
 Audit therefore rejected the design as a missing concurrency substrate, not as a
-missing boolean (`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:46-58`).
+missing boolean (`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:46-58`).
 
 This document specifies that substrate boundary. It is research and protocol,
 not an implementation diff.
@@ -198,7 +198,7 @@ The algorithm is:
 The critical operation may `await`; acquisition waiting and the operation itself
 therefore do not stop the server event loop. That is the key difference from the
 failed synchronous proposal, whose wrapped history path could synchronously hold
-for about 10.5 s (`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:25-30`).
+for about 10.5 s (`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:25-30`).
 
 ### Fairness
 
@@ -212,7 +212,7 @@ Fairness is **weak, deadline-bounded, barging allowed**:
 
 The linearization order is the order of successful SQLite transactions, not
 request arrival. The old test phrase “final state follows lock acquisition order”
-remains valid (`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:589-594`);
+remains valid (`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:589-594`);
 “final state follows request arrival order” would be a new and false promise.
 
 ### Stale holder
@@ -253,7 +253,7 @@ is shared. The first user can create that directory with inaccessible ownership,
 and an existing symlink can redirect later lock opens. A requested mode on
 `mkdir` or SQLite create does not repair or authenticate an existing entry. The
 failed design specified only modes, not identity checks
-(`devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md:296-303`).
+(`devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md:296-303`).
 
 The repository uses `tmpdir()` for isolated tests and disposable probes, such as
 the Codex runtime probe (`src/codex/runtime.ts:251-253`), not for a production

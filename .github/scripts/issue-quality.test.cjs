@@ -1379,6 +1379,8 @@ describe("normalisation", () => {
 
   it("strips HTML comments", () => {
     assert.equal(clean("Hello <!-- hidden --> world"), "Hello  world");
+    assert.equal(clean("<!--\nhidden issue text"), "");
+    assert.equal(clean("<!-- hidden -->\nVisible text"), "Visible text");
   });
 
   it("normalises punctuation and capitalisation", () => {
@@ -2090,5 +2092,52 @@ describe("detectAreaLabels", () => {
       labels: ["bug"],
     });
     assert.ok(labels.includes("streaming"), `got ${labels.join(",")}`);
+  });
+});
+
+describe("clean() respects fenced code (regression)", () => {
+  it("keeps section text that follows a comment-like literal in a fence", () => {
+    // A `<!--` inside a code sample is literal text under GFM. Stripping
+    // comments before fences let it run to EOF and swallow the rest of the
+    // section, so a valid issue was rejected as too vague to act on.
+    const goal = [
+      "```html",
+      "<!-- literal unclosed-comment example",
+      "```",
+      "",
+      "The provider catalog fails to load on startup and blocks routing.",
+    ].join("\n");
+
+    assert.ok(clean(goal).includes("provider catalog fails to load"));
+  });
+
+  it("still strips a real HTML comment outside code", () => {
+    assert.equal(clean("<!-- hidden -->").trim(), "");
+  });
+});
+
+describe("code-region scanning is GFM-correct and linear (regression)", () => {
+  it("honors a closing fence longer than its opener", () => {
+    // GFM allows the closing fence to be longer. Requiring an exact-length
+    // match left the block unterminated, so the comment inside it ran to EOF
+    // and swallowed the visible section below.
+    const goal = ["```html", "<!-- literal example", "````", "", "The catalog fails to load."].join("\n");
+    assert.ok(clean(goal).includes("The catalog fails to load."));
+  });
+
+  it("honors a code span containing a line ending", () => {
+    const goal = ["`first", "second`", "", "The catalog fails to load."].join("\n");
+    assert.ok(clean(goal).includes("The catalog fails to load."));
+  });
+
+  it("stays linear on adversarial input", () => {
+    // The previous masker combined a variable-length delimiter capture, a lazy
+    // whole-input scan and a backreference. A 60k-character body took ~10.5s
+    // inside an automation trust boundary anyone can post to.
+    const started = Date.now();
+    clean("```html\n" + "x".repeat(60000) + "\n");
+    clean("`a`".repeat(20000));
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2000, `code-region scan took ${elapsed}ms; expected a linear scan`);
   });
 });

@@ -12,7 +12,7 @@ exit (`src/codex/inject.ts:764-794`, `src/server/management-api.ts:167-194`).
 The incident audit rejected that shape because two 5-second SQLite waits, one
 500 ms synchronous sleep, and row-dependent file work can freeze the listener
 that is meant to keep serving every other client
-(`devlog/_plan/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:25-30`).
+(`devlog/_fin/260803_codex_desktop_toggle/008_audit_synthesis_wp4_r2.md:25-30`).
 
 The invariant for this part is therefore narrower than “history eventually
 converges”: while a Codex history operation is waiting on SQLite or walking
@@ -208,7 +208,7 @@ GUI requirement: render OFF and history convergence as separate facts. A green
 OFF badge cannot imply that routed threads are visible; the previous restore
 result already allows `success: true` while only the message says history failed
 (`src/codex/inject.ts:787-794`,
-`devlog/_plan/260803_codex_desktop_toggle/001_native_restore_thesis.md:92-110`).
+`devlog/_fin/260803_codex_desktop_toggle/001_native_restore_thesis.md:92-110`).
 
 ### B. Move the entire history operation off the event loop
 

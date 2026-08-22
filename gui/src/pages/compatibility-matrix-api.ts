@@ -132,19 +132,14 @@ async function collectPages<T>(
     seen.add(next);
     cursor = next;
   }
-  // The server kept advancing correctly but exceeded the browser-side safety bound.
-  // Preserve the coherent prefix and report truncation separately instead of
-  // misclassifying a legitimate large dataset as a broken pagination contract.
   return { rows, truncated: true };
 }
 
 export async function fetchAllSubjects(apiBase: string, signal: AbortSignal): Promise<CollectedPages<SubjectListItemDto>> {
-  return collectPages(
-    async cursor => {
-      const page = await fetchSubjectPage(apiBase, cursor, signal);
-      return { rows: page.subjects, hasMore: page.hasMore, nextCursor: page.nextCursor };
-    },
-  );
+  return collectPages(async cursor => {
+    const page = await fetchSubjectPage(apiBase, cursor, signal);
+    return { rows: page.subjects, hasMore: page.hasMore, nextCursor: page.nextCursor };
+  });
 }
 
 export async function fetchSubjectDetail(
@@ -181,12 +176,10 @@ async function fetchAllObservations(
   filters: { subjectId: string; layer?: string; suiteId?: string },
   signal: AbortSignal,
 ): Promise<CollectedPages<ObservationDto>> {
-  return collectPages(
-    async cursor => {
-      const page = await fetchObservationsPage(apiBase, filters, cursor, signal);
-      return { rows: page.observations, hasMore: page.hasMore, nextCursor: page.nextCursor };
-    },
-  );
+  return collectPages(async cursor => {
+    const page = await fetchObservationsPage(apiBase, filters, cursor, signal);
+    return { rows: page.observations, hasMore: page.hasMore, nextCursor: page.nextCursor };
+  });
 }
 
 export async function fetchEventById(apiBase: string, eventId: string, signal: AbortSignal): Promise<LabEventDto> {
@@ -248,6 +241,80 @@ export async function fetchPassiveProductionSummary(
   return parsePassiveProductionSummary(raw);
 }
 
+export type CommunityEvidenceSummaryRowDto = {
+  trustClass: "community_untrusted_v1";
+  status: "cryptographically_valid";
+  bundleId: string;
+  publisherKeyId: string;
+  activeRecordCount: number;
+  revokedRecordCount: number;
+};
+
+export type CommunityEvidenceContextDto = {
+  evidence: CommunityEvidenceSummaryRowDto[];
+  trustClass: "community_untrusted_v1";
+  locallyVerified: false;
+};
+
+function hasOnlyKeys(raw: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(raw).every(key => allowedSet.has(key));
+}
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function parseCommunityEvidenceContext(raw: unknown): CommunityEvidenceContextDto | null {
+  if (!isPlainObject(raw)
+    || !hasOnlyKeys(raw, ["evidence", "trustClass", "locallyVerified"])
+    || raw.trustClass !== "community_untrusted_v1"
+    || raw.locallyVerified !== false
+    || !Array.isArray(raw.evidence)
+    || raw.evidence.length > 4096) {
+    return null;
+  }
+  const evidence: CommunityEvidenceSummaryRowDto[] = [];
+  for (const value of raw.evidence) {
+    if (!isPlainObject(value)
+      || !hasOnlyKeys(value, [
+        "trustClass", "status", "bundleId", "publisherKeyId",
+        "activeRecordCount", "revokedRecordCount",
+      ])
+      || value.trustClass !== "community_untrusted_v1"
+      || value.status !== "cryptographically_valid"
+      || !isSha256Hex(value.bundleId)
+      || !isSha256Hex(value.publisherKeyId)
+      || !isNonNegativeInteger(value.activeRecordCount)
+      || !isNonNegativeInteger(value.revokedRecordCount)) {
+      return null;
+    }
+    evidence.push({
+      trustClass: "community_untrusted_v1",
+      status: "cryptographically_valid",
+      bundleId: value.bundleId,
+      publisherKeyId: value.publisherKeyId,
+      activeRecordCount: value.activeRecordCount,
+      revokedRecordCount: value.revokedRecordCount,
+    });
+  }
+  return { evidence, trustClass: "community_untrusted_v1", locallyVerified: false };
+}
+
+export async function fetchCommunityEvidenceContext(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<CommunityEvidenceContextDto> {
+  const raw = await fetchLabJson<unknown>(apiBase, "/api/lab/public/community", signal);
+  const context = parseCommunityEvidenceContext(raw);
+  if (!context) throw invalidResponse();
+  return context;
+}
+
 export type LabPageData = {
   status: LabStatusDto;
   verdicts: VerdictDto[];
@@ -255,6 +322,7 @@ export type LabPageData = {
   subjectsTruncated: boolean;
   hasMore: boolean;
   nextCursor?: string;
+  community: CommunityEvidenceContextDto | null;
 };
 
 export async function fetchLabPageData(
@@ -262,9 +330,15 @@ export async function fetchLabPageData(
   filters: VerdictQueryFilters,
   signal: AbortSignal,
 ): Promise<LabPageData> {
-  const status = await fetchLabStatus(apiBase, signal);
+  const [status, community] = await Promise.all([
+    fetchLabStatus(apiBase, signal),
+    fetchCommunityEvidenceContext(apiBase, signal).catch(error => {
+      if (signal.aborted) throw error;
+      return null;
+    }),
+  ]);
   if (!status.projectionAvailable) {
-    return { status, verdicts: [], subjects: [], subjectsTruncated: false, hasMore: false };
+    return { status, verdicts: [], subjects: [], subjectsTruncated: false, hasMore: false, community };
   }
   const [verdictPage, subjects] = await Promise.all([
     fetchVerdictPage(apiBase, filters, undefined, signal),
@@ -277,6 +351,7 @@ export async function fetchLabPageData(
     subjectsTruncated: subjects.truncated,
     hasMore: verdictPage.hasMore,
     nextCursor: verdictPage.nextCursor,
+    community,
   };
 }
 
@@ -316,7 +391,6 @@ async function mapSettledBounded<TItem, TResult>(
         results.push(await mapper(limited[current]!));
       } catch (error) {
         if (signal.aborted) throw error;
-        // Referenced events/artifacts are optional detail enrichment. Keep successful peers.
       }
     }
   };

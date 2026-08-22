@@ -62,7 +62,7 @@ artı eklenen hesaplar arasında seçim yapar; `"direct"` yalnızca geçerli
 arayan/ana girişi kullanır. API yalnızca yapılandırılmış API anahtarını veya
 anahtar havuzunu kullanır. Yalın bir model veya `openai-apikey/<model>`
 kullanın; rotalar arası kimlik bilgisi geri dönüşü yoktur. API GPT-5.6 satırları
-1.050.000 bağlam / 922.000 maksimum girdi meta verisi taşır ve Pro sanal
+922.000 bağlam / 922.000 maksimum girdi meta verisi taşır ve Pro sanal
 kimlikleri `reasoning.mode: "pro"` ile temel hat modeline yeniden yazılır.
 
 `openaiProviderTierVersion: 2`, geçerli tek sağlayıcılı projeksiyonu işaretler.
@@ -105,6 +105,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Özetlerin bildirilmesini durdurmak ve özet teslim alanlarını kaldırmak için bir modeli `false` olarak ayarlayın. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Model başına Responses teslim enum'ı; mevcut bir teslim alanını yeniden yazar. |
 | `modelAdapters?` | `Record<string, string>` | Karışık hatlı ağ geçitleri için model başına `openai-chat` veya `openai-responses` hat geçersiz kılma. Açık girdiler kayıt defteri varsayılanlarını yener. OpenCode Go önayarı, kardeş modelleri belgelenmiş hatlarında bırakırken `gpt-5.6-luna` için Responses'ı seçer; DeepSeek, `deepseek-v4-flash` için yerel Responses seçebilir; ve GitHub Copilot, GPT-5 ailesi (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) için yalnızca Responses varsayılanlarını bildirir çünkü bu modeller ajan trafiği için `/chat/completions`'ı reddeder. Yerleşik varsayılanı olmayan modeller (örneğin `gpt-5.4-nano`) burada dahil edilebilir. Tek hatlı yukarı akış pinleri ve kurallı ChatGPT iletme geçersiz kılmaları reddeder. |
+| xAI Responses katılımı (panel) | anahtar | Yalnızca `xai` için `grok-4.5` ve `grok-4.6` `modelAdapters` girdilerini atomik olarak ayarlar veya temizler. Tek girdi, sonraki anahtar yazımı ikisini eşitleyene kadar karma durum olarak görünür. Diğer geçersiz kılmalar ve katman davranışı değişmez. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Barındırılan bir araç ad alanı ayıran iletme harici Responses ağ geçitleri için tam model dahil etme. Şu anda yalnızca `["image_generation"]` kabul eder; eşleşen bir model `openai-responses` hattını kullanmalı ve bu barındırılan aracı desteklemelidir. Çakışan istemci `image_gen` bildirimlerini kaldırır ve arayan araç seçimini korumak için seçicilerini yeniden yazar. OpenAI API sanal `-pro` modelleri için önce seçilen genel kimlik eşleştirilir ve çözümlenen temel hat model kimliği bir geri dönüştür. `modelAdapters` önce genel kimliği, ardından temel kimliği çözer; ikinci çözümleme son hattı belirler. Diğer modeller normal takma ad davranışını korur. |
 | `reasoningEffortMap?` | `Record<string, string>` | Akıl yürütme etiketleri için sağlayıcı genelinde hat takma adları. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Akıl yürütme etiketleri için model başına hat takma adları. |
@@ -422,9 +423,9 @@ paneli daha sonraki izin listesi değişiklikleri için keşfedilen tam listeyi
 korur.
 
 Önizleme GPT-5.6 geri dönüş girdileri aynı mekanizmayı kullanır. OpenAI API
-anahtarı önayarı temel ve Pro kimliklerini `1050000` bağlam ve `922000` maksimum
+anahtarı önayarı temel ve Pro kimliklerini `922000` bağlam ve `922000` maksimum
 girdi ile tohumlar; OpenRouter `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra` ve
-`openai/gpt-5.6-luna`'yı `1050000` bağlam ile tohumlar. Pool/Direct `372000`
+`openai/gpt-5.6-luna`'yı `922000` bağlam ile tohumlar. Pool/Direct `922000`
 bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
 
 ```json
@@ -478,5 +479,4 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
-
 

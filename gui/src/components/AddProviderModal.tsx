@@ -87,6 +87,7 @@ export default function AddProviderModal({
       if (!res.ok) throw new Error(String(res.status));
       return await res.json() as { providers?: Array<{ provider: string; requests: number }> };
     },
+    { deadlineMs: 60_000 }, // shared usage-summary key: all four subscribers raise the deadline together
   );
 
   const oauthSupported = oauthPoll.data ?? [];

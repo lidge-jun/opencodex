@@ -62,7 +62,7 @@ subagent-fallback chain has nowhere to await, so an `await` added before the
 activation block would silently reroute subagents to a different model than the
 operator configured.
 
-Design and audit history: `devlog/_plan/260814_lab_core_decoupling/`.
+Design and audit history: `devlog/_fin/260814_lab_core_decoupling/`.
 
 ## The `devlog` directory
 

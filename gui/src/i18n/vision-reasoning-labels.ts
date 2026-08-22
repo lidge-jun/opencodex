@@ -5,6 +5,7 @@ export type VisionReasoningLabelLevel = "low" | "medium" | "high" | "xhigh" | "m
 const VISION_REASONING_LABELS = {
   en: { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" },
   de: { low: "Niedrig", medium: "Mittel", high: "Hoch", xhigh: "Sehr hoch", max: "Maximum" },
+  fr: { low: "Faible", medium: "Moyen", high: "Élevé", xhigh: "Très élevé", max: "Maximum" },
   ko: { low: "낮음", medium: "보통", high: "높음", xhigh: "매우 높음", max: "최대" },
   zh: { low: "低", medium: "中", high: "高", xhigh: "极高", max: "最大" },
   "zh-TW": { low: "低", medium: "中", high: "高", xhigh: "極高", max: "最大" },

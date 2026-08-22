@@ -53,7 +53,12 @@ devlog/**/security-advisory-draft*
 .worktrees/
 
 # Test-generated artifacts
-tests/.tmp-*/
+# Trailing slash matched directories only, but the same tests also leave plain
+# files behind when a run dies mid-write -- and on Windows those can stay locked
+# by an exiting child, so they cannot simply be deleted. An unignorable leftover
+# blocks the release preflight's clean-tree check for work that has nothing to do
+# with it, so ignore both shapes.
+tests/.tmp-*
 .claude/
 
 # Retired Go native-runtime experiment. `go/` is not part of the build, the

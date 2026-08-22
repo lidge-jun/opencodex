@@ -27,7 +27,7 @@ description: 控制 Codex 如何在所有模型上生成和管理子代理。
 
 - **v1** 会把所有模型的 `multi_agent_version` 设为 `"v1"`。
 - **base** 会恢复上游固定值。未固定的条目会遵循原生 `multi_agent_v2` 功能开关。
-- **v2** 会把所有模型的 `multi_agent_version` 设为 `"v2"`。
+- **v2** 会把所有模型的 `multi_agent_version` 设为 `"v2"`；但启用 **让 ChatGPT 保持 v1** 时例外：ChatGPT 原生条目保持 `"v1"`，路由/组合条目仍为 `"v2"`。
 
 opencodex 会把这一点作为最后一步同时应用到实时的 `/v1/models` 目录和同步到磁盘的目录。因此，模式更改会一致影响新建的 App、CLI 和 TUI 会话。
 

@@ -27,7 +27,7 @@ native-строки в picker, не удаляя сопоставления и �
 `<selector>/<native-openai-model>`.
 
 У строк API
-GPT-5.6 — контекст 1,050,000 и максимум входа 922,000; id picker'а вида `*-pro` разрешаются в
+GPT-5.6 — контекст 922,000 и максимум входа 922,000; id picker'а вида `*-pro` разрешаются в
 базовую wire-модель с `reasoning.mode: "pro"`, а логи, usage и picker state сохраняют виртуальный
 id. Каталог API жёстко ограничен ровно восемью id: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna и тремя
 виртуальными Pro-id; обобщённого alias `gpt-5.6-pro` не существует. Compact-запросы сохраняют
@@ -85,10 +85,10 @@ per-model identity и метаданные вместо приближения �
 
 | Маршрут | Id в селекторе и метаданные каталога |
 | --- | --- |
-| Вход Codex (строки с указанием аккаунта выключены) | Bare native-id, например `gpt-5.6-sol`, `gpt-5.6-terra` и `gpt-5.6-luna`; Pool или Direct выбирается через `codexAccountMode`. У строк GPT-5.6 окно каталога 372 000 токенов. |
+| Вход Codex (строки с указанием аккаунта выключены) | Bare native-id, например `gpt-5.6-sol`, `gpt-5.6-terra` и `gpt-5.6-luna`; Pool или Direct выбирается через `codexAccountMode`. У строк GPT-5.6 окно каталога 922 000 токенов. |
 | Вход Codex (строки с указанием аккаунта включены и есть подходящие селекторы) | По одной строке `<selector>/<native-openai-model>` для каждой пары подходящего селектора и поддерживаемой нативной модели; каждая строка использует только сопоставленный аккаунт, а bare native-строки скрыты из picker'а. Нативные метаданные и окна контекста сохраняются. |
-| OpenAI (API key) | Ровно восемь namespaced-строк: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna и три виртуальных id `*-pro` (контекст 1,050,000; максимум входа 922,000 у всех восьми) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
+| OpenAI (API key) | Ровно восемь namespaced-строк: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna и три виртуальных id `*-pro` (контекст 922,000; максимум входа 922,000 у всех восьми) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922,000) |
 | Cursor | Статический fallback включает `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` и `cursor/gpt-5.6-luna` (1,000,000), а также обычные/Fast-строки Grok 4.5 и 4.6 (500,000). Для 4.6 доступен ещё `xhigh`; какие строки останутся видимыми, решает live-discovery аккаунта. |
 | xAI | Live-discovery авторитетно. Fallback-каталог включает `xai/grok-4.6`, а моделью по умолчанию остаётся `xai/grok-4.5`; у обеих окно 500,000 токенов. Grok 4.6 поддерживает `low` / `medium` / `high` / `xhigh` (upstream-default: `high`), а Grok 4.5 — только до `high`. |
 

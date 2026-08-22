@@ -31,7 +31,7 @@ function unwrapSingleEnclosingFence(text) {
  */
 function normalizeRawSectionValue(raw) {
   if (typeof raw !== "string") return null;
-  let value = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+  let value = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "").trim();
   if (!value) return null;
 
   // A lone fenced block whose entire body is a stand-in is still a stand-in
@@ -179,7 +179,7 @@ function stripHtmlMedia(text) {
   if (typeof text !== "string") return "";
   let s = text
     .replace(/<img\b[^>]*>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ");
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
 
   // Whole media blocks: replace only when the inner content is not
   // substantive text (no word characters outside tags).
@@ -422,9 +422,126 @@ function isMediaOnly(text) {
 /**
  * Strip HTML comments, placeholder-only values, and trim whitespace.
  */
+function stripHtmlCommentsOutsideCode(raw) {
+  const text = String(raw);
+  // Linear scanner, deliberately not a regex. The previous masker combined a
+  // variable-length delimiter capture, a lazy whole-input scan and a
+  // backreference, which backtracks catastrophically on adversarial input: a
+  // 60k-character issue body took ~10.5s, inside an automation trust boundary
+  // that anyone can post to. This walks the string once.
+  //
+  // It also fixes two GFM cases the regex got wrong: a closing fence may be
+  // LONGER than its opener, and a code span may contain a line ending.
+  let out = "";
+  let i = 0;
+  let atLineStart = true;
+
+  const lineEnd = (from) => {
+    const nl = text.indexOf("\n", from);
+    return nl === -1 ? text.length : nl;
+  };
+
+  while (i < text.length) {
+    const ch = text[i];
+
+    // Fenced block: at most three leading spaces, then >= 3 backticks or tildes.
+    if (atLineStart && (ch === "`" || ch === "~" || ch === " " || ch === "\t")) {
+      let j = i;
+      let indent = 0;
+      while (j < text.length && (text[j] === " " || text[j] === "\t") && indent < 4) { j++; indent++; }
+      const marker = text[j];
+      if (indent < 4 && (marker === "`" || marker === "~")) {
+        let run = 0;
+        while (text[j + run] === marker) run++;
+        if (run >= 3) {
+          // Copy the opening line verbatim, then everything up to a closing
+          // fence of the SAME character and AT LEAST the same length.
+          // `cursor` is the index of the newline ending the current line, so the
+          // next line starts at cursor + 1.
+          let cursor = lineEnd(j + run);
+          let closed = false;
+          while (cursor < text.length) {
+            const start = cursor + 1;
+            let p = start;
+            let ind = 0;
+            while (p < text.length && (text[p] === " " || text[p] === "\t") && ind < 4) { p++; ind++; }
+            let closeRun = 0;
+            while (text[p + closeRun] === marker) closeRun++;
+            const after = p + closeRun;
+            const rest = text.slice(after, lineEnd(after));
+            if (ind < 4 && closeRun >= run && rest.trim() === "") {
+              const end = lineEnd(after);
+              out += text.slice(i, end);
+              i = end;
+              closed = true;
+              break;
+            }
+            const next = lineEnd(start);
+            if (next <= cursor) break;
+            cursor = next;
+          }
+          if (closed) { atLineStart = true; continue; }
+          // Unclosed fence runs to end of input, per GFM.
+          out += text.slice(i);
+          return out;
+        }
+      }
+    }
+
+    // Inline code span: a run of N backticks closed by the next run of exactly N.
+    if (ch === "`") {
+      let run = 0;
+      while (text[i + run] === "`") run++;
+      let p = i + run;
+      let close = -1;
+      while (p < text.length) {
+        if (text[p] === "`") {
+          let r = 0;
+          while (text[p + r] === "`") r++;
+          if (r === run) { close = p + r; break; }
+          p += r;
+          continue;
+        }
+        p++;
+      }
+      if (close !== -1) {
+        out += text.slice(i, close);
+        atLineStart = false;
+        i = close;
+        continue;
+      }
+    }
+
+    // HTML comment outside any code region. An unclosed one runs to EOF.
+    if (ch === "<" && text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      if (end === -1) return out;
+      i = end + 3;
+      continue;
+    }
+
+    out += ch;
+    atLineStart = ch === "\n";
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Strip HTML comments, placeholder-only values, and trim whitespace.
+ */
+/**
+ * Strip HTML comments, placeholder-only values, and trim whitespace.
+ */
 function clean(raw) {
   if (typeof raw !== "string") return "";
-  let s = raw.replace(/<!--[\s\S]*?-->/g, "");
+  // Comment stripping must not reach inside fenced code. GFM treats fence
+  // contents as literal text, so a `<!--` in a code sample never opens a
+  // comment; letting an unclosed one run through EOF swallowed the rest of the
+  // section and rejected valid issues as "too vague to act on". Fence contents
+  // are preserved, not deleted -- they are legitimate reproduction evidence
+  // that emptiness and duplicate detection still need to see.
+  let s = stripHtmlCommentsOutsideCode(raw);
   // Media-only sections (a lone screenshot or embed) carry no reportable
   // text. Strip the media tokens so the section participates in emptiness and
   // duplicate detection like any other blank section. This closes the

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { buildManualEnv } from "../src/pages/claude-manual-env";
 
-const LOCALES = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW"] as const;
+const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "zh", "zh-TW"] as const;
 
 async function read(path: string): Promise<string> {
   return Bun.file(new URL(path, import.meta.url)).text();

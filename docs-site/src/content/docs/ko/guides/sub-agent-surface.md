@@ -27,7 +27,7 @@ description: Codex가 모든 모델에서 서브에이전트를 생성하고 관
 
 - **v1**은 모든 모델에 `multi_agent_version = "v1"`을 설정합니다.
 - **base**는 업스트림 핀을 복원합니다. 핀이 없는 항목은 기본 `multi_agent_v2` 기능 플래그를 따릅니다.
-- **v2**는 모든 모델에 `multi_agent_version = "v2"`를 설정합니다.
+- **v2**는 모든 모델에 `multi_agent_version = "v2"`를 설정합니다. 단 **ChatGPT를 v1로 유지**를 켜면 예외입니다: ChatGPT 네이티브 항목은 `"v1"`로 남고, 라우팅/콤보 항목은 `"v2"`가 됩니다.
 
 opencodex는 이 값을 Codex가 읽는 실시간 `/v1/models` 카탈로그와 디스크에 동기화된 카탈로그 모두에 마지막 단계로 적용합니다. 그래서 모드를 바꾸면 새로 만들어지는 App, CLI, TUI 세션에 일관되게 반영됩니다.
 

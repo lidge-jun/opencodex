@@ -13,6 +13,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `port` | `number` | `10100` | 代理监听端口。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
 | `proxy?` | `string` | — | 出站 HTTP(S) 代理 URL，或 `${ENV_VAR}`。仅当 `HTTP_PROXY` / `HTTPS_PROXY` 未设置时才会应用；回环地址始终保留在 `NO_PROXY` 中。 |
+| `emptyCompletionRetry?` | `boolean` | `false` | 显式启用：当 Responses 完成时既无文本也无工具调用，使用相同请求重试一次。重试可能产生费用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不修改配置的情况下禁用；combo 与 routed-compaction turn 不参与。 |
 | `stallTimeoutSec?` | `number` | `300` | 在上游没有数据之前可等待的秒数，超过后返回 `response.incomplete`。最小值为 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次尝试的 DNS/TCP/TLS/最终响应头截止时间；它在正文生成之前结束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 优雅停机截止时间，超过后会中止仍在进行中的请求。 |
@@ -144,15 +145,17 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 在可用时启用 | 总开关。 |
-| `backend?` | `"openai" \| "anthropic"` | auto | 显式优先；否则若可用的 Anthropic OAuth 存储凭据存在则选择 `anthropic`，否则选择 `openai`。 |
-| `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.6-luna`，Anthropic 使用 `claude-sonnet-5`。旧的显式 `gpt-5.4-mini` 会在启动时迁移。 |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 显式配置优先；省略时始终使用 `openai`。`anthropic` 和 `xai` 仅在显式配置时运行；`gemini` 和 `exa` 在 executor 发布前仍为保留值。 |
+| `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.6-luna`，Anthropic 使用 `claude-sonnet-5`，xAI 使用 `grok-4.6`。旧的显式 `gpt-5.4-mini` 会在启动时迁移。 |
+| `exaApiKey?` | `string` | 无 | `exa` 后端的操作员密钥。仅可写入：管理读取绝不会返回已存储的值。 |
+| `xSearch?` | `object` | 省略 | xAI 专用的托管 `x_search` opt-in：`enabled`、互斥的 `allowedXHandles` / `excludedXHandles` 数组（最多 20 项），以及 ISO `fromDate` / `toDate`（`YYYY-MM-DD`）。 |
 | `reasoning?` | `string` | `low` | 侧车努力级别。`minimal` 与 web search 不兼容，会被拒绝。 |
 | `maxSearchesPerTurn?` | `number` | `3` | 每个主模型轮次允许的实际搜索次数。 |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | 仅限配置文件的 routed-model 原始正文不活动截止时间。整数范围 1–2147483647；每个非空数据块都会重置它。 |
 | `timeoutMs?` | `number` | `60000` | 单次托管搜索的截止时间。 |
 
 OpenAI 后端要求已登录 ChatGPT，并启用了 ChatGPT `forward` 提供方。来自 Claude 的入站
-routed 重放会把主 ChatGPT 认证注入内部请求。Anthropic 后端使用的是来自已启用 Anthropic OAuth 提供方的当前保存凭据。如果显式选择了 Anthropic 后端但没有可用账户，则会失败并关闭，而不会回退。Anthropic 执行器使用其原生的 `web_search_20250305` 工具。
+routed 重放会把主 ChatGPT 认证注入内部请求。Anthropic 后端使用的是来自已启用 Anthropic OAuth 提供方的当前保存凭据。如果显式选择了 Anthropic 后端但没有可用账户，则会失败并关闭，而不会回退。Anthropic 执行器使用其原生的 `web_search_20250305` 工具。xAI 后端要求有可用的已存储 Grok OAuth 账户，使用托管 `web_search`，并在 `xSearch.enabled` 为 true 时添加托管 `x_search`。格式错误的 `xSearch` 管理输入会返回 `400`；格式错误的持久化块会在规划期间失败并关闭。`gemini` 和 `exa` 通道绝不会因凭据发现或回退而激活；操作员必须显式选择它们。`exaApiKey` 可在写入时接受，但会从管理响应中省略。
 
 搜索由四个时钟共同约束：基础 `stallTimeoutSec`、`connectTimeoutMs`、routed-model 不活动超时，以及
 托管搜索超时。有效的桥接看门狗是最大值再加 30 秒。routed stall 是不活动保护，而不是总生成截止时间。
@@ -162,7 +165,7 @@ routed 重放会把主 ChatGPT 认证注入内部请求。Anthropic 后端使用
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 在可用时启用 | 图像描述总开关。 |
-| `backend?` | `"openai" \| "anthropic"` | auto | 与 web search 相同的显式优先、感知 Anthropic 凭据的选择方式。 |
+| `backend?` | `"openai" \| "anthropic"` | auto | 显式值优先；未设置时优先使用可用的已保存 Anthropic OAuth 凭据，否则使用 `openai`。 |
 | `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.4-mini`，Anthropic 使用 `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 推理强度；Anthropic 会忽略该项。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每个主轮次允许的新增描述缓存未命中次数。`0` 会禁用调用；无效值会使用默认值。 |

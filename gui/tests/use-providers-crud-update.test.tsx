@@ -3,7 +3,7 @@ import { act, useEffect, useRef, useState } from "react";
 import type { Root } from "react-dom/client";
 import { Window } from "happy-dom";
 import { useProvidersCrud } from "../src/pages/use-providers-crud";
-import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
+import type { ProviderUpdatePatch, ProviderUpdateResult } from "../src/components/provider-workspace/types";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 const originalFetch = globalThis.fetch;
@@ -57,6 +57,22 @@ test("updateProvider awaits fetchConfig before returning success", async () => {
   });
   expect(settled).toEqual({ ok: true });
 
+  await act(async () => { root.unmount(); });
+});
+
+test("updateProvider returns the xAI opt-in effective state echoed by PATCH", async () => {
+  globalThis.fetch = (async () => Response.json({
+    success: true,
+    xaiResponsesOptInState: "mixed",
+  })) as typeof fetch;
+  const { root, updateProvider } = await mountCrud();
+
+  let result: ProviderUpdateResult | undefined;
+  await act(async () => {
+    result = await updateProvider("xai", { xaiResponsesOptIn: true });
+  });
+
+  expect(result).toEqual({ ok: true, xaiResponsesOptInState: "mixed" });
   await act(async () => { root.unmount(); });
 });
 

@@ -100,4 +100,4 @@ regression from this unit:
   `panic(thread 8988): Internal assertion failure` / `oh no: Bun has crashed`.
 
 That belongs to the open Windows Bun stability work
-(`devlog/_plan/260731_windows_bun_stability/`), not here.
+(`devlog/_fin/260731_windows_bun_stability/`), not here.

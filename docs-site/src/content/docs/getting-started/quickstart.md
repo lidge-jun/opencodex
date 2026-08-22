@@ -29,7 +29,7 @@ The result is saved to `$OPENCODEX_HOME/config.json` (default `~/.opencodex/conf
 The current stable release seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key,
 OpenRouter, and
 the experimental Cursor adapter. They work only when that upstream account has access. The OpenAI
-API-key and OpenRouter presets advertise a 372,000-token usable context window; Cursor keeps its own
+API-key and OpenRouter presets advertise a 922,000-token usable context window; Cursor keeps its own
 adapter metadata.
 :::
 

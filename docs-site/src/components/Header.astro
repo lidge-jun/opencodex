@@ -19,12 +19,47 @@ const prefix = locale ? `${base}${locale}/` : base;
 type NavLink = { label: string; href: string };
 type NavGroup = { label: string; links: NavLink[] };
 
-const t = (en: string, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string) =>
-	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+const fr = {
+	'Auto': 'Automatique',
+	'Light': 'Clair',
+	'Dark': 'Sombre',
+	'Theme': 'Thème',
+	'Click to use the next theme': 'Cliquez pour passer au thème suivant',
+	'Getting Started': 'Démarrage',
+	'Installation': 'Installation',
+	'Quickstart': 'Démarrage rapide',
+	'How It Works': 'Fonctionnement',
+	'Agent Quickstart': 'Démarrage rapide pour les agents',
+	'Guides': 'Guides',
+	'Providers': 'Fournisseurs',
+	'Model Routing': 'Routage des modèles',
+	'Combos': 'Combinaisons',
+	'Codex Integration': 'Intégration de Codex',
+	'Codex App Model Picker': 'Sélecteur de modèles de Codex App',
+	'Sidecars: Search & Vision': 'Services auxiliaires : recherche et vision',
+	'Image Bridge': 'Pont d’images',
+	'Video Bridge': 'Pont vidéo',
+	'Web Dashboard': 'Tableau de bord web',
+	'Sub-agent Surface': 'Interface des sous-agents',
+	'Reference': 'Référence',
+	'Configuration': 'Configuration',
+	'Adapters': 'Adaptateurs',
+	'Architecture': 'Architecture',
+	'Proxy API Formats': 'Formats de l’API proxy',
+	'Management API': 'API de gestion',
+	'Contributing': 'Contribuer',
+	'Main': 'Navigation principale',
+	'Select language': 'Choisir la langue',
+	'Menu': 'Menu',
+} as const;
 
-type LanguageOption = { code: 'root' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr'; label: string };
+const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
+	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+
+type LanguageOption = { code: 'root' | 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr'; label: string };
 const languages: LanguageOption[] = [
 	{ code: 'root', label: 'English' },
+	{ code: 'fr', label: 'Français' },
 	{ code: 'ko', label: '한국어' },
 	{ code: 'zh-cn', label: '简体中文' },
 	{ code: 'zh-tw', label: '繁體中文' },

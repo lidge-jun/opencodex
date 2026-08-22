@@ -115,11 +115,94 @@ preserving a stale one would block every later migration.
   `daybreak-blue-latest` are distinct wire surfaces. An observed native row follows the pinned Sol
   capability metadata, but routing strips only the account selector and keeps
   `gpt-daybreak-blue-latest` byte-for-byte; it never expands the bare list or substitutes Sol.
-- API GPT-5.6 rows use 1,050,000 context tokens and 922,000 max input tokens. Codex-login rows keep
-  the native 372,000-token contract.
+- Account-gated native rows use each account's authenticated Codex `/models` roster as the
+  availability authority. Pool selection excludes accounts whose confirmed roster omits the model;
+  selector rows are generated only for the mapped entitled account. The bare row uses any eligible
+  account in Pool mode but only main-account evidence in Direct mode; a Direct turn independently
+  checks the forwarded caller credential, or stored main when an admission bearer is substituted.
+  Discovery failures fail closed. If an
+  entitled account still receives the exact pre-stream unsupported-model 400, opencodex invalidates
+  that account's roster and permits at most seven additional same-account sends, re-confirming the
+  exact rejection and fresh grant before each later send; otherwise ordinary eligible-account
+  failover applies.
+
+- `gpt-daybreak-blue-latest` remains the catalog and entitlement identity, but the canonical
+  ChatGPT wire uses `gpt-5.6-sol`, the serving id reported by successful Daybreak responses.
+  Daybreak compaction uses the existing synthetic `/responses` compaction path instead of the
+  native `/responses/compact` endpoint, whose model support is selector-specific. The internal
+  turn stays streaming as required by the canonical ChatGPT backend, and OCX returns the opaque
+  encrypted compaction item without attempting to decrypt or re-encode it.
+  The optional `prompt_cache_retention` hint is removed on this route because Daybreak's
+  authenticated catalog does not advertise it and upstream rejects it before execution.
+
+[Decision Log]
+- 목적과 의도: Preserve the account-gated Daybreak UX while avoiding shard-dependent selector
+  rejection and the unsupported prompt-cache retention parameter.
+- 기존 구현 및 제약 조건: The authenticated roster grants Daybreak, but live successful
+  responses report `gpt-5.6-sol`; the selector can still fail eight consecutive times.
+- 검토한 주요 대안: Increase retries indefinitely, hide Daybreak entirely, or canonicalize only
+  the credential-bearing wire model after entitlement selection.
+- 선택한 방식: Keep Daybreak for visibility and account authorization, then send the stable
+  serving id and remove only the unsupported optional retention hint.
+- 다른 대안 대신 이 방식을 선택한 이유: It keeps fail-closed entitlement checks and avoids
+  unbounded duplicate requests while preserving the user-facing model choice.
+- 장점, 단점 및 영향: Requests become deterministic and cheaper; this relies on the serving id
+  observed from successful upstream responses and must be revisited if the roster exposes a
+  first-class wire id later.
+
+[Decision Log]
+- 목적과 의도: Prevent account-gated native models from being shown or dispatched through a
+  ChatGPT account that upstream does not authorize.
+- 기존 구현 및 제약 조건: A static global Daybreak row solved clean-install discovery for
+  entitled accounts, but Pool accounts can hold different grants and Codex's injected catalog does
+  not refresh itself.
+- 검토한 주요 대안: Infer grants from plan labels, learn only from prompt failures, bind Daybreak
+  permanently to main, or rewrite the wire id to `gpt-5.6-sol`.
+- 선택한 방식: Share bounded authenticated per-account model-roster evidence between catalog sync,
+  `/v1/models`, and Pool auth selection.
+- 다른 대안 대신 이 방식을 선택한 이유: Plan labels and account position do not prove a grant;
+  failure-only learning wastes a turn; permanent main binding rejects valid secondary grants; wire
+  rewriting changes the requested product identity.
+- 장점, 단점 및 영향: Entitled accounts retain clean-install discovery while unentitled accounts
+  never receive the gated dispatch. A cold gated request may pay one bounded roster fetch per
+  account, and an unavailable discovery temporarily hides the model rather than guessing.
+- The two GPT-5.6 surfaces advertise different windows on purpose. API rows use 1,050,000
+  context with 922,000 max input. Codex-login rows default to the live catalog 272,000
+  (auto-compact 244,800) and only rise to 922,000 / 829,800 when the user turns the 1M
+  switch on.
+
+  The ceiling is the same on both — probing a real Codex-login account accepted 921,508 input
+  tokens and refused 922,013 with `context_length_exceeded` on Sol, Terra and Luna alike,
+  matching the 922,000 the API surface already declared. A Codex-login `context_window` is a
+  spending budget, not a label: Codex fills `context_window * effective_context_window_percent`
+  (95% by default, codex-rs `turn_context.rs`). Advertising 1,050,000 there spent 997,500 and
+  blew past the ceiling. The 922,000 opt-in yields a 875,900-token budget and keeps ~46k of
+  headroom. Evidence: `devlog/_plan/260817_native_gpt56_1m_context/001_measurement_evidence.md`
+  and `014_final_922k_with_margin.md`.
 - `*-pro` selected ids rewrite to the base wire id with `reasoning.mode: "pro"`; request logs,
   usage, model visibility, subagent state, and injection state retain the selected virtual id.
 - Compact preserves provider/selected identity but sends the base model without a reasoning object.
+
+## Process-local affinity diagnostics
+
+Provider debug capture includes one `[ocx:codex:affinity]` record for each canonical ChatGPT
+forward response before account-model retry selection. The record compares only an explicit safe
+header-name allowlist. Values are represented by size buckets and 12-character HMAC equality tags
+under a random process-local key; raw credentials, account ids, attestation values, thread/session
+ids, turn metadata, and request bodies never enter the record. Known top-level turn-metadata fields
+use the same process-local tags, while unknown fields contribute only a count. Oversized values are
+classified without hashing. The diagnostic is observational: it cannot strip headers, retry,
+switch accounts, reset threads, or mutate affinity.
+
+```text
+[Decision Log]
+- 목적과 의도: Identify which combined Codex affinity values survive a Plus-to-K12 credential substitution without collecting private thread or account data.
+- 기존 구현 및 제약 조건: Pool auth intentionally copies the curated caller metadata and replaces only authorization plus chatgpt-account-id. Individual header probes did not reproduce the workspace denial, while raw captures would expose account-bound identifiers.
+- 검토한 주요 대안: Delete all affinity metadata; log raw values; persist ordinary hashes; perform automatic header-ablation retries; or emit process-local keyed equality evidence only when provider debug is enabled.
+- 선택한 방식: Emit bounded pre-stream diagnostics with a random per-process HMAC key, a fixed non-credential header allowlist, known turn-field summaries, and no request mutation.
+- 다른 대안 대신 이 방식을 선택한 이유: Equality across two requests in one run is enough to narrow the incompatible combination; process-local HMACs prevent durable correlation and make offline guessing useless, while observation-only capture cannot change production semantics.
+- 장점, 단점 및 영향: Maintainers can compare a Plus success and exact-K12 denial safely. Tags cannot be compared across restarts, and the diagnostic does not itself identify an upstream policy rule or fix the rejection.
+```
 
 ## Account identity and store concurrency
 
