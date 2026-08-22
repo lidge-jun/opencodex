@@ -26,7 +26,7 @@ Use `git log vendor/main..overlay` to verify the final stack remains
 
 DROP decisions use containment in `vendor/main`. Presence on `vendor/dev` alone
 is not enough: a patch still absent from the released pin must remain in the
-`run/main` replay selection.
+daily `main` replay (via `run/main`, then merge).
 
 | Stack | Evidence |
 |---|---|
@@ -37,7 +37,7 @@ is not enough: a patch still absent from the released pin must remain in the
 ## FEAT-ONLY — still unique; leave on GitHub `feat/*` / open PRs
 
 Do not fold these into `overlay`. Replay the GitHub `feat/*` PR heads onto
-`run/main` if you need them locally; local `feat/*` branches are not required.
+`run/main` (then merge into daily `main`) if you need them locally; local `feat/*` branches are not required.
 
 | Stack | Where it lives | Upstream |
 |---|---|---|
