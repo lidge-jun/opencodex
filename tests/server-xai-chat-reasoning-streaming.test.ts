@@ -244,4 +244,60 @@ describe("xAI OAuth Chat reasoning streaming", () => {
       await server.stop(true);
     }
   }, 30_000);
+
+  test("rewrites a guarded non-streaming native call whose terminal usage event was copied", async () => {
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== CHAT_ENDPOINT) return originalFetch(input, init);
+      return Response.json({
+        id: "chatcmpl_xai_guarded_edit",
+        object: "chat.completion",
+        model: "grok-4.6",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            tool_calls: [{
+              id: "call_guarded_edit",
+              type: "function",
+              function: {
+                name: "write",
+                arguments: JSON.stringify({ file_path: "src/guarded.ts", content: "export const guarded = true;\n" }),
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+      });
+    }) as typeof fetch;
+
+    const configured = config();
+    configured.emptyCompletionRetry = true;
+    saveConfig(configured);
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          input: "create a guarded file",
+          stream: false,
+          tools: [{
+            type: "custom",
+            name: "exec",
+            description: "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };",
+          }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json() as { output?: Array<Record<string, unknown>> };
+      expect(body.output).toHaveLength(1);
+      expect(body.output?.[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
+      expect(body.output?.[0]?.input).toContain("*** Add File: src/guarded.ts");
+    } finally {
+      await server.stop(true);
+    }
+  }, 10_000);
 });

@@ -132,7 +132,12 @@ export function releaseTranslatedEvent(event: object, budget: TranslatorBudget):
   budget.releaseRetained(ownership.bytes, { kind: "retained_collectors" });
 }
 
-/** Replace one retained adapter-event batch while preserving its budget ownership. */
+/**
+ * Replace the retained members of an adapter-event batch while preserving budget ownership.
+ * Terminal guards may clone the final event to merge usage, producing a source array that mixes
+ * retained parser events with a new unretained terminal event. Release only the source leases
+ * owned by this budget, then charge the complete replacement array.
+ */
 export function replaceRetainedTranslatedEventBatch<T extends object>(
   source: readonly T[],
   replacement: T[],
@@ -140,12 +145,11 @@ export function replaceRetainedTranslatedEventBatch<T extends object>(
 ): void {
   const ownerships = source.map(event => retainedEventOwnership.get(event));
   if (ownerships.every(ownership => ownership?.budget !== budget)) return;
-  if (ownerships.some(ownership => ownership?.budget !== budget)) {
-    throw new Error("cannot replace a partially retained translated event batch");
-  }
   let releasedBytes = 0;
   for (let index = 0; index < source.length; index += 1) {
-    releasedBytes += ownerships[index]!.bytes;
+    const ownership = ownerships[index];
+    if (!ownership || ownership.budget !== budget) continue;
+    releasedBytes += ownership.bytes;
     retainedEventOwnership.delete(source[index]!);
   }
   budget.releaseRetained(releasedBytes, { kind: "retained_collectors" });

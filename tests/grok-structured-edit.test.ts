@@ -478,6 +478,11 @@ describe("Grok structured edit tools", () => {
     expect(grokShellNeedsGitEscalation("git commit -m 'split packages'")).toBe(true);
     expect(grokShellNeedsGitEscalation("git checkout feature/refactor")).toBe(true);
     expect(grokShellNeedsGitEscalation("git switch -c feature/refactor")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git reset --mixed HEAD~1")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git restore --staged src/a.ts")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git revert HEAD")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git branch -f main HEAD")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git update-ref refs/heads/main HEAD")).toBe(true);
     expect(grokShellNeedsGitEscalation("git -C /repo add .")).toBe(true);
     expect(grokShellNeedsGitEscalation("git -C '/repo with spaces' commit -m split")).toBe(true);
     expect(grokShellNeedsGitEscalation("git -C /repo status --short")).toBe(false);

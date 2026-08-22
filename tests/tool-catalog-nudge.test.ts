@@ -296,7 +296,7 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(grokWrite).toContain("Splitting a large file is many `write` calls");
     expect(grokWrite).toContain("do not draft the new tree only in assistant text");
     expect(grokWrite).toContain("Git operations that update the index or refs");
-    expect(grokWrite).toContain("add, commit, checkout, and switch");
+    expect(grokWrite).toContain("add, commit, checkout, switch, reset, or restore");
     expect(grokWrite).not.toContain("Discover them from the isolate global `ALL_TOOLS`");
     expect(grokWrite).not.toContain("ALL_TOOLS");
 

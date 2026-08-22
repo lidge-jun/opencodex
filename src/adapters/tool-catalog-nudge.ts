@@ -248,7 +248,7 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
       + " After a short survey, start `write`/`search_replace`; do not keep ranged-reading files you have already sampled."
       + " Commentary that only promises a split or refactor is not a workspace change — emit the tool calls in that same turn."
       + " Splitting a large file is many `write` calls (one new file each) plus `search_replace` on the original. Start from slices already read; do not wait to ingest the whole file, and do not draft the new tree only in assistant text."
-      + " Git operations that update the index or refs, including add, commit, checkout, and switch, must set `with_escalated_permissions` on `run_terminal_command` so Codex can prompt to write repository lock files; commentary cannot request that permission."
+      + " Git operations that update the index or refs, for example add, commit, checkout, switch, reset, or restore, must set `with_escalated_permissions` on `run_terminal_command` so Codex can prompt to write repository lock files; commentary cannot request that permission."
     );
   }
   if (!codeModeExecTool) return base;

@@ -8,7 +8,9 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   createTranslatorBudget,
   releaseTranslatedEvent,
+  replaceRetainedTranslatedEventBatch,
   retainTranslatedEvent,
+  retainTranslatedEventBatch,
   translatorObservedBufferSnapshot,
 } from "../src/lib/translator-budget";
 import type { AdapterEvent } from "../src/types";
@@ -51,6 +53,32 @@ describe("translator budget", () => {
       expect(() => retainTranslatedEvent(event, budget)).toThrow(/already retained/);
       expect(budget.snapshot().currentBytes).toBe(retainedBytes);
       releaseTranslatedEvent(event, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("batch replacement transfers retained members from a mixed guarded batch", () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 4_096 });
+    const retained = { type: "tool_call_end" } satisfies AdapterEvent;
+    const copiedTerminal = {
+      type: "done",
+      usage: { inputTokens: 1, outputTokens: 2 },
+    } satisfies AdapterEvent;
+    const source: AdapterEvent[] = [retained, copiedTerminal];
+    const replacement: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call", name: "exec" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "patch" }) },
+      { type: "tool_call_end" },
+      copiedTerminal,
+    ];
+    try {
+      retainTranslatedEventBatch([retained], budget);
+      replaceRetainedTranslatedEventBatch(source, replacement, budget);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify(replacement)));
+
+      for (const event of replacement) releaseTranslatedEvent(event, budget);
       expect(budget.snapshot().currentBytes).toBe(0);
     } finally {
       budget.dispose();
