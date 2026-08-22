@@ -1,6 +1,6 @@
 # Fork path ownership
 
-Agents read this before resolving sync conflicts. Three-way merge: base = last common ancestor; **ours** = `main`; **theirs** = `vendor/dev`.
+Agents read this before resolving sync conflicts. Three-way merge: base = last common ancestor; **ours** = `origin/main`; **theirs** = `vendor/main`.
 
 Do not open this document or the fork overlay as an upstream PR.
 
