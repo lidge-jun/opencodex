@@ -17,7 +17,10 @@ export function createHttpCoordinator(
   return {
     id: "http",
     async start(event) {
-      if (event.kind !== "pin-updated" || !options.url) return;
+      if (
+        !["pin-updated", "main-behind", "history-diverged"].includes(event.kind) ||
+        !options.url
+      ) return;
 
       const body = JSON.stringify(event);
       const headers: Record<string, string> = {

@@ -5,7 +5,10 @@ import type { GitHubIssue, GitHubIssuesClient, SyncEvent } from "../../scripts/f
 
 const TAG_SHA = "1111111111111111111111111111111111111111";
 
-function event(kind: SyncEvent["kind"] = "pin-updated"): SyncEvent {
+function event(
+  kind: SyncEvent["kind"] = "pin-updated",
+  recommendedLane?: SyncEvent["recommendedLane"],
+): SyncEvent {
   return {
     kind,
     upstreamRepo: "upstream",
@@ -14,6 +17,7 @@ function event(kind: SyncEvent["kind"] = "pin-updated"): SyncEvent {
     vendorMainSha: "2222222222222222222222222222222222222222",
     vendorDevSha: "3333333333333333333333333333333333333333",
     detectedAt: "2026-08-22T18:00:00.000Z",
+    ...(recommendedLane ? { recommendedLane } : {}),
   };
 }
 
@@ -68,13 +72,54 @@ describe("fork sync GitHub issue notifier", () => {
     expect((fake.calls[1]?.value as { labels: string[] }).labels).toEqual(["fork-sync", "triage"]);
   });
 
+  test("recommends a merge-from-main draft PR for daily-merge events", async () => {
+    const fake = client();
+    await createGitHubIssueNotifier({
+      client: fake.api,
+      upstreamRepo: "lidge-jun/opencodex",
+    }).notify(event("main-behind", "daily-merge"));
+
+    const created = fake.calls[1]?.value as { body: string };
+    expect(created.body).toContain("recommendedLane: daily-merge");
+    expect(created.body).toContain("open or update a merge-from-main draft PR");
+    expect(created.body).not.toContain("rebuild run/main");
+  });
+
+  test("reserves the rebuild recommendation for history-diverged events", async () => {
+    const emergency = client();
+    await createGitHubIssueNotifier({
+      client: emergency.api,
+      upstreamRepo: "lidge-jun/opencodex",
+    }).notify(event("history-diverged", "emergency-rebuild"));
+    const emergencyBody = emergency.calls[1]?.value as { body: string };
+    expect(emergencyBody.body).toContain("rebuild run/main");
+
+    const failed = client();
+    await createGitHubIssueNotifier({
+      client: failed.api,
+      upstreamRepo: "lidge-jun/opencodex",
+    }).notify(event("pin-diverged"));
+    const failedBody = failed.calls[1]?.value as { body: string };
+    expect(failedBody.body).toContain("investigate the fork sync event");
+    expect(failedBody.body).not.toContain("rebuild run/main");
+  });
+
   test("does not call GitHub for an already-current event", async () => {
     const fake = client();
     await createGitHubIssueNotifier({
       client: fake.api,
       upstreamRepo: "upstream",
-    }).notify(event("already-current"));
+    }).notify({ ...event("already-current"), vendorContainedInMain: true });
     expect(fake.calls).toEqual([]);
+  });
+
+  test("reports an already-current event that is not contained", async () => {
+    const fake = client();
+    await createGitHubIssueNotifier({
+      client: fake.api,
+      upstreamRepo: "upstream",
+    }).notify({ ...event("already-current"), vendorContainedInMain: false });
+    expect(fake.calls.map(call => call.method)).toEqual(["list", "create"]);
   });
 
   test("rejects an unknown notifier selected by environment", () => {

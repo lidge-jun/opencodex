@@ -1,4 +1,5 @@
 import { detectLatestVTag } from "./detect";
+import { annotateMainLane } from "./lane";
 import { pinVendorRefs } from "./pin";
 import { enabledCoordinators, enabledNotifiers, registerCoordinator, registerNotifier } from "./registry";
 import { createCliCoordinator } from "./coordinators/cli";
@@ -139,6 +140,16 @@ async function readStdin(): Promise<string> {
   return await new Response(Bun.stdin).text();
 }
 
+async function currentHead(runner: CommandRunner): Promise<string> {
+  const result = await runner(["rev-parse", "HEAD"]);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || `git rev-parse HEAD failed with exit code ${result.exitCode}`);
+  }
+  const head = result.stdout.trim();
+  if (!head) throw new Error("git rev-parse HEAD returned no commit");
+  return head;
+}
+
 export async function runCli(
   args: readonly string[],
   options: CliOptions = {},
@@ -177,12 +188,19 @@ export async function runCli(
   const upstreamRepo = env.FORK_SYNC_UPSTREAM_REPO ?? DEFAULT_UPSTREAM_REPO;
   const runner = options.runner ?? commandRunner;
   const detected = await detectLatestVTag({ upstreamRepo, runner });
-  const finalEvent = command === "pin"
+  const mainRef = command === "pin" && detected.vendorMainSha
+    ? await currentHead(runner)
+    : undefined;
+  const pinnedEvent = command === "pin"
     ? await pinVendorRefs(detected, {
       runner,
       upstreamDevRef: env.FORK_SYNC_UPSTREAM_DEV_REF,
     })
     : detected;
+  const finalEvent = await annotateMainLane(pinnedEvent, {
+    runner,
+    ...(mainRef ? { mainRef } : {}),
+  });
   write(JSON.stringify(finalEvent));
 }
 

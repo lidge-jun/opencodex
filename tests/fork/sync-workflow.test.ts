@@ -34,6 +34,13 @@ describe("fork upstream sync workflow contract", () => {
     expect(workflow).toContain("FORK_SYNC_COORDINATORS: cursor-webhook");
   });
 
+  test("emits every non-no-op lane and summarizes its kind", () => {
+    expect(workflow).toContain("main-behind");
+    expect(workflow).toContain("history-diverged");
+    expect(workflow).toContain("Fork sync lane: $kind");
+    expect(workflow).toContain("if: steps.pin.outputs.kind != 'already-current'");
+  });
+
   test("does not merge or force-push from the action", () => {
     expect(workflow).toContain("concurrency:");
     expect(workflow).toContain("cancel-in-progress: false");
@@ -43,6 +50,9 @@ describe("fork upstream sync workflow contract", () => {
   test("pushes only the two vendor refs after a successful pin", () => {
     expect(workflow).toContain(
       "git push origin refs/heads/vendor/main:refs/heads/vendor/main refs/heads/vendor/dev:refs/heads/vendor/dev",
+    );
+    expect(workflow).toContain(
+      "if: steps.pin.outputs.kind == 'pin-updated' || steps.pin.outputs.kind == 'history-diverged'",
     );
     expect(workflow).not.toMatch(/git\s+push\s+origin\s+(?:main|origin\/main)\b/);
   });

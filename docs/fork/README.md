@@ -32,6 +32,9 @@ Rules:
 - Never open an upstream PR from `origin/main`, `overlay`, or `run/main`. Daily checkout is **`main`**.
 - After upstream absorbs a patch, drop it from the overlay.
 - **Never force-push `origin/main` (or public `main`).**
+- The normal coordinator lane is a merge from the current `origin/main`.
+  Never run `git switch -C run/main vendor/main` for a daily release; that
+  disconnected rebuild is permitted only for `history-diverged`.
 
 Path ownership and conflict defaults: [`OWNED.md`](./OWNED.md).
 
@@ -62,13 +65,16 @@ git switch -c sync/upstream-$(date +%Y%m%d) origin/main
 git merge --no-ff origin/vendor/main
 ```
 
-Resolve conflicts using [`OWNED.md`](./OWNED.md). Run focused tests (see the
-Open or update a draft PR on the fork from `sync/upstream-YYYYMMDD` into
-`main`, and leave it mergeable for a human. The human clicks **Create a merge
-commit** / **Merge pull request**. Never squash or rebase these sync PRs.
+Resolve conflicts using [`OWNED.md`](./OWNED.md). Run focused tests for every
+changed domain. Open or update a draft PR on the fork from
+`sync/upstream-YYYYMMDD` into `main`, and check
+`gh pr view <number> --json mergeable -q .mergeable` until it reports
+`MERGEABLE`. The human creates the **merge commit** / **Merge pull request**.
+Never squash or rebase these sync PRs.
 
-If a disconnected rebuild is ever required, keep it as the emergency/catch-up
-recipe only. After the rebuild is reviewed, check out `run/main` first and
+If a disconnected rebuild is ever required for `history-diverged`, keep it as
+the emergency/catch-up recipe only. After the rebuild is reviewed, check out
+`run/main` first and
 record the old `main` parent with an ours merge, leaving the rebuild tree
 unchanged:
 
@@ -108,16 +114,21 @@ force-pushes `origin/main`.
 
 The CLI emits a `SyncEvent` to the enabled plugins. The first notifier,
 `github-issue`, upserts a `fork-sync` issue for non-no-op events. The first
-coordinator, `cursor-webhook`, sends only `pin-updated` events. A diverged
-vendor ref creates an issue but does not start the coordinator; an
-`already-current` poll is silent apart from the workflow summary.
+coordinator, `cursor-webhook`, sends `pin-updated`, `main-behind`, and
+`history-diverged` events. A diverged vendor ref creates an issue but does not
+start the coordinator; an `already-current` poll is silent apart from the
+workflow summary only when `vendor/main` is already contained in `main`.
 
 The Action needs repository secrets `FORK_SYNC_CURSOR_WEBHOOK_URL` and
 `FORK_SYNC_CURSOR_WEBHOOK_SECRET`. Plugin IDs are selected with
 `FORK_SYNC_NOTIFIERS` and `FORK_SYNC_COORDINATORS`. The webhook starts the
 Cursor Automation described in the fork-sync skill; that agent creates the
 merge-from-`main` sync branch, opens or updates a draft PR and decision table,
-verifies it is mergeable, then stops. A human reviews and merges `origin/main`.
+and waits until `gh pr view --json mergeable` reports `MERGEABLE` before
+stopping. A human reviews and creates the merge commit for `origin/main`;
+never squash or rebase these sync PRs. A timeout-only `macos-launchd` check
+flake may be retried with `gh run rerun`; do not edit the upstream lifecycle
+workflow for that flake.
 
 ### Adding another coordinator
 
@@ -149,8 +160,8 @@ FORK_SYNC_CLI_INPUT=summary
 
 The default CLI input is the full event JSON; `summary` is a readable,
 credential-free message. Commands are whitespace-separated executable and
-arguments. Both generic coordinators send only `pin-updated` and are silent
-when their required URL or command is absent.
+arguments. Both generic coordinators send `pin-updated`, `main-behind`, and
+`history-diverged`, and are silent when their required URL or command is absent.
 
 The current agent mappings are:
 

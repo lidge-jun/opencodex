@@ -45,7 +45,21 @@ describe("generic CLI coordinator", () => {
     expect(stdin).toContain("v2.29.0");
   });
 
-  test("does not spawn for non-updated events or without a command", async () => {
+  test("spawns for all actionable lane events", async () => {
+    const postedKinds: string[] = [];
+    for (const kind of ["pin-updated", "main-behind", "history-diverged"] as const) {
+      await createCliCoordinator({
+        command: "agent trigger fork-sync",
+        runner: async (_args, stdin) => {
+          postedKinds.push((JSON.parse(stdin) as SyncEvent).kind);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      }).start(event(kind));
+    }
+    expect(postedKinds).toEqual(["pin-updated", "main-behind", "history-diverged"]);
+  });
+
+  test("does not spawn for issue-only events or without a command", async () => {
     let calls = 0;
     const runner = async (): Promise<CommandResult> => {
       calls += 1;

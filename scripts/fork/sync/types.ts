@@ -2,7 +2,9 @@ export type SyncEventKind =
   | "already-current"
   | "pin-updated"
   | "pin-diverged"
-  | "detect-failed";
+  | "detect-failed"
+  | "main-behind"
+  | "history-diverged";
 
 export interface SyncEvent {
   kind: SyncEventKind;
@@ -11,6 +13,9 @@ export interface SyncEvent {
   latestTagSha: string;
   vendorMainSha: string;
   vendorDevSha: string;
+  vendorContainedInMain?: boolean;
+  mergeBaseCount?: number;
+  recommendedLane?: "noop" | "daily-merge" | "emergency-rebuild";
   detectedAt: string;
   error?: string;
 }

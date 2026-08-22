@@ -51,7 +51,10 @@ export function createCliCoordinator(
   return {
     id: "cli",
     async start(event) {
-      if (event.kind !== "pin-updated" || !options.command?.trim()) return;
+      if (
+        !["pin-updated", "main-behind", "history-diverged"].includes(event.kind) ||
+        !options.command?.trim()
+      ) return;
 
       const args = commandArgs(options.command);
       const input = options.input === "summary"
