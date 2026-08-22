@@ -151,6 +151,7 @@ import {
   resolveResponsesApiAuth,
   requestPolicyView,
   type RequestPolicyView,
+  type ManagementPolicyView,
   safeConfigDTO,
   setCorsOrigin,
   withCors,
@@ -187,6 +188,7 @@ import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } 
 import {
   initializeManagementAuthState,
   issueGuiSession,
+  handleGuiSessionEndpoint,
   managementPrincipal,
   requireManagementAuth,
   type ManagementAuthState,
@@ -640,6 +642,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const loopbackPolicy = (): RequestPolicyView => requestPolicyView(config, "127.0.0.1");
   void publicPolicy;
 
+  // Authenticated remote dashboard listener. The bind address is operator-named (typically
+  // a tailnet IP) and the policy view below is what makes management origin checks treat
+  // that listener's non-loopback Host as legitimate without touching the main listener's
+  // loopback policy. Data-plane admission never runs here: the route allowlist below
+  // refuses /v1/* outright, so no data-plane credential is involved at all.
+  const dashboardListener = config.dashboardListener;
+  const dashboardListenerPort = dashboardListener?.enabled ? dashboardListener.port : null;
+  const dashboardBindHostname = dashboardListener?.enabled ? dashboardListener.hostname.trim() : null;
+  const dashboardPolicy = (): ManagementPolicyView => requestPolicyView(config, dashboardBindHostname ?? "127.0.0.1");
+
   /**
    * Routes the unauthenticated loopback listener will serve. Everything else 404s.
    *
@@ -668,6 +680,28 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       return req.headers.get("upgrade")?.toLowerCase() === "websocket";
     }
     return false;
+  }
+
+  /**
+   * Routes the dashboard listener serves: the web app, the session bootstrap, and the
+   * management API (which still demands the admin token or a session credential).
+   * Everything a phone never needs — the whole /v1 data plane, its WebSocket upgrades,
+   * /readyz — is refused before any handler runs, so exposing the dashboard can never
+   * expose provider credentials or account quota. GET /healthz is served because the
+   * dashboard overview polls it; it discloses no more than the SPA shell already does
+   * (service name + version), while every credential-bearing route stays gated. An
+   * allowlist, not a denylist, for the same reason as loopbackRouteAllowed: routes
+   * added later must opt in explicitly.
+   */
+  function dashboardRouteAllowed(url: URL, req: Request): boolean {
+    const path = url.pathname;
+    if (path.startsWith("/api/")) return true;
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") return false;
+    if (req.method !== "GET" && req.method !== "HEAD") return false;
+    if (path.startsWith("/v1/")) return false;
+    if (path === "/readyz") return false;
+    // Static assets and the SPA fallback; serveGuiFile decides what actually exists.
+    return true;
   }
 
   // Codex treats empty / non-JSON 503 bodies as "Unknown error" (#452). Keep Retry-After and
@@ -805,6 +839,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     };
   let server: Server<WsData>;
   let loopbackServer: Server<WsData> | null = null;
+  let dashboardServer: Server<WsData> | null = null;
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
@@ -827,12 +862,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           loopbackPolicy(),
         );
       }
+      if (requestServer === dashboardServer && !dashboardRouteAllowed(new URL(req.url), req)) {
+        return withManagementCors(
+          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          req,
+          dashboardPolicy(),
+        );
+      }
       // Auth and CORS decisions below read `policy`, not `config`. For the public listener the
       // two are the same object, so its behaviour is unchanged; for the loopback listener the
       // view substitutes 127.0.0.1 as the bind address, which is what routes it through the
       // same code path a plain loopback bind has always taken — Host-header check included.
       // Routing, provider selection and response bodies keep using `config`.
       const policy: RequestPolicyView = requestServer === loopbackServer ? loopbackPolicy() : config;
+      // Management auth/CORS reads the receiving listener's bind address too: the dashboard
+      // listener's Host is non-loopback by design, and handing it the shared loopback config
+      // would 401/403 every management request that listener exists to serve.
+      const managementPolicy: ManagementPolicyView = requestServer === dashboardServer ? dashboardPolicy() : config;
       const url = new URL(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 
@@ -857,14 +903,14 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const managementPreflight = url.pathname.startsWith("/api/");
         const allowed = managementPreflight
-          ? isAllowedManagementOrigin(req, config)
+          ? isAllowedManagementOrigin(req, managementPolicy)
           : isAllowedRequestOrigin(req, policy);
         if (!allowed) {
           return new Response(null, { status: 403, headers: corsHeaders() });
         }
         return new Response(null, {
           status: 204,
-          headers: managementPreflight ? managementCorsHeaders(req, config) : corsHeaders(req, policy),
+          headers: managementPreflight ? managementCorsHeaders(req, managementPolicy) : corsHeaders(req, policy),
         });
       }
 
@@ -960,20 +1006,25 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
 
       if (url.pathname.startsWith("/api/")) {
+        // Session bootstrap runs before the management gate: it is how a credential is
+        // established, so it cannot require one to already exist (beyond the admin token
+        // the POST carries). All origin checks still apply inside the handler.
+        const sessionEndpointResponse = handleGuiSessionEndpoint(req, url, managementAuth, managementPolicy);
+        if (sessionEndpointResponse) return withManagementCors(sessionEndpointResponse, req, managementPolicy);
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
           pid: process.pid,
           port: boundPort ?? requestServer.port ?? listenPort,
         };
-        const apiAuthError = requireManagementAuth(req, managementAuth, config, localManagementAuth);
-        if (apiAuthError) return withManagementCors(apiAuthError, req, config);
+        const apiAuthError = requireManagementAuth(req, managementAuth, managementPolicy, localManagementAuth);
+        if (apiAuthError) return withManagementCors(apiAuthError, req, managementPolicy);
         // Which credential passed the gate, resolved from the same session table the
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
-        const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
-        const mgmtResponse = await handleManagementAPI(req, url, config, deps.managementApi, principal);
-        if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
-        return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
+        const principal = managementPrincipal(req, managementAuth, managementPolicy, localManagementAuth) ?? undefined;
+        const mgmtResponse = await handleManagementAPI(req, url, config, deps.managementApi, principal, managementPolicy);
+        if (mgmtResponse) return withManagementCors(mgmtResponse, req, managementPolicy);
+        return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, managementPolicy);
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
@@ -1795,6 +1846,35 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         throw error;
       }
     }
+
+    // The dashboard listener joins the same startup transaction: if its bind fails (the
+    // tailnet address disappeared, the port is taken), rolling back the already-bound
+    // listeners keeps `ocx` from accumulating half-configured servers across retries.
+    if (dashboardListenerPort !== null && dashboardBindHostname) {
+      try {
+        dashboardServer = Bun.serve<WsData>({
+          ...serveOptions,
+          port: dashboardListenerPort,
+          hostname: dashboardBindHostname,
+        });
+      } catch (error) {
+        // Each stop is independent: a throw from the first must not skip the second,
+        // or a failed dashboard bind strands the unauthenticated loopback listener.
+        try {
+          void server.stop(true);
+        } catch {
+          /* the original bind error is the one worth reporting */
+        }
+        if (loopbackServer) {
+          try {
+            void loopbackServer.stop(true);
+          } catch {
+            /* the original bind error is the one worth reporting */
+          }
+        }
+        throw error;
+      }
+    }
   } catch (error) {
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
@@ -1805,6 +1885,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   bindNativeMainStartupLifecycle(server, nativeMainLifecycle);
   const nativeStop = server.stop.bind(server);
   const loopbackListenerRef = loopbackServer;
+  const dashboardListenerRef = dashboardServer;
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
@@ -1815,6 +1896,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           () => nativeStop(closeActiveConnections),
           ...(loopbackListenerRef
             ? [() => loopbackListenerRef.stop(closeActiveConnections)]
+            : []),
+          ...(dashboardListenerRef
+            ? [() => dashboardListenerRef.stop(closeActiveConnections)]
             : []),
           async () => {
             userCostOverlayReconciler?.stop();
@@ -1848,6 +1932,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     console.warn(`   Any local process can use it without a credential — it spends account`);
     console.warn(`   quota and paid provider credentials, and can starve authenticated`);
     console.warn(`   remote clients. Not for shared or multi-tenant hosts.`);
+  }
+
+  if (dashboardServer) {
+    const dashboardPort = dashboardServer.port ?? dashboardListenerPort;
+    console.log(`Dashboard listener active on http://${dashboardBindHostname}:${dashboardPort}`);
+    console.log(`   Dashboard + management API only (admin token); /v1 data plane stays refused.`);
   }
 
   // Prime pool-account quota in the background so the rotation engine has real

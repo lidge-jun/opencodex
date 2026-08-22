@@ -155,9 +155,10 @@ test("concurrent 401s share one token prompt and all retry with the stored token
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    // Session re-bootstrap probe: this fixture never mints sessions, so fail it fast
-    // instead of letting it join the release queue below.
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
+    // Session probes (meta re-bootstrap, cookie arm, cookie mint): this fixture never mints
+    // sessions, so fail them fast instead of letting them join the release queue below.
+    const path = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname;
+    if (path === "/opencodex-session" || path === "/api/auth/session") {
       return new Response("unauthorized", { status: 401 });
     }
     if (headers.get("X-OpenCodex-API-Key") === "shared-token") {
@@ -278,7 +279,9 @@ test("canceling the token prompt once does not reopen it for the rest of the 401
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
+    // Session probes fail fast: this fixture queues only /api data requests.
+    const path = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname;
+    if (path === "/opencodex-session" || path === "/api/auth/session") {
       return new Response("unauthorized", { status: 401 });
     }
     if (headers.get("X-OpenCodex-API-Key")) {
@@ -325,6 +328,9 @@ test("data-plane requests never receive the management token or prompt", async (
   let phase: "seed" | "cross" = "seed";
   const seenHeaders: Array<string | null> = [];
   const stateful = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    // The install-time cookie-session arm must not count as a data-plane probe here.
+    const path = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname;
+    if (path === "/api/auth/session") return new Response("unauthorized", { status: 401 });
     const headers = new Headers(init?.headers);
     seenHeaders.push(headers.get("X-OpenCodex-API-Key"));
     if (phase === "seed") {

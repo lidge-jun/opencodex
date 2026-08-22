@@ -12,6 +12,7 @@ runs helper features around provider requests.
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy listen port. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. Non-loopback binds require `OPENCODEX_API_AUTH_TOKEN`. |
+| `dashboardListener?` | `{ enabled?: boolean; port: number; hostname: string }` | off | Opt-in second listener serving only the dashboard and `/api/*` on a private/tailnet address. The main proxy listener is unchanged. See [Remote dashboard access](/guides/web-dashboard/#remote-dashboard-access-tailscale). |
 | `proxy?` | `string` | — | Outbound HTTP(S) proxy URL or `${ENV_VAR}`. Applied to `HTTP_PROXY` / `HTTPS_PROXY` only when those variables are unset; loopback remains in `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a completion has no text or tool call. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
@@ -109,6 +110,39 @@ Binding to `127.0.0.1` means the kernel refuses remote connections, but it does 
 a page you visit can make your browser connect to `127.0.0.1`. The listener therefore applies the
 same `Host` and `Origin` checks as an ordinary loopback bind. Off by default.
 :::
+
+### Remote dashboard listener
+
+`dashboardListener` opens a second listener that serves only the dashboard: the web app, the session
+bootstrap path `/opencodex-session`, and the `/api/*` management API. The main proxy listener — and
+its `hostname` and `port` — are completely unchanged; Codex and every other client keep using the
+original `127.0.0.1` address exactly as before.
+
+```json
+{
+  "dashboardListener": {
+    "enabled": true,
+    "port": 10101,
+    "hostname": "100.88.9.100"
+  }
+}
+```
+
+`hostname` is required when the listener is enabled and must be a specific non-blank bind address,
+typically the machine's Tailscale IP (`100.x.y.z`). The key is absent by default; an
+`{ "enabled": false }` shape is also accepted. `port` must differ from the proxy `port` and from
+`unauthenticatedLoopbackListener`'s port; a collision is a write-time validation error.
+
+Every data-plane route is refused on this listener: `/v1/*` (Responses, Chat Completions, models,
+Messages, Realtime/live), data-plane WebSocket upgrades, and `/readyz` all return `404`. `GET /healthz` is served because the dashboard itself polls it; it returns the standard health payload — service name, version, uptime, pid, port, and restart/provider-reload capability flags — operational metadata only, with no credentials or provider data.
+Management calls still require the existing admin token (`OPENCODEX_ADMIN_AUTH_TOKEN` or the
+generated `~/.opencodex/admin-api-token` file) — the same credential the local dashboard uses. The
+bind address should be a private or tailnet address; see
+[Remote dashboard access (Tailscale)](/guides/web-dashboard/#remote-dashboard-access-tailscale).
+
+Session endpoints exist on every listener: `POST /api/auth/session` with the admin token in
+`X-OpenCodex-API-Key` mints a 12-hour GUI session cookie, and `GET /api/auth/session` returns the
+current session's `csrfToken`, `origin`, and `expiresAt`.
 
 ### SSH port forwarding
 
