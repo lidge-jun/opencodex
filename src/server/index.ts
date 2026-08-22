@@ -558,10 +558,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   startupCacheInvalidationWrote = false;
   const resolveServiceHomes = deps.resolveServiceHomes ?? currentServiceHomes;
   let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
-  try { startupOwnershipHomes = resolveServiceHomes(); } catch { /* inspection below stays unknown */ }
-  const startupOwnershipStatePaths = startupOwnershipHomes
-    ? serviceStatePathsForOpenCodexHome(startupOwnershipHomes.opencodexHome)
-    : null;
+  let startupOwnershipStatePaths: readonly string[] | null = null;
+  try {
+    const homes = resolveServiceHomes();
+    const statePaths = serviceStatePathsForOpenCodexHome(homes.opencodexHome);
+    startupOwnershipHomes = homes;
+    startupOwnershipStatePaths = statePaths;
+  } catch { /* inspection below stays unknown */ }
   const startupCacheOwnership = inspectStartupOwnership(
     deps,
     startupOwnershipHomes,
@@ -748,8 +751,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     if (retryOwnershipHomes === null || retryOwnershipStatePaths === null) {
       try {
         const homes = resolveServiceHomes();
+        const statePaths = serviceStatePathsForOpenCodexHome(homes.opencodexHome);
         retryOwnershipHomes = homes;
-        retryOwnershipStatePaths = serviceStatePathsForOpenCodexHome(homes.opencodexHome);
+        retryOwnershipStatePaths = statePaths;
       } catch {
         return "unknown";
       }

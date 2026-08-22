@@ -843,6 +843,7 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     process.env.CODEX_HOME = f.codexHome;
     process.env.OPENCODEX_HOME = f.configDir;
     let homesReady = false;
+    let statePathsReady = false;
     let homeResolutions = 0;
     let answer: NativeCodexOwnership = "unknown";
     let finishRecovery!: () => void;
@@ -855,7 +856,10 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
       resolveServiceHomes: () => {
         homeResolutions += 1;
         if (!homesReady) throw new Error("service homes are not mounted yet");
-        return { codexHome: f.codexHome, opencodexHome: f.configDir };
+        return {
+          codexHome: f.codexHome,
+          opencodexHome: statePathsReady ? f.configDir : (null as unknown as string),
+        };
       },
       inspectNativeCodexOwnership: (scope = {}) => {
         scopes.push({
@@ -883,6 +887,16 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
       answer = "owned";
       expect(tryAcquireNativeMainProfileClaim()).toBeNull();
       expect(homeResolutions).toBe(2);
+      expect(scopes).toHaveLength(0);
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "ownership-unknown",
+      });
+
+      statePathsReady = true;
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      expect(homeResolutions).toBe(3);
       expect(nativeMainStartupGateSnapshot()).toEqual({
         status: "blocked",
         homeId: f.manager.context.homeId,
