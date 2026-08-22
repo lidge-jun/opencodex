@@ -460,9 +460,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         : { reasoningWireValue: attempt.reasoningWireValue }
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
-    ...(normalizeStreamTimeline(attempt.streamTimeline)
-      ? { streamTimeline: normalizeStreamTimeline(attempt.streamTimeline)! }
-      : {}),
+    ...(normalizeStreamTimeline(attempt.streamTimeline) ? { streamTimeline: normalizeStreamTimeline(attempt.streamTimeline) as StreamTimeline } : {}),
     ...(typeof attempt.failureSide === "string" && KNOWN_FAILURE_SIDES.has(attempt.failureSide as FailureSide)
       ? { failureSide: attempt.failureSide as FailureSide }
       : {}),
@@ -581,9 +579,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
-    ...(normalizeStreamTimeline(entry.streamTimeline)
-      ? { streamTimeline: normalizeStreamTimeline(entry.streamTimeline)! }
-      : {}),
+    ...(normalizeStreamTimeline(entry.streamTimeline) ? { streamTimeline: normalizeStreamTimeline(entry.streamTimeline) as StreamTimeline } : {}),
     ...(typeof entry.failureSide === "string" && KNOWN_FAILURE_SIDES.has(entry.failureSide as FailureSide)
       ? { failureSide: entry.failureSide as FailureSide }
       : {}),
