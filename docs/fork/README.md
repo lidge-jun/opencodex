@@ -19,9 +19,9 @@ base for upstream PRs.
 | `vendor/main` | Fast-forward copy of `upstream/main` | No (FF only) | No |
 | `vendor/dev` | Fast-forward copy of `upstream/dev`; `feat/*` PR base only | No (FF only) | No |
 | `overlay` | Linear fork stack on `vendor/main` | Yes | No |
-| `origin/main` | Released `vendor/main` plus overlay via merge PR | No | Yes |
+| `origin/main` | Daily driver: release + overlay + selected `feat/*` | No | Yes |
 | `feat/…` | One topic; upstream PRs from `vendor/dev` | Yes until landed | No |
-| `run/main` | Disposable daily driver: release + overlay + selected `feat/*` | Yes (rebuilt) | No |
+| `run/main` | Disposable rebuild workspace; merge into `main`, never force-push `main` | Yes (rebuilt) | No |
 | `run/dev` | Retired as the daily checkout | Yes (if used) | No |
 | `sync/upstream-YYYYMMDD` | Throwaway merge + CI, then merge to `origin/main` | Discarded | No |
 | `archive/mixed-dev-YYYYMMDD` | Frozen pre-split snapshot | Frozen | No |
@@ -29,7 +29,7 @@ base for upstream PRs.
 Rules:
 
 - Never commit overlay work on `vendor/main` or `vendor/dev`.
-- Never open an upstream PR from `origin/main`, `overlay`, or `run/main`.
+- Never open an upstream PR from `origin/main`, `overlay`, or `run/main`. Daily checkout is **`main`**.
 - After upstream absorbs a patch, drop it from the overlay.
 - **Never force-push `origin/main` (or public `main`).**
 
@@ -49,7 +49,9 @@ Run that yourself in this repo. Agents must not run `git config`.
 
 Fetch when working. Merge when **`upstream/main` moves** (a release), and
 immediately for security/auth changes on that branch. Do not chase daily
-`upstream/dev` movement into `origin/main`.
+`upstream/dev` movement into `origin/main`. When `main` already carries
+replayed `feat/*` patches, rebuild `run/main` and merge that into `main`
+instead of merging `vendor/main` directly onto the PR stack.
 
 ```bash
 git fetch upstream origin --prune
@@ -68,10 +70,10 @@ upstream.
 
 Never `git merge -X ours` across the tree. If the merge is a disaster: abort, shrink overlay, retry.
 
-## Rebuild `run/main`
+## Rebuild daily `main`
 
-Disposable branch: `vendor/main` + overlay + selected unmerged `feat/*`.
-Rebuilt, not merged long-term.
+Do not force-push `main`. Rebuild on disposable `run/main`, then merge that
+into `main` (first landing may be a fast-forward).
 
 ```bash
 git fetch upstream origin --prune
@@ -89,6 +91,9 @@ git merge origin/feat/subagent-roles-config
 git merge origin/feat/subagent-roles-gui
 git merge origin/feat/subagent-roles-sync
 git push --force-with-lease origin run/main
+git checkout main
+git merge --no-ff origin/run/main
+git push origin main
 ```
 
 Stop including a `feat/*` once it is in `vendor/main`, not merely when it is
@@ -99,7 +104,7 @@ in `vendor/dev`. Force-push `run/main` only—not `origin/main`.
 1. `git branch archive/mixed-dev-2026-08-21` at pre-split HEAD.
 2. `git branch vendor/main upstream/main` and `git branch vendor/dev upstream/dev` (FF-only after).
 3. Classify `upstream/dev..archive/mixed-dev-*`: drop duplicates, keep open PRs on `feat/*`, cherry-pick local-forever as small `fork:` commits onto `overlay`.
-4. Rebuild public `origin/main` from `vendor/main` + overlay only—not the old mixed `dev`.
+4. Point public `origin/main` at the daily tree (`vendor/main` + overlay + selected `feat/*`)—not the old mixed `dev`.
 
 Classification of the 2026-08-21 mixed snapshot: [`MIXED-SPLIT.md`](./MIXED-SPLIT.md).
 

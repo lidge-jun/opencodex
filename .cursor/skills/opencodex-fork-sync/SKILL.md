@@ -1,6 +1,6 @@
 ---
 name: opencodex-fork-sync
-description: Use when performing an opencodex public-fork sync, updating vendor/main or vendor/dev, merging upstream/main into an overlay, rebuilding run/main, or resolving fork-sync conflicts.
+description: Use when performing an opencodex public-fork sync, updating vendor/main or vendor/dev, merging upstream/main into origin/main, rebuilding run/main then merging into main, or resolving fork-sync conflicts.
 ---
 
 # opencodex fork sync
@@ -37,17 +37,20 @@ gh pr merge <number> --merge
 
 Open and merge the sync PR on the fork into `main` only after human confirmation. `vendor/main` remains an exact fast-forward of `upstream/main`; `vendor/dev` remains an exact fast-forward of `upstream/dev` for PR bases only. Do not commit overlay work on either vendor branch.
 
-## Rebuild `run/main`
+## Rebuild daily `main`
 
-`run/main` is the disposable daily driver. Rebuild it from `vendor/main`, apply the overlay, then replay selected GitHub `feat/*` PR heads in stack order:
+`origin/main` is the daily driver (release + overlay + selected `feat/*`). Rebuild on disposable `run/main`, then merge into `main`. Never force-push `main`.
 
 ```bash
 git switch -C run/main overlay
 git merge <selected-origin-feat-head>
 git push --force-with-lease origin run/main
+git switch main
+git merge --no-ff origin/run/main
+git push origin main
 ```
 
-Do not retarget those upstream PRs to `main`, and stop replaying a `feat/*` once it is contained in `vendor/main`.
+Do not retarget those upstream PRs to upstream `main`, and stop replaying a `feat/*` once it is contained in `vendor/main`.
 
 ## Conflict report (required for every conflict)
 
