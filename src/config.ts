@@ -2672,6 +2672,25 @@ export function setConfigAuditMaxRowsForTests(value: number | null): void {
 const CONFIG_AUDIT_MAX_FIELDS = 64;
 /** Redacted before/after values are capped per entry; longer values are truncated. */
 const CONFIG_AUDIT_MAX_VALUE_CHARS = 4_096;
+/**
+ * Durable write-ahead marker for one config write. Written (atomically) BEFORE the
+ * config.json rename and removed AFTER the audit row commits, so a crash between the
+ * rename and the commit can be replayed instead of leaving a changed config with no
+ * audit record.
+ */
+const CONFIG_MUTATION_PENDING_AUDIT_FILENAME = "config-mutation-pending.json";
+
+type PendingConfigMutationAudit = {
+  createdAt: number;
+  surface: ConfigMutationSource["surface"];
+  detail: string;
+  fields: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  /** SHA-256 of the exact config.json bytes the pending write produced. */
+  afterSha256: string;
+};
+
 let warnedConfigMutationDirectoryAcl = false;
 
 export class ConfigMutationLockError extends Error {
@@ -2747,6 +2766,9 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     transactionOpen = true;
     initializeConfigGeneration(database);
     ensureConfigMutationAuditTable(database);
+    // Replay any interrupted write (config renamed but audit row not committed)
+    // before this transaction performs its own mutation.
+    reconcilePendingConfigMutationAudit(database);
   } catch (cause) {
     if (transactionOpen) {
       try { database?.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
@@ -2798,6 +2820,43 @@ function ensureConfigMutationAuditTable(database: Database): void {
 }
 
 /**
+ * Insert one audit row with a deterministic dedupe key (all six stored fields), then
+ * prune retention. Used by the live write path and by crash recovery, so a replayed
+ * row can never duplicate a row that already committed.
+ */
+function insertConfigMutationAuditRow(
+  database: Database,
+  createdAt: number,
+  source: Pick<ConfigMutationSource, "surface" | "detail">,
+  fields: string[],
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): void {
+  ensureConfigMutationAuditTable(database);
+  const fieldsJson = JSON.stringify(fields);
+  const beforeJson = JSON.stringify(before);
+  const afterJson = JSON.stringify(after);
+  const existing = database.prepare(`
+    SELECT 1 FROM config_mutation_audit
+    WHERE created_at = ? AND surface = ? AND detail = ? AND fields = ? AND before_json = ? AND after_json = ?
+    LIMIT 1
+  `).get(createdAt, source.surface, source.detail, fieldsJson, beforeJson, afterJson);
+  if (existing) return;
+  database.prepare(`
+    INSERT INTO config_mutation_audit (created_at, surface, detail, fields, before_json, after_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(createdAt, source.surface, source.detail, fieldsJson, beforeJson, afterJson);
+  // Keep the newest CONFIG_AUDIT_MAX_ROWS rows: delete every row at or below the id of
+  // the (N+1)-th newest entry. COALESCE keeps a small table a no-op.
+  database.prepare(`
+    DELETE FROM config_mutation_audit
+    WHERE id <= COALESCE((
+      SELECT id FROM config_mutation_audit ORDER BY id DESC LIMIT 1 OFFSET ?
+    ), 0)
+  `).run(configAuditMaxRows);
+}
+
+/**
  * Append one audit row inside the CURRENT open config-mutation transaction, so the
  * audit entry commits or rolls back atomically with the config bytes it describes.
  * Retention is bounded: only the newest CONFIG_AUDIT_MAX_ROWS rows survive.
@@ -2813,19 +2872,110 @@ export function recordConfigMutationInCurrentTransaction(
       "recordConfigMutationInCurrentTransaction requires an open config mutation transaction.",
     );
   }
-  ensureConfigMutationAuditTable(configMutationDatabase);
-  configMutationDatabase.prepare(`
-    INSERT INTO config_mutation_audit (created_at, surface, detail, fields, before_json, after_json)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(Date.now(), source.surface, source.detail, JSON.stringify(fields), JSON.stringify(before), JSON.stringify(after));
-  // Keep the newest CONFIG_AUDIT_MAX_ROWS rows: delete every row at or below the id of
-  // the (N+1)-th newest entry. COALESCE keeps a small table a no-op.
-  configMutationDatabase.prepare(`
-    DELETE FROM config_mutation_audit
-    WHERE id <= COALESCE((
-      SELECT id FROM config_mutation_audit ORDER BY id DESC LIMIT 1 OFFSET ?
-    ), 0)
-  `).run(configAuditMaxRows);
+  insertConfigMutationAuditRow(
+    configMutationDatabase,
+    Date.now(),
+    source,
+    fields,
+    before,
+    after,
+  );
+}
+
+function configMutationPendingAuditPath(): string {
+  return join(getConfigDir(), CONFIG_MUTATION_PENDING_AUDIT_FILENAME);
+}
+
+function writePendingConfigMutationAudit(payload: PendingConfigMutationAudit): void {
+  atomicWriteFile(configMutationPendingAuditPath(), JSON.stringify(payload));
+}
+
+function deletePendingConfigMutationAudit(): void {
+  try { unlinkSync(configMutationPendingAuditPath()); } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+}
+
+function readPendingConfigMutationAudit(): PendingConfigMutationAudit | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(configMutationPendingAuditPath(), "utf8"),
+    ) as Partial<PendingConfigMutationAudit>;
+    if (typeof parsed.createdAt !== "number" || !Number.isSafeInteger(parsed.createdAt)) return null;
+    if (parsed.surface !== "cli" && parsed.surface !== "api" && parsed.surface !== "internal") return null;
+    if (typeof parsed.detail !== "string") return null;
+    if (!Array.isArray(parsed.fields)) return null;
+    if (typeof parsed.afterSha256 !== "string" || parsed.afterSha256.length === 0) return null;
+    if (!parsed.before || typeof parsed.before !== "object" || Array.isArray(parsed.before)) return null;
+    if (!parsed.after || typeof parsed.after !== "object" || Array.isArray(parsed.after)) return null;
+    return parsed as PendingConfigMutationAudit;
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      // A malformed marker must not block future writes; drop it and continue.
+      try { unlinkSync(configMutationPendingAuditPath()); } catch { /* best-effort */ }
+    }
+    return null;
+  }
+}
+
+/**
+ * Reconcile an interrupted write inside an OPEN writable transaction: if the config
+ * bytes on disk match the pending marker, the rename landed before the crash, so the
+ * audit row is replayed (deduped). Otherwise the rename never landed and the marker is
+ * dropped. Either way the marker is removed so future writes start clean.
+ */
+function reconcilePendingConfigMutationAudit(database: Database): void {
+  const pending = readPendingConfigMutationAudit();
+  if (!pending) return;
+  const configPath = getConfigPath();
+  let currentHash: string | null = null;
+  try {
+    currentHash = createHash("sha256").update(readFileSync(configPath)).digest("hex");
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  if (currentHash === pending.afterSha256) {
+    insertConfigMutationAuditRow(
+      database,
+      pending.createdAt,
+      pending,
+      pending.fields,
+      pending.before,
+      pending.after,
+    );
+  }
+  deletePendingConfigMutationAudit();
+}
+
+/** Record the row described by the marker inside the CURRENT open transaction, then remove it. */
+function recordPendingConfigMutationAuditNow(): void {
+  if (configMutationLockDepth < 1 || !configMutationDatabase) return;
+  const pending = readPendingConfigMutationAudit();
+  if (!pending) return;
+  insertConfigMutationAuditRow(
+    configMutationDatabase,
+    pending.createdAt,
+    pending,
+    pending.fields,
+    pending.before,
+    pending.after,
+  );
+  deletePendingConfigMutationAudit();
+}
+
+/** Best-effort read-path recovery: replay an orphaned marker when the DB already exists. */
+function reconcilePendingConfigMutationAuditOnRead(path: string): void {
+  if (!existsSync(configMutationPendingAuditPath())) return;
+  try {
+    const writable = new Database(path);
+    try {
+      reconcilePendingConfigMutationAudit(writable);
+    } finally {
+      writable.close();
+    }
+  } catch {
+    // A concurrent writer may hold the SQLite lock; the next mutation reconciles.
+  }
 }
 
 /**
@@ -2840,6 +2990,7 @@ export function readConfigMutationAudit(limit = 100): { rows: ConfigMutationAudi
     // resolve the path without the write-side effects of configMutationDatabasePath().
     const path = configMutationDatabasePathForRead();
     if (!existsSync(path)) return { rows: [], maxRows: configAuditMaxRows };
+    reconcilePendingConfigMutationAuditOnRead(path);
     database = new Database(path, { readonly: true });
     const rows = database.prepare(`
       SELECT id, created_at AS createdAt, surface, detail, fields,
@@ -2937,15 +3088,29 @@ export function buildConfigMutationSnapshot(
   // redaction at the schema boundary). Redact every segment before it is persisted
   // and echoed by GET /api/config/mutations; extraction keeps the raw segments.
   const fields = segmentPaths.map(segments => segments.map(redactSecretString).join(".") || "<root>");
+  // Redaction can collapse distinct paths (two token-shaped provider names both
+  // become providers.[REDACTED].<field>), and a dotted key can collide with a
+  // dotted passthrough name. Give duplicates a deterministic, non-secret
+  // occurrence suffix so no before/after record overwrites another.
+  const labelCounts = new Map<string, number>();
+  for (const label of fields) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  const labelSeen = new Map<string, number>();
+  const uniqueFields = fields.map(label => {
+    const count = labelCounts.get(label) ?? 1;
+    if (count <= 1) return label;
+    const seen = (labelSeen.get(label) ?? 0) + 1;
+    labelSeen.set(label, seen);
+    return seen === 1 ? label : `${label}#${seen}`;
+  });
   const before: Record<string, unknown> = {};
   const after: Record<string, unknown> = {};
   segmentPaths.forEach((segments, index) => {
-    const label = fields[index]!;
+    const label = uniqueFields[index]!;
     const key = segments.at(-1) ?? label;
     before[label] = boundAuditValue(extractConfigValueAtPath(beforeRaw, segments), key);
     after[label] = boundAuditValue(extractConfigValueAtPath(afterRaw, segments), key);
   });
-  return { fields, before, after };
+  return { fields: uniqueFields, before, after };
 }
 
 function bumpGenerationForCooperatingConfigWrite(): void {
@@ -3043,7 +3208,10 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
  * changed and null when the save was byte-identical. Refreshes the cost-overlay
  * registry from the persisted config so runtime estimates follow every save path.
  */
-function persistConfigUnlocked(config: OcxConfig): OcxConfig | null {
+function persistConfigUnlocked(
+  config: OcxConfig,
+  audit?: { before: unknown; source: ConfigMutationSource },
+): OcxConfig | null {
   const configPath = getConfigPath();
   // External editors can add provider rows the live config deliberately does
   // not route with yet; merge them at the serialization boundary so an
@@ -3064,26 +3232,26 @@ function persistConfigUnlocked(config: OcxConfig): OcxConfig | null {
     refreshUserCostOverlays(persisted);
     return null;
   }
+  if (audit) {
+    // Write-ahead marker: persisted BEFORE the rename so a crash between the rename
+    // and the audit-row commit is recovered (replayed or dropped) on the next access.
+    const snapshot = buildConfigMutationSnapshot(audit.before, persisted);
+    writePendingConfigMutationAudit({
+      createdAt: Date.now(),
+      surface: audit.source.surface,
+      detail: audit.source.detail,
+      fields: snapshot.fields,
+      before: snapshot.before,
+      after: snapshot.after,
+      afterSha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+  }
   atomicWriteFile(configPath, bytes);
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
   refreshUserCostOverlays(persisted);
+  if (audit) recordPendingConfigMutationAuditNow();
   return persisted;
-}
-
-/**
- * Record one changed persist under the open mutation transaction, snapshotted
- * against the exact document that was written (including preserved disk-only
- * providers) so the audit never reports a deletion that did not reach disk.
- */
-function recordPersistedConfigMutation(
-  before: unknown,
-  persisted: OcxConfig,
-  source: ConfigMutationSource,
-): void {
-  bumpGenerationForCooperatingConfigWrite();
-  const snapshot = buildConfigMutationSnapshot(before, persisted);
-  recordConfigMutationInCurrentTransaction(source, snapshot.fields, snapshot.before, snapshot.after);
 }
 
 /** Persist `config` to config.json under the config-mutation lock. */
@@ -3096,8 +3264,8 @@ export function saveConfig(
   withConfigMutationLockSync(() => {
     const beforeRaw = readRawConfigJson();
     const projected = projectCustomModelCatalogMigration(beforeRaw, config);
-    const persisted = persistConfigUnlocked(projected);
-    if (persisted) recordPersistedConfigMutation(beforeRaw, persisted, source);
+    const persisted = persistConfigUnlocked(projected, { before: beforeRaw, source });
+    if (persisted) bumpGenerationForCooperatingConfigWrite();
     adoptCustomModelCatalogMigration(config, projected);
   });
 }
@@ -3184,8 +3352,11 @@ export function mutatePersistedConfig<T>(
         commitBase.diagnostics.config,
         confirmedConfig,
       );
-      const persisted = persistConfigUnlocked(projected);
-      if (persisted) recordPersistedConfigMutation(commitBase.diagnostics.config, persisted, source);
+      const persisted = persistConfigUnlocked(projected, {
+        before: commitBase.diagnostics.config,
+        source,
+      });
+      if (persisted) bumpGenerationForCooperatingConfigWrite();
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -3574,12 +3745,12 @@ export function saveConfigPreservingClaudeCode(
       const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      const persisted = persistConfigUnlocked(persistedConfig);
-      if (persisted) recordPersistedConfigMutation(onDisk, persisted, source);
+      const persisted = persistConfigUnlocked(persistedConfig, { before: onDisk, source });
+      if (persisted) bumpGenerationForCooperatingConfigWrite();
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      const persisted = persistConfigUnlocked(projectedConfig);
-      if (persisted) recordPersistedConfigMutation(onDisk, persisted, source);
+      const persisted = persistConfigUnlocked(projectedConfig, { before: onDisk, source });
+      if (persisted) bumpGenerationForCooperatingConfigWrite();
     }
     adoptCustomModelCatalogMigration(config, projectedConfig);
     if (claudeCodeBaseline.has(config)) {

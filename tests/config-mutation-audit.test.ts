@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildConfigMutationSnapshot,
@@ -173,6 +174,31 @@ describe("config mutation audit log", () => {
     expect(serialized).toContain("[REDACTED]");
   });
 
+  test("redacted field labels stay unique when distinct paths collapse", () => {
+    saveConfig(configWithProvider());
+    const outcome = mutatePersistedConfig(persisted => {
+      persisted.providers["sk-live-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] = {
+        adapter: "openai-chat",
+        baseUrl: "https://a.invalid/v1",
+      } as unknown as OcxConfig["providers"][string];
+      persisted.providers["sk-live-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"] = {
+        adapter: "openai-chat",
+        baseUrl: "https://b.invalid/v1",
+      } as unknown as OcxConfig["providers"][string];
+      return { changed: true, value: true };
+    }, { surface: "api", detail: "PUT /api/providers" });
+    expect(outcome.status).toBe("committed");
+    const { rows } = readConfigMutationAudit();
+    const fields = rows[0].fields;
+    // Distinct paths that both redact to providers.[REDACTED].<field> keep unique labels.
+    expect(new Set(fields).size).toBe(fields.length);
+    const redactedFields = fields.filter(field => field.includes("[REDACTED]"));
+    expect(redactedFields.length).toBeGreaterThanOrEqual(2);
+    for (const field of redactedFields) {
+      expect(rows[0].after[field]).toBeDefined();
+    }
+  });
+
   test("a disk-only provider is not reported as deleted", () => {
     saveConfig(configWithProvider());
 
@@ -192,6 +218,77 @@ describe("config mutation audit log", () => {
     // The provider must still be on disk.
     const after = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, any>;
     expect(after.providers.staging).toBeDefined();
+  });
+
+  test("a crash after the config rename is replayed from the pending marker", () => {
+    saveConfig(configWithProvider(10100), { surface: "cli", detail: "ocx first" });
+    const configPath = join(testRoot, "config.json");
+    // Simulate a crash between the config.json rename and the audit-row commit:
+    // disk already carries the new bytes, the audit row does not exist yet.
+    const next = configWithProvider(10500);
+    const bytes = JSON.stringify(next, null, 2) + "\n";
+    writeFileSync(configPath, bytes);
+    writeFileSync(join(testRoot, "config-mutation-pending.json"), JSON.stringify({
+      createdAt: 1234567890,
+      surface: "api",
+      detail: "PUT /api/test-crash",
+      fields: ["port"],
+      before: { port: 10100 },
+      after: { port: 10500 },
+      afterSha256: createHash("sha256").update(bytes).digest("hex"),
+    }));
+
+    // The next write (even a byte-identical retry) reconciles the marker first.
+    saveConfig(configWithProvider(10500), { surface: "cli", detail: "ocx retry" });
+
+    const { rows } = readConfigMutationAudit();
+    expect(rows.some(row => row.detail === "PUT /api/test-crash")).toBe(true);
+    // The byte-identical retry records nothing of its own.
+    expect(rows.some(row => row.detail === "ocx retry")).toBe(false);
+    expect(existsSync(join(testRoot, "config-mutation-pending.json"))).toBe(false);
+  });
+
+  test("a pending marker whose rename never landed is dropped without a phantom row", () => {
+    saveConfig(configWithProvider(10100), { surface: "cli", detail: "ocx first" });
+    const bytes = JSON.stringify(configWithProvider(10500), null, 2) + "\n";
+    writeFileSync(join(testRoot, "config-mutation-pending.json"), JSON.stringify({
+      createdAt: 1234567890,
+      surface: "api",
+      detail: "PUT /api/test-never-landed",
+      fields: ["port"],
+      before: { port: 10100 },
+      after: { port: 10500 },
+      afterSha256: createHash("sha256").update(bytes).digest("hex"),
+    }));
+
+    saveConfig(configWithProvider(10600), { surface: "cli", detail: "ocx next" });
+
+    const { rows } = readConfigMutationAudit();
+    expect(rows.some(row => row.detail === "PUT /api/test-never-landed")).toBe(false);
+    expect(rows[0].detail).toBe("ocx next");
+    expect(existsSync(join(testRoot, "config-mutation-pending.json"))).toBe(false);
+  });
+
+  test("the read path replays an orphaned pending marker without duplicating", () => {
+    saveConfig(configWithProvider(10100), { surface: "cli", detail: "ocx first" });
+    const configPath = join(testRoot, "config.json");
+    const bytes = JSON.stringify(configWithProvider(10500), null, 2) + "\n";
+    writeFileSync(configPath, bytes);
+    writeFileSync(join(testRoot, "config-mutation-pending.json"), JSON.stringify({
+      createdAt: 1234567890,
+      surface: "api",
+      detail: "PUT /api/test-crash",
+      fields: ["port"],
+      before: { port: 10100 },
+      after: { port: 10500 },
+      afterSha256: createHash("sha256").update(bytes).digest("hex"),
+    }));
+
+    const first = readConfigMutationAudit();
+    const second = readConfigMutationAudit();
+    expect(first.rows.filter(row => row.detail === "PUT /api/test-crash")).toHaveLength(1);
+    expect(second.rows.filter(row => row.detail === "PUT /api/test-crash")).toHaveLength(1);
+    expect(existsSync(join(testRoot, "config-mutation-pending.json"))).toBe(false);
   });
 });
 
