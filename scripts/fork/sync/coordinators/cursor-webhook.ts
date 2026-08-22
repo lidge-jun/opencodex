@@ -1,10 +1,10 @@
 import { createHmac } from "node:crypto";
-import type { ForkSyncCoordinator } from "../types";
+import type { FetchImplementation, ForkSyncCoordinator } from "../types";
 
 export interface CursorWebhookOptions {
   url?: string;
   secret?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchImplementation;
 }
 
 export function createCursorWebhookCoordinator(

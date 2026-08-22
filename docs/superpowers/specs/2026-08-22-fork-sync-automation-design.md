@@ -78,6 +78,11 @@ export interface CommandResult {
 export type CommandRunner =
   (args: readonly string[]) => Promise<CommandResult>;
 
+export type FetchImplementation = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface DetectOptions {
   upstreamRepo: string;
   runner: CommandRunner;
@@ -198,7 +203,7 @@ The Cursor coordinator uses an injected fetch implementation:
 export interface CursorWebhookOptions {
   url?: string;
   secret?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchImplementation;
 }
 
 export function createCursorWebhookCoordinator(
