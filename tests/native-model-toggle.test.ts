@@ -156,6 +156,24 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(entry.auto_compact_token_limit).toBe(120_000);
   });
 
+  test("the on-disk catalog preserves a lower retained native compaction threshold", () => {
+    const retained = {
+      slug: "gpt-5.4-mini",
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 100_000,
+    };
+    applyNativeOpenAiContextOverride(retained as never, nativeContextLimits({}));
+    expect(retained.auto_compact_token_limit).toBe(100_000);
+
+    const configured = {
+      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.4-mini": 80_000 } } },
+    } as never;
+    const lowered = { ...retained };
+    applyNativeOpenAiContextOverride(lowered as never, nativeContextLimits(configured));
+    expect(lowered.auto_compact_token_limit).toBe(80_000);
+  });
+
   test("the advertised native window stays inside the measured ceiling after Codex spends 95% of it", () => {
     // The regression this pins: Codex does not treat context_window as a label, it spends
     // context_window * effective_context_window_percent (95% by default, codex-rs
