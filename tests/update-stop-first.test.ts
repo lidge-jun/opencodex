@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runNpmCachePreflight } from "../src/update/npm-cache-preflight.mjs";
+import { killProxy } from "../src/lib/process-control";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -145,34 +146,7 @@ describe("update stops the running proxy before replacing files", () => {
       const fakeBin = join(root, "fake-bin");
       const fakeNpm = join(fakeBin, "npm");
       const cache = join(root, "npm-cache");
-      const port = await freePort();
-
-      mkdirSync(dirname(launcher), { recursive: true });
-      mkdirSync(join(packageRoot, "node_modules"), { recursive: true });
-      mkdirSync(opencodexHome, { recursive: true });
-      mkdirSync(fakeBin, { recursive: true });
-      mkdirSync(cache, { recursive: true });
-      copyFileSync(join(repoRoot, "bin", "ocx.mjs"), launcher);
-      chmodSync(launcher, 0o755);
-      symlinkSync(join(repoRoot, "src"), join(packageRoot, "src"), "dir");
-      symlinkSync(join(repoRoot, "node_modules", "bun"), join(packageRoot, "node_modules", "bun"), "dir");
-      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
-        name: "@bitkyc08/opencodex",
-        version: "1.0.0",
-        type: "module",
-      }));
-      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ port }));
-      writeFileSync(join(opencodexHome, "runtime-port.json"), JSON.stringify({ port, pid: 999_999_999 }));
-      writeFileSync(fakeNpm, `#!/bin/sh
-case "$1" in
-  view) printf '2.0.0\\n' ;;
-  config) printf '%s\\n' "$OCX_FAKE_NPM_CACHE" ;;
-  install) exit 1 ;;
-  *) exit 1 ;;
-esac
-`);
-      chmodSync(fakeNpm, 0o755);
-
+      const bundledBun = join(repoRoot, "node_modules", "bun");
       const env = {
         ...process.env,
         HOME: root,
@@ -181,8 +155,37 @@ esac
         OCX_FAKE_NPM_CACHE: cache,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       };
+      let recoveredPid: number | undefined;
 
       try {
+        const port = await freePort();
+        expect(existsSync(bundledBun)).toBe(true);
+        mkdirSync(dirname(launcher), { recursive: true });
+        mkdirSync(join(packageRoot, "node_modules"), { recursive: true });
+        mkdirSync(opencodexHome, { recursive: true });
+        mkdirSync(fakeBin, { recursive: true });
+        mkdirSync(cache, { recursive: true });
+        copyFileSync(join(repoRoot, "bin", "ocx.mjs"), launcher);
+        chmodSync(launcher, 0o755);
+        symlinkSync(join(repoRoot, "src"), join(packageRoot, "src"), "dir");
+        symlinkSync(bundledBun, join(packageRoot, "node_modules", "bun"), "dir");
+        writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+          name: "@bitkyc08/opencodex",
+          version: "1.0.0",
+          type: "module",
+        }));
+        writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ port }));
+        writeFileSync(join(opencodexHome, "runtime-port.json"), JSON.stringify({ port, pid: 999_999_999 }));
+        writeFileSync(fakeNpm, `#!/bin/sh
+case "$1" in
+  view) printf '2.0.0\\n' ;;
+  config) printf '%s\\n' "$OCX_FAKE_NPM_CACHE" ;;
+  install) exit 1 ;;
+  *) exit 1 ;;
+esac
+`);
+        chmodSync(fakeNpm, 0o755);
+
         const result = Bun.spawnSync(["node", launcher, "update"], {
           cwd: root,
           env,
@@ -195,16 +198,29 @@ esac
         expect(result.exitCode).toBe(1);
         expect(output).toContain("Stopping the running proxy before updating");
         expect(output).toContain("restarting the previous version directly");
-        expect(output).toContain(`Proxy starting on port ${port}.`);
+        expect(output).toContain(`Attempting to restart the proxy on port ${port}.`);
         expect(await waitForProxy(port)).toBe(true);
+        const runtime = JSON.parse(readFileSync(join(opencodexHome, "runtime-port.json"), "utf8"));
+        expect(runtime.pid).toBeGreaterThan(0);
+        recoveredPid = runtime.pid;
       } finally {
-        Bun.spawnSync(["node", launcher, "stop"], {
-          cwd: root,
-          env,
-          stdout: "ignore",
-          stderr: "ignore",
-          timeout: 30_000,
-        });
+        const stopped = existsSync(launcher)
+          ? Bun.spawnSync(["node", launcher, "stop"], {
+              cwd: root,
+              env,
+              stdout: "ignore",
+              stderr: "ignore",
+              timeout: 30_000,
+            })
+          : null;
+        if (stopped?.exitCode !== 0) {
+          if (!recoveredPid) {
+            try {
+              recoveredPid = JSON.parse(readFileSync(join(opencodexHome, "runtime-port.json"), "utf8")).pid;
+            } catch { /* the proxy never wrote runtime state */ }
+          }
+          if (Number.isSafeInteger(recoveredPid) && recoveredPid! > 0) killProxy(recoveredPid!);
+        }
         rmSync(root, { recursive: true, force: true });
       }
     },

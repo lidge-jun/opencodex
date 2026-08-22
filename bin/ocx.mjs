@@ -230,16 +230,23 @@ function runNpmSelfUpdate() {
   const launcher = fileURLToPath(import.meta.url);
 
   function startProxyDirectly() {
+    if (!existsSync(launcher)) {
+      console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
+      return;
+    }
     const env = { ...process.env };
     delete env.OCX_SERVICE;
+    console.log(`Attempting to restart the proxy on port ${bakePort}.`);
     const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
       env,
     });
+    child.on("error", error => {
+      console.error(`opencodex: direct proxy restart failed: ${error.message}`);
+    });
     child.unref();
-    console.log(`Proxy starting on port ${bakePort}.`);
   }
 
   function refreshBackgroundServiceOrStartDirect() {
