@@ -60,7 +60,7 @@ export function createGitHubIssueNotifier(
   return {
     id: "github-issue",
     async notify(event) {
-      if (event.kind === "already-current") return;
+      if (event.kind === "already-current" && event.vendorContainedInMain === true) return;
       const issues = await options.client.listOpen({ label: LABEL });
       const matching = event.latestTag
         ? issues.find(issue =>

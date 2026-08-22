@@ -109,8 +109,17 @@ describe("fork sync GitHub issue notifier", () => {
     await createGitHubIssueNotifier({
       client: fake.api,
       upstreamRepo: "upstream",
-    }).notify(event("already-current"));
+    }).notify({ ...event("already-current"), vendorContainedInMain: true });
     expect(fake.calls).toEqual([]);
+  });
+
+  test("reports an already-current event that is not contained", async () => {
+    const fake = client();
+    await createGitHubIssueNotifier({
+      client: fake.api,
+      upstreamRepo: "upstream",
+    }).notify({ ...event("already-current"), vendorContainedInMain: false });
+    expect(fake.calls.map(call => call.method)).toEqual(["list", "create"]);
   });
 
   test("rejects an unknown notifier selected by environment", () => {
