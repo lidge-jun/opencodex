@@ -935,9 +935,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // output, so high effort needs the same total-token headroom as budget thinking or a
           // default 8192-token request can spend everything on thought and return empty text.
           body.thinking = { type: "adaptive" };
-          body.output_config = { effort: adaptiveEffort(parsed.options.reasoning) };
+          const effort = adaptiveEffort(parsed.options.reasoning);
+          body.output_config = { effort };
           const explicitMaxOut = parsed.options.maxOutputTokens;
-          const wantBudget = reasoningBudget(parsed.options.reasoning);
+          const wantBudget = reasoningBudget(effort);
           const floor = wantBudget + OUTPUT_HEADROOM;
           // Preserve explicit caller limits as-is; for omitted limits use the adaptive ceiling
           // so effort=max (budget=32k) still leaves OUTPUT_HEADROOM tokens for visible output.
