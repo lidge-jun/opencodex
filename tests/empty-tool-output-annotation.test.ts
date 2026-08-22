@@ -109,7 +109,24 @@ describe("openai-chat empty tool output annotation", () => {
     const tool = messages.find(m => m.role === "tool");
     expect(tool?.content).toBe("");
   });
+
+  test("orphaned empty result is annotated when enabled", () => {
+    const messages = wire(providerWithFlag, [
+      { role: "toolResult", toolCallId: "call_orphan", toolName: "exec_command", content: "", isError: false, timestamp: 0 },
+    ]);
+    const tool = messages.find(m => m.role === "tool");
+    expect(tool?.content).toBe(ANNOTATION);
+  });
+
+  test("orphaned empty result stays empty when the option is absent", () => {
+    const messages = wire(providerWithoutFlag, [
+      { role: "toolResult", toolCallId: "call_orphan", toolName: "exec_command", content: "", isError: false, timestamp: 0 },
+    ]);
+    const tool = messages.find(m => m.role === "tool");
+    expect(tool?.content).toBe("");
+  });
 });
+
 
 describe("openai-responses empty tool output annotation", () => {
   const originalFetch = globalThis.fetch;
