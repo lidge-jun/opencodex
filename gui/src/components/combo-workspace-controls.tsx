@@ -24,9 +24,6 @@ export function StrategySeg({
       {([
         ["failover", "cws.strategy.failover"],
         ["round-robin", "cws.strategy.roundRobin"],
-        ["random", "cws.strategy.random"],
-        ["least-used", "cws.strategy.leastUsed"],
-        ["reset-window", "cws.strategy.resetWindow"],
       ] as const).map(([id, key]) => (
         <button
           key={id}
@@ -273,7 +270,7 @@ export function TargetEditor({
                 <option key={id} value={id}>{id}</option>
               ))}
             </select>
-            {(strategy === "round-robin" || strategy === "random") && (
+            {strategy === "round-robin" && (
               <input
                 className="input mono"
                 type="number"

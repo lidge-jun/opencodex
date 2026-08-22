@@ -73,8 +73,8 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Selection strategy. Target order is failover priority and breaks ties. Weights shape round-robin and random selection. |
-| `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100; ignored by other strategies. |
+| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape smooth weighted round-robin. |
+| `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | Applied only when the caller omits effort and the selected target advertises the requested rung. |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publishes image only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
@@ -97,11 +97,6 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
   }
 }
 ```
-
-`reset-window` prefers eligible targets whose earliest known quota reset is soonest. It reads only
-the last successfully cached provider-quota snapshot, so request routing never waits for an upstream
-quota probe. Missing or stale reset data ranks after known data; when every target is unknown, the
-configured target order remains the fallback.
 
 For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
 commands, see [Combos](/guides/combos/).
@@ -188,8 +183,8 @@ echoed as given. The CLI dry-run cannot supply these per-candidate account field
 
 ### Combos vs policy profiles
 
-- A **combo** is explicit target routing and failover: configured order, weighted selection,
-  successful-use history, or cached quota-reset timing decides, and failures advance through the list.
+- A **combo** is explicit ordered/weighted target routing and failover: the configured order (or
+  smooth weighted round-robin) decides, and failures advance through the list.
 - A **policy profile** is evidence-based selection among configured candidates: hard capability
   requirements filter first, then deterministic scoring ranks the survivors.
 

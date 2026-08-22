@@ -92,8 +92,8 @@ aileleri kullanamaz.
 | Anahtar | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | gerekli | Sıralı somut rotalar. `weight` 1–10000 arasındadır ve varsayılan olarak `1`'dir. |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Seçim stratejisi. Hedef sırası eşitlikleri bozar; ağırlıklar round-robin ve random için kullanılır. |
-| `stickyLimit?` | `number` | `1` | Bir round-robin grubunda tutulan başarılı istekler. Aralık 1–100; diğer stratejilerce yok sayılır. |
+| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | Seçim stratejisi. Hedef sırası yük devretme önceliğidir; ağırlıklar pürüzsüz ağırlıklı round-robin'i şekillendirir. |
+| `stickyLimit?` | `number` | `1` | Tek bir round-robin grubunda tutulan başarılı istekler. Aralık 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | ayarlanmamış | Yalnızca arayan çabayı atladığında ve seçilen hedef istenen basamağı bildirdiğinde uygulanır. |
 | `alias?` | `string` | — | Kurallı seçici slug'ı yerine isteğe bağlı genel model kimliği. |
 | `nativeAlias?` | `boolean` | `false` | Şu anda desteklenen bir yalın yerel kimliğin yalnızca o niteliksiz kimlik için öncelikli olmasına izin verin. Yalın `gpt-5.6-*` kimlikleri Codex Havuz/Direct kimlik bilgilerini kullanır. Hesap nitelikli rotalar ayrı kalır. `openai-apikey/gpt-5.6-*` gibi sağlayıcı nitelikli rotalar yapılandırılmış API anahtarı rotalarını kullanır ve asla yerel takma ada düşmez. |
@@ -293,4 +293,5 @@ değişmeden ayrıştırılır. Geçmiş dizini tek kullanımlıktır -
 otomatik bir yeniden oluşturmayı tetikler; `ocx logs rebuild-index` bunu zorlar.
 Bu sistemdeki hiçbir şey ağırlıkları, bütçeleri veya aday kümelerini otomatik
 olarak ayarlamaz.
+
 

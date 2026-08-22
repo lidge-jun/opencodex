@@ -129,9 +129,6 @@ export default function ComboWorkspace({
               {([
                 ["failover", sections.failover, "cws.group.failover"],
                 ["round-robin", sections.roundRobin, "cws.group.roundRobin"],
-                ["weighted", sections.weighted, "cws.group.weighted"],
-                ["leastUsed", sections.leastUsed, "cws.group.leastUsed"],
-                ["resetWindow", sections.resetWindow, "cws.group.resetWindow"],
               ] as const).map(([key, items, labelKey]) => (
                 items.length > 0 ? (
                   <div key={key} className="combos-workspace-rail-group">

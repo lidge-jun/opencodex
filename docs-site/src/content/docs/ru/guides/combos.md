@@ -268,9 +268,9 @@ Combo хранятся в объекте верхнего уровня `combos`,
 | Поле | Обязательно | По умолчанию | Правила |
 | --- | --- | --- | --- |
 | `targets` | Yes | — | Непустой упорядоченный массив настроенных целей `{ provider, model, weight? }`. Дубли пар provider/model запрещены. |
-| `targets[].weight` | No | `1` | Целое число от 1 до 10 000. Используется в round-robin и random; другие стратегии игнорируют его. |
-| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"` или `"reset-window"`. |
-| `stickyLimit` | No | `1` | Целое число от 1 до 100 успешных запросов на один выбор round-robin; другие стратегии игнорируют поле. |
+| `targets[].weight` | No | `1` | Целое число от 1 до 10 000. Используется в round-robin; при failover игнорируется. |
+| `strategy` | No | `"failover"` | `"failover"` или `"round-robin"`. |
+| `stickyLimit` | No | `1` | Целое число от 1 до 100 успешных запросов на один выбор round-robin. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max` или `ultra`; применяется только когда вызывающая сторона не указала effort, а цель объявляет поддержку. |
 | `alias` | No | none | Необязательный обрезанный публичный id модели; используйте правила alias выше. Пустое значение хранится как отсутствие alias. |
 | `nativeAlias` | No | `false` | Явно разрешает поддерживаемому сейчас bare native alias перехватить приоритет routing/catalog только для неквалифицированного id. Bare `gpt-5.6-*` использует учётные данные Codex Pool/Direct; маршруты с квалификатором аккаунта сохраняют свою идентичность, а provider-qualified `openai-apikey/gpt-5.6-*` использует API-ключ и никогда не переходит на native alias. |

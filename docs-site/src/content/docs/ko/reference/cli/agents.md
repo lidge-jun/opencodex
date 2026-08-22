@@ -46,7 +46,7 @@ mode와 flag 전환은 현재 숫자 thread 한도를 유효한 v1/v2 Codex key 
 
 ### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
 
-여러 선택 전략을 사용하는 콤보 가상 모델을 관리합니다. `ocx route combo`는 계층형 별칭이며,
+콤보 failover와 round-robin 가상 모델을 관리합니다. `ocx route combo`는 계층형 별칭이며,
 현재 지원되는 라우팅 리소스는 combo입니다. 대상은 `provider/model[:weight],provider/model[:weight]` 형식을 사용합니다.
 
 ```bash
