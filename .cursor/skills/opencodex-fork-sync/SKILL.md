@@ -36,7 +36,9 @@ bun scripts/fork/sync/cli.ts emit < "$RUNNER_TEMP/fork-sync-event.json"
 Only `vendor/main` and `vendor/dev` are allowlisted, and both updates use
 `--ff-only`. `vendor/dev` moves only when a new main tag is pinned. The Action
 has `contents: write` and `issues: write`, never `pull-requests: write`, and
-never merges or force-pushes `origin/main`. `already-current` is silent.
+never merges or force-pushes `origin/main`. `already-current` is silent only
+when `vendor/main` is already contained in `main`; otherwise lane annotation
+emits `main-behind` or `history-diverged`.
 `pin-diverged` creates the tracking issue but does not start the webhook.
 
 ## Manual sync commands
@@ -52,15 +54,16 @@ git switch -c sync/upstream-YYYYMMDD origin/main
 git merge --no-ff vendor/main
 gh repo view --json defaultBranchRef -q .defaultBranchRef.name
 gh pr create --base main --head sync/upstream-YYYYMMDD --title "sync: upstream YYYYMMDD" --body "<summary and verification>"
-gh pr merge <number> --merge
 ```
 
-Open the sync PR on the fork into `origin/main` only after human confirmation.
-`vendor/main` remains an exact fast-forward of `upstream/main`; `vendor/dev`
-remains an exact fast-forward of `upstream/dev` for PR bases only. Do not
-commit overlay work on either vendor branch. The issue notifier is selected by
-`FORK_SYNC_NOTIFIERS=github-issue`; the Cursor coordinator is selected by
-`FORK_SYNC_COORDINATORS=cursor-webhook`.
+Open the sync PR as a draft and stop only when
+`gh pr view <number> --json mergeable -q .mergeable` reports `MERGEABLE`.
+Never ping the human before that gate is true. The human performs the merge
+commit; never squash or rebase these sync PRs. `vendor/main` remains an exact
+fast-forward of `upstream/main`; `vendor/dev` remains an exact fast-forward of
+`upstream/dev` for PR bases only. Do not commit overlay work on either vendor
+branch. The issue notifier is selected by `FORK_SYNC_NOTIFIERS=github-issue`;
+the Cursor coordinator is selected by `FORK_SYNC_COORDINATORS=cursor-webhook`.
 
 Cursor is the first coordinator, not the only supported integration. The
 registry accepts comma-separated IDs and can run multiple coordinators, for
@@ -79,9 +82,9 @@ FORK_SYNC_HTTP_SIGNATURE_PREFIX=<optional prefix, default sha256=>
 FORK_SYNC_HTTP_AUTH_HEADER=<optional complete Authorization value>
 ```
 
-It sends JSON `POST` requests only for `pin-updated`. A configured secret adds
-an HMAC-SHA256 signature; an auth header supports bearer-token endpoints. It
-does not print any of these values.
+It sends JSON `POST` requests only for `pin-updated`, `main-behind`, and
+`history-diverged`. A configured secret adds an HMAC-SHA256 signature; an auth
+header supports bearer-token endpoints. It does not print any of these values.
 
 Use the generic CLI coordinator for a local agent process that accepts a
 message on stdin:
@@ -94,7 +97,8 @@ FORK_SYNC_CLI_INPUT=summary
 
 The CLI defaults to JSON stdin; `summary` sends a readable,
 credential-free event summary. The command is whitespace-separated executable
-and arguments, runs only for `pin-updated`, and must exit successfully.
+and arguments, runs for `pin-updated`, `main-behind`, and `history-diverged`,
+and must exit successfully.
 
 The mapping for currently researched open-source agents is:
 
@@ -113,17 +117,21 @@ notification, or workflow stages. The Action still never merges
 `origin/main`, and every coordinator must stop at a draft PR or
 recommendation, just like Cursor.
 
-## Cursor Automation stages 3–7
+## Cursor Automation stages 3–8
 
-The webhook-triggered Cursor Automation starts only after `pin-updated`. The
-daily path starts at `origin/main`: create
+The webhook-triggered Cursor Automation starts for `pin-updated`,
+`main-behind`, and `history-diverged`. The daily-merge path starts at
+`origin/main`: create
 `sync/upstream-YYYYMMDD` from it, merge `origin/vendor/main`, use Mergiraf
 where available, and read `docs/fork/OWNED.md` before resolving conflicts.
 Replay overlay or feature patches only when they are not already contained,
-using `merge-base --is-ancestor` or patch-id. Run the exact focused tests for
-changed domains, assemble the required conflict decision table, and open or
-update a draft PR into `main`. Confirm `mergeable=true` before stopping; the
-human then clicks Merge (merge commit). Do not merge it from the automation.
+using `scripts/fork/sync/contained.ts` or
+`git merge-base --is-ancestor`; do not rely on patch-id alone. Run the exact
+focused tests for changed domains, assemble the required conflict decision
+table, and open or update a draft PR into `main`. Confirm
+`gh pr view --json mergeable` is `MERGEABLE` before stopping or pinging the
+human. The human then performs the merge commit. Do not merge it from the
+automation.
 
 If histories diverge again, a disconnected `run/main` rebuild is an emergency
 recipe only. After reviewing that rebuild, check out `run/main` first and use
@@ -132,9 +140,13 @@ without changing the rebuilt tree. This is the only documented `-s ours`
 exception. Never use whole-tree `git merge -X ours` or `git merge -X theirs`,
 and never recursively merge old `main` into a rebuild.
 
-Never squash or rebase these fork sync PRs. Do not retarget upstream PRs to
-upstream `main`, and stop replaying a `feat/*` once it is contained in
-`vendor/main`.
+Never run `git switch -C run/main vendor/main` on the daily path. If histories
+diverge, use that disconnected `run/main` rebuild only for
+`history-diverged`, then apply the documented catch-up merge. Never squash or
+rebase these fork sync PRs. Do not retarget upstream PRs to upstream `main`,
+and stop replaying a `feat/*` once it is contained in the sync branch or
+`vendor/main`. A timeout-only `macos-launchd` check flake may be retried with
+`gh run rerun`; do not edit the upstream lifecycle workflow.
 
 ## Conflict report (required for every conflict)
 

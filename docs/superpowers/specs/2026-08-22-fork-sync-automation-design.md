@@ -4,7 +4,8 @@ Date: 2026-08-22
 Status: approved implementation design
 Scope: fork-owned automation for polling released upstream tags, maintaining
 the two vendor refs, and notifying a configured coordinator that prepares a
-human-reviewable `origin/main` rebuild. Cursor is the first coordinator.
+human-reviewable merge from the current `origin/main`. Cursor is the first
+coordinator.
 
 This is a fork-owned document. It must not be opened as a pull request to
 `lidge-jun/opencodex`.
@@ -15,8 +16,10 @@ Keep `origin/main` on released upstream code plus the fork overlay without
 auto-merging or force-pushing the public default branch. A GitHub Action polls
 `lidge-jun/opencodex` for the newest `v*` tag, fast-forwards the vendor refs,
 upserts one tracking issue, and starts configured coordinators only after a
-successful pin update. The first coordinator, Cursor, rebuilds disposable
-`run/main` and opens a draft PR; a human merges `origin/main`.
+successful pin update. The first coordinator, Cursor, performs the daily merge
+from the current `origin/main` and opens a draft PR. It uses the disconnected
+`run/main` rebuild only for a `history-diverged` event; a human merges
+`origin/main`.
 
 ## Non-goals and safety rules
 
@@ -30,7 +33,11 @@ successful pin update. The first coordinator, Cursor, rebuilds disposable
   A no-op poll never chases `upstream/dev`.
 - A diverged vendor ref produces `pin-diverged`, creates an issue, and never
   calls a coordinator.
-- `already-current` is a silent no-op apart from the workflow summary.
+- `already-current` is silent apart from the workflow summary only when
+  `vendor/main` is already contained in the fork's default branch. If the pin
+  is still absent from `main`, lane annotation changes the event to
+  `main-behind` or `history-diverged` and the configured coordinator is
+  notified.
 - Scripts live under `scripts/fork/sync/` and tests under `tests/fork/`. Nothing
   in this feature is imported by `src/router.ts`, `src/server/lifecycle.ts`, or
   `src/server/responses/core.ts`.
@@ -44,6 +51,8 @@ coordinators:
 export type SyncEventKind =
   | "already-current"
   | "pin-updated"
+  | "main-behind"
+  | "history-diverged"
   | "pin-diverged"
   | "detect-failed";
 
@@ -55,6 +64,9 @@ export interface SyncEvent {
   vendorMainSha: string;
   vendorDevSha: string;
   detectedAt: string;
+  vendorContainedInMain?: boolean;
+  mergeBaseCount?: number;
+  recommendedLane?: "noop" | "daily-merge" | "emergency-rebuild";
   error?: string;
 }
 ```
@@ -62,6 +74,25 @@ export interface SyncEvent {
 `detectedAt` is an ISO-8601 UTC string. SHA values are full hexadecimal commit
 IDs. Errors are short, sanitized operational messages and must never include
 webhook URLs, webhook secrets, GitHub tokens, or request bodies.
+
+After detection and pinning, the CLI annotates the lane against the default
+branch ref (`HEAD` in the Action checkout). It uses
+`git merge-base --is-ancestor <vendorMainSha> <mainRef>` for
+`vendorContainedInMain` and counts the lines from
+`git merge-base --all <mainRef> <vendorMainSha>` for `mergeBaseCount`.
+Missing refs leave these optional fields unset and preserve the original event
+kind. Only `already-current` and `pin-updated` are reclassified:
+
+- more than one merge base → `history-diverged` and
+  `recommendedLane: "emergency-rebuild"`;
+- `already-current`, not contained, with one merge base → `main-behind` and
+  `recommendedLane: "daily-merge"`;
+- `pin-updated` with one merge base → remains `pin-updated` with
+  `recommendedLane: "daily-merge"`;
+- contained `already-current` → remains `already-current` with
+  `recommendedLane: "noop"`.
+
+`pin-diverged` and `detect-failed` are never reclassified.
 
 ## Command boundary
 
@@ -197,8 +228,11 @@ export function createGitHubIssueNotifier(
 
 It lists open issues with the `fork-sync` label, finds the issue whose body or
 title contains the current tag, and updates it; otherwise it creates one.
-`already-current` is ignored. Issue text contains only the public upstream
-repo, tag, SHAs, event kind, and remediation guidance.
+`already-current` is ignored only when `vendor/main` is contained in `main`.
+Issue text contains only the public upstream repo, tag, SHAs, event kind,
+`recommendedLane`, and remediation guidance. Daily-merge events say to open or
+update a merge-from-main draft PR; only history-diverged events say to rebuild
+`run/main`.
 
 The Cursor coordinator uses an injected fetch implementation:
 
@@ -214,8 +248,9 @@ export function createCursorWebhookCoordinator(
 ): ForkSyncCoordinator;
 ```
 
-It posts only `pin-updated` events. The body is `JSON.stringify(event)` and the
-request has `content-type: application/json` and
+It posts only `pin-updated`, `main-behind`, and `history-diverged` events. The
+body is `JSON.stringify(event)` and the request has `content-type:
+application/json` and
 `x-fork-sync-signature: sha256=<hex HMAC-SHA256>`. Missing URL or secret is a
 silent no-op. Non-2xx responses throw without logging credentials.
 
@@ -237,8 +272,8 @@ export function createHttpCoordinator(
 ): ForkSyncCoordinator;
 ```
 
-It posts only `pin-updated` events when a URL is configured. A secret adds an
-HMAC-SHA256 header, defaulting to
+It posts only `pin-updated`, `main-behind`, and `history-diverged` events when a
+URL is configured. A secret adds an HMAC-SHA256 header, defaulting to
 `x-fork-sync-signature: sha256=<hex>`. `signatureHeader` and
 `signaturePrefix` adapt the header spelling and encoding required by another
 agent. `authHeader` supports HTTP endpoints such as a bearer-token gateway.
@@ -261,8 +296,9 @@ export function createCliCoordinator(
 
 The command is whitespace-separated executable/argument text and receives one
 event on stdin. `json` is the default input; `summary` sends a readable,
-credential-free release summary. It runs only for `pin-updated`, does nothing
-when the command is missing, and throws on a non-zero exit code.
+credential-free release summary. It runs for `pin-updated`, `main-behind`, and
+`history-diverged`, does nothing when the command is missing, and throws on a
+non-zero exit code.
 
 These adapter kinds cover the current extension points:
 
