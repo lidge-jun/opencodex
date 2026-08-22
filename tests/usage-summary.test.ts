@@ -520,7 +520,7 @@ describe("summarizeUsage", () => {
     expect(sum.providers[0]).toMatchObject({ provider: "openai", requests: 4, totalTokens: 14 });
     expect(sum.models).toHaveLength(1);
     expect(sum.models[0]).toMatchObject({ provider: "openai", model: "gpt-5.5", requests: 4, totalTokens: 14 });
-    expect(sum.days.find(day => day.requests === 4)?.models).toEqual([
+    expect(sum.days.find(day => day.requests === 4)?.models).toMatchObject([
       { provider: "openai", model: "gpt-5.5", requests: 4, attemptCount: 4, totalTokens: 14 },
     ]);
   });
@@ -935,6 +935,81 @@ describe("summarizeUsage", () => {
     expect(sumEvening30d.days).toHaveLength(30);
     expect(day29Evening).toBe(1200);
     expect(sumMorning30d.since).toBe(sumEvening30d.since);
+  });
+
+  test("exposes per-provider, per-model, and per-day cache counters and price coverage (#1820)", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({
+        ts: FIXED_NOW - 1000,
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        usageStatus: "reported",
+        usage: {
+          inputTokens: 1000,
+          outputTokens: 200,
+          cacheReadInputTokens: 600,
+          cacheCreationInputTokens: 300,
+        },
+      }),
+      entry({
+        ts: FIXED_NOW - 2000,
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        usageStatus: "reported",
+        usage: {
+          inputTokens: 500,
+          outputTokens: 100,
+          cacheReadInputTokens: 0,
+        },
+      }),
+      entry({
+        ts: FIXED_NOW - 3000,
+        provider: "unpriced-prov",
+        model: "unpriced-model",
+        usageStatus: "reported",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 50,
+        },
+      }),
+    ];
+
+    const summary = summarizeUsage(entries, "7d", FIXED_NOW);
+
+    // Model-level assertions
+    const sonnet = summary.models.find(m => m.model === "claude-sonnet-5");
+    expect(sonnet).toBeDefined();
+    expect(sonnet?.inputTokens).toBe(1500);
+    expect(sonnet?.outputTokens).toBe(300);
+    expect(sonnet?.cacheReadInputTokens).toBe(600);
+    expect(sonnet?.cacheCreationInputTokens).toBe(300);
+    expect(sonnet?.cacheHitRate).toBeCloseTo(600 / 1500);
+    expect(sonnet?.priceCoverageRatio).toBe(1);
+
+    const unpricedModel = summary.models.find(m => m.model === "unpriced-model");
+    expect(unpricedModel).toBeDefined();
+    expect(unpricedModel?.cacheHitRate).toBe(0);
+    expect(unpricedModel?.priceCoverageRatio).toBe(0);
+
+    // Provider-level assertions
+    const anthropicProv = summary.providers.find(p => p.provider === "anthropic");
+    expect(anthropicProv).toBeDefined();
+    expect(anthropicProv?.inputTokens).toBe(1500);
+    expect(anthropicProv?.outputTokens).toBe(300);
+    expect(anthropicProv?.cacheReadInputTokens).toBe(600);
+    expect(anthropicProv?.cacheCreationInputTokens).toBe(300);
+    expect(anthropicProv?.cacheHitRate).toBeCloseTo(600 / 1500);
+    expect(anthropicProv?.priceCoverageRatio).toBe(1);
+
+    // Day model assertions
+    const day = summary.days.find(d => d.models.some(m => m.model === "claude-sonnet-5"));
+    expect(day).toBeDefined();
+    const daySonnet = day?.models.find(m => m.model === "claude-sonnet-5");
+    expect(daySonnet?.inputTokens).toBe(1500);
+    expect(daySonnet?.outputTokens).toBe(300);
+    expect(daySonnet?.cacheReadInputTokens).toBe(600);
+    expect(daySonnet?.cacheCreationInputTokens).toBe(300);
+    expect(daySonnet?.cacheHitRate).toBeCloseTo(600 / 1500);
   });
 
 });
