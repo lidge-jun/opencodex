@@ -22,7 +22,6 @@ import {
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
-import { getCodexHome } from "../codex/paths";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import {
@@ -569,13 +568,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     startupOwnershipStatePaths,
   );
   // Startup cache invalidation is best-effort and must never block the server from
-  // serving. It now takes K so it cannot race a convergence commit, but both the
-  // home resolution and the acquisition can fail on a machine with no Codex home —
-  // `getCodexHome()` THROWS when CODEX_HOME names a missing directory, which would
-  // otherwise turn "no Codex installed" into "proxy will not start".
-  if (startupCacheOwnership.ownership === "owned") {
+  // serving. It now takes K so it cannot race a convergence commit. Use the home
+  // paired with the ownership inspection; re-reading ambient CODEX_HOME here could
+  // invalidate a different installation after an environment or mount change.
+  if (startupCacheOwnership.ownership === "owned" && startupOwnershipHomes !== null) {
     try {
-      const startupCodexHome = getCodexHome();
+      const startupCodexHome = startupOwnershipHomes.codexHome;
       // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
       // with the later startup sync and warns ONCE about stale app-servers; warning
       // here instead would read a catalog mtime the sync is about to move.
