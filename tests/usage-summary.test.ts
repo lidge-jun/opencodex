@@ -128,6 +128,36 @@ describe("day-level estimated cost", () => {
     expect(day!.estimatedCostUsd).toBeCloseTo(sum.summary.estimatedCostUsd, 10);
   });
 
+  test("two attempts on the SAME model are counted once, not once per attempt", () => {
+    // The day grid prices per ATTRIBUTION but looks the cost up in a map keyed by
+    // provider/model. When a retry lands on the same model, that key appears twice in
+    // the attribution list while the map already holds the SUM of both attempts — so a
+    // naive lookup adds the pair's total once per attempt and doubles the day.
+    // Every other combo test in this file uses two DIFFERENT models, which is exactly
+    // why the bug survives them.
+    const at = Date.UTC(2026, 0, 15, 12, 0, 0);
+    const usage = { inputTokens: 1_000, outputTokens: 100 };
+    const entries = [entry({
+      ts: at,
+      requestId: "retry-same-model",
+      provider: "combo",
+      model: "combo-model",
+      usageStatus: "reported",
+      attempts: [
+        { provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage },
+        { provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage },
+      ],
+    } as Partial<PersistedUsageEntry> & { ts: number })];
+    const sum = summarizeUsage(entries, "30d", at);
+    const day = sum.days.find(d => d.requests === 1);
+    expect(day).toBeDefined();
+
+    // The window total prices each attempt once; the day must agree with it.
+    expect(day!.estimatedCostUsd).toBeCloseTo(sum.summary.estimatedCostUsd, 10);
+    const modelSum = day!.models.reduce((acc, m) => acc + m.estimatedCostUsd, 0);
+    expect(day!.estimatedCostUsd).toBeCloseTo(modelSum, 10);
+  });
+
   test("the day overflow row sums the cost of the models it collapsed", () => {
     // Past MAX_USAGE_MODEL_BREAKDOWN_ROWS the tail collapses into one "other"
     // row. If that aggregation drops cost, every breakdown under the cap still

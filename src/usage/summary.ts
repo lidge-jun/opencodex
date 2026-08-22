@@ -456,7 +456,14 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     const attributionCosts = dayAttributionCosts(entry);
     for (const attribution of usageAttributions(entry)) {
       const attributionKey = usageModelKey(baseProviderLabel(attribution.provider), attribution.model);
+      // Spend each key's cost ONCE. `attributionCosts` already holds the SUM of every
+      // attempt that shares a provider/model key, while `usageAttributions` yields one
+      // entry per attempt — so a retry onto the same model would otherwise add that
+      // pair's total twice and double the day against `summary.estimatedCostUsd`.
+      // Deleting on read keeps the first attribution carrying the group's cost and gives
+      // its siblings zero, which is what `buildModels` already does per attempt.
       const costUsd = attributionCosts.get(attributionKey) ?? 0;
+      attributionCosts.delete(attributionKey);
       bumpDayModel(key, attribution, costUsd);
       day.estimatedCostUsd += costUsd;
     }
