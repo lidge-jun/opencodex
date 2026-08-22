@@ -2769,8 +2769,21 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     initializeConfigGeneration(database);
     ensureConfigMutationAuditTable(database);
     // Replay any interrupted write (config renamed but audit row not committed)
-    // before this transaction performs its own mutation.
-    reconcilePendingConfigMutationAudit(database);
+    // in its OWN transaction before this mutation starts. A recovered marker's
+    // row commits here, and the marker is removed, so a later failure in the new
+    // mutation can neither roll the recovered row back nor let a new marker
+    // overwrite the one whose replay has not yet committed.
+    if (existsSync(configMutationPendingAuditPath())) {
+      reconcilePendingConfigMutationAudit(database);
+      database.exec("COMMIT");
+      transactionOpen = false;
+      if (pendingConfigMutationAuditCleanup) {
+        pendingConfigMutationAuditCleanup = false;
+        deletePendingConfigMutationAudit();
+      }
+      database.exec("BEGIN IMMEDIATE");
+      transactionOpen = true;
+    }
   } catch (cause) {
     if (transactionOpen) {
       try { database?.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }

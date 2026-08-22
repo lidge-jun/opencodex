@@ -291,7 +291,7 @@ describe("config mutation audit log", () => {
     expect(existsSync(join(testRoot, "config-mutation-pending.json"))).toBe(false);
   });
 
-  test("a rollback after reconciliation keeps the pending marker for the next write", () => {
+  test("a rollback after reconciliation keeps the recovered audit row committed", () => {
     saveConfig(configWithProvider(10100), { surface: "cli", detail: "ocx first" });
     const configPath = join(testRoot, "config.json");
     const bytes = JSON.stringify(configWithProvider(10500), null, 2) + "\n";
@@ -307,16 +307,21 @@ describe("config mutation audit log", () => {
       afterSha256: createHash("sha256").update(bytes).digest("hex"),
     }));
 
-    // A mutation that reconciles the marker and then fails must not consume it.
+    // Reconciliation commits the recovered row in its own transaction, so a
+    // mutation that fails afterwards cannot roll the row back or let a new marker
+    // overwrite the marker whose replay already committed.
     expect(() => mutatePersistedConfig(() => {
       throw new Error("mutation failed after reconciliation");
     }, { surface: "api", detail: "PUT /api/fails" })).toThrow();
-    expect(existsSync(markerPath)).toBe(true);
+    let audit = readConfigMutationAudit();
+    expect(audit.rows.some(row => row.detail === "PUT /api/test-crash")).toBe(true);
+    expect(existsSync(markerPath)).toBe(false);
 
     saveConfig(configWithProvider(10600), { surface: "cli", detail: "ocx next" });
-    const { rows } = readConfigMutationAudit();
-    expect(rows.some(row => row.detail === "PUT /api/test-crash")).toBe(true);
-    expect(existsSync(markerPath)).toBe(false);
+    audit = readConfigMutationAudit();
+    expect(audit.rows.some(row => row.detail === "PUT /api/test-crash")).toBe(true);
+    expect(audit.rows.filter(row => row.detail === "PUT /api/test-crash")).toHaveLength(1);
+    expect(audit.rows[0].detail).toBe("ocx next");
   });
 });
 
