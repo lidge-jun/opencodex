@@ -34,6 +34,57 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
+## Remote dashboard access (Tailscale)
+
+opencodex can serve the dashboard to another device — a phone, a second computer — without opening
+the proxy itself to the network. The opt-in `dashboardListener` config key opens a second listener
+that serves only the dashboard: the web app and the `/api/*` management API. The loopback-only
+`/opencodex-session` bootstrap is not part of this remote surface.
+
+```json
+{
+  "dashboardListener": {
+    "enabled": true,
+    "port": 10101,
+    "hostname": "100.88.9.100"
+  }
+}
+```
+
+`hostname` is required and must be a specific non-blank bind address; the typical choice is the
+machine's Tailscale IP, making the dashboard reachable at `http://100.88.9.100:10101` from anywhere
+on your tailnet. The key is absent by default, and `{ "enabled": false }` is also accepted. The
+`port` must differ from the proxy port and from `unauthenticatedLoopbackListener`'s port — a
+collision is rejected when the config is written.
+
+The main proxy listener is completely unchanged: it stays on `127.0.0.1`, and Codex and every other
+client keep pointing at the original proxy port. Nothing about provider or API-key mode changes.
+
+Every data-plane route is refused on this listener: `/v1/*` (Responses, Chat Completions, models,
+Messages, Realtime/live), data-plane WebSocket upgrades, and `/readyz` all return `404`. `GET /healthz` is served because the dashboard itself polls it; it returns the standard health payload — service name, version, uptime, pid, port, and restart/provider-reload capability flags — operational metadata only, with no credentials or provider data.
+
+### Sign-in on the remote dashboard
+
+Management calls on this listener require the existing admin token (`OPENCODEX_ADMIN_AUTH_TOKEN` or
+the generated `~/.opencodex/admin-api-token` file) — the same credential as the local dashboard.
+After sign-in the dashboard exchanges the token for a session automatically. `POST /api/auth/session`
+with the token in `X-OpenCodex-API-Key` mints a 12-hour GUI session and sets the HttpOnly
+`opencodex_gui_session` cookie (`Path=/`; `SameSite=Strict`), while `GET /api/auth/session` returns
+the current session's `csrfToken`, `origin`, and `expiresAt` when the cookie is valid. The cookie is
+host-scoped and unreadable by page JavaScript, and mutations additionally require the per-session
+CSRF token. The phone therefore asks for the admin token once per 12 hours instead of on every
+refresh.
+
+Loopback dashboard behavior is unchanged: the local dashboard keeps auto-minting its 5-minute
+sessions into the served page.
+
+:::caution[Keep it on the tailnet]
+The bind hostname should be a private or tailnet address; Tailscale is the recommended setup. The
+session cookie travels over plain HTTP to that address, which is acceptable inside a
+WireGuard-encrypted tailnet but should not be exposed on an untrusted network. The cookie carries no
+`Secure` flag because the tailnet URL is `http://`.
+:::
+
 ## What you can do
 
 | Area | What it does |

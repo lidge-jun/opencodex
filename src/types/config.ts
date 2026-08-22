@@ -508,6 +508,29 @@ export interface OcxConfig {
     | { enabled: false }
     | { enabled: true; port: number };
   /**
+   * Opt-in second listener that serves ONLY the web dashboard and the management API
+   * behind the existing admin token, for reach-from-another-device setups (typically a
+   * Tailscale tailnet).
+   *
+   * The main proxy listener is untouched: it keeps its own hostname/port and admission
+   * policy, and Codex/clients keep pointing at it. This listener refuses every data-plane
+   * route (/v1/*, data-plane WebSocket upgrades, /readyz) so binding it to a tailnet
+   * address never exposes provider credentials or account quota. GET /healthz is served
+   * for the dashboard overview poll; it discloses operational metadata only (service,
+   * version, uptime, pid, port, restart/provider-reload capability), never credentials.
+   *
+   * Management requests on this listener authenticate with the admin token once and then
+   * with the HttpOnly cookie session it mints (see /api/auth/session); loopback dashboard
+   * behavior on the main listener is unchanged.
+   *
+   * The port is required when enabled and must differ from the proxy port and from
+   * unauthenticatedLoopbackListener. The hostname is required so the operator names the
+   * exact interface (for example the machine's tailnet IP) instead of inheriting a wildcard.
+   */
+  dashboardListener?:
+    | { enabled: false }
+    | { enabled: true; port: number; hostname: string };
+  /**
    * Outbound HTTP(S) proxy URL for provider requests (e.g. "http://user:pass@proxy:8080", or
    * "${HTTPS_PROXY}"-style env reference). Mirrored into HTTP_PROXY/HTTPS_PROXY at startup when
    * those are unset — Bun's fetch honors them for all outbound calls; localhost is excluded.

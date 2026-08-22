@@ -136,9 +136,10 @@ export async function handleManagementAPI(
   config: OcxConfig,
   deps: ManagementApiDeps = {},
   principal?: ManagementPrincipal,
+  policy: Pick<OcxConfig, "hostname" | "corsAllowOrigins"> = config,
 ): Promise<Response | null> {
-  if (!isAllowedManagementOrigin(req, config)) {
-    return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+  if (!isAllowedManagementOrigin(req, policy)) {
+    return jsonResponse({ error: "cross-origin request blocked" }, 403, req, policy);
   }
   // Management bodies are small JSON (provider names, key ids, settings). Reject oversized
   // payloads before any handler buffers them — the data plane has its own decompression cap.

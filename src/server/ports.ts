@@ -58,15 +58,16 @@ export type FindAvailablePortOptions = {
    */
   allowEphemeralFallback?: boolean;
   /**
-   * A port this selection must never return, even when it is free (#1102).
+   * A port (or ports) this selection must never return, even when it is free (#1102).
    *
    * The unauthenticated loopback listener binds a fixed port from config. If the public
    * listener took that port first — via an explicit `--port`, a `config.port` of 0, or the
    * ephemeral fallback happening to land on it — the loopback bind would then fail with
    * EADDRINUSE, and the startup transaction would roll back a public listener that had
-   * nothing wrong with it. Excluding the port here fails the right thing at the right time.
+   * nothing wrong with it. The dashboard listener has the same requirement, so the
+   * option accepts a list. Excluding the port here fails the right thing at the right time.
    */
-  reservedPort?: number;
+  reservedPort?: number | number[];
 };
 
 export class PortUnavailableError extends Error {
@@ -85,10 +86,14 @@ export async function findAvailablePort(
 ): Promise<number> {
   const preferRetryMs = opts.preferRetryMs ?? 0;
   const allowEphemeral = opts.allowEphemeralFallback !== false;
-  const reserved = opts.reservedPort;
+  const reserved = opts.reservedPort === undefined
+    ? []
+    : Array.isArray(opts.reservedPort)
+      ? opts.reservedPort
+      : [opts.reservedPort];
   // An explicit preference for the reserved port is a configuration mistake, not a busy
   // socket: retrying or hopping would hide it. Refuse before probing anything.
-  if (reserved !== undefined && preferredPort === reserved) {
+  if (reserved.includes(preferredPort)) {
     throw new PortUnavailableError(preferredPort, hostname);
   }
   // Port 0 asks the OS to select an ephemeral port. Resolve it to that concrete
@@ -113,7 +118,7 @@ export async function findAvailablePort(
   // async recursion has no way to stop if the assumption is ever wrong.
   for (let attempt = 0; attempt < EPHEMERAL_REDRAW_LIMIT; attempt += 1) {
     const port = await allocateEphemeralPort(hostname);
-    if (port !== reserved) return port;
+    if (!reserved.includes(port)) return port;
   }
   throw new Error("failed to allocate an available port");
 }
