@@ -2945,13 +2945,13 @@ async function handleResponsesInner(
     // call it cannot execute, and the turn showed a bare `aborted` with the file untouched.
     // Forward auth is the canonical ChatGPT backend speaking Codex's own protocol rather than a
     // routed provider, so it keeps passing through unguarded, as it does for the rewrites above.
-    // The guard needs a catalog to compare against, so it stands down when the request carries
-    // none. That is not the same claim as "no tools means no tool may be called": a passthrough
-    // request can legitimately omit `tools` entirely and still receive a tool call the client
-    // understands — `tests/github-copilot-stream-contract.test.ts` sends `{model, input, stream}`
-    // with no tools and Copilot answers with a `custom_tool_call` for `apply_patch`. Policing an
-    // empty catalog truncates that turn. An unreadable body lands here too, since it yields no
-    // names either.
+    // The guard needs a catalog to compare against, so it stands down when the request omits one.
+    // An explicit empty catalog is still authoritative: it declares that no client tools may be
+    // called. A passthrough request can legitimately omit `tools` entirely and still receive a call
+    // the client understands — `tests/github-copilot-stream-contract.test.ts` sends
+    // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
+    // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
+    // too because the proxy cannot establish the caller's declared authorization boundary.
     const parseOutboundRequestBody = (bodyText: string): Record<string, unknown> | undefined => {
       try {
         const body = JSON.parse(bodyText) as unknown;
@@ -2970,7 +2970,9 @@ async function handleResponsesInner(
     // the client's name back. Widening only ever makes the guard fire less; a name declared in
     // neither place — #1700's `apply_patch` — is still refused.
     for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
-    const undeclaredToolGuardActive = declaredWireToolNames.size > 0
+    const hasExplicitWireToolCatalog = outboundRequestBody !== undefined
+      && Array.isArray(outboundRequestBody.tools);
+    const undeclaredToolGuardActive = (declaredWireToolNames.size > 0 || hasExplicitWireToolCatalog)
       && route.provider.authMode !== "forward";
     // A refused turn must not seed `previous_response_id` replay. The inspection branch reads the
     // untouched upstream stream, so it can still observe a `response.completed` the client never
