@@ -4,6 +4,9 @@ import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  modelResponsesCompatibilityConfigError,
+  modelResponsesTerminalRepairConfigError,
+  responsesTerminalRepairConfigError,
   modelPreferHostedToolsConfigError,
   codexAutoStartEnabled,
   nonBlankStringArrayConfigError,
@@ -614,6 +617,12 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
+  const compatError = modelResponsesCompatibilityConfigError(raw.modelResponsesCompatibility);
+  if (compatError) return `provider ${name} ${compatError}`;
+  const modelRepairError = modelResponsesTerminalRepairConfigError(raw.modelResponsesTerminalRepair);
+  if (modelRepairError) return `provider ${name} ${modelRepairError}`;
+  const repairError = responsesTerminalRepairConfigError(raw.responsesTerminalRepair);
+  if (repairError) return `provider ${name} ${repairError}`;
   const preferHostedToolsError = modelPreferHostedToolsConfigError(
     raw.modelPreferHostedTools,
     "modelPreferHostedTools",
@@ -709,6 +718,9 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "modelMaxOutputTokens",
       "openRouterRouting",
       "modelOpenRouterRouting",
+      "modelResponsesCompatibility",
+      "modelResponsesTerminalRepair",
+      "responsesTerminalRepair",
       "reasoningEfforts",
       "modelReasoningEfforts",
       "reasoningWireFormat",

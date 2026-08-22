@@ -12,6 +12,8 @@
  * assert the captured upstream URL, which is externally observable.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { safeConfigDTO, providerManagementConfigError } from "../src/server/auth-cors";
+import type { OcxConfig } from "../src/types";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import {
   getProviderRegistryEntry,
@@ -1118,6 +1120,46 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-zero")).toBeUndefined();
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-neg")).toBeUndefined();
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-nan")).toBeUndefined();
+    });
+
+    test("safeConfigDTO preserves terminal-repair configuration keys", () => {
+      const config: OcxConfig = {
+        providers: {
+          "custom-gw": {
+            adapter: "openai-responses",
+            baseUrl: "https://custom-gateway.test/v1",
+            modelResponsesCompatibility: { "my-model": "terminal-repair" },
+            modelResponsesTerminalRepair: { "my-model": 1500 },
+            responsesTerminalRepair: { graceMs: 800 },
+          },
+        },
+      } as unknown as OcxConfig;
+      const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+      expect(dto.providers["custom-gw"].modelResponsesCompatibility).toEqual({ "my-model": "terminal-repair" });
+      expect(dto.providers["custom-gw"].modelResponsesTerminalRepair).toEqual({ "my-model": 1500 });
+      expect(dto.providers["custom-gw"].responsesTerminalRepair).toEqual({ graceMs: 800 });
+    });
+
+    test("providerManagementConfigError validates terminal-repair configuration", () => {
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "my-model": "terminal-repair" },
+        modelResponsesTerminalRepair: { "my-model": 1500 },
+        responsesTerminalRepair: 800,
+      })).toBeNull();
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "my-model": "invalid" },
+      })).toContain('modelResponsesCompatibility.my-model must be "terminal-repair"');
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: -500,
+      })).toContain('responsesTerminalRepair must be "terminal-repair", a positive number');
     });
   });
 });
