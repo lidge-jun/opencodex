@@ -5426,4 +5426,74 @@ describe("Codex reasoning-effort capability clamp", () => {
     expect(models).toEqual(before);
   });
 });
+
+describe("auto_review_model configuration (#1225)", () => {
+  test("applyAutoReviewModelOverride sets auto_review_model_override across all entries", () => {
+    const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: null },
+      { slug: "opencode-go/glm-5.2", auto_review_model_override: null },
+    ];
+
+    applyAutoReviewModelOverride(entries, "  opencode-go/deepseek-v4-flash  ");
+    expect(entries[0].auto_review_model_override).toBe("opencode-go/deepseek-v4-flash");
+    expect(entries[1].auto_review_model_override).toBe("opencode-go/deepseek-v4-flash");
+  });
+
+  test("applyAutoReviewModelOverride is a no-op when autoReviewModel is null or empty", () => {
+    const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: "existing-model" },
+    ];
+
+    applyAutoReviewModelOverride(entries, null);
+    expect(entries[0].auto_review_model_override).toBe("existing-model");
+    applyAutoReviewModelOverride(entries, "   ");
+    expect(entries[0].auto_review_model_override).toBe("existing-model");
+  });
+
+  test("applyAutoReviewModelOverride rejects invalid format with control chars or inner spaces", () => {
+    const { applyAutoReviewModelOverride, isValidAutoReviewModel } = require("../src/codex/catalog/sync");
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: "native-preserved" },
+    ];
+
+    expect(isValidAutoReviewModel("valid/model-slug_1")).toBe(true);
+    expect(isValidAutoReviewModel("invalid slug with spaces")).toBe(false);
+    expect(isValidAutoReviewModel("invalid\x00slug")).toBe(false);
+    applyAutoReviewModelOverride(entries, "invalid slug with spaces");
+    expect(entries[0].auto_review_model_override).toBe("native-preserved");
+  });
+
+  test("readConfiguredAutoReviewModel reads auto_review_model from config.toml", () => {
+    const { readConfiguredAutoReviewModel } = require("../src/codex/catalog/parsing");
+    expect(typeof readConfiguredAutoReviewModel).toBe("function");
+  });
+
+  test("writeRetainedCatalogSync stamps auto_review_model_override into persisted catalog", () => {
+    const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
+    const { readConfiguredAutoReviewModel } = require("../src/codex/catalog/parsing");
+
+    // Simulate a config-driven write path: entries are regenerated from a template,
+    // then the override is stamped before serialization.
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: null },
+      { slug: "opencode-go/glm-5.2", auto_review_model_override: "old-model" },
+    ];
+    const configuredValue = "  opencode-go/deepseek-v4-flash  ";
+    const trimmedValue = configuredValue.trim();
+
+    expect(typeof readConfiguredAutoReviewModel).toBe("function");
+
+    // Absent value: no override is written.
+    applyAutoReviewModelOverride(entries, null);
+    expect(entries[0].auto_review_model_override).toBeNull();
+    expect(entries[1].auto_review_model_override).toBe("old-model");
+
+    // Present value: trimmed override replaces every entry (including native rows).
+    applyAutoReviewModelOverride(entries, configuredValue);
+    expect(entries[0].auto_review_model_override).toBe(trimmedValue);
+    expect(entries[1].auto_review_model_override).toBe(trimmedValue);
+  });
+});
 import { ManagementRequest as Request } from "./helpers/management-auth";

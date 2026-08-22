@@ -41,7 +41,7 @@ import {
 } from "../model-entitlements";
 
 
-import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readConfiguredAutoReviewModel, readNativeBaseline } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { accountBoundNativeOpenAiSlugs, accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, nativeContextLimits, observedAccountBoundNativeEntries, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry, type NativeContextLimitsInput } from "./metadata";
 import {
@@ -1403,6 +1403,30 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+const AUTO_REVIEW_MODEL_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\s]/;
+
+export function isValidAutoReviewModel(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return Boolean(trimmed)
+    && trimmed.length <= 1024
+    && !AUTO_REVIEW_MODEL_CONTROL_CHARS.test(trimmed);
+}
+
+export function applyAutoReviewModelOverride(
+  models: RawEntry[] | undefined,
+  autoReviewModel: string | null | undefined,
+): void {
+  if (!models || !Array.isArray(models) || !autoReviewModel) return;
+  const trimmed = autoReviewModel.trim();
+  if (!trimmed || !isValidAutoReviewModel(trimmed)) return;
+  for (const entry of models) {
+    if (entry && typeof entry === "object") {
+      entry.auto_review_model_override = trimmed;
+    }
+  }
+}
+
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -1596,6 +1620,10 @@ function writeRetainedCatalogSync({
     },
   });
   clampCatalogModelsToCodexSupport(catalog.models);
+  const autoReviewModel = readConfiguredAutoReviewModel();
+  if (autoReviewModel) {
+    applyAutoReviewModelOverride(catalog.models, autoReviewModel);
+  }
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;

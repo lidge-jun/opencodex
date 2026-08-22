@@ -35,10 +35,12 @@ import {
   findNativeTemplate,
   legacyCatalogBackupPath,
   parseCatalogJson,
+  readConfiguredAutoReviewModel,
   type RawCatalog,
   type RawEntry,
   } from "./catalog/parsing";
   import {
+  applyAutoReviewModelOverride,
   buildCatalogEntriesFromObservedState,
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   mergeCatalogEntriesFromObservedState,
@@ -364,6 +366,10 @@ function prepareCatalog(
       ? supportedCodexReasoningEffortsFromObservedCatalog(source.runtimeSupport.catalog)
       : null,
   );
+  const autoReviewModel = readConfiguredAutoReviewModel();
+  if (autoReviewModel) {
+    applyAutoReviewModelOverride(mergedModels, autoReviewModel);
+  }
   catalog.models = mergedModels;
   return catalog;
 }
