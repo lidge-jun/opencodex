@@ -577,14 +577,24 @@ function isNativeOpenAIChatTarget(provider: OcxProviderConfig): boolean {
   }
 }
 
+/** Wire text used when a present-but-empty tool result must stay visible to the model. */
+const EMPTY_TOOL_OUTPUT_ANNOTATION =
+  "[ocx] empty tool output: the tool ran but produced no stdout or return value; do not treat this as success, failure, or user-provided input.";
+
 /**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
  * content is text-only on every chat provider, so these ride in a follow-up user message instead of
  * being flattened to the "[image]" marker the model can't actually see. Data URLs and remote https
  * URLs are both valid in image_url.url, unlike Gemini inline_data which needs base64.
  */
-function toolResultTextForWire(content: string | OcxContentPart[]): string {
-  if (typeof content === "string") return content;
+function toolResultTextForWire(content: string | OcxContentPart[], annotateEmpty = false): string {
+  // An empty content array is a present-but-empty result; `contentPartsToText` would
+  // otherwise fall back to the "[image]" marker and hide the emptiness from the model.
+  if (annotateEmpty && Array.isArray(content) && content.length === 0) return EMPTY_TOOL_OUTPUT_ANNOTATION;
+  if (typeof content === "string") {
+    if (annotateEmpty && content.trim() === "") return EMPTY_TOOL_OUTPUT_ANNOTATION;
+    return content;
+  }
   const text = content.filter((p) => p.type === "text").map((p) => (p as OcxTextContent).text).join("");
   if (text) {
     const untransportableImages = content.filter((p) => p.type === "image" && !p.imageUrl).length;
@@ -772,7 +782,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           out.push({
             role: "tool",
             tool_call_id: toolCallId,
-            content: toolResultTextForWire(msg.content),
+            content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
           });
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           pendingToolCalls.splice(matchIdx, 1);
@@ -817,7 +827,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           out.push({
             role: "tool",
             tool_call_id: toolCallId,
-            content: toolResultTextForWire(msg.content),
+            content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
           });
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           flushToolResultImages();

@@ -183,6 +183,14 @@ export interface OcxProviderConfig {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * When enabled, a tool result that is present but empty (no usable text or content
+   * part) is rewritten to an explicit annotation before it reaches the upstream wire,
+   * so models do not silently accept an empty result or re-issue the same call
+   * Non-empty results and missing-result placeholders stay byte-identical.
+   * Seeded true for DeepSeek; absent keeps legacy behavior for every other provider.
+   */
+  annotateEmptyToolOutputs?: boolean;
+  /**
    * Provider fallback for canonical Fast capability over an OpenAI `service_tier` wire.
    * This pure tri-state feeds catalog publication, routing eligibility, compatibility
    * fingerprints, and proxy-owned canonical Fast injection on both Responses and Chat routes.
