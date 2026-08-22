@@ -187,12 +187,44 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [manualCode, setManualCode] = useState("");
+  const [manualCodeBusy, setManualCodeBusy] = useState(false);
+  const [manualCodeMsg, setManualCodeMsg] = useState("");
+  const [manualCodeOk, setManualCodeOk] = useState(true);
   const [importBusy, setImportBusy] = useState(false);
   const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
   const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
   const deviceCodeCopy = useCopyFeedback<string>();
+  const manualFlowKey = loginHint?.provider === item.name
+    ? `${loginHint.provider}\0${loginHint.url ?? ""}\0${loginHint.deviceCode ?? ""}\0${loginHint.instructions ?? ""}\0${loginHint.attemptId ?? ""}`
+    : "";
+  const [seenManualFlowKey, setSeenManualFlowKey] = useState(manualFlowKey);
+  const manualFlowKeyRef = useRef(manualFlowKey);
+  const mountedRef = useRef(false);
+
+  const resetManualCode = () => {
+    setManualCode("");
+    setManualCodeMsg("");
+    setManualCodeOk(true);
+  };
+
+  if (manualFlowKey !== seenManualFlowKey) {
+    setSeenManualFlowKey(manualFlowKey);
+    setManualCode("");
+    setManualCodeBusy(false);
+    setManualCodeMsg("");
+    setManualCodeOk(true);
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    manualFlowKeyRef.current = manualFlowKey;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [manualFlowKey]);
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -220,6 +252,7 @@ export default function ProviderAuthPanel({
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
   const isOauth = surface === "oauth-accounts";
   const isKeyAuth = surface === "api-keys";
+  const isCommandCodeAuth = item.adapter === "command-code" && item.authMode === "oauth";
 
   if (surface === "codex-accounts") {
     return (
@@ -260,6 +293,31 @@ export default function ProviderAuthPanel({
       if (ok) { setNewKey(""); setAddingKey(false); }
     } finally {
       setKeyBusy(false);
+    }
+  };
+
+  const submitManualCode = async () => {
+    const input = manualCode.trim();
+    if (!input || manualCodeBusy || !authHandlers.onSubmitManualCode) return;
+    const submittedFlowKey = manualFlowKeyRef.current;
+    setManualCodeBusy(true);
+    setManualCodeMsg("");
+    try {
+      const outcome = await authHandlers.onSubmitManualCode(item.name, input);
+      if (outcome !== "submitted") return;
+      if (!mountedRef.current || manualFlowKeyRef.current !== submittedFlowKey) return;
+      setManualCode("");
+      setManualCodeOk(true);
+      setManualCodeMsg(t("prov.pasteOk"));
+    } catch (error) {
+      if (!mountedRef.current || manualFlowKeyRef.current !== submittedFlowKey) return;
+      setManualCodeOk(false);
+      const message = error instanceof Error && error.message.trim() ? error.message : t("prov.networkError");
+      setManualCodeMsg(t("prov.pasteFail", { error: message }));
+    } finally {
+      if (mountedRef.current && manualFlowKeyRef.current === submittedFlowKey) {
+        setManualCodeBusy(false);
+      }
     }
   };
 
@@ -400,8 +458,56 @@ export default function ProviderAuthPanel({
                     </div>
                   )}
                   <LoginUrlBlock url={hintForThis.url ?? ""} />
+                  {authHandlers.onSubmitManualCode && (
+                    <div className="pwi-auth-paste">
+                      <div className="muted text-label">
+                        {isCommandCodeAuth
+                          ? t("prov.pasteCommandCodeHint")
+                          : t("prov.pasteRedirectHint")}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input
+                          type={isCommandCodeAuth ? "password" : "text"}
+                          autoComplete="off"
+                          spellCheck={false}
+                          maxLength={4096}
+                          value={manualCode}
+                          onChange={e => { setManualCode(e.target.value); setManualCodeMsg(""); }}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" && manualCode.trim()) {
+                              e.preventDefault();
+                              void submitManualCode();
+                            }
+                          }}
+                          placeholder={isCommandCodeAuth ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
+                          aria-label={isCommandCodeAuth ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
+                          disabled={manualCodeBusy}
+                          className="input text-label"
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          className="btn btn-ghost"
+                          type="button"
+                          disabled={manualCodeBusy || !manualCode.trim()}
+                          onClick={() => void submitManualCode()}
+                        >
+                          {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
+                        </button>
+                      </div>
+                      {manualCodeMsg && (
+                        <div
+                          role={manualCodeOk ? "status" : "alert"}
+                          aria-atomic="true"
+                          className="text-label"
+                          style={{ color: manualCodeOk ? "var(--accent-hover)" : "var(--amber)" }}
+                        >
+                          {manualCodeMsg}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {authHandlers.onCancelLogin && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { resetManualCode(); void authHandlers.onCancelLogin?.(item.name); }}>
                       {t("common.cancel")}
                     </button>
                   )}

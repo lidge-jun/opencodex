@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
+import type { LoginHint } from "../components/provider-workspace/types";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { ToastNotice, type NoticeTone } from "../ui";
@@ -36,7 +37,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
+  const [loginInfo, setLoginInfo] = useState<LoginHint | null>(null);
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
@@ -212,7 +213,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth } = useProvidersOAuth({
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, submitManualCode } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
@@ -366,6 +367,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             authHandlers={{
               onLogin: requestLoginOAuth,
               onCancelLogin: cancelLoginOAuth,
+              onSubmitManualCode: submitManualCode,
               onLogout: logoutOAuth,
               onReauth: (provider, accountId) => loginOAuth(provider, true, accountId),
               onSwitchAccount: switchAccount,

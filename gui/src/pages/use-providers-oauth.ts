@@ -4,7 +4,39 @@ import { readJsonIfOk } from "../fetch-json";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 
+/**
+ * Tagged error for internally mapped API/validation failures — only these are safe to render.
+ * Transport/fetch rejections never use this type and are mapped to prov.networkError.
+ */
+export class SafeManualCodeError extends Error {
+  readonly safe = true as const;
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SafeManualCodeError";
+  }
+}
+/** Exported for tests: map API error string + status to localized key. */
+export function mapManualCodeApiErrorToKey(raw: string, status: number): string {
+  const lower = raw.trim().toLowerCase();
+  if (lower.includes("empty code")) return "prov.manualErrorEmpty";
+  if (lower.includes("code too large") || lower.includes("input too long") || status === 413) return "prov.manualErrorTooLarge";
+  if (lower.includes("no login") || lower.includes("no login in progress")) return "prov.manualErrorNoLogin";
+  if (lower.includes("stale login")) return "prov.manualErrorStale";
+  if (lower.includes("no authorization code")) return "prov.manualErrorNoCode";
+  if (lower.includes("missing the state")) return "prov.manualErrorMissingState";
+  if (lower.includes("state mismatch")) return "prov.manualErrorStateMismatch";
+  if (status >= 500) return "prov.networkError";
+  return "prov.manualErrorInvalid";
+}
+
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
+
+export interface OAuthHook {
+  cancelLoginOAuth: (provider: string) => Promise<void>;
+  loginOAuth: (provider: string, addAccount?: boolean, accountId?: string) => Promise<void>;
+  logoutOAuth: (provider: string) => Promise<void>;
+  submitManualCode: (provider: string, input: string) => Promise<"submitted" | "cancelled">;
+}
 
 export function useProvidersOAuth({
   apiBase,
@@ -31,7 +63,7 @@ export function useProvidersOAuth({
   setAccountSets: React.Dispatch<React.SetStateAction<Record<string, AccountSet>>>;
   setBusy: React.Dispatch<React.SetStateAction<string | null>>;
   setStatus: React.Dispatch<React.SetStateAction<string>>;
-  setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>>;
+  setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string; attemptId?: string } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
@@ -44,10 +76,17 @@ export function useProvidersOAuth({
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
+  const oauthAttemptIdRef = useRef<Map<string, string> | null>(null);
+  if (oauthAttemptIdRef.current === null) oauthAttemptIdRef.current = new Map();
+  const manualAbortRef = useRef<Map<string, AbortController> | null>(null);
+  if (manualAbortRef.current === null) manualAbortRef.current = new Map();
 
   const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
     oauthLoginGenerationRef.current!.set(provider, gen);
+    oauthAttemptIdRef.current!.delete(provider);
+    const ctrl = manualAbortRef.current!.get(provider);
+    if (ctrl) { ctrl.abort(); manualAbortRef.current!.delete(provider); }
     return gen;
   }, []);
 
@@ -90,9 +129,12 @@ export function useProvidersOAuth({
         notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
         return;
       }
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string };
+      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; attemptId?: string };
+      if (data.attemptId && typeof data.attemptId === "string") {
+        oauthAttemptIdRef.current!.set(provider, data.attemptId);
+      }
       if (data.url || data.instructions || data.deviceCode) {
-        setLoginInfo({ provider, url: data.url, instructions: data.instructions, deviceCode: data.deviceCode });
+        setLoginInfo({ provider, url: data.url, instructions: data.instructions, deviceCode: data.deviceCode, attemptId: data.attemptId });
       }
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       let finished = false;
@@ -211,5 +253,39 @@ export function useProvidersOAuth({
     }
   };
 
-  return { cancelLoginOAuth, loginOAuth, logoutOAuth };
+  const submitManualCode = async (provider: string, input: string): Promise<"submitted" | "cancelled"> => {
+    const attemptId = oauthAttemptIdRef.current!.get(provider);
+    const controller = new AbortController();
+    const prev = manualAbortRef.current!.get(provider);
+    if (prev) prev.abort();
+    manualAbortRef.current!.set(provider, controller);
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, input, attemptId }),
+        signal: controller.signal,
+      });
+      if (!aliveRef.current) return "cancelled";
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        const raw = data.error || "";
+        const key = mapManualCodeApiErrorToKey(raw, res.status);
+        throw new SafeManualCodeError(t(key as never), { cause: new Error(data.error || String(res.status)) } as ErrorOptions);
+      }
+      return "submitted";
+    } catch (error) {
+      if ((error as Error)?.name === "AbortError") return "cancelled";
+      if (aliveRef.current) {
+        if (error instanceof SafeManualCodeError && error.message) throw error;
+        // Every other rejection (including fetch errors that happen to carry a cause) is transport.
+        throw new Error(t("prov.networkError" as never), { cause: error });
+      }
+      return "cancelled";
+    } finally {
+      if (manualAbortRef.current!.get(provider) === controller) manualAbortRef.current!.delete(provider);
+    }
+  };
+
+  return { cancelLoginOAuth, loginOAuth, logoutOAuth, submitManualCode };
 }
