@@ -811,7 +811,7 @@ function execCommandExtras(toolName: string, argsText: string, cmd: string): Gro
   const justification = firstStringArg(args, ["justification", "reason"]);
   const explicit = firstBooleanArg(args, ["with_escalated_permissions", "withEscalatedPermissions", "escalate"]);
   const auto = grokShellNeedsGitEscalation(cmd);
-  const escalate = explicit !== false && (explicit === true || auto);
+  const escalate = auto || explicit === true;
   if (!escalate && !workdir) return {};
   return {
     ...(workdir ? { workdir } : {}),

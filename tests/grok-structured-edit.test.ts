@@ -503,6 +503,23 @@ describe("Grok structured edit tools", () => {
     expect(addInput).toContain(".git/index.lock");
     expect(addInput).toContain("git -C /repo add -- cogs/admin.py");
 
+    for (const command of [
+      "git checkout feature/refactor",
+      "git switch -c feature/refactor",
+      "git reset --mixed HEAD~1",
+    ]) {
+      const rewritten = await collect(rewriteGrokStructuredEditEvents(replay([
+        { type: "tool_call_start", id: "c1", name: "run_terminal_command" },
+        {
+          type: "tool_call_delta",
+          arguments: JSON.stringify({ command, with_escalated_permissions: false }),
+        },
+        { type: "tool_call_end" },
+      ]), new Set(["run_terminal_command"]), { kind: "exec", name: "exec" }));
+      const input = (JSON.parse((rewritten[1] as { arguments: string }).arguments) as { input: string }).input;
+      expect(input).toContain('sandbox_permissions: "require_escalated"');
+    }
+
     const status = await collect(rewriteGrokStructuredEditEvents(replay([
       { type: "tool_call_start", id: "c1", name: "run_terminal_command" },
       { type: "tool_call_delta", arguments: JSON.stringify({ command: "git status --short" }) },
