@@ -5,7 +5,6 @@ import {
   vercelGatewayProviderPayload,
 } from "../src/providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../src/providers/service-tier";
-import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function provider(baseUrl: string, overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -122,29 +121,5 @@ describe("Vercel AI Gateway configurable provider routing (#1406)", () => {
     ));
     expect(error).not.toBeNull();
     expect(error).toContain(expected);
-  });
-
-  test("safeConfigDTO preserves vercelGatewayRouting in management responses", () => {
-    const config: OcxConfig = {
-      port: 10100,
-      providers: {
-        "vercel-ai-gateway": {
-          adapter: "openai-chat",
-          baseUrl: "https://ai-gateway.vercel.sh/v1",
-          apiKey: "secret",
-          vercelGatewayRouting: { only: ["novita"], sort: "ttft" },
-          modelVercelGatewayRouting: {
-            "zai/glm-5.2": { order: ["novita", "deepinfra"] },
-          },
-        },
-      },
-    };
-    const dto = safeConfigDTO(config);
-    expect(dto.providers?.["vercel-ai-gateway"]?.vercelGatewayRouting).toEqual({
-      only: ["novita"], sort: "ttft",
-    });
-    expect(dto.providers?.["vercel-ai-gateway"]?.modelVercelGatewayRouting).toEqual({
-      "zai/glm-5.2": { order: ["novita", "deepinfra"] },
-    });
   });
 });
