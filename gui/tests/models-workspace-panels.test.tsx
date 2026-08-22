@@ -38,7 +38,7 @@ function installFetch(): { hits: Map<string, number> } {
     }
     if (url.includes("/api/provider-context-caps")) return Response.json({ providers: {} });
     if (url.includes("/api/providers")) return Response.json([{ name: "openai", disabled: false }]);
-    if (url.includes("/api/selected-models")) return Response.json({});
+    if (url.includes("/api/selected-models")) return Response.json({ selected: {} });
     if (url.includes("/api/combos")) return Response.json([]);
     if (url.includes("/api/config")) return Response.json({ providers: { openai: { defaultModel: "gpt-5" } } });
     if (url.includes("/api/routing-profiles")) return Response.json([]);
@@ -124,7 +124,7 @@ test("a cold catalog never removes the tab strip", async () => {
     if (url.includes("/api/models")) { await gate; return Response.json([]); }
     if (url.includes("/api/provider-context-caps")) return Response.json({ providers: {} });
     if (url.includes("/api/providers")) return Response.json([]);
-    if (url.includes("/api/selected-models")) return Response.json({});
+    if (url.includes("/api/selected-models")) return Response.json({ selected: {} });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
 
@@ -147,7 +147,7 @@ test("a cold catalog failure still lets the user reach another tab", async () =>
     if (url.includes("/api/models")) throw new Error("catalog down");
     if (url.includes("/api/provider-context-caps")) return Response.json({ providers: {} });
     if (url.includes("/api/providers")) return Response.json([]);
-    if (url.includes("/api/selected-models")) return Response.json({});
+    if (url.includes("/api/selected-models")) return Response.json({ selected: {} });
     if (url.includes("/api/routing-profiles")) return Response.json([]);
     if (url.includes("/api/routing-analytics")) return Response.json(null);
     if (url.includes("/api/config")) return Response.json({ providers: {} });
@@ -256,7 +256,7 @@ test("a panel load failure does not take its siblings with it", async () => {
     if (url.includes("/api/models")) return Response.json([]);
     if (url.includes("/api/provider-context-caps")) return Response.json({ providers: {} });
     if (url.includes("/api/providers")) return Response.json([]);
-    if (url.includes("/api/selected-models")) return Response.json({});
+    if (url.includes("/api/selected-models")) return Response.json({ selected: {} });
     // A shape the combos loader cannot parse into a coherent page.
     if (url.includes("/api/combos")) return Response.json({ combos: { not: "an array" } });
     if (url.includes("/api/config")) return Response.json(null);
@@ -375,7 +375,7 @@ test("a failed combos reload keeps the workspace instead of replacing it", async
     if (url.includes("/api/models")) return Response.json([]);
     if (url.includes("/api/provider-context-caps")) return Response.json({ providers: {} });
     if (url.includes("/api/providers")) return Response.json([]);
-    if (url.includes("/api/selected-models")) return Response.json({});
+    if (url.includes("/api/selected-models")) return Response.json({ selected: {} });
     if (url.includes("/api/combos")) return Response.json([]);
     if (url.includes("/api/config")) return Response.json({ providers: {} });
     return new Response(null, { status: 404 });
@@ -400,6 +400,70 @@ test("a failed combos reload keeps the workspace instead of replacing it", async
     await act(async () => { await Promise.resolve(); });
 
     expect(panel(container, "combos")?.querySelector(".combos-workspace-root")).toBeTruthy();
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test("a configured frontier shortcut focuses its provider and exact route query", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/models")) {
+      return Response.json([
+        { provider: "xai", id: "grok-4.6", namespaced: "xai/grok-4.6", disabled: false },
+        { provider: "cursor", id: "grok-4.6", namespaced: "cursor/grok-4.6", disabled: false },
+        { provider: "anthropic", id: "claude-opus-5", namespaced: "anthropic/claude-opus-5", disabled: false },
+        { provider: "anthropic", id: "claude-fable-5", namespaced: "anthropic/claude-fable-5", disabled: false },
+      ]);
+    }
+    if (url.includes("/api/provider-context-caps")) return Response.json({ providers: {} });
+    if (url.includes("/api/providers")) {
+      return Response.json([
+        { name: "xai", disabled: false },
+        { name: "cursor", disabled: false },
+        { name: "anthropic", disabled: false },
+      ]);
+    }
+    if (url.includes("/api/selected-models")) return Response.json({ selected: {} });
+    if (url.includes("/api/config")) return Response.json({ providers: {} });
+    if (url.includes("/api/shadow-call-settings")) return Response.json({ enabled: false });
+    if (url.includes("/api/v2")) return new Response(null, { status: 404 });
+    if (url.includes("/api/lab/status")) return Response.json({ projectionAvailable: false });
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const { container, root } = await mountModels();
+  try {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    const shortcut = [...container.querySelectorAll<HTMLButtonElement>(".models-frontier-shortcut")]
+      .find(button => button.textContent?.includes("Claude Opus 5"));
+    expect(shortcut).toBeTruthy();
+
+    await act(async () => shortcut!.click());
+    await act(async () => { await Promise.resolve(); });
+
+    expect(shortcut!.getAttribute("aria-pressed")).toBe("true");
+    const providerCards = [...container.querySelectorAll<HTMLElement>(".models-provider-card")];
+    expect(providerCards).toHaveLength(1);
+    expect(providerCards[0]!.textContent).toContain("anthropic");
+    expect(providerCards[0]!.textContent).toContain("claude-opus-5");
+    expect(providerCards[0]!.textContent).not.toContain("claude-fable-5");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test("an unavailable frontier shortcut opens provider setup", async () => {
+  installFetch();
+  const { container, root } = await mountModels();
+  try {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    const shortcut = [...container.querySelectorAll<HTMLButtonElement>(".models-frontier-shortcut")]
+      .find(button => button.textContent?.includes("xAI Grok"));
+    expect(shortcut?.textContent).toContain("Add provider");
+
+    await act(async () => shortcut!.click());
+    expect(testWindow.location.hash).toBe("#providers");
   } finally {
     await act(async () => root.unmount());
   }
