@@ -180,6 +180,16 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
     out.push(tool);
   };
   const pushCustom = (t: Record<string, unknown>, namespace?: string) => {
+    // Hosted image_generation already installed the synthetic root tool. A later
+    // root custom `image_gen` would collide on the same wire name with a different
+    // `freeform` flag and throw `ambiguous tool catalog`.
+    if (
+      !namespace
+      && t.name === IMAGE_GEN_TOOL_NAME
+      && out.some(tool => tool.name === IMAGE_GEN_TOOL_NAME && !tool.namespace && tool.imageGeneration)
+    ) {
+      return;
+    }
     // Freeform custom tools are lowered to a single string `input` because chat models cannot
     // emit Responses grammar payloads directly. Keep tool-specific input guidance scoped to the
     // tool that owns it: leaking apply_patch syntax into `exec` or another freeform tool teaches

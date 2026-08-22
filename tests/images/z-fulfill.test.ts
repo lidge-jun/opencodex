@@ -22,6 +22,12 @@ beforeAll(async () => {
       if (xaiError) throw xaiError;
       return xaiResult;
     },
+    resolveXaiAspectRatioLiteral: (value: unknown) => {
+      if (typeof value !== "string") return undefined;
+      const literal = value.trim();
+      if (!literal || literal === "auto") return undefined;
+      return new Set(["1:1", "16:9", "9:16", "4:3", "3:4"]).has(literal) ? literal : undefined;
+    },
   }));
   mock.module("../../src/images/artifacts", () => ({
     createImageBudget: () => ({ spent: 0 }),
