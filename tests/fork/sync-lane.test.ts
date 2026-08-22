@@ -113,6 +113,22 @@ describe("annotateMainLane", () => {
     expect(result.recommendedLane).toBe("emergency-rebuild");
   });
 
+  test("reclassifies a disconnected already-current event as an emergency rebuild", async () => {
+    const queued = queuedRunner([
+      gitResult("", 1),
+      gitResult(""),
+    ]);
+
+    const result = await annotateMainLane(event("already-current"), {
+      runner: queued.runner,
+    });
+
+    expect(result.kind).toBe("history-diverged");
+    expect(result.vendorContainedInMain).toBe(false);
+    expect(result.mergeBaseCount).toBe(0);
+    expect(result.recommendedLane).toBe("emergency-rebuild");
+  });
+
   test("does not reclassify non-lane events", async () => {
     const queued = queuedRunner([
       gitResult("vendor-sha\n"),

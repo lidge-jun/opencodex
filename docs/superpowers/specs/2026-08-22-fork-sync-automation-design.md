@@ -83,7 +83,8 @@ branch ref (`HEAD` in the Action checkout). It uses
 Missing refs leave these optional fields unset and preserve the original event
 kind. Only `already-current` and `pin-updated` are reclassified:
 
-- more than one merge base → `history-diverged` and
+- zero merge bases (disconnected history) or more than one merge base →
+  `history-diverged` and
   `recommendedLane: "emergency-rebuild"`;
 - `already-current`, not contained, with one merge base → `main-behind` and
   `recommendedLane: "daily-merge"`;
@@ -91,6 +92,10 @@ kind. Only `already-current` and `pin-updated` are reclassified:
   `recommendedLane: "daily-merge"`;
 - contained `already-current` → remains `already-current` with
   `recommendedLane: "noop"`.
+
+Only a single merge base may use the daily-merge or noop lanes; a missing
+common ancestor is fail-closed as `history-diverged`, never as
+`already-current`.
 
 `pin-diverged` and `detect-failed` are never reclassified.
 

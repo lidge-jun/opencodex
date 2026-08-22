@@ -46,7 +46,7 @@ export async function annotateMainLane(
   if (event.kind !== "already-current" && event.kind !== "pin-updated") {
     return annotated;
   }
-  if (baseCount > 1) {
+  if (baseCount === 0 || baseCount > 1) {
     return {
       ...annotated,
       kind: "history-diverged",

@@ -125,6 +125,29 @@ describe("fork sync CLI", () => {
     expect(event.recommendedLane).toBe("emergency-rebuild");
   });
 
+  test("reclassifies a disconnected already-current event as history-diverged", async () => {
+    const output: string[] = [];
+    const results = [
+      result(`${TAG_SHA} refs/tags/v2.29.0\n`),
+      result(TAG_SHA),
+      result(DEV_SHA),
+      result(""),
+      result("", 1),
+      result(""),
+    ];
+
+    await runCli(["detect"], {
+      env: { FORK_SYNC_UPSTREAM_REPO: "upstream" },
+      runner: async () => results.shift() ?? result("", 1, "unexpected command"),
+      write: value => output.push(value),
+    });
+
+    const event = JSON.parse(output[0]!) as SyncEvent;
+    expect(event.kind).toBe("history-diverged");
+    expect(event.mergeBaseCount).toBe(0);
+    expect(event.recommendedLane).toBe("emergency-rebuild");
+  });
+
   test("pin dispatches detection and both ff-only updates", async () => {
     const calls: string[][] = [];
     const output: string[] = [];
