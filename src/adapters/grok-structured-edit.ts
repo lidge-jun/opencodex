@@ -411,7 +411,11 @@ export function grokNativeCatalogTools(
       parameters: { ...GROK_RUN_TERMINAL_COMMAND_INPUT_SCHEMA },
     },
   ];
-  return candidates.filter(tool => !existingBareNames.has(tool.name));
+  const available = candidates.filter(tool => !existingBareNames.has(tool.name));
+  // Hiding exec is safe only while the projected catalog still owns an edit sink. If the
+  // caller already owns both edit names, the remaining read/terminal helpers cannot be
+  // translated into file mutations, so keep the original code-mode catalog intact.
+  return available.some(tool => isGrokStructuredEditToolName(tool.name)) ? available : [];
 }
 
 type GrokNativeCatalogRequest = {

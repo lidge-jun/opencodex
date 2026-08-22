@@ -1299,10 +1299,11 @@ function toolsToChatFormatForProvider(parsed: OcxParsedRequest, provider: OcxPro
 }
 
 function toolChoiceToChatFormat(
-  tc: OcxParsedRequest["options"]["toolChoice"],
-  tools: OcxParsedRequest["context"]["tools"],
+  parsed: OcxParsedRequest,
   provider: OcxProviderConfig,
 ): unknown {
+  const tc = parsed.options.toolChoice;
+  const tools = parsed.context.tools;
   if (!tc) return undefined;
   if (isAllowedToolChoice(tc)) {
     if (tc.mode === "required" && tc.allowedTools.length === 1 && isNativeOpenAIChatTarget(provider)) {
@@ -1311,7 +1312,19 @@ function toolChoiceToChatFormat(
     return tc.mode === "required" ? "required" : "auto";
   }
   if (tc === "auto" || tc === "none" || tc === "required") return tc;
-  if ("name" in tc) return { type: "function", function: { name: resolveToolChoiceWireName(tools, tc.name) } };
+  if ("name" in tc) {
+    // An exact exec selector authorizes the Grok projection, but that projection replaces exec
+    // with several native functions. Requiring one of the advertised functions preserves the
+    // caller's forced-tool intent without naming a tool that is absent from the outgoing catalog.
+    const grokNative = grokNativeCatalogTools(
+      tools,
+      tc,
+      provider,
+      effectiveInstructionText(parsed.context.messages, parsed.context.systemPrompt),
+    );
+    if (grokNative.length > 0) return "required";
+    return { type: "function", function: { name: resolveToolChoiceWireName(tools, tc.name) } };
+  }
   return undefined;
 }
 
@@ -1377,7 +1390,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const { url, headers, hasCredential } = openAIChatTransport(provider);
       const messages = messagesToChatFormat(parsed, provider);
       const tools = toolsToChatFormatForProvider(parsed, provider);
-      const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider);
+      const toolChoice = toolChoiceToChatFormat(parsed, provider);
 
       const body: Record<string, unknown> = {
         model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(parsed.modelId) : parsed.modelId,

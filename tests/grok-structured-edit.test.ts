@@ -117,6 +117,15 @@ describe("Grok structured edit tools", () => {
     )).toEqual([]);
   });
 
+  test("keeps exec when caller collisions remove both native edit tools", () => {
+    const callerSearch: OcxTool = { name: "search_replace", description: "caller search", parameters: {} };
+    const callerWrite: OcxTool = { name: "write", description: "caller write", parameters: {} };
+    const tools = [codeModeExec(applyPatchHelper), callerSearch, callerWrite];
+
+    expect(grokNativeCatalogTools(tools, undefined, xai)).toEqual([]);
+    expect(grokFacingTools(tools, undefined, xai)).toEqual(tools);
+  });
+
   test("keeps every caller-owned Grok-name collision byte-identical in adapter events", async () => {
     for (const name of [
       "read_file",

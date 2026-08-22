@@ -236,6 +236,27 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(instructions).toEqual(["system", "Do not modify files.", "current user text"]);
   });
 
+  test("keeps only the latest authoritative collaboration-mode block", () => {
+    const planMode = [
+      "<collaboration_mode># Collaboration Mode: Plan",
+      "You are in **Plan Mode**. Do not make any mutations.",
+      "</collaboration_mode>",
+    ].join("\n");
+    const defaultMode = [
+      "<collaboration_mode># Collaboration Mode: Default",
+      "You are now in Default mode. Previous Plan mode instructions are inactive.",
+      "</collaboration_mode>",
+    ].join("\n");
+    const instructions = effectiveInstructionText([
+      { role: "developer", timestamp: 1, content: planMode },
+      { role: "developer", timestamp: 2, content: "Keep this non-mode instruction.\n" + defaultMode },
+      { role: "user", timestamp: 3, content: "implement it" },
+    ]);
+
+    expect(instructions).toEqual(["Keep this non-mode instruction.", defaultMode, "implement it"]);
+    expect(shouldSuppressCodeModePatchGuidance(instructions.join("\n"))).toBe(false);
+  });
+
   test("injects contextual patch guidance only for declared nested helpers", () => {
     const exec = (description: string): OcxTool => ({ name: "exec", freeform: true, description, parameters: {} });
     const note = buildNonOpenAIToolCatalogNudgeForTools([exec("declare const tools: { apply_patch(input: string): Promise<unknown>; exec_command(cmd: string): Promise<unknown> }")]);

@@ -383,6 +383,29 @@ describe("xAI auth-mode transport selection", () => {
     expect(tool?.function.parameters.oneOf).toBeUndefined();
     expect(tool?.function.parameters.properties).toEqual({});
   });
+
+  test("remaps an exact exec choice when the Grok catalog replaces exec", () => {
+    const parsedRequest = parseRequest({
+      model: "grok-4.5",
+      input: "edit the file",
+      tools: [{
+        type: "custom",
+        name: "exec",
+        description: "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };",
+      }],
+      tool_choice: { type: "custom", name: "exec" },
+    });
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest(parsedRequest);
+    const body = JSON.parse(request.body) as {
+      tool_choice: unknown;
+      tools: Array<{ function: { name: string } }>;
+    };
+
+    expect(body.tool_choice).toBe("required");
+    expect(body.tools.map(tool => tool.function.name)).toEqual([
+      "read_file", "grep", "list_dir", "search_replace", "write", "run_terminal_command",
+    ]);
+  });
 });
 
 describe("xAI prompt-cache conv-id affinity", () => {

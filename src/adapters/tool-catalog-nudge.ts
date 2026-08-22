@@ -7,19 +7,31 @@ import {
   type OcxMessage,
 } from "../types";
 
+const COLLABORATION_MODE_BLOCK = /<collaboration_mode>[\s\S]*?<\/collaboration_mode>/gi;
+
 /** Collect authoritative system/developer text plus only the latest user turn. */
 export function effectiveInstructionText(messages: readonly OcxMessage[] | undefined, system?: readonly string[]): string[] {
-  const out = [...(system ?? [])];
+  const out: string[] = [];
+  let latestCollaborationMode: string | undefined;
   let latestUserText: string[] = [];
+  const appendAuthoritativeText = (text: string): void => {
+    const withoutSupersededModes = text.replace(COLLABORATION_MODE_BLOCK, block => {
+      latestCollaborationMode = block;
+      return "";
+    }).trim();
+    if (withoutSupersededModes.length > 0) out.push(withoutSupersededModes);
+  };
+
+  for (const text of system ?? []) appendAuthoritativeText(text);
   for (const message of messages ?? []) {
     if (message.role !== "developer" && message.role !== "user") continue;
     const text = typeof message.content === "string"
       ? [message.content]
       : message.content.filter(part => part.type === "text").map(part => part.text);
-    if (message.role === "developer") out.push(...text);
+    if (message.role === "developer") text.forEach(appendAuthoritativeText);
     else latestUserText = text;
   }
-  return [...out, ...latestUserText];
+  return [...out, ...(latestCollaborationMode ? [latestCollaborationMode] : []), ...latestUserText];
 }
 
 // Tool names that exist only in OTHER agent harnesses (Claude Code and friends). Naming one
