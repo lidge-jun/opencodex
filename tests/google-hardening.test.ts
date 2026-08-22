@@ -84,21 +84,36 @@ describe("google provider hardening", () => {
     );
   });
 
+  test("Antigravity rejects a cleartext http baseUrl before dispatch", async () => {
+    const adapter = createGoogleAdapter(antigravityProvider({
+      baseUrl: "http://daily-cloudcode-pa.googleapis.com",
+    }));
+
+    await expect(adapter.buildRequest(parsed())).rejects.toThrow(
+      "google-antigravity requires an HTTPS baseUrl",
+    );
+  });
+
   test("Antigravity rejects flat Gemini payloads without the response wrapper", async () => {
     const adapter = createGoogleAdapter(antigravityProvider());
     const flatPayload = { candidates: [{ content: { parts: [{ text: "unexpected" }] } }] };
 
+    // SSE-framed flat payload: parseStream unwraps each data frame and rejects missing `response`.
     const streamEvents = await collect(adapter.parseStream(sseResponse([flatPayload])));
+    expect(streamEvents).toEqual([{
+      type: "error",
+      message: "google-antigravity response missing response wrapper",
+    }]);
+
+    // Plain JSON without SSE framing: CCA parseResponse delegates to parseStream, which reads until
+    // EOF without finding a `data:` frame and fails closed as truncated SSE transport.
     const responseEvents = await adapter.parseResponse!(
       new Response(JSON.stringify(flatPayload), { status: 200 }),
     );
-
-    const expected = [{
+    expect(responseEvents).toEqual([{
       type: "error",
-      message: "google-antigravity response missing response wrapper",
-    }];
-    expect(streamEvents).toEqual(expected);
-    expect(responseEvents).toEqual(expected);
+      message: "upstream stream ended with an incomplete SSE frame — possible truncation",
+    }]);
   });
 
   test("truncated final JSON is a terminal stream error", async () => {
