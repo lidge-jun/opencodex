@@ -49,8 +49,7 @@ import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
-import { redactSecretString } from "./lib/redact";
-import { redactSecrets } from "./lib/redact";
+import { redactSecretString, redactSecrets } from "./lib/redact";
 import {
   resolveTrustedWindowsPowerShellExe,
   resolveTrustedWindowsSystemDirectory,
@@ -2821,12 +2820,12 @@ export function recordConfigMutationInCurrentTransaction(
   `).run(Date.now(), source.surface, source.detail, JSON.stringify(fields), JSON.stringify(before), JSON.stringify(after));
   // Keep the newest CONFIG_AUDIT_MAX_ROWS rows: delete every row at or below the id of
   // the (N+1)-th newest entry. COALESCE keeps a small table a no-op.
-  configMutationDatabase.exec(`
+  configMutationDatabase.prepare(`
     DELETE FROM config_mutation_audit
     WHERE id <= COALESCE((
-      SELECT id FROM config_mutation_audit ORDER BY id DESC LIMIT 1 OFFSET ${configAuditMaxRows}
+      SELECT id FROM config_mutation_audit ORDER BY id DESC LIMIT 1 OFFSET ?
     ), 0)
-  `);
+  `).run(configAuditMaxRows);
 }
 
 /**

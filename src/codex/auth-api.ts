@@ -442,7 +442,7 @@ function getRuntimeConfig(config: OcxConfig): OcxConfig {
 }
 
 function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void {
-  saveConfigPreservingClaudeCode(nextConfig, { surface: "internal", detail: "auth: runtime config save" });
+  saveConfigPreservingClaudeCode(nextConfig);
   if (sourceConfig === nextConfig || !isRuntimeConfig(sourceConfig)) return;
   for (const key of Object.keys(sourceConfig) as Array<keyof OcxConfig>) {
     delete sourceConfig[key];
@@ -900,7 +900,7 @@ function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: Fresh
         }
       }
       return { changed, value: accepted };
-    }, { surface: "internal", detail: "wham: pool plan reconcile" });
+    });
   } catch (error) {
     // Plan persistence is derived metadata on a read route. Contention must fail closed without
     // turning account listing into a 500; a later refresh can retry against the latest files.
