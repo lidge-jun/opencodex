@@ -110,6 +110,13 @@ export function catalogEntryEfforts(entry: RawEntry): string[] {
 
 export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
 
+/** grok-4.6's vendor ladder tops at xhigh. Do not advertise synthetic max/ultra. */
+export function isExactGrok46ReasoningLadder(modelId: string | undefined): boolean {
+  if (!modelId) return false;
+  const id = modelId.toLowerCase();
+  return id === "grok-4.6" || id === "grok-4.6-fast";
+}
+
 export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
   if (!model) return;
   // This marker survives strict catalog normalization and lets sync distinguish a stale

@@ -901,7 +901,7 @@ describe("provider registry parity", () => {
     expect(entry).toBeTruthy();
     expect(entry?.context_window).toBe(500_000);
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
-      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+      .toEqual(["low", "medium", "high", "xhigh"]);
     expect(entry?.default_reasoning_level).toBe("high");
   });
 

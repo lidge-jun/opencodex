@@ -1725,6 +1725,33 @@ describe("Google Gemini catalog metadata", () => {
   });
 });
 
+describe("xAI grok-4.6 catalog reasoning ladder", () => {
+  test("advertises low/medium/high/xhigh without synthetic max or ultra", async () => {
+    const xai = {
+      adapter: "openai-chat" as const,
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "oauth" as const,
+      liveModels: false,
+    };
+    enrichProviderFromRegistry("xai", xai);
+    const models = await gatherRoutedModels({
+      port: 0,
+      defaultProvider: "xai",
+      providers: { xai },
+    });
+    const grok46 = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(row => row.slug === "xai/grok-4.6");
+    const grok45 = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(row => row.slug === "xai/grok-4.5");
+
+    expect((grok46?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    expect(grok46?.default_reasoning_level).toBe("high");
+    expect((grok45?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "max", "ultra"]);
+  });
+});
+
 describe("Cursor Kimi K3 catalog default effort", () => {
   // Regression for the effort-tier ladder added with cursor/kimi-k3: the Cursor ladder is
   // low/high/max with NO medium rung, so applyReasoningLevels' medium -> high -> first
