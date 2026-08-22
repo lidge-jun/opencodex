@@ -64,10 +64,16 @@ conversationnelle. Les continuations avec état utilisant `previous_response_id`
 à l’identique figure dans ce préfixe. Lorsque les directives changent, le protocole de l’outil principal reste en première position et
 les nouvelles directives sont insérées avant l’entrée conversationnelle actuelle.
 
-Ce sont des instructions destinées à l'agent principal, et non à un routeur de génération côté proxy. Sur la v2, un fork avec historique complet
-hérite du modèle parent et rejette les remplacements de modèle ou d'effort. Le guidage indique donc à Codex de
-utilisez `fork_turns: "none"` (ou un compte de tour partiel positif tel que `"3"`) lorsque vous dépassez `model` ou
-`reasoning_effort`, et de rendre le message de tâche autonome.
+Ce sont des instructions destinées à l'agent principal, et non à un routeur de génération côté proxy. L'indication d'usage v2 propre à Codex
+indique à l'agent qu'un fork avec historique complet (`fork_turns` omis ou `"all"`) hérite du modèle et de l'effort de raisonnement du parent,
+et qu'il ne doit donc pas y joindre de remplacements. Le guidage indique donc à Codex d'utiliser `fork_turns: "none"` (ou un compte de tour
+partiel positif tel que `"3"`) lorsqu'il transmet `model` ou `reasoning_effort`, et de rendre le message de tâche autonome.
+
+Traitez cela comme une convention au niveau du prompt plutôt que comme un rejet strict à l'exécution. Codex rejetait autrefois `agent_type`,
+`model` et `reasoning_effort` sur un fork v2 à historique complet ([openai/codex#20077](https://github.com/openai/codex/issues/20077)), mais
+[#37252](https://github.com/openai/codex/pull/37252) a supprimé cette vérification, et le gestionnaire de spawn v2 actuel applique les
+remplacements de modèle quel que soit le mode de fork. Suivre la convention reste néanmoins la voie fiable, car l'agent est invité à éviter les
+remplacements sur un fork complet.
 
 Le texte personnalisé de `injectionPrompt` peut utiliser les quatre espaces réservés suivants :
 
@@ -227,8 +233,15 @@ l’agent principal décide toujours s’il doit déléguer.
 
 ### Pourquoi mon enfant v2 a-t-il utilisé le modèle parent ?
 
-Un fork v2 à historique complet hérite du modèle parent. Utilisez un spawn qui définit `fork_turns` sur `"none"` ou
-un décompte partiel positif avant de passer un dépassement de modèle ou d'effort.
+Les agents générés héritent du modèle parent dès que `model` est omis, et c'est le comportement par défaut pour tous les modes de fork, pas une
+conséquence propre au fork avec historique complet. L'indication d'usage v2 intégrée à Codex demande en outre à l'agent de ne pas joindre de
+remplacements sur un fork à historique complet, de sorte qu'il peut délibérément laisser `model` non défini. Transmettez un `model` explicite
+sur un spawn qui définit `fork_turns` sur `"none"` ou un décompte partiel positif.
+
+Si le champ `model` est totalement absent du schéma de l'outil, la cause est son exposition et non le mode de fork : vérifiez
+`features.multi_agent_v2.expose_spawn_agent_model_overrides` dans Codex (activé par défaut), et consultez
+[openai/codex#31814](https://github.com/openai/codex/issues/31814) pour les parents ChatGPT natifs dont le schéma de collaboration est figé par
+le backend.
 
 ### Pourquoi un modèle configuré manque-t-il dans la liste v2 ?
 

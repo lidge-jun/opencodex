@@ -43,7 +43,9 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 
 `multiAgentGuidanceEnabled` 默认开启，是 opencodex 编写的指引在两个界面上的总开关。关闭它会同时抑制 v2 的 designation block 和 v1 的 proactive 文本。
 
-这些是发给主代理的指令，不是 proxy 侧的 spawn 路由器。对于 v2，全历史 fork 会继承父模型，并拒绝模型或 effort 覆盖。因此，指引会要求 Codex 在传递 `model` 或 `reasoning_effort` 时使用 `fork_turns: "none"`（或者像 `"3"` 这样正向的部分 turn 数），并让任务消息保持自包含。
+这些是发给主代理的指令，不是 proxy 侧的 spawn 路由器。Codex 自身的 v2 usage hint 会告诉代理：全历史 fork（省略 `fork_turns` 或设为 `"all"`）继承父模型和推理 effort，因此不应同时传入覆盖。所以指引会要求 Codex 在传递 `model` 或 `reasoning_effort` 时使用 `fork_turns: "none"`（或者像 `"3"` 这样正向的部分 turn 数），并让任务消息保持自包含。
+
+请把它当作提示词层面的约定，而不是运行时的硬性拒绝。Codex 过去确实会在全历史 v2 fork 上拒绝 `agent_type`、`model` 和 `reasoning_effort`（[openai/codex#20077](https://github.com/openai/codex/issues/20077)），但 [#37252](https://github.com/openai/codex/pull/37252) 移除了该检查，当前的 v2 spawn 处理器无论 fork 模式如何都会应用模型覆盖。不过遵循该约定仍然更可靠，因为代理已被提示在全量 fork 上避免使用覆盖。
 
 自定义 `injectionPrompt` 文本可以使用全部四个占位符：
 
@@ -153,7 +155,9 @@ curl -X PUT http://localhost:10100/api/injection-model \
 
 ### 为什么我的 v2 子级使用了父模型？
 
-全历史 v2 fork 会继承父模型。在传入模型或 effort 覆盖之前，请使用把 `fork_turns` 设为 `"none"` 或正向部分 turn 数的 spawn。
+只要省略 `model`，子代理就会继承父模型；这是所有 fork 模式下的默认行为，并非全历史 fork 单独造成的。此外，Codex 内置的 v2 usage hint 也会要求代理不要在全历史 fork 上传入覆盖，因此代理可能有意不设置 `model`。请在把 `fork_turns` 设为 `"none"` 或正向部分 turn 数的 spawn 上显式传入 `model`。
+
+如果工具 schema 中根本没有 `model` 字段，原因是暴露设置而非 fork 模式：请检查 Codex 的 `features.multi_agent_v2.expose_spawn_agent_model_overrides`（默认开启）；对于 collaboration schema 由后端固定的 ChatGPT 原生父代理，参见 [openai/codex#31814](https://github.com/openai/codex/issues/31814)。
 
 ### 为什么配置的模型没有出现在 v2 roster 中？
 

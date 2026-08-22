@@ -6,7 +6,7 @@ description: 全域控制 Codex 在所有模型上生成和管理子代理的方
 opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀表板和 Models 頁面中的 **Sub-agent** 開關會全域控制這一設定。
 
 :::note
-在 v2 介面（`multi_agent_v2`）上，子代理**預設**繼承父會話的模型：`fork_turns` 預設為 `all`，而全量歷史 fork 會拒絕覆蓋。自 v2.7.2 起，opencodex 注入的指引會教模型如何打破繼承 —— 將 `fork_turns` 設為 `"none"`（或如 `"3"` 的部分 fork）的 `spawn_agent` 呼叫可以傳入 `model` / `reasoning_effort` 引數；即使公開的工具 schema 中看不到這些引數，Codex 執行環境也會解析並應用。已知傳輸限制：當**原生**父代理 spawn 一個路由到**非原生** provider 的子代理時，Codex 用戶端可能只以後端加密的 `encrypted_content` 傳送 `NEW_TASK` 載荷（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。opencodex 不會把這種無法讀取的任務轉發給外部 provider：直接路由會回傳 HTTP 400 和錯誤碼 `unreadable_encrypted_agent_task`；組合路由則會跳過無法解密的目標，並在存在可用目標時選擇規範的原生 ChatGPT 目標。恢復方法：異構 provider 委派改用 v1、選擇原生 ChatGPT 子代理，或將任務重新作為明文 v2 `agent_message` 內容傳送。另有預設停用的實驗性 `agentTaskRecovery`；它會增加 ChatGPT 配額用量與延遲，且依賴非公開後端行為。
+在 v2 介面（`multi_agent_v2`）上，子代理**預設**繼承父會話的模型：`fork_turns` 預設為 `all`，且 Codex 的 v2 使用提示會要求不要在全量歷史 fork 上傳入覆蓋。自 v2.7.2 起，opencodex 注入的指引會教模型如何打破繼承 —— 將 `fork_turns` 設為 `"none"`（或如 `"3"` 的部分 fork）的 `spawn_agent` 呼叫可以傳入 `model` / `reasoning_effort` 引數；即使公開的工具 schema 中看不到這些引數，Codex 執行環境也會解析並應用。已知傳輸限制：當**原生**父代理 spawn 一個路由到**非原生** provider 的子代理時，Codex 用戶端可能只以後端加密的 `encrypted_content` 傳送 `NEW_TASK` 載荷（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。opencodex 不會把這種無法讀取的任務轉發給外部 provider：直接路由會回傳 HTTP 400 和錯誤碼 `unreadable_encrypted_agent_task`；組合路由則會跳過無法解密的目標，並在存在可用目標時選擇規範的原生 ChatGPT 目標。恢復方法：異構 provider 委派改用 v1、選擇原生 ChatGPT 子代理，或將任務重新作為明文 v2 `agent_message` 內容傳送。另有預設停用的實驗性 `agentTaskRecovery`；它會增加 ChatGPT 配額用量與延遲，且依賴非公開後端行為。
 :::
 
 ## What sub-agents are
@@ -21,7 +21,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 | --- | --- | --- |
 | **v1** | `multi_agent_v1` | 使用經典的名稱空間代理工具，以及 `send_input` / `close_agent` / `resume_agent`。`spawn_agent` 的模型覆蓋可以在其他模型上生成子代理。 |
 | **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol 和 gpt-5.6-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
-| **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。全量歷史 fork 時子代理繼承父模型；`fork_turns: "none"`（或部分 fork）時接受 `model` / `reasoning_effort` 覆蓋。如果原生→路由子代理只收到後端加密的任務內容，外部路由會回傳 `unreadable_encrypted_agent_task`；混合組合會優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
+| **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。省略 `model` 時子代理繼承父模型；提示慣例是在傳入 `model` / `reasoning_effort` 覆蓋時使用 `fork_turns: "none"`（或部分 fork）。如果原生→路由子代理只收到後端加密的任務內容，外部路由會回傳 `unreadable_encrypted_agent_task`；混合組合會優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
 
 ## 運作原理
 
@@ -44,9 +44,15 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 `multiAgentGuidanceEnabled` 預設開啟，是 opencodex 撰寫的指引在兩個介面上的主開關。關閉它會同時
 抑制 v2 指定區塊與 v1 主動文字。
 
-這些是給主代理的指示，不是 proxy 端的 spawn 路由器。在 v2 上，全量歷史 fork 會繼承父模型並拒絕
-模型或 effort 覆蓋。因此指引會告訴 Codex 在傳遞 `model` 或 `reasoning_effort` 時使用
-`fork_turns: "none"`（或正數的部分回合數，例如 `"3"`），並讓任務訊息自足。
+這些是給主代理的指示，不是 proxy 端的 spawn 路由器。Codex 自身的 v2 usage hint 會告訴代理：全量歷史
+fork（省略 `fork_turns` 或設為 `"all"`）繼承父模型與推理 effort，因此不應同時傳入覆蓋。所以指引會告訴
+Codex 在傳遞 `model` 或 `reasoning_effort` 時使用 `fork_turns: "none"`（或正數的部分回合數，例如
+`"3"`），並讓任務訊息自足。
+
+請把它視為提示詞層級的慣例，而非執行期的硬性拒絕。Codex 過去確實會在全量歷史 v2 fork 上拒絕
+`agent_type`、`model` 與 `reasoning_effort`（[openai/codex#20077](https://github.com/openai/codex/issues/20077)），
+但 [#37252](https://github.com/openai/codex/pull/37252) 移除了該檢查，目前的 v2 spawn 處理器無論 fork
+模式為何都會套用模型覆蓋。不過遵循該慣例仍然較可靠，因為代理已被提示在全量 fork 上避免使用覆蓋。
 
 自訂 `injectionPrompt` 文字可以使用全部四個佔位符：
 
@@ -174,8 +180,13 @@ curl -X PUT http://localhost:10100/api/injection-model \
 
 ### 為什麼我的 v2 子代理使用了父模型？
 
-全量歷史 v2 fork 會繼承父模型。請在傳遞模型或 effort 覆蓋之前，使用把 `fork_turns` 設為 `"none"`
-或正數部分計數的 spawn。
+只要省略 `model`，子代理就會繼承父模型；這是所有 fork 模式下的預設行為，並非全量歷史 fork 單獨造成
+的。此外，Codex 內建的 v2 usage hint 也會要求代理不要在全量歷史 fork 上傳入覆蓋，因此代理可能刻意不
+設定 `model`。請在把 `fork_turns` 設為 `"none"` 或正數部分計數的 spawn 上明確傳入 `model`。
+
+如果工具 schema 中根本沒有 `model` 欄位，原因是公開設定而非 fork 模式：請檢查 Codex 的
+`features.multi_agent_v2.expose_spawn_agent_model_overrides`（預設開啟）；至於 collaboration schema 由
+後端固定的 ChatGPT 原生父代理，請參見 [openai/codex#31814](https://github.com/openai/codex/issues/31814)。
 
 ### 為什麼設定的模型沒有出現在 v2 名冊中？
 
