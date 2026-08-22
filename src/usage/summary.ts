@@ -453,7 +453,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
       for (const m of models.values()) {
         m.cacheHitRate = (m.inputTokens ?? 0) > 0 && (m.cacheReadInputTokens ?? 0) > 0
           ? (m.cacheReadInputTokens ?? 0) / (m.inputTokens ?? 0)
-          : ((m.inputTokens ?? 0) > 0 ? 0 : null);
+          : null;
       }
       const sorted = [...models.values()].sort((a, b) => b.requests - a.requests);
       day.models = retainedBreakdownRows(sorted, overflow => {
@@ -480,7 +480,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
         }
         const cacheHitRate = inputTokens > 0 && cacheReadInputTokens > 0
           ? cacheReadInputTokens / inputTokens
-          : (inputTokens > 0 ? 0 : null);
+          : null;
         return {
           model: "other",
           provider: "other",
@@ -628,7 +628,7 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
     m.shareRatio = totalTokens === 0 ? 0 : m.totalTokens / totalTokens;
     m.cacheHitRate = m.inputTokens > 0 && (m.cacheReadInputTokens ?? 0) > 0
       ? (m.cacheReadInputTokens ?? 0) / m.inputTokens
-      : (m.inputTokens > 0 ? 0 : null);
+      : null;
     m.priceCoverageRatio = m.requests > 0 ? m.pricedRequests / m.requests : 0;
   }
   const sorted = models.sort((a, b) => b.requests - a.requests);
@@ -687,7 +687,7 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
     other.shareRatio = totalTokens === 0 ? 0 : other.totalTokens / totalTokens;
     other.cacheHitRate = other.inputTokens > 0 && (other.cacheReadInputTokens ?? 0) > 0
       ? (other.cacheReadInputTokens ?? 0) / other.inputTokens
-      : (other.inputTokens > 0 ? 0 : null);
+      : null;
     other.priceCoverageRatio = other.requests > 0 ? other.pricedRequests / other.requests : 0;
     return other;
   });
@@ -810,7 +810,7 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
     p.shareRatio = totalTokens === 0 ? 0 : p.totalTokens / totalTokens;
     p.cacheHitRate = (p.inputTokens ?? 0) > 0 && (p.cacheReadInputTokens ?? 0) > 0
       ? (p.cacheReadInputTokens ?? 0) / (p.inputTokens ?? 0)
-      : ((p.inputTokens ?? 0) > 0 ? 0 : null);
+      : null;
     p.priceCoverageRatio = p.requests > 0 ? p.pricedRequests / p.requests : 0;
   }
   return providers.sort((a, b) => b.requests - a.requests);

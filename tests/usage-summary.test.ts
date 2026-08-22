@@ -988,7 +988,7 @@ describe("summarizeUsage", () => {
 
     const unpricedModel = summary.models.find(m => m.model === "unpriced-model");
     expect(unpricedModel).toBeDefined();
-    expect(unpricedModel?.cacheHitRate).toBe(0);
+    expect(unpricedModel?.cacheHitRate).toBeNull();
     expect(unpricedModel?.priceCoverageRatio).toBe(0);
 
     // Provider-level assertions
