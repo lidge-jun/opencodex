@@ -320,15 +320,19 @@ async function connectPublicHttps(
   const resolved = await resolvePublicAddresses(url, options.context);
   const pinned = pickPinnedAddress(resolved.addresses);
   const download = options.pinnedDownload ?? ((resource, peer, signal) =>
-    pinnedHttpsGet(resource, peer, signal, { maxBytes: options.maxBytes }));
+    pinnedHttpGet(resource, peer, signal, {
+      maxBytes: options.maxBytes,
+      context: `${options.context} download`,
+    }));
   return download(url, pinned, options.signal);
 }
 
 /**
  * Fetch a provider-returned image URL after destination-policy + pinned HTTPS.
- * Redirects are not followed (`pinnedHttpsGet` treats 3xx as failure). Throws a
- * message that names the class of failure (scheme / destination kind / download)
- * without reflecting the target URL.
+ * Redirects are not followed: the default pinned GET returns the status, and this
+ * helper rejects every non-2xx including 3xx. Throws a message that names the
+ * class of failure (scheme / destination kind / download) without reflecting the
+ * target URL.
  */
 export async function fetchPublicHttpsImage(
   url: string,

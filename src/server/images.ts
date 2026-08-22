@@ -436,6 +436,35 @@ async function tryXaiImageRelay(
   if (config.images?.bridgeEnabled !== true) return undefined;
   const found = findXaiProvider(config);
   if (!found) return undefined;
+  const obj = body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
+  const prompt = typeof obj.prompt === "string" ? obj.prompt
+    : typeof obj.input === "string" ? obj.input
+    : "";
+  if (!prompt.trim()) {
+    return formatErrorResponse(400, "invalid_request_error", "image generation requires a prompt");
+  }
+  const n = typeof obj.n === "number" && Number.isFinite(obj.n) ? Math.max(1, Math.min(4, Math.floor(obj.n))) : 1;
+  const size = typeof obj.size === "string" ? obj.size : undefined;
+  const quality = typeof obj.quality === "string" ? obj.quality : undefined;
+  const aspectRatio = typeof obj.aspect_ratio === "string" ? obj.aspect_ratio : undefined;
+  let imageUrl: string | undefined;
+  if (endpoint === "edits") {
+    const images = obj.images;
+    const first = Array.isArray(images) ? images[0] : undefined;
+    if (typeof obj.image === "string") imageUrl = obj.image;
+    else if (typeof obj.image_url === "string") imageUrl = obj.image_url;
+    else if (first && typeof first === "object" && first !== null) {
+      const rec = first as Record<string, unknown>;
+      if (typeof rec.image_url === "string") imageUrl = rec.image_url;
+      else if (typeof rec.url === "string") imageUrl = rec.url;
+    }
+    if (!imageUrl?.trim()) {
+      return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
+    }
+    imageUrl = imageUrl.trim();
+  }
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
   try {
@@ -452,35 +481,6 @@ async function tryXaiImageRelay(
       return undefined;
     }
     if (!token) return undefined;
-    const obj = body && typeof body === "object" && !Array.isArray(body)
-      ? body as Record<string, unknown>
-      : {};
-    const prompt = typeof obj.prompt === "string" ? obj.prompt
-      : typeof obj.input === "string" ? obj.input
-      : "";
-    if (!prompt.trim()) {
-      return formatErrorResponse(400, "invalid_request_error", "image generation requires a prompt");
-    }
-    const n = typeof obj.n === "number" && Number.isFinite(obj.n) ? Math.max(1, Math.min(4, Math.floor(obj.n))) : 1;
-    const size = typeof obj.size === "string" ? obj.size : undefined;
-    const quality = typeof obj.quality === "string" ? obj.quality : undefined;
-    const aspectRatio = typeof obj.aspect_ratio === "string" ? obj.aspect_ratio : undefined;
-    let imageUrl: string | undefined;
-    if (endpoint === "edits") {
-      const images = obj.images;
-      const first = Array.isArray(images) ? images[0] : undefined;
-      if (typeof obj.image === "string") imageUrl = obj.image;
-      else if (typeof obj.image_url === "string") imageUrl = obj.image_url;
-      else if (first && typeof first === "object" && first !== null) {
-        const rec = first as Record<string, unknown>;
-        if (typeof rec.image_url === "string") imageUrl = rec.image_url;
-        else if (typeof rec.url === "string") imageUrl = rec.url;
-      }
-      if (!imageUrl?.trim()) {
-        return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
-      }
-      imageUrl = imageUrl.trim();
-    }
     logCtx.provider = "xai";
     logCtx.model = config.images?.bridgeModel ?? "grok-imagine-image-quality";
     const result = await callXaiImages(
@@ -503,6 +503,14 @@ async function tryXaiImageRelay(
     for (const img of result.images) {
       if (typeof img.b64_json === "string" && img.b64_json) {
         const encodedBytes = img.b64_json.length;
+        if (encodedBytes > MAX_ENCODED_BYTES_PER_IMAGE) {
+          return formatErrorResponse(502, "upstream_error", "xAI image payload exceeds per-image size cap");
+        }
+        try {
+          decodeValidatedImageBase64(img.b64_json);
+        } catch {
+          return formatErrorResponse(502, "upstream_error", "xAI image payload failed base64/magic validation");
+        }
         const decodedBytes = decodedBytesFromBase64(img.b64_json);
         if (wouldExceedRelayBudget(spentDecoded, spentEncoded, decodedBytes, encodedBytes)) {
           return xaiImageOutputTooLarge();
