@@ -111,3 +111,26 @@ Classification of the 2026-08-21 mixed snapshot: [`MIXED-SPLIT.md`](./MIXED-SPLI
 Daily pin design: [`2026-08-21-fork-daily-main-pin-design.md`](../superpowers/specs/2026-08-21-fork-daily-main-pin-design.md).
 
 Overlay/seam design: [`2026-08-21-fork-sync-design.md`](../superpowers/specs/2026-08-21-fork-sync-design.md).
+
+## Automated release sync
+
+`.github/workflows/fork-upstream-sync.yml` is a fork-owned poller. It runs on a
+schedule or manual dispatch from the trusted default branch, fetches released
+`v*` tags from `upstream`, and invokes
+`bun scripts/fork/sync/cli.ts pin`. The Action fast-forwards only
+`vendor/main` to the newest tag that is on `upstream/main`, and
+`vendor/dev` to `upstream/dev` in that same new-tag cycle. It never merges or
+force-pushes `origin/main`.
+
+The CLI emits a `SyncEvent` to the enabled plugins. The first notifier,
+`github-issue`, upserts a `fork-sync` issue for non-no-op events. The first
+coordinator, `cursor-webhook`, sends only `pin-updated` events. A diverged
+vendor ref creates an issue but does not start the coordinator; an
+`already-current` poll is silent apart from the workflow summary.
+
+The Action needs repository secrets `FORK_SYNC_CURSOR_WEBHOOK_URL` and
+`FORK_SYNC_CURSOR_WEBHOOK_SECRET`. Plugin IDs are selected with
+`FORK_SYNC_NOTIFIERS` and `FORK_SYNC_COORDINATORS`. The webhook starts the
+Cursor Automation described in the fork-sync skill; that agent rebuilds
+disposable `run/main`, opens a draft PR and decision table, then stops. A
+human reviews and merges `origin/main`.

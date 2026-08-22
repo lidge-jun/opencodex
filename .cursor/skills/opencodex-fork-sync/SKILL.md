@@ -5,7 +5,10 @@ description: Use when performing an opencodex public-fork sync, updating vendor/
 
 # opencodex fork sync
 
-Read `docs/fork/OWNED.md` before resolving any conflict. Agents analyze, recommend, and test; a human confirms and lands `main`.
+Read `docs/fork/OWNED.md` before resolving any conflict. The GitHub Action
+owns stages 1–2 (detect and ff-only pin); the Cursor Automation owns stages 3–7
+(rebuild, conflict analysis, tests, and draft PR). Agents analyze, recommend,
+and test; a human confirms and lands `origin/main`.
 
 ## Roles
 
@@ -19,7 +22,24 @@ Read `docs/fork/OWNED.md` before resolving any conflict. Agents analyze, recomme
 Parallelize independent domains. Serialize `src/adapters/google.ts` and `src/server/responses/core.ts`.
 Workers must be **Composer 2.5** or **GPT 5.6 Luna**.
 
-## Sync commands
+## Action stages 1–2
+
+The fork workflow polls released `v*` tags on `lidge-jun/opencodex`. It checks
+out the repository default branch, fetches `upstream/main`, `upstream/dev`,
+and tags, then runs:
+
+```bash
+bun scripts/fork/sync/cli.ts pin > "$RUNNER_TEMP/fork-sync-event.json"
+bun scripts/fork/sync/cli.ts emit < "$RUNNER_TEMP/fork-sync-event.json"
+```
+
+Only `vendor/main` and `vendor/dev` are allowlisted, and both updates use
+`--ff-only`. `vendor/dev` moves only when a new main tag is pinned. The Action
+has `contents: write` and `issues: write`, never `pull-requests: write`, and
+never merges or force-pushes `origin/main`. `already-current` is silent.
+`pin-diverged` creates the tracking issue but does not start the webhook.
+
+## Manual sync commands
 
 ```bash
 git fetch upstream origin --prune
@@ -35,11 +55,25 @@ gh pr create --base main --head sync/upstream-YYYYMMDD --title "sync: upstream Y
 gh pr merge <number> --merge
 ```
 
-Open and merge the sync PR on the fork into `main` only after human confirmation. `vendor/main` remains an exact fast-forward of `upstream/main`; `vendor/dev` remains an exact fast-forward of `upstream/dev` for PR bases only. Do not commit overlay work on either vendor branch.
+Open the sync PR on the fork into `origin/main` only after human confirmation.
+`vendor/main` remains an exact fast-forward of `upstream/main`; `vendor/dev`
+remains an exact fast-forward of `upstream/dev` for PR bases only. Do not
+commit overlay work on either vendor branch. The issue notifier is selected by
+`FORK_SYNC_NOTIFIERS=github-issue`; the Cursor coordinator is selected by
+`FORK_SYNC_COORDINATORS=cursor-webhook`.
+
+## Cursor Automation stages 3–7
+
+The webhook-triggered Cursor Automation starts only after `pin-updated`. Fetch
+the refs, rebuild disposable `run/main` from `origin/main` plus the vendor
+release and selected feature branches, use Mergiraf where available, and read
+`docs/fork/OWNED.md` before resolving conflicts. Run the exact focused tests
+for changed domains, assemble the required conflict decision table, and open a
+draft PR into `origin/main`. Stop after the draft PR; do not merge it.
 
 ## Rebuild daily `main`
 
-`origin/main` is the daily driver (release + overlay + selected `feat/*`). Rebuild on disposable `run/main`, then merge into `main`. Never force-push `main`.
+`origin/main` is the daily driver (release + overlay + selected `feat/*`). Rebuild on disposable `run/main`, then submit a reviewed PR into `origin/main`. Never force-push `main`.
 
 ```bash
 git switch -C run/main overlay
