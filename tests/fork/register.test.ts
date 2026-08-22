@@ -23,6 +23,10 @@ function resolveSpec(spec: string, fromFile: string): string | null {
   return null;
 }
 
+function namesForkDirectly(source: string): boolean {
+  return /\bimport\s*\(\s*["'][^"']*\/fork(?:\/|["'])/.test(source);
+}
+
 function firstForkPath(entry: string): string[] | null {
   const start = resolve(repoRoot, entry);
   const previous = new Map<string, string | null>([[start, null]]);
@@ -58,6 +62,14 @@ function firstForkPath(entry: string): string[] | null {
 describe("fork runtime seam", () => {
   test("registerFork does not throw", () => {
     expect(() => registerFork()).not.toThrow();
+  });
+
+  test("detects a direct dynamic src/fork import", () => {
+    expect(namesForkDirectly('void import("../fork/register");')).toBe(true);
+    expect(namesForkDirectly('const m = await import("./management/fork-routes");')).toBe(false);
+    for (const file of PROTECTED) {
+      expect(namesForkDirectly(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
+    }
   });
 
   test.each(PROTECTED)("%s does not reach src/fork transitively", file => {
