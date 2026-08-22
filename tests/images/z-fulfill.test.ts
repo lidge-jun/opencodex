@@ -198,6 +198,24 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.n).toBe(4);
   });
 
+  test("forwards a validated aspect_ratio to callXaiImages", async () => {
+    reset();
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: "16:9", size: "1024x1024" }) },
+      plan, { spent: 0 },
+    );
+    expect(xaiCalls[0]!.aspectRatio).toBe("16:9");
+  });
+
+  test("drops auto and illegal aspect_ratio values", async () => {
+    reset();
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: "auto" }) },
+      plan, { spent: 0 },
+    );
+    expect(xaiCalls[0]!.aspectRatio).toBeUndefined();
+  });
+
   test("forwards imageUrl from image_url arg", async () => {
     reset();
     await fulfillImageCall(

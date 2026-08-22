@@ -13,6 +13,7 @@ import { saveConfig } from "../src/config";
 import { selectImagesProvider } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
 import { handleImages, IMAGES_RESPONSE_MAX_BYTES, readImageResponseBytes, setXaiResultPinnedDownloadForTests } from "../src/server/images";
+import { MAX_ENCODED_BYTES_PER_IMAGE } from "../src/images/artifacts";
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire";
@@ -189,7 +190,7 @@ function stubXaiImagine(payload: unknown): CapturedRequest[] {
 }
 
 test("POST /v1/images/generations relays to xAI Imagine when the image bridge is enabled", async () => {
-  const captured = stubXaiImagine({ data: [{ b64_json: "dHJhaW4=" }] });
+  const captured = stubXaiImagine({ data: [{ b64_json: CCA_TINY_PNG }] });
   saveConfig(xaiBridgeConfig());
 
   const server = startServer(0);
@@ -201,7 +202,7 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
     });
     expect(response.status).toBe(200);
     const json = await response.json() as { data?: Array<{ b64_json?: string }> };
-    expect(json.data?.[0]?.b64_json).toBe("dHJhaW4=");
+    expect(json.data?.[0]?.b64_json).toBe(CCA_TINY_PNG);
     expect(captured).toHaveLength(1);
     expect(captured[0]!.path).toBe("/v1/images/generations");
     expect(JSON.stringify(captured[0]!.body)).toContain("grok-imagine-image-quality");
@@ -209,6 +210,132 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
     expect(captured[0]!.headers.get("chatgpt-account-id")).toBeNull();
     expect(captured[0]!.headers.get("session_id")).toBeNull();
     expect(captured[0]!.headers.get("x-codex-turn-metadata")).toBeNull();
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations with an empty prompt does not resolve xAI auth", async () => {
+  const captured = stubXaiImagine({ data: [{ b64_json: CCA_TINY_PNG }] });
+  saveConfig(xaiBridgeConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "   ", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toContain("image generation requires a prompt");
+    expect(captured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations relays with Grok OAuth and no ChatGPT headers", async () => {
+  const captured = stubXaiImagine({ data: [{ b64_json: CCA_TINY_PNG }] });
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      ...forwardConfig().providers,
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+    },
+  } as OcxConfig);
+  await saveCredential("xai", {
+    access: "xai-oauth-token",
+    refresh: "xai-refresh",
+    expires: Date.now() + 10 * 60_000,
+    source: "oauth",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "session_id": "sess-9",
+        "x-codex-turn-metadata": "meta",
+      },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.path).toBe("/v1/images/generations");
+    expect(captured[0]!.headers.get("authorization")).toBe("Bearer xai-oauth-token");
+    expect(captured[0]!.headers.get("chatgpt-account-id")).toBeNull();
+    expect(captured[0]!.headers.get("session_id")).toBeNull();
+    expect(captured[0]!.headers.get("x-codex-turn-metadata")).toBeNull();
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations does not reach api.x.ai when OAuth token resolution fails", async () => {
+  const captured = stubXaiImagine({ data: [{ b64_json: CCA_TINY_PNG }] });
+  saveConfig({
+    ...forwardConfig(),
+    images: { bridgeEnabled: true },
+    providers: {
+      openai: { ...disabledOpenAiProvider },
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).not.toBe(200);
+    expect(captured.filter(call => call.path.includes("/images/"))).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations rejects oversized xAI inline payloads", async () => {
+  const oversized = "A".repeat(MAX_ENCODED_BYTES_PER_IMAGE + 4);
+  stubXaiImagine({ data: [{ b64_json: oversized }] });
+  saveConfig(xaiBridgeConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toContain("per-image size cap");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations rejects invalid xAI inline image bytes", async () => {
+  stubXaiImagine({ data: [{ b64_json: "dHJhaW4=" }] });
+  saveConfig(xaiBridgeConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toMatch(/base64|magic|validation/i);
   } finally {
     await server.stop(true);
   }
@@ -237,7 +364,7 @@ test("POST /v1/images/edits with no image URL does not call xAI generation", asy
 test("POST /v1/images/generations rejects xAI batches that exceed the aggregate output budget", async () => {
   stubXaiImagine({
     data: [
-      { b64_json: "dHJhaW4=" },
+      { b64_json: CCA_TINY_PNG },
       { url: "https://8.8.8.8/huge.png" },
     ],
   });

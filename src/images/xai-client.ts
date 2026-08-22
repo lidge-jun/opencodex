@@ -30,7 +30,6 @@ const XAI_DEFAULT_MODEL = "grok-imagine-image-quality";
 // OpenAI's "WxH" size to the closest standard ratio (log-space distance) and
 // OpenAI quality buckets onto xAI's 1k/2k resolution. Unknown values are
 // dropped rather than forwarded, to avoid sending parameters xAI rejects.
-const XAI_ASPECT_RATIO_LITERALS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4"]);
 const XAI_ASPECT_RATIOS: ReadonlyArray<readonly [string, number]> = [
   ["1:1", 1],
   ["3:4", 0.75],
@@ -38,14 +37,18 @@ const XAI_ASPECT_RATIOS: ReadonlyArray<readonly [string, number]> = [
   ["9:16", 0.5625],
   ["16:9", 16 / 9],
 ];
+const XAI_ASPECT_RATIO_LITERALS = new Set(XAI_ASPECT_RATIOS.map(([label]) => label));
+
+/** Accept a hosted/Codex `aspect_ratio` literal; `auto` and unknown values drop. */
+export function resolveXaiAspectRatioLiteral(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const literal = value.trim();
+  if (!literal || literal === "auto") return undefined;
+  return XAI_ASPECT_RATIO_LITERALS.has(literal) ? literal : undefined;
+}
 
 function resolveAspectRatio(req: XaiImageRequest): string | undefined {
-  const literal = req.aspectRatio?.trim();
-  if (literal) {
-    if (literal === "auto") return undefined;
-    if (XAI_ASPECT_RATIO_LITERALS.has(literal)) return literal;
-    return undefined;
-  }
+  if (req.aspectRatio?.trim()) return resolveXaiAspectRatioLiteral(req.aspectRatio);
   return mapSizeToAspectRatio(req.size);
 }
 
