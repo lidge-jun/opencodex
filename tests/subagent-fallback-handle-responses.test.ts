@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { saveCredential } from "../src/oauth/store";
 import {
   clearAccountQuota,
   updateAccountQuota,
@@ -944,6 +945,58 @@ describe("encrypted child native-only fallback", () => {
     expect(capture.urls).toHaveLength(1);
     expect(capture.urls[0]).toContain("relay.example.test");
     expect(capture.urls[0]).not.toContain("api.x.ai");
+    expect(capture.bodies[0]).toContain(FERNET_TASK);
+  });
+
+  test("skips a Copilot fallback whose OAuth transport origin differs from approval", async () => {
+    await saveCredential("github-copilot", {
+      access: "copilot-access-fixture",
+      refresh: "copilot-refresh-fixture",
+      expires: Date.now() + 3_600_000,
+      accountId: "copilot-account-fixture",
+      apiBaseUrl: "https://api.individual.githubcopilot.com",
+    });
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      subagentModelFallback: [
+        "github-copilot/gpt-5.6-luna",
+        "relay/gpt-5.6-luna",
+      ],
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "xai-test",
+        },
+        "github-copilot": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.githubcopilot.com",
+          authMode: "oauth",
+          allowEncryptedV2AgentTasks: true,
+        },
+        relay: {
+          adapter: "openai-responses",
+          baseUrl: "https://relay.example.test/v1",
+          authMode: "key",
+          apiKey: "relay-test",
+          allowEncryptedV2AgentTasks: true,
+        },
+      },
+    });
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(cfg, {
+      model: "xai/grok-4.5",
+      input: encryptedAgentInput(),
+      stream: false,
+    });
+
+    expect(response.status).toBe(200);
+    expect(capture.urls).toHaveLength(1);
+    expect(capture.urls[0]).toContain("relay.example.test");
+    expect(capture.urls[0]).not.toContain("githubcopilot.com");
     expect(capture.bodies[0]).toContain(FERNET_TASK);
   });
 

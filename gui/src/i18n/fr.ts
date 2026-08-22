@@ -1166,7 +1166,7 @@ export const fr: Record<TKey, string> = {
   "pws.allowPrivateNetwork": "Autoriser le réseau local/privé",
   "pws.encryptedV2Passthrough": "Transmettre les tâches d’agent V2 chiffrées",
   "pws.encryptedV2PassthroughDesc": "Faites confiance à ce point de terminaison Responses pour traiter ou relayer sans modification le texte chiffré opaque des tâches enfants V2 de Codex. OpenCodex ne le déchiffre, ne le traduit ni ne le reconstitue. Activez uniquement après vérification de la compatibilité du fournisseur.",
-  "pws.encryptedV2Confirm": "Confier à ce fournisseur le traitement ou le relais sans modification du texte chiffré opaque des tâches enfants V2 ? Un point de terminaison incompatible peut échouer parce qu’il ne peut pas lire la tâche.",
+  "pws.encryptedV2Confirm": "Confier à ce fournisseur le traitement du texte chiffré opaque des tâches enfants V2 ou son relais octet par octet ? Un point de terminaison incompatible peut échouer s’il exige du texte en clair ou modifie le texte chiffré.",
   "pws.liveModels": "Détecter les modèles auprès du fournisseur",
   "pws.liveModelsDesc": "Récupérez le catalogue de modèles en direct du fournisseur. Désactivez cette option pour utiliser uniquement les modèles configurés/statiques.",
   "pws.xaiResponsesOptIn": "Utiliser l’API Responses pour Grok 4.5 et 4.6",

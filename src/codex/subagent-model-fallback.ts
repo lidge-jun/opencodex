@@ -30,6 +30,7 @@ import { isCodexAccountPaused } from "./account-pause";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
 import { PROVIDER_REGISTRY, type InboundWire } from "../providers/registry";
+import { getOAuthCredentialApiBaseUrl } from "../oauth";
 import {
   canReceiveEncryptedV2AgentTasks,
   CODEX_FORWARD_BASE_URL,
@@ -38,6 +39,7 @@ import {
 } from "../providers/openai-tiers";
 import { routeModel, type RouteResult } from "../router";
 import { resolveFinalWireProtocolOverride } from "../server/adapter-resolve";
+import { resolveProviderTransport } from "../providers/xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import {
@@ -61,6 +63,14 @@ type ModelHealth = {
 const modelHealth = new Map<string, ModelHealth>();
 const quotaPrimedAt = new Map<string, number>();
 const knownProviderIdSet = new Set(PROVIDER_REGISTRY.map(entry => entry.id.toLowerCase()));
+
+function sameUpstreamOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left.trim()).origin === new URL(right.trim()).origin;
+  } catch {
+    return false;
+  }
+}
 
 function tryRouteFallbackModel(config: OcxConfig, model: string): RouteResult | null {
   try {
@@ -285,12 +295,24 @@ export function selectAvailableSubagentModel(
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
       const resolvedProvider = route
-        ? resolveFinalWireProtocolOverride(
-            route.providerName,
-            route.modelId,
-            route.provider,
-            inboundWire,
-          )
+        ? (() => {
+            const approvedBaseUrl = route.provider.baseUrl;
+            const transportProvider = resolveProviderTransport(
+              route.providerName,
+              route.provider,
+              undefined,
+              route.providerName === "github-copilot"
+                ? getOAuthCredentialApiBaseUrl(route.providerName)
+                : undefined,
+            );
+            if (!sameUpstreamOrigin(approvedBaseUrl, transportProvider.baseUrl)) return null;
+            return resolveFinalWireProtocolOverride(
+              route.providerName,
+              route.modelId,
+              transportProvider,
+              inboundWire,
+            );
+          })()
         : null;
       if (!resolvedProvider || !canReceiveEncryptedV2AgentTasks(resolvedProvider)) {
         skipped.push(candidate);
