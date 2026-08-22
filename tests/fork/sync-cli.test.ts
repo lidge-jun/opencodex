@@ -17,6 +17,7 @@ function detectRunner(): CommandRunner {
     result(MAIN_SHA),
     result(DEV_SHA),
     result(""),
+    result("", 1),
     result(""),
   ];
   return async () => results.shift() ?? result("", 1, "unexpected command");
@@ -43,6 +44,7 @@ describe("fork sync CLI", () => {
       result(MAIN_SHA),
       result(DEV_SHA),
       result(""),
+      result("", 1),
       result(""),
       result(""),
       result(TAG_SHA),
@@ -129,6 +131,39 @@ describe("fork sync CLI", () => {
       args: ["nanobot", "trigger", "fork-sync"],
       stdin: JSON.stringify(event),
     });
+  });
+
+  test("emit still starts coordinators when a notifier fails", async () => {
+    const started: string[] = [];
+    registerNotifier({
+      id: "failing-notifier",
+      async notify() {
+        throw new Error("GitHub issues request returned HTTP 410");
+      },
+    });
+    registerCoordinator({
+      id: "surviving-coordinator",
+      async start() {
+        started.push("started");
+      },
+    });
+    const event: SyncEvent = {
+      kind: "pin-updated",
+      upstreamRepo: "upstream",
+      latestTag: "v2.29.0",
+      latestTagSha: TAG_SHA,
+      vendorMainSha: MAIN_SHA,
+      vendorDevSha: DEV_SHA,
+      detectedAt: "2026-08-22T18:00:00.000Z",
+    };
+    await expect(runCli(["emit"], {
+      env: {
+        FORK_SYNC_NOTIFIERS: "failing-notifier",
+        FORK_SYNC_COORDINATORS: "surviving-coordinator",
+      },
+      stdin: JSON.stringify(event),
+    })).rejects.toThrow("HTTP 410");
+    expect(started).toEqual(["started"]);
   });
 
   test("rejects unknown commands", async () => {

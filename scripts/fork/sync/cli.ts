@@ -153,8 +153,24 @@ export async function runCli(
     registerBuiltins(env, options);
     const input = options.stdin ?? await readStdin();
     const event = JSON.parse(input) as SyncEvent;
-    for (const notifier of enabledNotifiers(env)) await notifier.notify(event);
-    for (const coordinator of enabledCoordinators(env)) await coordinator.start(event);
+    const failures: string[] = [];
+    for (const notifier of enabledNotifiers(env)) {
+      try {
+        await notifier.notify(event);
+      } catch (error) {
+        failures.push(`${notifier.id}: ${error instanceof Error ? error.message : "failed"}`);
+      }
+    }
+    for (const coordinator of enabledCoordinators(env)) {
+      try {
+        await coordinator.start(event);
+      } catch (error) {
+        failures.push(`${coordinator.id}: ${error instanceof Error ? error.message : "failed"}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(failures.join("; "));
+    }
     return;
   }
 
