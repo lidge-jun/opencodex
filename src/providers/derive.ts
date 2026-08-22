@@ -254,6 +254,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(entry.annotateEmptyToolOutputs !== undefined
+      ? { annotateEmptyToolOutputs: entry.annotateEmptyToolOutputs }
+      : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
     ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
@@ -500,6 +503,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
   if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
     prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
+  }
+  if (prov.annotateEmptyToolOutputs === undefined && seed.annotateEmptyToolOutputs !== undefined) {
+    prov.annotateEmptyToolOutputs = seed.annotateEmptyToolOutputs;
   }
   // Registry-only metadata (never seeded into saved config): backfill straight from
   // the entry so an explicit user value stays distinguishable from the default.

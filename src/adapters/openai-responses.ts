@@ -842,6 +842,41 @@ function toolOutputText(output: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
+/** Wire text used when a present-but-empty tool output must stay visible to the model. */
+const EMPTY_TOOL_OUTPUT_ANNOTATION =
+  "[ocx] empty tool output: the tool ran but produced no stdout or return value; do not treat this as success, failure, or user-provided input.";
+
+/** True when a Responses tool output item is present but carries no usable content. */
+function isToolOutputEmpty(output: unknown): boolean {
+  if (typeof output === "string") return output.trim() === "";
+  if (Array.isArray(output)) {
+    return output.every(part => {
+      if (!isPlainObject(part)) return true;
+      if (typeof part.text === "string" && part.text.trim() !== "") return false;
+      if (part.type === "refusal" && typeof part.refusal === "string" && part.refusal.trim() !== "") return false;
+      return true;
+    });
+  }
+  return output === undefined || output === null;
+}
+
+/**
+ * Rewrite present-but-empty tool outputs to an explicit annotation. Synthetic
+ * missing-result placeholders are non-empty and pass through untouched. No-op unless
+ * the provider opts in (`annotateEmptyToolOutputs`).
+ */
+function annotateEmptyResponsesToolOutputs(body: unknown, enabled: boolean): unknown {
+  if (!enabled || !isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")) return item;
+    if (!isToolOutputEmpty(item.output)) return item;
+    changed = true;
+    return { ...item, output: EMPTY_TOOL_OUTPUT_ANNOTATION };
+  });
+  return changed ? { ...body, input } : body;
+}
+
 /**
  * Repair a forward-mode input array whose continuation context was lost. When the replay
  * expansion misses (proxy restart, unrecorded prior turn), previous_response_id is stripped
@@ -2032,6 +2067,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // reaches the wire is unparseable.
       if (forward || stateless) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
+      }
+      if (provider.annotateEmptyToolOutputs === true) {
+        outBody = annotateEmptyResponsesToolOutputs(outBody, true);
       }
       if (provider.requiresAdjacentResponsesToolResults === true) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
