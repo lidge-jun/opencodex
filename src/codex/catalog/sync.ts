@@ -1403,13 +1403,23 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+const AUTO_REVIEW_MODEL_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\s]/;
+
+export function isValidAutoReviewModel(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return Boolean(trimmed)
+    && trimmed.length <= 1024
+    && !AUTO_REVIEW_MODEL_CONTROL_CHARS.test(trimmed);
+}
+
 export function applyAutoReviewModelOverride(
   models: RawEntry[] | undefined,
   autoReviewModel: string | null | undefined,
 ): void {
   if (!models || !Array.isArray(models) || !autoReviewModel) return;
   const trimmed = autoReviewModel.trim();
-  if (!trimmed) return;
+  if (!trimmed || !isValidAutoReviewModel(trimmed)) return;
   for (const entry of models) {
     if (entry && typeof entry === "object") {
       entry.auto_review_model_override = trimmed;

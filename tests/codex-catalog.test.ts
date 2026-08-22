@@ -5452,6 +5452,19 @@ describe("auto_review_model configuration (#1225)", () => {
     expect(entries[0].auto_review_model_override).toBe("existing-model");
   });
 
+  test("applyAutoReviewModelOverride rejects invalid format with control chars or inner spaces", () => {
+    const { applyAutoReviewModelOverride, isValidAutoReviewModel } = require("../src/codex/catalog/sync");
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: "native-preserved" },
+    ];
+
+    expect(isValidAutoReviewModel("valid/model-slug_1")).toBe(true);
+    expect(isValidAutoReviewModel("invalid slug with spaces")).toBe(false);
+    expect(isValidAutoReviewModel("invalid\x00slug")).toBe(false);
+    applyAutoReviewModelOverride(entries, "invalid slug with spaces");
+    expect(entries[0].auto_review_model_override).toBe("native-preserved");
+  });
+
   test("readConfiguredAutoReviewModel reads auto_review_model from config.toml", () => {
     const { readConfiguredAutoReviewModel } = require("../src/codex/catalog/parsing");
     expect(typeof readConfiguredAutoReviewModel).toBe("function");
