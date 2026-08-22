@@ -5426,4 +5426,30 @@ describe("Codex reasoning-effort capability clamp", () => {
     expect(models).toEqual(before);
   });
 });
+
+describe("auto_review_model configuration (#1225)", () => {
+  test("applyAutoReviewModelOverride sets auto_review_model_override across all entries", () => {
+    const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: null },
+      { slug: "opencode-go/glm-5.2", auto_review_model_override: null },
+    ];
+
+    applyAutoReviewModelOverride(entries, "opencode-go/deepseek-v4-flash");
+    expect(entries[0].auto_review_model_override).toBe("opencode-go/deepseek-v4-flash");
+    expect(entries[1].auto_review_model_override).toBe("opencode-go/deepseek-v4-flash");
+  });
+
+  test("applyAutoReviewModelOverride is a no-op when autoReviewModel is null or empty", () => {
+    const { applyAutoReviewModelOverride } = require("../src/codex/catalog/sync");
+    const entries = [
+      { slug: "gpt-5.5", auto_review_model_override: null },
+    ];
+
+    applyAutoReviewModelOverride(entries, null);
+    expect(entries[0].auto_review_model_override).toBeNull();
+    applyAutoReviewModelOverride(entries, "   ");
+    expect(entries[0].auto_review_model_override).toBeNull();
+  });
+});
 import { ManagementRequest as Request } from "./helpers/management-auth";

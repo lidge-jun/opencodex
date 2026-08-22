@@ -42,6 +42,7 @@ import {
 
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { readConfiguredAutoReviewModel } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { accountBoundNativeOpenAiSlugs, accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, nativeContextLimits, observedAccountBoundNativeEntries, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry, type NativeContextLimitsInput } from "./metadata";
 import {
@@ -1403,6 +1404,20 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+export function applyAutoReviewModelOverride(
+  models: RawEntry[] | undefined,
+  autoReviewModel: string | null | undefined,
+): void {
+  if (!models || !Array.isArray(models) || !autoReviewModel) return;
+  const trimmed = autoReviewModel.trim();
+  if (!trimmed) return;
+  for (const entry of models) {
+    if (entry && typeof entry === "object") {
+      entry.auto_review_model_override = trimmed;
+    }
+  }
+}
+
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -1596,6 +1611,10 @@ function writeRetainedCatalogSync({
     },
   });
   clampCatalogModelsToCodexSupport(catalog.models);
+  const autoReviewModel = readConfiguredAutoReviewModel();
+  if (autoReviewModel) {
+    applyAutoReviewModelOverride(catalog.models, autoReviewModel);
+  }
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
