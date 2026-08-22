@@ -392,7 +392,7 @@ test("POST /v1/images/generations rejects xAI batches that exceed the aggregate 
 });
 
 test("POST /v1/images/generations returns multiple xAI URL images under the aggregate budget", async () => {
-  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const png = new Uint8Array(Buffer.from(CCA_TINY_PNG, "base64"));
   const pinned: Array<{ address: string; family: number }> = [];
   stubXaiImagine({
     data: [
@@ -422,6 +422,29 @@ test("POST /v1/images/generations returns multiple xAI URL images under the aggr
       { address: "8.8.8.8", family: 4 },
       { address: "8.8.8.8", family: 4 },
     ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/images/generations rejects a non-image xAI result URL", async () => {
+  stubXaiImagine({ data: [{ url: "https://8.8.8.8/page.html" }] });
+  setXaiResultPinnedDownloadForTests(async () => new Response("<html>not an image</html>", {
+    status: 200,
+    headers: { "content-type": "text/html" },
+  }));
+  saveConfig(xaiBridgeConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a train", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { message?: string } };
+    expect(json.error?.message).toBe("xAI image download failed");
   } finally {
     await server.stop(true);
   }
@@ -693,6 +716,57 @@ test("an explicit custom Images provider uses its configured endpoint, key, and 
     expect(captured[0].headers.get("authorization")).toBe("Bearer custom-images-key");
     expect(captured[0].headers.get("x-provider-route")).toBe("images");
     expect(captured[0].body).toMatchObject({ prompt: "a cat", model: "gpt-image-2" });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("an explicit Images provider wins over the xAI Imagine relay", async () => {
+  const xaiCaptured = stubXaiImagine({ data: [{ b64_json: CCA_TINY_PNG }] });
+  const captured: CapturedRequest[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push({
+        path: new URL(req.url).pathname,
+        headers: req.headers,
+        body: await req.json(),
+      });
+      return Response.json({ created: 1_767_000_000, data: [{ b64_json: "aGVsbG8=" }] });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "custom-images",
+    openaiProviderTierVersion: 2,
+    providers: {
+      "custom-images": {
+        adapter: "openai-responses",
+        baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+        allowPrivateNetwork: true,
+        authMode: "key",
+        apiKey: "${OPENCODEX_TEST_IMAGES_API_KEY}",
+      },
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-test-token" },
+    },
+    images: { bridgeEnabled: true, provider: "custom-images" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer custom-images-key");
+    expect(xaiCaptured).toHaveLength(0);
   } finally {
     await server.stop(true);
     await upstream.stop(true);

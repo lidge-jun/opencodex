@@ -41,6 +41,7 @@ import {
   decodeValidatedImageBase64,
   fetchPublicHttpsImage,
   MAX_ENCODED_BYTES_PER_IMAGE,
+  sniffImageExtension,
   type PinnedDownloadFn,
 } from "../images/artifacts";
 import { findXaiProvider, resolveXaiImageAuthToken } from "../images/plan";
@@ -540,6 +541,7 @@ async function tryXaiImageRelay(
       });
       if (observed.oversized) return xaiImageOutputTooLarge();
       if (observed.bytes.byteLength === 0) continue;
+      if (!sniffImageExtension(observed.bytes)) return xaiImageDownloadFailed();
       const decodedBytes = observed.bytes.byteLength;
       const b64 = Buffer.from(observed.bytes).toString("base64");
       if (wouldExceedRelayBudget(spentDecoded, spentEncoded, decodedBytes, b64.length)) {
@@ -597,10 +599,13 @@ export async function handleImages(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
-  const xaiRelay = await tryXaiImageRelay(body, config, logCtx, req.signal, endpoint);
-  if (xaiRelay) return xaiRelay;
-
   const candidates = selectImagesProvider(config);
+  // Explicit images.provider owns the route, including its validation errors.
+  // Do not divert that selection to the xAI Imagine relay.
+  if (config.images?.provider === undefined) {
+    const xaiRelay = await tryXaiImageRelay(body, config, logCtx, req.signal, endpoint);
+    if (xaiRelay) return xaiRelay;
+  }
   if (candidates.error) {
     return formatErrorResponse(400, "invalid_request_error", candidates.error);
   }
