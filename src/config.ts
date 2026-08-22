@@ -1107,10 +1107,18 @@ export function modelAdapterRecordConfigError(
 export function modelResponsesCompatibilityConfigError(
   value: unknown,
   field = "modelResponsesCompatibility",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
 ): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
-  for (const [key, entry] of Object.entries(value)) {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  for (const [key, entry] of entries) {
     if (!key.trim() || key !== key.trim()) return `${field} keys must be nonblank trimmed model ids`;
     if (entry !== "terminal-repair") {
       return `${field}.${key} must be "terminal-repair"`;
@@ -1122,10 +1130,18 @@ export function modelResponsesCompatibilityConfigError(
 export function modelResponsesTerminalRepairConfigError(
   value: unknown,
   field = "modelResponsesTerminalRepair",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
 ): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
-  for (const [key, entry] of Object.entries(value)) {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  for (const [key, entry] of entries) {
     if (!key.trim() || key !== key.trim()) return `${field} keys must be nonblank trimmed model ids`;
     const grace = typeof entry === "number" ? entry : (typeof entry === "object" && entry ? (entry as { graceMs?: unknown }).graceMs : null);
     if (typeof grace !== "number" || !Number.isFinite(grace) || grace <= 0) {
@@ -1138,8 +1154,13 @@ export function modelResponsesTerminalRepairConfigError(
 export function responsesTerminalRepairConfigError(
   value: unknown,
   field = "responsesTerminalRepair",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
 ): string | null {
   if (value === undefined) return null;
+  if (provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
   if (value === "terminal-repair") return null;
   const grace = typeof value === "number" ? value : (typeof value === "object" && value ? (value as { graceMs?: unknown }).graceMs : null);
   if (typeof grace !== "number" || !Number.isFinite(grace) || grace <= 0) {

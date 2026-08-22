@@ -13,6 +13,11 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { safeConfigDTO, providerManagementConfigError } from "../src/server/auth-cors";
+import {
+  modelResponsesCompatibilityConfigError,
+  modelResponsesTerminalRepairConfigError,
+  responsesTerminalRepairConfigError,
+} from "../src/config";
 import type { OcxConfig } from "../src/types";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import {
@@ -1095,6 +1100,7 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
       const invalidProv = {
         adapter: "openai-responses",
         baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
         modelResponsesTerminalRepair: {
           "zero-grace": 0,
           "neg-grace": -500,
@@ -1120,6 +1126,45 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-zero")).toBeUndefined();
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-neg")).toBeUndefined();
       expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-nan")).toBeUndefined();
+    });
+
+    test("canonical ChatGPT forward provider never undergoes terminal repair", () => {
+      const canonicalOpenAi = {
+        adapter: "openai-responses",
+        authMode: "forward" as const,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        responsesTerminalRepair: "terminal-repair" as const,
+        modelResponsesTerminalRepair: { "gpt-5": 1000 },
+        modelResponsesCompatibility: { "gpt-5": "terminal-repair" as const },
+      };
+      expect(providerModelResponsesTerminalRepair("openai", canonicalOpenAi, "gpt-5")).toBeUndefined();
+    });
+
+    test("duplicate case-folded keys fail closed on ambiguity", () => {
+      const conflictProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "My-Model": 500,
+          "my-model": 1500,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "My-Model")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "my-model")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "MY-MODEL")).toBeUndefined();
+    });
+
+    test("clamps grace period to maximum 60,000 ms", () => {
+      const hugeProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "huge-model": 120_000,
+          "max-safe": Number.MAX_SAFE_INTEGER,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hugeProv, "huge-model")).toEqual({ graceMs: 60_000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hugeProv, "max-safe")).toEqual({ graceMs: 60_000 });
     });
 
     test("safeConfigDTO preserves terminal-repair configuration keys", () => {
@@ -1160,6 +1205,18 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
         baseUrl: "https://custom-gateway.test/v1",
         responsesTerminalRepair: -500,
       })).toContain('responsesTerminalRepair must be "terminal-repair", a positive number');
+
+      const canonicalOpenAi = {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      };
+      expect(responsesTerminalRepairConfigError("terminal-repair", "responsesTerminalRepair", "openai", canonicalOpenAi))
+        .toContain("responsesTerminalRepair is not supported on the canonical ChatGPT forward provider");
+      expect(modelResponsesCompatibilityConfigError({ "gpt-5": "terminal-repair" }, "modelResponsesCompatibility", "openai", canonicalOpenAi))
+        .toContain("modelResponsesCompatibility is not supported on the canonical ChatGPT forward provider");
+      expect(modelResponsesTerminalRepairConfigError({ "gpt-5": 500 }, "modelResponsesTerminalRepair", "openai", canonicalOpenAi))
+        .toContain("modelResponsesTerminalRepair is not supported on the canonical ChatGPT forward provider");
     });
   });
 });
