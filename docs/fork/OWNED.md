@@ -16,6 +16,8 @@ Files only this fork adds or maintains:
 | `tests/fork/**` |
 | `docs/fork/**` |
 | `.cursor/skills/opencodex-fork-sync/**` |
+| `scripts/fork/**` |
+| `.github/workflows/fork-upstream-sync.yml` |
 
 ### `shared-hotspot` — manual / agent report
 
