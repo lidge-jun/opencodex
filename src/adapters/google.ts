@@ -320,11 +320,11 @@ function messagesToGeminiFormat(
         break;
       }
       case "toolResult": {
-        // repairGoogleToolPairs drops orphan results; only standalone matched results reach here.
-        if (!messages.some(m => m === msg)) break;
-        // A standalone functionResponse is invalid without an immediately preceding matching
-        // functionCall batch. Preserve the result as explicit user text (plus any representable
-        // image siblings) rather than manufacturing a successful call or sending a 400-prone shape.
+        // repairGoogleToolPairs already dropped this result from pairing/id allocation, so a
+        // lone functionResponse cannot be emitted. Consecutive results after a functionCall
+        // batch never reach here (the assistant branch consumes them). Standalone or
+        // barrier-delayed results still have to stay visible — especially image-bearing
+        // screenshots — as explicit user text rather than vanishing or 400ing CCA.
         contents.push({ role: "user", parts: geminiOrphanToolResultParts(msg as OcxToolResultMessage) });
         break;
       }

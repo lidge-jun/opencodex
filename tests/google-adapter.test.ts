@@ -134,14 +134,18 @@ describe("google adapter — tool-call ids on the wire", () => {
     expect(frPart.functionResponse.id).toBe("call_abc");
   });
 
-  test("orphan tool results are omitted instead of emitting an unmatched functionResponse", async () => {
+  test("orphan tool results stay visible as text instead of emitting an unmatched functionResponse", async () => {
     const contents = await geminiContents(parsedWith([
       { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
       { role: "user", content: "continue" },
     ]));
 
     expect(contents.flatMap(content => content.parts).some(part => "functionResponse" in part)).toBe(false);
-    expect(JSON.stringify(contents)).not.toContain("orphan");
+    expect(contents.map(content => content.role)).toEqual(["user", "user"]);
+    expect(contents[0].parts).toEqual([
+      { text: "[tool_result without adjacent tool_use: missing (orphan)]\ndiscard" },
+    ]);
+    expect(contents[1].parts).toEqual([{ text: "continue" }]);
   });
 
   test("AI Studio keeps an unmatched trailing tool call", async () => {
