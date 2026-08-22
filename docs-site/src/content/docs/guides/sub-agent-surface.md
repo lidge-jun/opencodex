@@ -22,7 +22,7 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 
 On **v2**, an optional **Keep ChatGPT on v1** switch (`keepNativeChatGptOnV1`) leaves Sol/Terra
 on the v1 surface so they can still spawn Grok or Claude. ChatGPT-native parents encrypt v2
-`NEW_TASK` bodies; routed models cannot read them. Routed parents stay on v2, where child tasks
+`NEW_TASK` bodies; ordinary routed models cannot read them. Routed parents stay on v2, where child tasks
 are plaintext. This is a switch *inside* v2, not a fourth catalog mode.
 
 :::tip[Not sure?]
@@ -115,26 +115,36 @@ inside a cooldown, missing a usable pooled Codex account, or beyond the configur
 Availability probes are cached for `subagentModelFallbackPollMs` (60 seconds by default).
 
 Fallback does not make incompatible encrypted tasks readable. When the child task is encrypted for
-ChatGPT, selection is restricted to canonical native ChatGPT targets even if an external model
-appears earlier in the chain.
+ChatGPT, selection is restricted to targets that can receive that ciphertext: canonical native
+ChatGPT or a Responses provider with an explicit `allowEncryptedV2AgentTasks: true` opt-in.
 
 ## Encrypted v2 task delivery
 
-Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. That
-payload can be read by the native ChatGPT backend, but not by an external provider. This is the
-known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
+Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. The
+native ChatGPT backend can consume that payload; some compatible relays may also be able to pass it
+to a backend that can. OpenCodex cannot infer that capability from a provider name or Base URL. This
+is the known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex fails safely instead of forwarding an empty or unreadable task:
 
-- A direct non-native route returns HTTP 400 with
+- An ineligible direct non-native route returns HTTP 400 with
   `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext.
-- A combo considers only canonical native ChatGPT targets for that task, including retries. If none
-  is available, it returns the same 400 error.
+- A combo considers only canonical native ChatGPT targets and explicitly trusted Responses targets
+  for that task, including retries. If none is available, it returns the same 400 error.
 - A readable plaintext task keeps the normal route and fallback behavior.
 
 Recovery options are to select a native ChatGPT child, add a native ChatGPT target to the combo, use
 v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
 content when you control the caller.
+
+If a non-canonical Responses endpoint has been verified to consume or relay this ciphertext, enable
+**Providers → Settings → Pass through encrypted V2 agent tasks** for that provider, or set
+`allowEncryptedV2AgentTasks: true` in its provider config. The option is disabled by default and is
+valid only when the selected model's final wire is `openai-responses`; a `modelAdapters` override to
+`openai-chat` remains ineligible. It passes the opaque task through unchanged; it does not decrypt,
+translate, or recover plaintext, and it does not prove provider compatibility. The canonical ChatGPT
+forward provider is always eligible and needs no flag. A provider opted into passthrough skips
+`agentTaskRecovery` for that route because recovery and opaque forwarding are separate trust modes.
 
 An experimental, disabled-by-default `agentTaskRecovery` option can recover this specific native-
 to-routed shape through a raw Responses passthrough to the fixed ChatGPT `/responses` endpoint using
@@ -149,8 +159,8 @@ byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy calle
 `unreadable_encrypted_agent_task` on any failure. See
 [Agent configuration: Encrypted v2 task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery)
 for the full trust boundary and configuration.
-Combo routing remains unchanged and continues to consider only canonical native ChatGPT targets for
-encrypted tasks.
+Combo routing applies the same eligibility rule and considers canonical native ChatGPT targets plus
+Responses targets with the explicit provider opt-in.
 
 ## Changing the mode
 

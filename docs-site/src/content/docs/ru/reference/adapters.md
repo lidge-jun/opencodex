@@ -74,6 +74,12 @@ interface ProviderAdapter {
   authorization, ChatGPT account id и заголовки OpenAI beta/originator/session. Это путь входа
   через ChatGPT, на котором также работают [сайдкары](/ru/guides/sidecars/).
 
+Ciphertext зашифрованных дочерних задач V2 на этом адаптере остаётся непрозрачным: он пересылается
+побайтно без расшифровки, перевода или восстановления. Каноническая пересылка ChatGPT доверена
+неявно, но неканонический Responses-провайдер должен после проверки совместимости явно задать
+`allowEncryptedV2AgentTasks: true`. Опция по умолчанию отключена и действует только при финальном wire
+`openai-responses`; override в `openai-chat` не подходит.
+
 ## `anthropic`
 
 **Назначение:** Anthropic **Messages** (`/v1/messages`).

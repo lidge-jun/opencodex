@@ -76,6 +76,12 @@ of the HTTP retry loop.
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
   that also powers the [sidecars](/guides/sidecars/).
 
+Encrypted V2 child-task ciphertext remains opaque on this adapter: it is forwarded byte for byte,
+not decrypted, translated, or recovered. Canonical ChatGPT forwarding is trusted implicitly; a
+non-canonical Responses provider must explicitly set `allowEncryptedV2AgentTasks: true` after
+verifying upstream compatibility. The opt-in is disabled by default, applies only when the final
+model wire is `openai-responses`, and does not make an `openai-chat` override eligible.
+
 ## `anthropic`
 
 **Targets:** Anthropic **Messages** (`/v1/messages`).

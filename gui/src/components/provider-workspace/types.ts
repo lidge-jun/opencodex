@@ -96,6 +96,7 @@ export type ProviderUpdatePatch = {
   authMode?: string;
   note?: string;
   disabled?: boolean;
+  allowEncryptedV2AgentTasks?: boolean;
   allowPrivateNetwork?: boolean;
   liveModels?: boolean;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;

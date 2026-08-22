@@ -17,6 +17,25 @@ export function providerServiceTierConfigError(name: unknown, provider: unknown)
   return error ? `provider ${name} ${error}` : null;
 }
 
+/**
+ * Validate the provider editor's encrypted V2 capability outside the auth/CORS boundary.
+ * The capability is an explicit operator trust decision, and only Responses adapters can
+ * preserve the opaque task wire required by the feature.
+ */
+export function providerEncryptedV2ConfigError(name: unknown, provider: unknown): string | null {
+  if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
+    return null;
+  }
+  const raw = provider as Record<string, unknown>;
+  if (raw.allowEncryptedV2AgentTasks !== undefined && typeof raw.allowEncryptedV2AgentTasks !== "boolean") {
+    return `provider ${name} allowEncryptedV2AgentTasks must be a boolean`;
+  }
+  if (raw.allowEncryptedV2AgentTasks === true && raw.adapter !== "openai-responses") {
+    return `provider ${name} allowEncryptedV2AgentTasks requires adapter=openai-responses`;
+  }
+  return null;
+}
+
 function publicServiceTierRecord(value: unknown): Record<string, boolean> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const entries = Object.entries(value).filter(([model, supported]) =>
@@ -26,9 +45,9 @@ function publicServiceTierRecord(value: unknown): Record<string, boolean> | unde
 }
 
 /**
- * Add the provider editor's capability map to the already secret-free config
+ * Add the provider editor's capability fields to the already secret-free config
  * DTO. `safeConfigDTO` remains the owner of auth/cors redaction; this helper
- * only projects a boolean model capability used by the management UI.
+ * only projects the booleans used by the management UI.
  */
 export function withProviderServiceTierDTO(dto: unknown, config: OcxConfig): unknown {
   if (!dto || typeof dto !== "object" || Array.isArray(dto)) return dto;
@@ -41,8 +60,15 @@ export function withProviderServiceTierDTO(dto: unknown, config: OcxConfig): unk
     const dtoProvider = providers[name];
     if (!dtoProvider || typeof dtoProvider !== "object" || Array.isArray(dtoProvider)) continue;
     const capabilities = publicServiceTierRecord(provider.modelSupportsServiceTier);
-    if (capabilities === undefined) continue;
-    projectedProviders[name] = { ...(dtoProvider as Record<string, unknown>), modelSupportsServiceTier: capabilities };
+    const encryptedV2 = typeof provider.allowEncryptedV2AgentTasks === "boolean"
+      ? provider.allowEncryptedV2AgentTasks
+      : undefined;
+    if (capabilities === undefined && encryptedV2 === undefined) continue;
+    projectedProviders[name] = {
+      ...(dtoProvider as Record<string, unknown>),
+      ...(capabilities === undefined ? {} : { modelSupportsServiceTier: capabilities }),
+      ...(encryptedV2 === undefined ? {} : { allowEncryptedV2AgentTasks: encryptedV2 }),
+    };
   }
   return { ...root, providers: projectedProviders };
 }

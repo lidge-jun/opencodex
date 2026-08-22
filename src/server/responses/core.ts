@@ -159,7 +159,11 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import {
+  canReceiveEncryptedV2AgentTasks,
+  isCanonicalOpenAiForwardProvider,
+  OPENAI_CODEX_PROVIDER_ID,
+} from "../../providers/openai-tiers";
 import { providerContextCap } from "../../providers/context-cap";
 import {
   fastPolicyForModel,
@@ -178,10 +182,13 @@ import {
   waitForProviderRequestSlot,
 } from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
-import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
+import {
+  applyOpenAiVirtualModel,
+  resolveOpenAiCompactModel,
+} from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
-import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
+import { resolveAdapter, resolveFinalWireProtocolOverride, resolveWireProtocolOverride } from "../adapter-resolve";
 import {
   providerModelResponsesTerminalRepair,
   providerModelResponsesUpstreamStreaming,
@@ -1444,6 +1451,33 @@ function unreadableEncryptedAgentTaskResponse(): Response {
   );
 }
 
+function sameUpstreamOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left.trim()).origin === new URL(right.trim()).origin;
+  } catch {
+    return false;
+  }
+}
+
+function routeCanReceiveEncryptedV2AgentTasks(
+  route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
+  inboundWire: InboundWire,
+  approvedBaseUrl: string,
+): boolean {
+  const resolvedProvider = resolveFinalWireProtocolOverride(
+    route.providerName,
+    route.modelId,
+    route.provider,
+    inboundWire,
+  );
+  if (!canReceiveEncryptedV2AgentTasks(resolvedProvider)) return false;
+  // The capability is consent for the destination the operator approved, not for a
+  // later transport-derived endpoint. OAuth credential metadata may legitimately
+  // select a Copilot host for OAuth, but that host must still match the approved
+  // provider origin before opaque ciphertext is admitted.
+  return sameUpstreamOrigin(approvedBaseUrl, resolvedProvider.baseUrl);
+}
+
 type ResponsesAuthResolution =
   | { ok: true; authCtx: CodexAuthContext; headers: Headers; substituteMainCredential: boolean }
   | { ok: false; response: Response };
@@ -1803,7 +1837,18 @@ export async function handleComboResponses(
     if (!provider || provider.disabled === true) return false;
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
-      return isCanonicalOpenAiForwardProvider(route.provider);
+      const approvedBaseUrl = route.provider.baseUrl;
+      const transportProvider = resolveProviderTransport(
+        route.providerName,
+        route.provider,
+        undefined,
+        route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+      );
+      return routeCanReceiveEncryptedV2AgentTasks(
+        { ...route, provider: transportProvider },
+        options.inboundWire ?? "responses",
+        approvedBaseUrl,
+      );
     } catch {
       return false;
     }
@@ -2377,6 +2422,7 @@ async function handleResponsesInner(
       Date.now(),
       unreadableEncryptedAgentTask,
       previewSelectionOptions,
+      inboundWire,
     );
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
@@ -2413,7 +2459,19 @@ async function handleResponsesInner(
     threadSpawn
     && unreadableEncryptedAgentTask
     && agentTaskRecovery
-    && !isCanonicalOpenAiForwardProvider(route.provider)
+    && !routeCanReceiveEncryptedV2AgentTasks(
+      {
+        ...route,
+        provider: resolveProviderTransport(
+          route.providerName,
+          route.provider,
+          parsed.options.promptCacheKey,
+          route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+        ),
+      },
+      inboundWire,
+      route.provider.baseUrl,
+    )
     && !options.comboAttempt
   ) {
     let recovered = false;
@@ -2467,6 +2525,7 @@ async function handleResponsesInner(
             Date.now(),
             false,
             previewSelectionOptions,
+            inboundWire,
           );
           if (fallback) {
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
@@ -2504,12 +2563,6 @@ async function handleResponsesInner(
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
 
-  // Encrypted child tasks may only reach the canonical native backend. This check
-  // runs against the FINAL route so native-only fallback can rescue a routed primary.
-  if (!isCanonicalOpenAiForwardProvider(route.provider) && unreadableEncryptedAgentTask) {
-    return unreadableEncryptedAgentTaskResponse();
-  }
-
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
   // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
   // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
@@ -2538,6 +2591,24 @@ async function handleResponsesInner(
     inboundWire,
     inboundTransport: options.inboundTransport,
   });
+  // Virtual model normalization can change both the wire model and its model-specific
+  // adapter. Resolve the transport before the authoritative ciphertext gate as well: a
+  // provider's OAuth credential may supply a different Copilot host, and the opt-in is
+  // valid only for the destination whose origin the operator approved.
+  const approvedEncryptedV2BaseUrl = route.provider.baseUrl;
+  const preAuthTransportProvider = resolveProviderTransport(
+    route.providerName,
+    route.provider,
+    parsed.options.promptCacheKey,
+    route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+  );
+  const preAuthTransportRoute = { ...route, provider: preAuthTransportProvider };
+  if (
+    unreadableEncryptedAgentTask
+    && !routeCanReceiveEncryptedV2AgentTasks(preAuthTransportRoute, inboundWire, approvedEncryptedV2BaseUrl)
+  ) {
+    return unreadableEncryptedAgentTaskResponse();
+  }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
@@ -2682,6 +2753,13 @@ async function handleResponsesInner(
     parsed.options.promptCacheKey,
     route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
   );
+  if (
+    unreadableEncryptedAgentTask
+    && !routeCanReceiveEncryptedV2AgentTasks(route, inboundWire, approvedEncryptedV2BaseUrl)
+  ) {
+    releaseCodexAuthContextProbeLease(authCtx);
+    return unreadableEncryptedAgentTaskResponse();
+  }
   let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
     && adapterProvider.adapter === "openai-responses"
@@ -3237,6 +3315,18 @@ async function handleResponsesInner(
         parsed.options.promptCacheKey,
         route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
       );
+      if (
+        unreadableEncryptedAgentTask
+        && !routeCanReceiveEncryptedV2AgentTasks(
+          { ...route, provider: refreshedProvider },
+          inboundWire,
+          approvedEncryptedV2BaseUrl,
+        )
+      ) {
+        upstream.abort();
+        releaseCodexAuthContextProbeLease(authCtx);
+        return unreadableEncryptedAgentTaskResponse();
+      }
       route.provider = refreshedProvider;
       const refreshedAdapter = resolveAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
@@ -4651,6 +4741,17 @@ async function handleResponsesInner(
           parsed.options.promptCacheKey,
           route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
         );
+        if (
+          unreadableEncryptedAgentTask
+          && !routeCanReceiveEncryptedV2AgentTasks(
+            { ...route, provider: refreshedProvider },
+            inboundWire,
+            approvedEncryptedV2BaseUrl,
+          )
+        ) {
+          cleanupUpstreamAbort();
+          return unreadableEncryptedAgentTaskResponse();
+        }
         route.provider = refreshedProvider;
         invalidateSameTargetRequest();
         activeAdapter = resolveAdapter(

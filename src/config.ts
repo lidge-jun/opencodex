@@ -716,6 +716,7 @@ const providerConfigSchema = z.object({
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
+  allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   // The management API accepts `null` as "clear this", so a config written before the POST
   // canonicalization below can hold one on disk. Rejecting it here would send the operator
@@ -1388,6 +1389,13 @@ const configSchema = z.object({
         message: "fastWire=null conflicts with supportsServiceTier=true",
       });
     }
+    if (provider.allowEncryptedV2AgentTasks === true && provider.adapter !== "openai-responses") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "allowEncryptedV2AgentTasks"],
+        message: "allowEncryptedV2AgentTasks requires adapter=openai-responses",
+      });
+    }
     const openRouterRoutingError = openRouterRoutingConfigError(provider);
     if (openRouterRoutingError) {
       ctx.addIssue({
@@ -1766,6 +1774,35 @@ function sanitizeRetryOn429ForLoad(parsed: unknown): void {
     } else {
       // Preserve an intentionally empty `retryOn429: {}` (presence = opt-in with defaults).
       p.retryOn429 = cleaned;
+    }
+  }
+}
+
+/**
+ * Load-time degradation for the encrypted V2 task capability. This flag is an
+ * operator trust decision, but one malformed hand edit must not replace every
+ * configured provider, key, and route with factory defaults. Invalid values are
+ * fail-closed by removing the opt-in; management and candidate validation still
+ * reject the same inputs at their write boundaries.
+ */
+function sanitizeEncryptedV2AgentTasksForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const raw = provider as Record<string, unknown>;
+    const capability = raw.allowEncryptedV2AgentTasks;
+    if (capability === undefined) continue;
+    const safeProviderName = JSON.stringify(redactSecretString(name));
+    if (typeof capability !== "boolean") {
+      delete raw.allowEncryptedV2AgentTasks;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.allowEncryptedV2AgentTasks (${typeof capability}) is invalid — disabling encrypted V2 task passthrough while preserving the provider`);
+      continue;
+    }
+    if (capability === true && raw.adapter !== "openai-responses") {
+      delete raw.allowEncryptedV2AgentTasks;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.allowEncryptedV2AgentTasks requires adapter=openai-responses — disabling encrypted V2 task passthrough while preserving the provider`);
     }
   }
 }
@@ -2194,6 +2231,7 @@ export function loadConfig(): OcxConfig {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeEncryptedV2AgentTasksForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
@@ -2531,6 +2569,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeEncryptedV2AgentTasksForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {

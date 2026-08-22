@@ -1722,6 +1722,77 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  for (const scenario of [
+    {
+      name: "a non-boolean encrypted V2 capability",
+      adapter: "openai-responses",
+      capability: "yes",
+    },
+    {
+      name: "an encrypted V2 capability on a non-Responses adapter",
+      adapter: "openai-chat",
+      capability: true,
+    },
+  ] as const) {
+    test(`degrades ${scenario.name} without discarding provider routing`, () => {
+      writeConfig({
+        port: 10100,
+        defaultProvider: "relay",
+        providers: {
+          relay: {
+            adapter: scenario.adapter,
+            baseUrl: "https://relay.example.test/v1",
+            authMode: "key",
+            apiKey: "provider-key-marker",
+            allowEncryptedV2AgentTasks: scenario.capability,
+          },
+        },
+        routingProfiles: {
+          preferred: { candidates: [{ provider: "relay", model: "model-a" }] },
+        },
+      });
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const loaded = loadConfig() as Record<string, any>;
+
+        expect(loaded.defaultProvider).toBe("relay");
+        expect(Object.keys(loaded.providers)).toEqual(["relay"]);
+        expect(loaded.providers.relay).toMatchObject({
+          adapter: scenario.adapter,
+          baseUrl: "https://relay.example.test/v1",
+          apiKey: "provider-key-marker",
+        });
+        expect(loaded.providers.relay.allowEncryptedV2AgentTasks).toBeUndefined();
+        expect(loaded.routingProfiles).toEqual({
+          preferred: { candidates: [{ provider: "relay", model: "model-a" }] },
+        });
+        const diagnostics = readConfigDiagnostics();
+        expect(diagnostics.source).toBe("file");
+        expect(diagnostics.error).toBeNull();
+        expect(diagnostics.config.defaultProvider).toBe("relay");
+        expect(diagnostics.config.providers.relay).toMatchObject({
+          adapter: scenario.adapter,
+          apiKey: "provider-key-marker",
+        });
+        expect(diagnostics.config.providers.relay?.allowEncryptedV2AgentTasks).toBeUndefined();
+        expect(diagnostics.config.routingProfiles).toEqual({
+          preferred: { candidates: [{ provider: "relay", model: "model-a" }] },
+        });
+        expect(backupNames()).toEqual([]);
+
+        const warnings = warnSpy.mock.calls.map(call => String(call[0])).join("\n");
+        expect(warnings).toContain("allowEncryptedV2AgentTasks");
+        expect(warnings).not.toContain("provider-key-marker");
+        expect(warnings).not.toContain("https://relay.example.test/v1");
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
+  }
+
   describe("one bad entry in an independent section does not discard the config (#1785)", () => {
     /** Two usable providers, a disabled one, prices, and a profile worth keeping. */
     function configWith(extra: Record<string, unknown>): void {

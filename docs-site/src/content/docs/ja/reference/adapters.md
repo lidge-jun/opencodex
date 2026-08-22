@@ -65,6 +65,12 @@ HTTP リトライ ループの対象外です。
 - `key` provider は検証済みの相対 `responsesPath` を設定できます。adapter は `baseUrl` 末尾の `/` を 1 つ除き、`{trimmedBaseUrl}{responsesPath}` に送信します。Ark Agent Plan では `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` と `responsesPath: "/responses"` を使います。
 - `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/ja/guides/sidecars/) にも使われます。
 
+暗号化された V2 子タスクの暗号文はこのアダプター上でも不透明なままです。バイト単位で転送
+され、復号・翻訳・復元は行われません。正規の ChatGPT 転送は暗黙に信頼されますが、非正規の
+Responses プロバイダーは互換性を確認したうえで `allowEncryptedV2AgentTasks: true` を明示的に
+設定する必要があります。オプションはデフォルトで無効で、最終 wire が `openai-responses` の場合
+だけ有効です。`openai-chat` への override は対象外です。
+
 ## `anthropic`
 
 **対象:** Anthropic **Messages**（`/v1/messages`）。

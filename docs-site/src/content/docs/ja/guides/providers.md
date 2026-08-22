@@ -82,6 +82,10 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 (`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`)も含まれます。実際の呼び出し可否はアカウント権限に
 依存します。
 
+暗号化された V2 子タスクでは、正規の ChatGPT 転送は暗黙に信頼されます。非正規 Responses
+プロバイダーの宛先バインド opt-in、最終 wire の適格性、フェイルクローズ動作については、
+[プロバイダー設定リファレンス](/ja/reference/configuration/providers/)を参照してください。
+
 ## 2. アカウントログイン(OAuth)
 
 OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー

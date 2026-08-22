@@ -75,7 +75,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
-import { providerServiceTierConfigError } from "./provider-capability-config";
+import { providerEncryptedV2ConfigError, providerServiceTierConfigError } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -118,6 +118,7 @@ function applyProviderPatchFields(
   const next: OcxProviderConfig = { ...provider };
   let touched = false;
   let headersTouched = false;
+  let baseUrlChanged = false;
 
   if (Object.hasOwn(rawBody, "disabled")) {
     if (typeof rawBody.disabled !== "boolean") return { error: "disabled must be a boolean" };
@@ -134,7 +135,9 @@ function applyProviderPatchFields(
   }
   if (Object.hasOwn(rawBody, "baseUrl")) {
     if (typeof rawBody.baseUrl !== "string" || !rawBody.baseUrl.trim()) return { error: "baseUrl must be a non-empty string" };
-    next.baseUrl = rawBody.baseUrl.trim();
+    const nextBaseUrl = rawBody.baseUrl.trim();
+    baseUrlChanged = nextBaseUrl !== provider.baseUrl;
+    next.baseUrl = nextBaseUrl;
     touched = true;
   }
   if (Object.hasOwn(rawBody, "defaultModel")) {
@@ -180,6 +183,19 @@ function applyProviderPatchFields(
     if (typeof rawBody.allowPrivateNetwork !== "boolean") return { error: "allowPrivateNetwork must be a boolean" };
     next.allowPrivateNetwork = rawBody.allowPrivateNetwork;
     touched = true;
+  }
+  if (Object.hasOwn(rawBody, "allowEncryptedV2AgentTasks")) {
+    if (typeof rawBody.allowEncryptedV2AgentTasks !== "boolean") {
+      return { error: "allowEncryptedV2AgentTasks must be a boolean" };
+    }
+    next.allowEncryptedV2AgentTasks = rawBody.allowEncryptedV2AgentTasks;
+    touched = true;
+  }
+  // Encrypted V2 trust is destination-specific. A URL-only edit must not carry
+  // the approval for the previous endpoint into the new destination. An explicit
+  // capability field in the same PATCH is the management API's fresh approval.
+  if (baseUrlChanged && !Object.hasOwn(rawBody, "allowEncryptedV2AgentTasks")) {
+    delete next.allowEncryptedV2AgentTasks;
   }
   if (Object.hasOwn(rawBody, "liveModels")) {
     if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };
@@ -399,6 +415,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasApiKey: !!p.apiKey,
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
+      allowEncryptedV2AgentTasks: p.allowEncryptedV2AgentTasks === true,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
@@ -439,6 +456,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const provider = diskConfig.providers[name]!;
     const providerError = providerManagementConfigError(name, provider);
     if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
+    const encryptedV2Error = providerEncryptedV2ConfigError(name, provider);
+    if (encryptedV2Error) return jsonResponse({ error: "provider reload target invalid" }, 409);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
       diskConfig.codexAccountNamespaces,
       name,
@@ -498,6 +517,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const providerError = providerManagementConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
+    const encryptedV2Error = providerEncryptedV2ConfigError(name, body.provider);
+    if (encryptedV2Error) return jsonResponse({ error: encryptedV2Error }, 400);
     const serviceTierError = providerServiceTierConfigError(name, body.provider);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
@@ -650,11 +671,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const applied = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
     if ("error" in applied) return jsonResponse({ error: applied.error }, 400);
     const next = applied.next;
+    // The destination probe below is asynchronous. Capture the exact destination
+    // that was validated so a capability-only replay cannot silently approve a
+    // different destination if another PATCH wins the mutation lock meanwhile.
+    const validatedBaseUrl = next.baseUrl;
 
     const pacingOnly = keys.every(key => key === "requestPacing");
     if (applied.editorTouched && !pacingOnly) {
       const providerError = providerManagementConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
+      const encryptedV2Error = providerEncryptedV2ConfigError(name, next);
+      if (encryptedV2Error) return jsonResponse({ error: encryptedV2Error }, 400);
       const serviceTierError = providerServiceTierConfigError(name, next);
       if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
       const resolvedError = await providerDestinationResolvedError(name, next);
@@ -676,6 +703,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // later save clobbering the earlier snapshot.
     let replayError: string | undefined;
     withConfigMutationLockSync(() => {
+      const currentProvider = config.providers[name]!;
+      const destinationChangedDuringValidation = currentProvider.baseUrl !== validatedBaseUrl;
+      if (
+        destinationChangedDuringValidation
+        && rawBody.allowEncryptedV2AgentTasks === true
+        && !Object.hasOwn(rawBody, "baseUrl")
+      ) {
+        replayError = "provider destination changed during validation; retry with an explicit baseUrl";
+        return;
+      }
       const replay = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
       if ("error" in replay) {
         replayError = replay.error;
@@ -685,6 +722,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const syncError = providerManagementConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;
+          return;
+        }
+        const encryptedV2Error = providerEncryptedV2ConfigError(name, replay.next);
+        if (encryptedV2Error) {
+          replayError = encryptedV2Error;
           return;
         }
         const serviceTierError = providerServiceTierConfigError(name, replay.next);

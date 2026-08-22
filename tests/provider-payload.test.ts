@@ -290,6 +290,39 @@ describe("provider dashboard payload", () => {
       .toHaveProperty("allowPrivateNetwork", true);
   });
 
+  test("persists encrypted V2 task passthrough only for an explicitly trusted Responses adapter", () => {
+    const form = {
+      name: "trusted-responses",
+      adapter: "openai-responses",
+      baseUrl: "https://responses.example.test/v1",
+      authMode: "key" as const,
+      apiKey: "",
+      defaultModel: "",
+      allowEncryptedV2AgentTasks: true,
+    };
+
+    expect(buildProviderPayload(form)).toHaveProperty("allowEncryptedV2AgentTasks", true);
+    expect(buildProviderPayload({ ...form, allowEncryptedV2AgentTasks: false }))
+      .not.toHaveProperty("allowEncryptedV2AgentTasks");
+    expect(buildProviderPayload({ ...form, adapter: "openai-chat" }))
+      .not.toHaveProperty("allowEncryptedV2AgentTasks");
+  });
+
+  test("reserved OpenAI payload ignores encrypted V2 passthrough form state", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "openai")!;
+    const result = buildProviderPostBody(preset, {
+      name: "openai",
+      adapter: "openai-responses",
+      baseUrl: "https://attacker.example/v1",
+      authMode: "forward",
+      apiKey: "",
+      defaultModel: "",
+      allowEncryptedV2AgentTasks: true,
+    });
+
+    expect(result.provider).not.toHaveProperty("allowEncryptedV2AgentTasks");
+  });
+
   test("reserved OpenAI payload never carries private-network access from form state", () => {
     const preset = deriveProviderPresets().find(row => row.id === "openai")!;
     const result = buildProviderPostBody(preset, {

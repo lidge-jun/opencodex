@@ -40,6 +40,15 @@ export function AddProviderFormPane({
 }) {
   const t = useT();
 
+  const changeBaseUrl = (baseUrl: string) => {
+    const destinationChanged = baseUrl.trim() !== form.baseUrl.trim();
+    onFormChange({
+      ...form,
+      baseUrl,
+      ...(destinationChanged ? { allowEncryptedV2AgentTasks: false } : {}),
+    });
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {!isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
@@ -66,7 +75,18 @@ export function AddProviderFormPane({
       {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
       {!isReservedForward && <>
         <AddProviderField label={t("modal.adapter")}>
-          <select className="input" value={form.adapter} onChange={e => onFormChange({ ...form, adapter: e.target.value })}>
+          <select
+            className="input"
+            value={form.adapter}
+            onChange={e => {
+              const adapter = e.target.value;
+              onFormChange({
+                ...form,
+                adapter,
+                ...(adapter === "openai-responses" ? {} : { allowEncryptedV2AgentTasks: false }),
+              });
+            }}
+          >
             {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
           </select>
         </AddProviderField>
@@ -79,10 +99,7 @@ export function AddProviderFormPane({
                 onChange={e => {
                   const id = e.target.value;
                   onEndpointChoiceChange(id);
-                  onFormChange({
-                    ...form,
-                    baseUrl: baseUrlForChoice(preset.baseUrlChoices, id, form.baseUrl),
-                  });
+                  changeBaseUrl(baseUrlForChoice(preset.baseUrlChoices, id, form.baseUrl));
                 }}
               >
                 {preset.baseUrlChoices.map(c => (
@@ -100,7 +117,7 @@ export function AddProviderFormPane({
                 <input
                   className="input"
                   value={form.baseUrl}
-                  onChange={e => onFormChange({ ...form, baseUrl: e.target.value })}
+                  onChange={e => changeBaseUrl(e.target.value)}
                   placeholder={t("modal.baseUrlPlaceholder")}
                 />
               </AddProviderField>
@@ -108,7 +125,7 @@ export function AddProviderFormPane({
           </>
         ) : (
           <AddProviderField label={t("modal.baseUrl")}>
-            <input className="input" value={form.baseUrl} onChange={e => onFormChange({ ...form, baseUrl: e.target.value })} placeholder={t("modal.baseUrlPlaceholder")} />
+            <input className="input" value={form.baseUrl} onChange={e => changeBaseUrl(e.target.value)} placeholder={t("modal.baseUrlPlaceholder")} />
           </AddProviderField>
         )}
         {!isReservedForward && (
@@ -119,6 +136,23 @@ export function AddProviderFormPane({
         )}
         {!isReservedForward && (form?.allowPrivateNetwork ?? false) && (
           <p className="muted text-hint">{t("modal.allowPrivateNetworkHint")}</p>
+        )}
+        {!isReservedForward && form.adapter === "openai-responses" && (
+          <>
+            <label className="modal-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={form.allowEncryptedV2AgentTasks ?? false}
+                onChange={e => {
+                  const enabled = e.target.checked;
+                  if (enabled && !window.confirm(t("pws.encryptedV2Confirm"))) return;
+                  onFormChange({ ...form, allowEncryptedV2AgentTasks: enabled });
+                }}
+              />
+              <span className="muted text-control">{t("pws.encryptedV2Passthrough")}</span>
+            </label>
+            <p className="muted text-hint">{t("pws.encryptedV2PassthroughDesc")}</p>
+          </>
         )}
       </>}
       {form.authMode === "forward" ? (

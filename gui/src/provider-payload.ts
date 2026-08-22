@@ -7,6 +7,7 @@ export interface ProviderPayloadForm {
   apiKey: string;
   apiKeyTransport?: "x-api-key" | "bearer";
   defaultModel: string;
+  allowEncryptedV2AgentTasks?: boolean;
   allowPrivateNetwork?: boolean;
 }
 
@@ -77,6 +78,7 @@ export interface ProviderPayload {
   defaultModel?: string;
   authMode?: "key" | "forward" | "oauth";
   codexAccountMode?: "pool" | "direct";
+  allowEncryptedV2AgentTasks?: boolean;
   allowPrivateNetwork?: boolean;
 }
 
@@ -100,6 +102,9 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
   }
   if (form.defaultModel.trim()) {
     provider.defaultModel = form.defaultModel.trim();
+  }
+  if (form.adapter.trim() === "openai-responses" && form.allowEncryptedV2AgentTasks) {
+    provider.allowEncryptedV2AgentTasks = true;
   }
   if (form.allowPrivateNetwork) {
     provider.allowPrivateNetwork = true;

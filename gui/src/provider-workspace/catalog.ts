@@ -46,6 +46,7 @@ export interface WorkspaceProvider {
   freeTier?: boolean;
   disabled?: boolean;
   note?: string;
+  allowEncryptedV2AgentTasks?: boolean;
   allowPrivateNetwork?: boolean;
   requestPacing?: {
     enabled?: boolean;

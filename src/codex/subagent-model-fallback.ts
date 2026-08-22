@@ -29,13 +29,17 @@ import {
 import { isCodexAccountPaused } from "./account-pause";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
-import { PROVIDER_REGISTRY } from "../providers/registry";
+import { PROVIDER_REGISTRY, type InboundWire } from "../providers/registry";
+import { getOAuthCredentialApiBaseUrl } from "../oauth";
 import {
+  canReceiveEncryptedV2AgentTasks,
   CODEX_FORWARD_BASE_URL,
   OPENAI_CODEX_PROVIDER_ID,
   isCanonicalOpenAiForwardProvider,
 } from "../providers/openai-tiers";
 import { routeModel, type RouteResult } from "../router";
+import { resolveFinalWireProtocolOverride } from "../server/adapter-resolve";
+import { resolveProviderTransport } from "../providers/xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import {
@@ -59,6 +63,14 @@ type ModelHealth = {
 const modelHealth = new Map<string, ModelHealth>();
 const quotaPrimedAt = new Map<string, number>();
 const knownProviderIdSet = new Set(PROVIDER_REGISTRY.map(entry => entry.id.toLowerCase()));
+
+function sameUpstreamOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left.trim()).origin === new URL(right.trim()).origin;
+  } catch {
+    return false;
+  }
+}
 
 function tryRouteFallbackModel(config: OcxConfig, model: string): RouteResult | null {
   try {
@@ -275,13 +287,34 @@ export function selectAvailableSubagentModel(
   nativeFallbackOnly = false,
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
   trailingFallback: readonly string[] = [],
+  inboundWire: InboundWire = "responses",
 ): { model: string; rewritten: boolean; skipped: string[] } {
   const chain = normalizedChain(primary, config, extraFallback, trailingFallback);
   const skipped: string[] = [];
   for (const candidate of chain) {
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
-      if (!route || !isCanonicalOpenAiForwardProvider(route.provider)) {
+      const resolvedProvider = route
+        ? (() => {
+            const approvedBaseUrl = route.provider.baseUrl;
+            const transportProvider = resolveProviderTransport(
+              route.providerName,
+              route.provider,
+              undefined,
+              route.providerName === "github-copilot"
+                ? getOAuthCredentialApiBaseUrl(route.providerName)
+                : undefined,
+            );
+            if (!sameUpstreamOrigin(approvedBaseUrl, transportProvider.baseUrl)) return null;
+            return resolveFinalWireProtocolOverride(
+              route.providerName,
+              route.modelId,
+              transportProvider,
+              inboundWire,
+            );
+          })()
+        : null;
+      if (!resolvedProvider || !canReceiveEncryptedV2AgentTasks(resolvedProvider)) {
         skipped.push(candidate);
         continue;
       }
@@ -515,6 +548,7 @@ export function applySubagentModelFallback(
   now = Date.now(),
   nativeFallbackOnly = false,
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
+  inboundWire: InboundWire = "responses",
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
   const tomlRoleFallback = resolveAgentModelFallbackForPrimary(
@@ -536,6 +570,7 @@ export function applySubagentModelFallback(
     nativeFallbackOnly,
     accountUsabilityOptions,
     tomlRoleFallback,
+    inboundWire,
   );
   if (!selection.rewritten) return selection.skipped.length > 0
     ? { from: parsed.modelId, to: parsed.modelId, skipped: selection.skipped }

@@ -76,6 +76,12 @@ interface ProviderAdapter {
   ChatGPT account id, OpenAI beta/originator/session 헤더가 대상입니다. 이 ChatGPT 로그인 경로는
   [사이드카](/ko/guides/sidecars/)에도 쓰입니다.
 
+암호화된 V2 하위 작업의 ciphertext는 이 어댑터에서도 불투명하게 유지됩니다. 바이트 단위로
+전달되며 복호화·번역·복구하지 않습니다. 정규 ChatGPT 포워딩은 암묵적으로 신뢰하지만, 비정규
+Responses 프로바이더는 호환성을 확인한 뒤 `allowEncryptedV2AgentTasks: true`를 명시해야 합니다.
+이 옵션은 기본적으로 꺼져 있고 최종 wire가 `openai-responses`일 때만 적용되며, `openai-chat`
+override는 대상에서 제외됩니다.
+
 ## `anthropic`
 
 **대상:** Anthropic **Messages**(`/v1/messages`).

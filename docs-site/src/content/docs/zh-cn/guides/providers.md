@@ -73,6 +73,9 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-sol`、
 `gpt-5.6-terra`、`gpt-5.6-luna`）；账号具备相应权限时才能实际调用。
 
+对于加密的 V2 子任务，规范 ChatGPT 透传会被隐式信任。非规范 Responses 提供商的目标绑定 opt-in、
+最终 wire 资格和 fail-closed 行为，请参阅[提供商配置参考](/zh-cn/reference/configuration/providers/)。
+
 ## 2. 账号登录（OAuth）
 
 有八个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。

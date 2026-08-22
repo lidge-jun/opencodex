@@ -68,6 +68,11 @@ interface ProviderAdapter {
   account id 和 OpenAI beta/originator/session header。这条 ChatGPT 登录路径也为
   [sidecar](/zh-cn/guides/sidecars/) 提供支持。
 
+加密的 V2 子任务密文在此 adapter 上也保持不透明：按字节转发，不会解密、翻译或恢复。规范
+ChatGPT 透传会被隐式信任；非规范 Responses 提供商必须在确认兼容性后显式设置
+`allowEncryptedV2AgentTasks: true`。该选项默认关闭，只在最终 wire 为 `openai-responses` 时
+生效；解析到 `openai-chat` 的 override 不具备资格。
+
 ## `anthropic`
 
 **目标：** Anthropic **Messages**（`/v1/messages`）。

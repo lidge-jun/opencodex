@@ -332,6 +332,17 @@ describe("github-copilot transport fail-closed host allowlist", () => {
     }, "https://corp.githubcopilot.com");
     expect(resolved.baseUrl).toBe("https://corp.githubcopilot.com");
   });
+
+  test("a stored credential apiBaseUrl never overrides a key-auth destination", async () => {
+    const { resolveGithubCopilotTransport } = await import("../src/providers/github-copilot-transport");
+    const resolved = resolveGithubCopilotTransport({
+      adapter: "openai-responses",
+      authMode: "key",
+      baseUrl: "https://api.githubcopilot.com",
+      allowEncryptedV2AgentTasks: true,
+    }, "https://api.individual.githubcopilot.com");
+    expect(resolved.baseUrl).toBe("https://api.githubcopilot.com");
+  });
 });
 
 describe("copilot token redaction", () => {
