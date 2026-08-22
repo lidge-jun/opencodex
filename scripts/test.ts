@@ -1,6 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPLIT_GATEWAY_DIR = join(dirname(fileURLToPath(import.meta.url)), "../integrations/replit-gateway");
+
+/** Companion tests run only for the default full root suite, not file-scoped invocations. */
+export function shouldRunCompanionTests(requestedTestPaths: readonly string[]): boolean {
+  return requestedTestPaths.length === 0;
+}
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -156,7 +164,31 @@ if (import.meta.main) {
         + "Check for another test runner, a busy CPU, or a test that started polling something real.",
       );
     }
-    process.exitCode = child.exitCode ?? 1;
+    if ((child.exitCode ?? 1) !== 0) {
+      process.exitCode = child.exitCode ?? 1;
+    } else if (shouldRunCompanionTests(requestedTests)) {
+      const install = Bun.spawnSync(
+        [process.execPath, "install", "--frozen-lockfile"],
+        { cwd: REPLIT_GATEWAY_DIR, stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+      );
+      if ((install.exitCode ?? 1) !== 0) {
+        process.exitCode = install.exitCode ?? 1;
+      } else {
+        const companionStartedAt = Date.now();
+        const companion = Bun.spawnSync(
+          [process.execPath, "test", "--isolate", "tests/"],
+          { cwd: REPLIT_GATEWAY_DIR, stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+        );
+        const companionElapsedSeconds = Math.round((Date.now() - companionStartedAt) / 1000);
+        if (companionElapsedSeconds > 120) {
+          console.warn(
+            `[test] replit-gateway companion tests took ${companionElapsedSeconds}s; `
+            + "check for contention or a wedged test.",
+          );
+        }
+        process.exitCode = companion.exitCode ?? 1;
+      }
+    }
   } finally {
     isolated.cleanup();
   }
