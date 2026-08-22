@@ -10,6 +10,7 @@ import {
   loadConfig,
   multiAgentGuidanceEnabled,
   mutatePersistedConfig,
+  type ConfigMutationSource,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
@@ -112,11 +113,12 @@ function mirrorDesiredEnabledOntoSnapshot(config: OcxConfig, client: "claude-des
 function persistDesktopProfileField(
   config: OcxConfig,
   desktopProfile: NonNullable<OcxConfig["claudeCode"]>["desktopProfile"],
+  source: ConfigMutationSource = { surface: "api", detail: "PUT /api/native-integrations/claude-desktop" },
 ): { ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" } {
   const outcome = mutatePersistedConfig(persisted => {
     persisted.claudeCode = { ...(persisted.claudeCode ?? {}), desktopProfile };
     return { changed: true, value: true };
-  });
+  }, source);
   // Only mirror into memory once the durable write actually landed; an
   // `unavailable` outcome must not leave the snapshot claiming a saved profile.
   if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
@@ -216,7 +218,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       );
       if (result.written && result.fingerprint) {
         current.claudeCode = { ...current.claudeCode, desktopProfile: { ...current.claudeCode.desktopProfile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
-        saveConfigPreservingClaudeCode(current);
+        saveConfigPreservingClaudeCode(current, { surface: "internal", detail: "auto-apply desktop fingerprint" });
       }
     } catch { /* best-effort */ }
   }
@@ -342,13 +344,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsMode) {
       if (mode === "default") delete config.multiAgentMode;
       else config.multiAgentMode = mode;
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/v2 (mode)" });
       warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
     }
     if (wantsKeepNative) {
       if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
       else delete config.keepNativeChatGptOnV1;
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/v2 (keep-native-v1)" });
       const effectiveMode = mode ?? config.multiAgentMode ?? "default";
       warnings.push(body.keepNativeChatGptOnV1 === true
         ? (effectiveMode === "v2"
@@ -566,7 +568,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (nextPrompt) config.injectionPrompt = nextPrompt;
     else delete config.injectionPrompt;
 
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/injection-model" });
     return jsonResponse({
       ok: true,
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
@@ -601,7 +603,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       config[key] = value;
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/effort-caps" });
     return jsonResponse({ ok: true, effortCap: config.effortCap ?? null, subagentEffortCap: config.subagentEffortCap ?? null });
   }
 
@@ -648,7 +650,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const chosen = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string").slice(0, 5) : [];
     config.subagentModels = chosen;
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    save(config, { surface: "api", detail: "PUT /api/subagent-models" });
     const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
@@ -717,7 +719,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     else delete config.subagentModelFallback;
     if (nextPollMs !== undefined) config.subagentModelFallbackPollMs = nextPollMs;
     else delete config.subagentModelFallbackPollMs;
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/subagent-model-fallback" });
     return jsonResponse({
       ok: true,
       models: config.subagentModelFallback ?? [],
@@ -759,7 +761,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (excluded.length > 2000) return jsonResponse({ error: "excluded list is too large" }, 400);
     if (excluded.length === 0) delete config.grokExcludedModels;
     else config.grokExcludedModels = excluded;
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/grok/selection" });
     return jsonResponse({ ok: true, excluded });
   }
 
@@ -816,7 +818,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       const state = await buildClaudeDesktopState(config, parsed);
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconcileDesktopProfile(state.profile, state.models) };
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/native-integrations/claude-desktop (profile)" });
       const saved = await buildClaudeDesktopState(config);
       const runtimePort = Number(url.port) || config.port;
       return jsonResponse({ ok: true, ...saved, port: runtimePort });
@@ -858,7 +860,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         }
       }
       const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
-      const desired = setIntegrationEnabled("claude-desktop", true);
+      const desired = setIntegrationEnabled("claude-desktop", true, { surface: "api", detail: "POST /api/claude-desktop/apply" });
       if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
       // Disk now says ON; the reused server snapshot must agree, or the native
       // GET reports OFF and a later whole-snapshot save undoes this transition.
@@ -869,7 +871,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // its stale `clientIntegrations` back over that write and turn the enable
       // action into an immediate self-cancelling OFF — the guard below would then
       // refuse the apply it was asked to perform. Persist ONLY the profile field.
-      const profileSaved = persistDesktopProfileField(config, state.profile);
+      const profileSaved = persistDesktopProfileField(config, state.profile, { surface: "api", detail: "POST /api/claude-desktop/apply" });
       if (!profileSaved.ok) {
         return jsonResponse({
           error: `Claude Desktop profile could not be saved (${profileSaved.reason}); nothing was applied.`,
@@ -916,7 +918,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           ...state.profile,
           appliedFingerprint: result.fingerprint,
           appliedAt: new Date().toISOString(),
-        });
+        }, { surface: "api", detail: "POST /api/claude-desktop/apply (fingerprint)" });
         if (!marked.ok) {
           return jsonResponse({
             ok: true,

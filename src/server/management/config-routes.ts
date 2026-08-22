@@ -11,6 +11,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  readConfigMutationAudit,
 } from "../../config";
 import {
   clearLoginState,
@@ -251,6 +252,23 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     return jsonResponse({ error: "Full config PUT is disabled. Use /api/providers POST for provider changes." }, 405);
   }
 
+  if (url.pathname === "/api/config/mutations" && req.method === "GET") {
+    // Mutation history echoes caller-chosen provider/model names and field values.
+    // Only authenticated human-facing management principals may read it; direct
+    // dispatch (undefined principal) and process-scoped capabilities are rejected.
+    if (ctx.principal !== "admin-token" && ctx.principal !== "gui-session") {
+      return jsonResponse(
+        { error: ctx.principal === undefined ? "admin token required" : "not authorized to read config mutation history" },
+        ctx.principal === undefined ? 401 : 403,
+        req,
+        config,
+      );
+    }
+    const requested = Number(url.searchParams.get("limit") ?? "");
+    const { rows, maxRows } = readConfigMutationAudit(Number.isFinite(requested) ? requested : 100);
+    return jsonResponse({ mutations: rows, retention: { maxRows } });
+  }
+
   if (url.pathname === "/api/settings" && req.method === "GET") {
     let resolved: ReturnType<typeof resolveCodexRuntime>;
     try {
@@ -442,7 +460,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         config.codexAccountPickerEnabled = false;
       }
       pickerIsEnabled = codexAccountPickerEnabled(config);
-      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config, { surface: "api", detail: "PUT /api/settings" });
     } catch (error) {
       if (previousSettings.hasCodexAutoStart) config.codexAutoStart = previousSettings.codexAutoStart;
       else delete config.codexAutoStart;
@@ -775,7 +793,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else config.visionSidecar.reasoning = normalizedVisionReasoning;
       }
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/sidecar-settings" });
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
     const savedWebSearchCandidates = await webSearchCandidateRows(config);
@@ -822,7 +840,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (body.model === "") delete config.shadowCallIntercept.model;
       else config.shadowCallIntercept.model = body.model;
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/shadow-call-settings" });
     const sci = config.shadowCallIntercept;
     return jsonResponse({
       ok: true,

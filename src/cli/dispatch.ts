@@ -79,7 +79,7 @@ const commandRunners: Record<string, CommandRunner> = {
         console.error("No running proxy found. Run 'ocx start' — it injects opencodex automatically.");
         return 1;
       }
-      const desired = setIntegrationEnabled("codex", true);
+      const desired = setIntegrationEnabled("codex", true, { surface: "cli", detail: "ocx inject" });
       if (!desired.ok) {
         console.error(`Codex desired state was not saved (${desired.reason}).`);
         return desired.reason === "conflict" ? 2 : 1;
@@ -97,7 +97,7 @@ const commandRunners: Record<string, CommandRunner> = {
       console.log(`Plain \`codex\` now routes through opencodex in ${target.effectiveCodexHome} (undo with: ocx restore).`);
       return 0;
     }
-    const desired = setIntegrationEnabled("codex", false);
+    const desired = setIntegrationEnabled("codex", false, { surface: "cli", detail: "ocx restore" });
     if (!desired.ok) {
       if (restoreJson) {
         // Machine-readable contract: every restore --json outcome emits one

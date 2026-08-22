@@ -304,7 +304,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
     const enabled = body.enabled;
 
     const { setCodexIntegrationEnabled } = await import("../../codex/desired-state");
-    const persisted = setCodexIntegrationEnabled(enabled);
+    const persisted = setCodexIntegrationEnabled(enabled, { surface: "api", detail: "PUT /api/native-integrations/codex" });
     /*
      * `missing` does not block the switch — see the Grok route for the reasoning.
      * A user with no config file yet still gets the artifact change; what they
@@ -430,7 +430,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      * on, where the other order leaves artifacts the next start undoes.
      */
     const { setGrokIntegrationEnabled } = await import("../../codex/desired-state");
-    const persisted = setGrokIntegrationEnabled(enabled);
+    const persisted = setGrokIntegrationEnabled(enabled, { surface: "api", detail: "PUT /api/native-integrations/grok" });
     /*
      * `missing` does NOT block the toggle here.
      *
@@ -618,7 +618,7 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
 
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
-    const persisted = setIntegrationEnabled("claude-desktop", body.enabled);
+    const persisted = setIntegrationEnabled("claude-desktop", body.enabled, { surface: "api", detail: "PUT /api/native-integrations/claude-desktop" });
     if (!persisted.ok) {
       return refusal(persisted.retryable ? 409 : 500, "claude-desktop", persisted.retryable ? "config_busy" : "write_failed", persisted.message);
     }
@@ -733,7 +733,7 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
      */
     const persist = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
     try {
-      persist(config);
+      persist(config, { surface: "api", detail: "PUT /api/native-integrations/claude" });
     } catch (error) {
       if (isConfigLockError(error)) {
         return isLockContention(error)
