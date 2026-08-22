@@ -645,7 +645,7 @@ export const fr: Record<TKey, string> = {
   "sub.roles.description": "Quand l’utiliser",
   "sub.roles.descriptionHint": "Montré au parent pour qu’il sache quand lancer ce spécialiste.",
   "sub.roles.model": "Modèle",
-  "sub.roles.effort": "Effort",
+  "sub.roles.effort": "Effort de raisonnement",
   "sub.roles.effortNone": "Défaut du modèle",
   "sub.roles.instructions": "Instructions enfant",
   "sub.roles.instructionsHint": "Prompt développeur chargé par l’agent enfant.",
