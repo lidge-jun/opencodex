@@ -19,7 +19,7 @@ import {
   updateJobPath,
   type UpdateJobState,
 } from "../src/update/job";
-import { checkUpdatePackageIntegrity, updateCommand, updateCommandStr } from "../src/update/index";
+import { checkUpdatePackageIntegrity, PKG, updateCommand, updateCommandStr } from "../src/update/index";
 
 type SpawnResult = { status: number | null; stdout: string };
 function fakeSpawn(result: SpawnResult): typeof import("node:child_process").spawnSync {
@@ -1525,18 +1525,18 @@ describe("GUI update execution decisions", () => {
 
 describe("immutable update target (WP160)", () => {
   test("a resolved version pins the install target instead of the movable tag", () => {
-    expect(updateCommand("bun", "latest", "2.7.24").args).toEqual(["add", "-g", "@bitkyc08/opencodex@2.7.24"]);
-    expect(updateCommand("npm", "latest", "2.7.24").args).toEqual(["install", "-g", "@bitkyc08/opencodex@2.7.24"]);
-    expect(updateCommandStr("bun", "latest", "2.7.24")).toContain("@bitkyc08/opencodex@2.7.24");
+    expect(updateCommand("bun", "latest", "2.7.24").args).toEqual(["add", "-g", `${PKG}@2.7.24`]);
+    expect(updateCommand("npm", "latest", "2.7.24").args).toEqual(["install", "-g", `${PKG}@2.7.24`]);
+    expect(updateCommandStr("bun", "latest", "2.7.24")).toContain(`${PKG}@2.7.24`);
     // Unknown version falls back to the tag (best-effort lane).
-    expect(updateCommand("bun", "latest").args).toEqual(["add", "-g", "@bitkyc08/opencodex@latest"]);
-    expect(updateCommand("bun", "latest", null).args).toEqual(["add", "-g", "@bitkyc08/opencodex@latest"]);
+    expect(updateCommand("bun", "latest").args).toEqual(["add", "-g", `${PKG}@latest`]);
+    expect(updateCommand("bun", "latest", null).args).toEqual(["add", "-g", `${PKG}@latest`]);
   });
 
   test("bun worker execution pins the resolved version through updateExecutionCommand", () => {
     const cmd = updateExecutionCommand("bun", "latest", "/pkg/bin/ocx.mjs", "2.7.24");
     expect(cmd.bin).toBe(process.platform === "win32" ? process.execPath : "bun");
-    expect(cmd.args).toEqual(["add", "-g", "@bitkyc08/opencodex@2.7.24"]);
+    expect(cmd.args).toEqual(["add", "-g", `${PKG}@2.7.24`]);
     expect(cmd.display).toContain("@2.7.24");
   });
 
