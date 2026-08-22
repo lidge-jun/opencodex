@@ -16,8 +16,12 @@ Image Bridge обнаруживает такие вызовы и прозрач�
   чтобы не создавать неожиданных расходов xAI — см. [Конфигурацию](#configuration) ниже).
 - Нужна запись провайдера `xai` с **API-ключом**. Bridge жёстко привязывает выполнение к
   registry-endpoint'у xAI Images (`https://api.x.ai/v1`); любой настроенный override `baseUrl`
-  для image-вызовов игнорируется. Одного OAuth / `ocx login xai` для активации bridge
-  недостаточно (OAuth-транспорт Grok CLI ориентирован на чат и не используется для `/images/*`).
+  для image-вызовов игнорируется. Одного OAuth / `ocx login xai` недостаточно, чтобы
+  включить этот sidecar-цикл. Тот же флаг `bridgeEnabled` включает отдельный relay Codex
+  `/v1/images`, чтобы встроенный клиент `image_gen` мог вызывать Imagine с grant'ом Grok CLI —
+  см. [Встроенную генерацию изображений](/guides/codex-integration/#built-in-image-generation-image_gen).
+  Если grant (или API-ключ xAI) отсутствует, `/v1/images` возвращает ошибку и не
+  переходит на ChatGPT.
 
   ```json
   {

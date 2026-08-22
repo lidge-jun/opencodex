@@ -162,6 +162,15 @@ function xaiImageDownloadFailed(): Response {
   return formatErrorResponse(502, "upstream_error", "xAI image download failed");
 }
 
+function xaiImageAuthMissing(): Response {
+  return formatErrorResponse(
+    400,
+    "invalid_request_error",
+    "xAI Imagine relay is enabled but no usable Grok CLI OAuth token or xAI API key was found. "
+    + "Run `ocx login xai` or set an xAI API key. The request was not forwarded to ChatGPT.",
+  );
+}
+
 /** Test seam: inject a pinned HTTPS GET so relay tests never open a real socket. */
 let xaiResultPinnedDownload: PinnedDownloadFn | undefined;
 
@@ -479,9 +488,9 @@ async function tryXaiImageRelay(
       if (linkedSignal.signal.aborted) {
         return formatErrorResponse(504, "upstream_error", `xAI image ${endpoint} timed out during authentication`);
       }
-      return undefined;
+      return xaiImageAuthMissing();
     }
-    if (!token) return undefined;
+    if (!token) return xaiImageAuthMissing();
     logCtx.provider = "xai";
     logCtx.model = config.images?.bridgeModel ?? "grok-imagine-image-quality";
     const result = await callXaiImages(
