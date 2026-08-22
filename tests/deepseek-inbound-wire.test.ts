@@ -1021,11 +1021,12 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
         adapter: "openai-responses",
         baseUrl: "https://custom-gateway.test/v1",
         modelResponsesCompatibility: {
-          "my-model": "terminal-repair" as const,
+          "My-Model": "terminal-repair" as const,
         },
       };
       expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "my-model")).toEqual({ graceMs: 500 });
       expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MY-MODEL")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "My-Model")).toEqual({ graceMs: 500 });
       expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "other-model")).toBeUndefined();
     });
 
@@ -1034,12 +1035,14 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
         adapter: "openai-responses",
         baseUrl: "https://custom-gateway.test/v1",
         modelResponsesTerminalRepair: {
-          "model-num": 1500,
-          "model-obj": { graceMs: 2000 },
+          "Model-Num": 1500,
+          "Model-Obj": { graceMs: 2000 },
         },
       };
       expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-num")).toEqual({ graceMs: 1500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MODEL-NUM")).toEqual({ graceMs: 1500 });
       expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-obj")).toEqual({ graceMs: 2000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MODEL-OBJ")).toEqual({ graceMs: 2000 });
       expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "unconfigured")).toBeUndefined();
     });
 

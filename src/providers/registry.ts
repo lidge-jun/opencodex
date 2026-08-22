@@ -2877,6 +2877,17 @@ export function providerModelResponsesUpstreamStreaming(
   return entry.modelResponsesUpstreamStreaming[modelId.trim().toLowerCase()];
 }
 
+function lookupCaseInsensitive<T>(map: Record<string, T> | undefined, key: string): T | undefined {
+  if (!map) return undefined;
+  if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
+  const lowerKey = key.trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(map, lowerKey)) return map[lowerKey];
+  for (const [k, v] of Object.entries(map)) {
+    if (k.trim().toLowerCase() === lowerKey) return v;
+  }
+  return undefined;
+}
+
 /**
  * Resolve terminal-repair policy for native Responses streams (supports registry presets
  * and custom-provider configuration overrides, issue #1809).
@@ -2887,21 +2898,21 @@ export function providerModelResponsesTerminalRepair(
   modelId: string,
 ): ResponsesTerminalRepairPolicy | undefined {
   const modelKey = modelId.trim().toLowerCase();
-  const effectiveAdapter = provider.modelAdapters?.[modelId] ?? provider.modelAdapters?.[modelKey] ?? provider.adapter;
+  const effectiveAdapter = lookupCaseInsensitive(provider.modelAdapters, modelId) ?? provider.adapter;
 
   // Custom provider opt-in: effective wire must be openai-responses
   if (effectiveAdapter === "openai-responses") {
     // 1. Check explicit modelResponsesCompatibility
-    const compat = provider.modelResponsesCompatibility?.[modelId] ?? provider.modelResponsesCompatibility?.[modelKey];
+    const compat = lookupCaseInsensitive(provider.modelResponsesCompatibility, modelId);
     if (compat === "terminal-repair") {
-      const raw = provider.modelResponsesTerminalRepair?.[modelId] ?? provider.modelResponsesTerminalRepair?.[modelKey];
+      const raw = lookupCaseInsensitive(provider.modelResponsesTerminalRepair, modelId);
       const grace = typeof raw === "number" ? raw : (typeof raw === "object" && raw ? raw.graceMs : 500);
       const graceMs = Math.floor(grace ?? 500);
       return { graceMs: Number.isFinite(graceMs) && graceMs > 0 ? graceMs : 500 };
     }
 
     // 2. Check explicit modelResponsesTerminalRepair
-    const rawModel = provider.modelResponsesTerminalRepair?.[modelId] ?? provider.modelResponsesTerminalRepair?.[modelKey];
+    const rawModel = lookupCaseInsensitive(provider.modelResponsesTerminalRepair, modelId);
     if (rawModel !== undefined) {
       const grace = typeof rawModel === "number" ? rawModel : (typeof rawModel === "object" && rawModel ? rawModel.graceMs : undefined);
       const graceMs = Math.floor(grace ?? 0);
