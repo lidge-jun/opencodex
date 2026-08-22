@@ -216,6 +216,11 @@ export interface ProviderRegistryEntry {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * When enabled, tool results that are present but empty are annotated on the wire.
+   * Seeded/backfilled like other fixed wire capabilities.
+   */
+  annotateEmptyToolOutputs?: boolean;
+  /**
    * Registry default for the provider's `service_tier` support; see
    * `OcxProviderConfig.supportsServiceTier`. Registry-only: backfilled (never
    * overriding) at enrich/route time and deliberately NOT seeded into saved
@@ -1682,6 +1687,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // context splits a call from its result (#1292); parallel calls remain one
     // reasoning-bearing assistant batch rather than being split per pair (#1477).
     requiresAdjacentResponsesToolResults: true,
+    // DeepSeek exec tool results can be present-but-empty (a script that ran without
+    // calling text(...)); annotate them so routed models do not silently accept an
+    // empty result or re-issue the same call.
+    annotateEmptyToolOutputs: true,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
