@@ -61,8 +61,8 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 | 键 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 有序的具体路由。`weight` 范围为 1–10000，默认值为 `1`。 |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 选择策略。目标顺序用于打破平局；权重用于 round-robin 和 random。 |
-| `stickyLimit?` | `number` | `1` | 单个 round-robin 批次中保留的成功请求数。范围 1–100；其他策略会忽略它。 |
+| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | 选择策略。目标顺序表示故障切换优先级；权重会影响平滑加权轮询。 |
+| `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias?` | `string` | — | 可选的公开 model id，用于替代规范化的选择器 slug。 |

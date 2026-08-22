@@ -211,9 +211,9 @@ ocx combo remove <id> --yes
 |フィールド |必須 |デフォルト |ルール |
 | --- | --- | --- | --- |
 | `targets` |はい | — |構成された `{ provider, model, weight? }` ターゲットの空でない順序付けされた配列。重複するプロバイダーとモデルのペアは拒否されます。 |
-| `targets[].weight` |いいえ | `1` | 1 ～ 10,000 の整数。round-robin と random で使用され、他の戦略では無視されます。 |
-| `strategy` |いいえ | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、または `"reset-window"`。 |
-| `stickyLimit` |いいえ | `1` |round-robin 選択ごとの成功リクエスト数。1 ～ 100 の整数で、他の戦略では無視されます。 |
+| `targets[].weight` |いいえ | `1` | 1 ～ 10,000 の整数。ラウンドロビンで使用されます。フェイルオーバーによって無視されます。 |
+| `strategy` |いいえ | `"failover"` | `"failover"` または `"round-robin"`。 |
+| `stickyLimit` |いいえ | `1` |ラウンドロビン選択ごとの成功したリクエストの数は 1 ～ 100 の整数です。 |
 | `defaultEffort` |いいえ | `null` | `low`、`medium`、`high`、`xhigh`、`max`、または `ultra`;呼び出し元が努力を省略し、ターゲットがサポートをアドバタイズした場合にのみ適用されます。 |
 | `alias` |いいえ |なし |オプションのトリミングされたパブリック モデル ID。上記のエイリアス ルールを使用します。空の値はエイリアスなしで保存されます。 |
 | `nativeAlias` |いいえ | `false` | 現在サポートされている bare native alias に routing/catalog の優先権を明示的に与えます。 |

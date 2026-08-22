@@ -1036,4 +1036,72 @@ describe("supported disabled-provider activation", () => {
     });
   }, 10_000);
 });
+
+describe("combo response-path strategy accounting", () => {
+  function responseRequest(): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    });
+  }
+
+  function completion(label: string): Response {
+    return Response.json({
+      id: `chatcmpl-${label}`,
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: label }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+  }
+
+  test("least-used counts successful response-path attempts", async () => {
+    let aHits = 0;
+    let bHits = 0;
+    const upstreamA = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { aHits += 1; return completion("a"); } });
+    const upstreamB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { bHits += 1; return completion("b"); } });
+    try {
+      const config = baseConfig({
+        providers: {
+          a: { adapter: "openai-chat", baseUrl: `${upstreamA.url}v1`, allowPrivateNetwork: true, apiKey: "ka", models: ["m1"] },
+          b: { adapter: "openai-chat", baseUrl: `${upstreamB.url}v1`, allowPrivateNetwork: true, apiKey: "kb", models: ["m2"] },
+        },
+        combos: { free: { strategy: "least-used", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] } },
+      });
+      expect((await handleResponses(responseRequest(), config, { model: "", provider: "" })).status).toBe(200);
+      expect((await handleResponses(responseRequest(), config, { model: "", provider: "" })).status).toBe(200);
+      expect({ aHits, bHits }).toEqual({ aHits: 1, bHits: 1 });
+    } finally {
+      await upstreamA.stop(true);
+      await upstreamB.stop(true);
+    }
+  }, 10_000);
+
+  test("reset-window retries the next target and cools the failed target", async () => {
+    let aHits = 0;
+    let bHits = 0;
+    const upstreamA = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() { aHits += 1; return Response.json({ error: { message: "busy" } }, { status: 429, headers: { "retry-after": "60" } }); },
+    });
+    const upstreamB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { bHits += 1; return completion("b"); } });
+    try {
+      const config = baseConfig({
+        providers: {
+          a: { adapter: "openai-chat", baseUrl: `${upstreamA.url}v1`, allowPrivateNetwork: true, apiKey: "ka", models: ["m1"] },
+          b: { adapter: "openai-chat", baseUrl: `${upstreamB.url}v1`, allowPrivateNetwork: true, apiKey: "kb", models: ["m2"] },
+        },
+        combos: { free: { strategy: "reset-window", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] } },
+      });
+      const response = await handleResponses(responseRequest(), config, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect({ aHits, bHits }).toEqual({ aHits: 1, bHits: 1 });
+      expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(true);
+    } finally {
+      await upstreamA.stop(true);
+      await upstreamB.stop(true);
+    }
+  }, 10_000);
+});
 import { ManagementRequest as Request } from "./helpers/management-auth";

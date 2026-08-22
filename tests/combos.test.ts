@@ -47,6 +47,8 @@ import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { reconcileComboRotationState } from "../src/combos/resolve";
 import {
   clearCachedProviderQuotas,
+  getCachedProviderQuota,
+  replaceCachedProviderQuotas,
   setCachedProviderQuotaForTests,
 } from "../src/providers/quota-routing-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
@@ -431,6 +433,19 @@ describe("combo failure policy and advancement", () => {
 });
 
 describe("deterministic combo selection", () => {
+  test("replacing quota snapshots removes providers omitted from the refresh", () => {
+    const now = Date.now();
+    replaceCachedProviderQuotas([
+      { provider: "a", label: "a", source: "test", quota: { updatedAt: now } },
+      { provider: "b", label: "b", source: "test", quota: { updatedAt: now } },
+    ]);
+    replaceCachedProviderQuotas([
+      { provider: "a", label: "a", source: "test", quota: { updatedAt: now } },
+    ]);
+    expect(getCachedProviderQuota("a", now)).not.toBeNull();
+    expect(getCachedProviderQuota("b", now)).toBeNull();
+  });
+
   test("equal-weight RR rotates exactly", () => {
     const config = rrConfig(1, [1, 1, 1]);
     expect(successfulPicks(config, 6)).toEqual([

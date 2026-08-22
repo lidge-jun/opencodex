@@ -210,9 +210,9 @@ ocx combo remove <id> --yes
 | 필드 | 필수 | 기본값 | 규칙 |
 | --- | --- | --- | --- |
 | `targets` | 예 | — | 설정된 `{ provider, model, weight? }` 대상의 비어 있지 않은 순서가 있는 배열이어야 합니다. 중복된 provider/model 쌍은 거부됩니다. |
-| `targets[].weight` | 아니요 | `1` | 1에서 10,000 사이의 정수입니다. round-robin과 random에서 사용되며 다른 전략에서는 무시됩니다. |
-| `strategy` | 아니요 | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, 또는 `"reset-window"`입니다. |
-| `stickyLimit` | 아니요 | `1` | round-robin 선택 한 번당 성공 요청 1에서 100회 사이의 정수이며 다른 전략에서는 무시됩니다. |
+| `targets[].weight` | 아니요 | `1` | 1에서 10,000 사이의 정수입니다. round-robin에서 사용되며 failover에서는 무시됩니다. |
+| `strategy` | 아니요 | `"failover"` | `"failover"` 또는 `"round-robin"`입니다. |
+| `stickyLimit` | 아니요 | `1` | round-robin 선택 한 번당 성공 요청 1에서 100회 사이의 정수입니다. |
 | `defaultEffort` | 아니요 | `null` | `low`, `medium`, `high`, `xhigh`, `max`, 또는 `ultra`입니다. 호출자가 effort를 생략하고 대상이 지원을 광고할 때만 적용됩니다. |
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
 | `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |

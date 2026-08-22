@@ -80,7 +80,7 @@ gate: it requires the native feature to be enabled with an explicit v2 surface
 
 ### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
 
-Manage combo virtual models and routing strategies. `ocx route combo` is the hierarchical alias;
+Manage combo failover and round-robin virtual models. `ocx route combo` is the hierarchical alias;
 combo is currently the supported routing resource. Targets use
 `provider/model[:weight],provider/model[:weight]`.
 
