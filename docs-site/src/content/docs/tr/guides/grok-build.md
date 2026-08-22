@@ -22,7 +22,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... görünür model başına bir [model.ocx-*] tablosu ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -55,18 +66,27 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 Grok Build'in `/effort` (ve `--effort`) ayarı yalnızca katalog girdisi merdiveni
 bildiren modeller için çalışır: model listesi getirme işlemi ham `GET
 /v1/models` yanıtını okur ve buradaki girdiler `supports_reasoning_effort` artı
-`reasoning_efforts` menü seçeneklerini taşımalıdır. Yönlendirilen model
-girdileri için opencodex, yapılandırılmış sağlayıcı katmanlarını
-(`reasoningEfforts` / `modelReasoningEfforts` ve `modelDefaultReasoningEfforts`
-varsayılanı) bu yanıta yansıtır. Bu meta veriler proxy tarafından
-yapılandırılmış yönlendirilen merdiveni açıklar — yerel yukarı akış akıl yürütme
-desteğini iddia etmez ve adaptörler akıl yürütmeyi taklit edebilir veya
-seviyeleri sağlayıcıya özgü alanlarla eşleyebilir. Yapılandırılmış bir merdivene
-sahip yönlendirilen modeller, tıpkı Codex'te olduğu gibi Grok Build'de de çaba
-denetimini gösterir. Boş bir katman listesine sahip modeller, Codex davranışıyla
-eşleşecek şekilde çaba denetimi tutmaz. Yerel GPT-5.6 girdileri ayrıdır:
-sağlayıcı tarafından yapılandırılmış yönlendirilen meta veriler yerine
-sabitlenmiş yukarı akış akıl yürütme merdivenlerini korur ve ortaya çıkarır.
+`reasoning_efforts` menü seçeneklerini taşımalıdır. Merdivenin Grok ile uyumlu
+bir izdüşümü, yönetilen her `[model.*]` tablosuna `supports_reasoning_effort`, varsayılan
+`reasoning_effort` ve `[[model.<alias>.reasoning_efforts]]` seçim satırlarıyla
+yazılır. Yönlendirilen model girdileri için opencodex, yapılandırılmış sağlayıcı
+katmanlarını (`reasoningEfforts` / `modelReasoningEfforts` ve
+`modelDefaultReasoningEfforts` varsayılanı) yansıtır. Bu meta veriler proxy
+tarafından yapılandırılmış merdiveni açıklar; adaptörler akıl yürütmeyi taklit
+edebilir veya seviyeleri sağlayıcıya özgü alanlarla eşleyebilir. Boş bir katman
+listesine sahip modeller çaba denetimi göstermez. Yerel GPT-5.6 girdileri,
+sabitlenmiş yukarı akış akıl yürütme merdivenlerini korur. Modelin bildirdiği
+geçerli Grok katmanları, `none` ve `minimal` dahil olmak üzere korunur. Codex'e özgü
+`ultra` dahil desteklenmeyen veya yinelenen katmanlar dosyadan çıkarılır; yazılan her
+seçenek seçilebilir durumda kalır.
+
+Grok Build, opencodex ile Chat Completions üzerinden konuşur ve merdiven
+bildirildiğinde `reasoning_effort` gönderir. Bu durumda Chat Completions giriş
+dönüştürücüsü, dahili Responses `reasoning.summary` değerini varsayılan olarak
+`auto` yapar; böylece akıl yürütme izleri Grok'a `delta.reasoning_content`
+olarak ulaşır. Modelin akıl yürütmesini sürdürüp izi gizlemek isteyen bir istemci
+`include_reasoning: false` (veya `reasoning.summary: "none"`) ayarlayabilir. Her
+iki seçenek de bulunduğunda açıkça belirtilen `reasoning.summary` önceliklidir.
 
 ## Kimlik doğrulama notu
 
@@ -153,10 +173,10 @@ adlar bu nedenle noktalardan tamamen kaçınır.
   oturuma ulaşır. Grok'un neyi ayrıştırdığını doğrulamak için `grok inspect`
   komutunu çalıştırın: yüklediği yapılandırma kaynaklarını listeler ve
   reddettiği herhangi bir alan hakkında uyarır. Çözümlenen model listesini
-  yazdırmaz. Tek bir TOML hatasının *tüm* kullanıcı yapılandırma katmanını
-  geçersiz kıldığını unutmayın; bu nedenle opencodex dosyayı atomik olarak yazar
-  — Grok asla yarı yazılmış bir yapılandırma görmez.
+  yazdırmaz. Güncel Grok Build, geçersiz model alanlarını uyarıyla atlar ve model
+  girdisinin kalanını korur. Bir TOML sözdizimi hatası dosyanın yüklenmesini
+  engeller. opencodex dosyayı atomik olarak yazar; Grok her yeniden yüklemede
+  eksiksiz bir belge görür.
 - **Katalog güncellemeleri:** çitle çevrili blok, enjeksiyon anındaki kataloğu
   yansıtır. Sağlayıcılar veya modeller ekledikten sonra yenilemek için `ocx
   ensure` çalıştırın (veya proxy'yi yeniden başlatın).
-

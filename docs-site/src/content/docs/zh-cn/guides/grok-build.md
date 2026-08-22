@@ -17,7 +17,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -33,6 +44,27 @@ grok models          # lists ocx-* entries alongside native grok models
 grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 # or in the TUI: /model ocx-anthropic-claude-opus-4-8
 ```
+
+## 推理强度
+
+Grok Build 的 `/effort`（以及 `--effort`）适用于目录条目声明了推理档位的模型。
+模型列表会读取原始 `GET /v1/models` 响应，其中的条目需要包含
+`supports_reasoning_effort` 和 `reasoning_efforts` 菜单选项。这组档位经过 Grok 兼容投影后
+会写入每个受管理的 `[model.*]` 表，包括 `supports_reasoning_effort`、默认
+`reasoning_effort` 和 `[[model.<alias>.reasoning_efforts]]` 选择项。对于路由模型，
+opencodex 会映射已配置的提供方档位（`reasoningEfforts` /
+`modelReasoningEfforts`，以及 `modelDefaultReasoningEfforts` 中的默认值）。这些元数据
+描述代理配置的路由档位；适配器可以模拟推理，或将档位映射到提供方专用字段。档位列表
+为空的模型不会显示 effort 控件。原生 GPT-5.6 条目会保留固定的上游推理档位。
+模型声明的有效 Grok 档位（包括 `none` 和 `minimal`）都会保留。不受支持或重复的档位
+（包括 Codex 专用的 `ultra`）会从文件中省略，从而确保写出的每个选项都可执行。
+
+Grok Build 通过 Chat Completions 与 opencodex 通信，并在声明档位时发送
+`reasoning_effort`。在这种情况下，Chat Completions 入站转换器会将内部 Responses 的
+`reasoning.summary` 默认设为 `auto`，因此推理轨迹会以 `delta.reasoning_content`
+到达 Grok。需要模型执行推理且不返回轨迹的客户端，可以设置
+`include_reasoning: false`（或 `reasoning.summary: "none"`）。两个选项同时出现时，
+显式的 `reasoning.summary` 优先。
 
 ## 认证说明
 
@@ -73,5 +105,5 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ## 已知限制
 
 - **服务安装后的 `ocx restart`：** 运行中的代理负责重启授权和排空协调；旧进程退出后，由已安装的服务管理器启动替换进程。服务监督始终保留。仅在 loopback 自动注册模式下，受管理区块也会在交接期间保留；非 loopback 部署使用手动管理的 Grok 配置。只有确认同一端口上出现另一个经过身份验证且健康的进程后，命令才会成功。
-- **配置读取时机：** 先启动 opencodex，再启动 `grok`，结果最可预测。Grok Build 会监视 `~/.grok/config.toml`，并在 `[model]` 表实际发生变化时重新加载（大约一秒的防抖，按内容比较），因此刷新后的区块可以在无需重启的情况下进入已打开的会话。要确认 Grok 解析到了什么，可以运行 `grok inspect`：它会列出已加载的配置来源，并提示被拒绝的字段，但不会打印最终解析出的模型列表。注意，单个 TOML 错误会使*整个*用户配置层失效，这也是 opencodex 以原子方式写入文件的原因——Grok 不会看到半写入的配置。
+- **配置读取时机：** 先启动 opencodex，再启动 `grok`，结果最可预测。Grok Build 会监视 `~/.grok/config.toml`，并在 `[model]` 表实际发生变化时重新加载（大约一秒的防抖，按内容比较），因此刷新后的区块可以在无需重启的情况下进入已打开的会话。要确认 Grok 解析到了什么，可以运行 `grok inspect`：它会列出已加载的配置来源，并提示被拒绝的字段，但不会打印最终解析出的模型列表。当前 Grok Build 会报告并跳过无效的模型字段，同时保留该模型条目的其余部分。TOML 语法错误仍会阻止文件加载。opencodex 会以原子方式写入文件，因此 Grok 每次重新加载时都会看到完整文档。
 - **目录更新：** 有边界线的区块反映的是注入时的目录状态。添加提供方或模型后，运行 `ocx ensure`（或重启代理）以刷新它。

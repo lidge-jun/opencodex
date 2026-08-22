@@ -21,7 +21,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -45,6 +56,30 @@ grok models          # lists ocx-* entries alongside native grok models
 grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 # or in the TUI: /model ocx-anthropic-claude-opus-4-8
 ```
+
+## Уровень рассуждения
+
+Команда Grok Build `/effort` (и флаг `--effort`) работает для моделей, чья запись в каталоге
+публикует шкалу уровней. Список моделей читает исходный ответ `GET /v1/models`; записи в нём
+должны содержать `supports_reasoning_effort` и пункты меню `reasoning_efforts`. Совместимая с
+Grok проекция этой шкалы записывается в каждую управляемую таблицу `[model.*]` через
+`supports_reasoning_effort`,
+значение `reasoning_effort` по умолчанию и строки
+`[[model.<alias>.reasoning_efforts]]`. Для маршрутизируемых моделей opencodex отражает
+настроенные уровни провайдера (`reasoningEfforts` / `modelReasoningEfforts` и значение по
+умолчанию из `modelDefaultReasoningEfforts`). Эти метаданные описывают шкалу прокси; адаптеры
+могут эмулировать рассуждение или преобразовывать уровни в поля конкретного провайдера. Модели
+с пустым списком уровней не показывают управление effort. Нативные записи GPT-5.6 сохраняют
+закреплённые upstream-шкалы. Допустимые уровни Grok, включая `none` и `minimal`, сохраняются,
+когда модель их объявляет. Неподдерживаемые или повторяющиеся уровни, в том числе предназначенный
+для Codex `ultra`, исключаются из файла; каждый записанный пункт остаётся доступным для выбора.
+
+Grok Build обращается к opencodex через Chat Completions и отправляет `reasoning_effort`, когда
+шкала опубликована. В этом случае входной преобразователь Chat Completions задаёт внутреннему
+Responses `reasoning.summary` значение `auto`, поэтому трассировка рассуждений приходит в Grok
+как `delta.reasoning_content`. Клиент может оставить рассуждение модели и скрыть трассировку с
+помощью `include_reasoning: false` (или `reasoning.summary: "none"`). При наличии обоих
+параметров приоритет имеет явно заданный `reasoning.summary`.
 
 ## Замечание об аутентификации
 
@@ -116,8 +151,8 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
   содержимому), поэтому обновлённый блок доходит до уже открытой сессии без перезапуска. Чтобы
   проверить, что именно разобрал Grok, выполните `grok inspect`: он перечисляет источники
   конфигурации и предупреждает о полях, которые отверг. Список разрешённых моделей при этом не
-  печатается. Учтите, что одна TOML-ошибка делает недействительным *весь* пользовательский слой
-  конфигурации, поэтому opencodex пишет файл атомарно — Grok никогда не увидит полузаписанный
-  `config.toml`.
+  печатается. Текущая версия Grok Build сообщает о недопустимых полях модели, пропускает их и
+  сохраняет остальные данные записи. Синтаксическая ошибка TOML препятствует загрузке файла.
+  opencodex пишет файл атомарно, поэтому при каждой перезагрузке Grok видит целый документ.
 - **Обновления каталога:** fenced-блок отражает каталог на момент внедрения. После добавления
   провайдеров или моделей выполните `ocx ensure` (или перезапустите прокси), чтобы его обновить.
