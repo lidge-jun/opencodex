@@ -59,6 +59,18 @@ export function collectDeclaredWireToolNames(body: unknown): Set<string> {
   return names;
 }
 
+/** Whether the outbound request contains any supported, readable client-tool catalog. */
+export function hasExplicitWireToolCatalog(body: unknown): boolean {
+  if (!isPlainObject(body)) return false;
+  if (Array.isArray(body.tools)) return true;
+  if (!Array.isArray(body.input)) return false;
+  return body.input.some(item =>
+    isPlainObject(item)
+    && item.type === "additional_tools"
+    && Array.isArray(item.tools)
+  );
+}
+
 function undeclaredNameInItem(item: unknown, declared: ReadonlySet<string>): string | undefined {
   if (!isPlainObject(item)) return undefined;
   if (typeof item.type !== "string" || !CLIENT_EXECUTED_CALL_TYPES.has(item.type)) return undefined;

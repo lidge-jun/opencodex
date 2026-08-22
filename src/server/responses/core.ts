@@ -311,6 +311,7 @@ import {
 import {
   collectDeclaredWireToolNames,
   createUndeclaredToolCallGuardBlockRewrite,
+  hasExplicitWireToolCatalog,
   undeclaredToolCallMessage,
   undeclaredToolCallName,
   undeclaredToolCallNameInResponse,
@@ -2970,9 +2971,8 @@ async function handleResponsesInner(
     // the client's name back. Widening only ever makes the guard fire less; a name declared in
     // neither place — #1700's `apply_patch` — is still refused.
     for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
-    const hasExplicitWireToolCatalog = outboundRequestBody !== undefined
-      && Array.isArray(outboundRequestBody.tools);
-    const undeclaredToolGuardActive = (declaredWireToolNames.size > 0 || hasExplicitWireToolCatalog)
+    const explicitWireToolCatalog = hasExplicitWireToolCatalog(outboundRequestBody);
+    const undeclaredToolGuardActive = (declaredWireToolNames.size > 0 || explicitWireToolCatalog)
       && route.provider.authMode !== "forward";
     // A refused turn must not seed `previous_response_id` replay. The inspection branch reads the
     // untouched upstream stream, so it can still observe a `response.completed` the client never

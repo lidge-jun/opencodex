@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
   collectDeclaredWireToolNames,
   createUndeclaredToolCallGuardBlockRewrite,
+  hasExplicitWireToolCatalog,
   undeclaredToolCallNameInResponse,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../src/server/responses-undeclared-tool-guard";
@@ -107,7 +108,7 @@ describe("collectDeclaredWireToolNames", () => {
 
   test("is empty when a readable request explicitly declares an empty tool catalog", () => {
     // The name set alone cannot distinguish omission from an explicit deny-all catalog, so the
-    // caller separately tracks whether the readable body contained a `tools` array.
+    // caller separately tracks whether the readable body contained a supported catalog array.
     expect(collectDeclaredWireToolNames({ tools: [] }).size).toBe(0);
   });
 
@@ -117,6 +118,25 @@ describe("collectDeclaredWireToolNames", () => {
     });
 
     expect([...names]).toEqual(["exec"]);
+  });
+});
+
+describe("hasExplicitWireToolCatalog", () => {
+  test("distinguishes omitted or unreadable catalogs from top-level arrays", () => {
+    expect(hasExplicitWireToolCatalog(undefined)).toBe(false);
+    expect(hasExplicitWireToolCatalog({})).toBe(false);
+    expect(hasExplicitWireToolCatalog({ tools: "nonsense" })).toBe(false);
+    expect(hasExplicitWireToolCatalog({ tools: [] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "function", name: "exec" }] })).toBe(true);
+  });
+
+  test("recognizes an additional_tools array, including an explicit empty catalog", () => {
+    expect(hasExplicitWireToolCatalog({
+      input: [{ type: "additional_tools", role: "developer", tools: [] }],
+    })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      input: [{ type: "additional_tools", role: "developer", tools: "nonsense" }],
+    })).toBe(false);
   });
 });
 
@@ -488,7 +508,12 @@ describe("empty and absent tool catalogs", () => {
     status: "completed",
   };
 
-  async function post(stream: boolean, tools: unknown[] | undefined, upstream: () => Response) {
+  async function post(
+    stream: boolean,
+    tools: unknown[] | undefined,
+    upstream: () => Response,
+    additionalTools?: unknown[],
+  ) {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
     try {
@@ -498,7 +523,12 @@ describe("empty and absent tool catalogs", () => {
         body: JSON.stringify({
           model: "fixture/deepseek-v4-flash",
           stream,
-          input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+          input: [
+            { role: "user", content: [{ type: "input_text", text: "hi" }] },
+            ...(additionalTools === undefined
+              ? []
+              : [{ type: "additional_tools", role: "developer", tools: additionalTools }]),
+          ],
           ...(tools === undefined ? {} : { tools }),
         }),
       }), config, { model: "", provider: "" });
@@ -551,6 +581,22 @@ describe("empty and absent tool catalogs", () => {
 
   test("streaming, tools: [] — refuses an upstream client tool call", async () => {
     const response = await post(true, [], sseUpstream);
+    const body = await response.text();
+
+    expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).not.toContain("response.completed");
+  });
+
+  test("non-streaming, additional_tools.tools: [] — refuses an upstream client tool call", async () => {
+    const response = await post(false, undefined, jsonUpstream, []);
+
+    expect(response.status).toBe(502);
+    const body = await response.json() as { error: { message: string } };
+    expect(body.error.message).toContain('undeclared client tool "apply_patch"');
+  });
+
+  test("streaming, additional_tools.tools: [] — refuses an upstream client tool call", async () => {
+    const response = await post(true, undefined, sseUpstream, []);
     const body = await response.text();
 
     expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
