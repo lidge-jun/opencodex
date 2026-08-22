@@ -351,10 +351,24 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     ? entry.context_window
     : undefined;
   if (effectiveContext !== undefined) {
+    const derivedAutoCompactTokenLimit = nativeOpenAiAutoCompactTokenLimit(nativeSlug, limits);
+    const retainedAutoCompactTokenLimit = isNativeOpenAiEntry(entry)
+      && typeof entry.auto_compact_token_limit === "number"
+      && Number.isSafeInteger(entry.auto_compact_token_limit)
+      && entry.auto_compact_token_limit > 0
+      ? entry.auto_compact_token_limit
+      : undefined;
+    // A smaller threshold retained from Codex is policy evidence too. Configuration may
+    // lower it further, but catalog sync must never replace it with a larger default.
+    const loweringAutoCompactTokenLimit = retainedAutoCompactTokenLimit === undefined
+      ? derivedAutoCompactTokenLimit
+      : derivedAutoCompactTokenLimit === undefined
+        ? retainedAutoCompactTokenLimit
+        : Math.min(retainedAutoCompactTokenLimit, derivedAutoCompactTokenLimit);
     entry.auto_compact_token_limit = clampAutoCompactTokenLimit(
       effectiveContext,
       nativeOpenAiMaxInputTokens(nativeSlug, limits) ?? override?.maxInputTokens,
-      nativeOpenAiAutoCompactTokenLimit(nativeSlug, limits),
+      loweringAutoCompactTokenLimit,
     );
   }
 }
