@@ -10,7 +10,7 @@
  *  - hardenSecretDir mirrors the same contract for directories.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -439,6 +439,14 @@ describe("non-Windows determinism", () => {
 // This tests the contract via the exported sanitizeDiagnostics helper if present,
 // otherwise verifies that hardenSecretPath failure messages meet the contract.
 // ---------------------------------------------------------------------------
+
+describe("icacls executable authority", () => {
+  test("default runners resolve icacls from the trusted System32 path, not PATH", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "src", "lib", "windows-secret-acl.ts"), "utf8");
+    expect(src).toContain("resolveTrustedWindowsIcaclsExe");
+    expect(src).not.toMatch(/Bun\.spawn(?:Sync)?\(\["icacls\.exe"/);
+  });
+});
 
 describe("diagnostics sanitization contract", () => {
   test("HardenResult diagnostics field is a plain string when present", () => {

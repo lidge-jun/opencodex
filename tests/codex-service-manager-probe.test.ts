@@ -274,7 +274,10 @@ describe("could not ask is not an answer", () => {
    * reached the bus, which is the opposite conclusion.
    */
   test("a non-zero systemctl status is unknown even though a missing unit exits zero", () => {
-    const { run } = recorder(() => ({ status: 1, stderr: "Failed to connect to bus" }));
+    // Amended for #2114, not deleted: the rule still holds for every non-zero exit whose
+    // stderr does not prove the bus itself was unreachable. The bus-down family is handled
+    // by reading the unit file instead, and is asserted separately below.
+    const { run } = recorder(() => ({ status: 1, stderr: "Job for opencodex-proxy.service failed" }));
     expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("unknown");
   });
 
@@ -1006,5 +1009,165 @@ describe("ownership refuses what it cannot prove", () => {
       currentHomes: { codexHome, opencodexHome },
     });
     expect(result.ownership).toBe("owned");
+  });
+});
+
+/*
+ * #2114: systemctl exists and runs, but the user session bus does not answer.
+ *
+ * The old branch called every non-zero exit `unknown`, which fences native-main for the
+ * whole process — the reporter's 503. But "the question never reached the bus" is evidence
+ * about the BUS, not evidence that a foreign service owns this home.
+ *
+ * Widening the exit code alone would fail open, because with the bus down systemctl cannot
+ * see a foreign unit either. So the classification asks the DISK, which needs no bus.
+ */
+describe("systemd probe: the bus is unreachable (#2114)", () => {
+  const BUS_DOWN = "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined";
+
+  test("no unit file on disk means nothing can own this home — absent, not fenced", () => {
+    const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("absent");
+  });
+
+  test("a unit naming THIS home is still ours, read off disk", () => {
+    const definitionPath = writeUnit(join(home, ".codex"), join(home, ".opencodex"));
+    const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+    const result = inspectServiceManagerInstallation({ run, platform: "linux", home });
+
+    expect(result.kind).toBe("present");
+    // Registration is genuinely unknowable with the bus down; the claim must not invent it.
+    expect(result.kind === "present" && result.claims[0]?.definitionPath).toBe(definitionPath);
+    expect(result.kind === "present" && result.claims[0]?.homes.codexHome).toBe(join(home, ".codex"));
+  });
+
+  // The guard that keeps this fail-closed. A foreign unit is exactly the case the old
+  // `unknown` existed to protect, and it must survive the widening.
+  test("a unit naming a FOREIGN home still blocks", () => {
+    writeUnit("/other/.codex", "/other/.opencodex");
+    const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+    const result = inspectServiceManagerInstallation({ run, platform: "linux", home });
+
+    expect(result.kind).toBe("present");
+    expect(result.kind === "present" && result.claims[0]?.homes.codexHome).toBe("/other/.codex");
+  });
+
+  test("a non-bus failure is untouched — it stays unknown", () => {
+    const { run } = recorder(() => ({ status: 1, stderr: "Job for opencodex-proxy.service failed" }));
+
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("unknown");
+  });
+});
+
+/*
+ * #2108: a reboot leaves native-main fenced until `ocx restart`.
+ *
+ * One trigger is a timed-out `sc.exe query`. WinSW is an optional backend, and a
+ * scheduler-only install has neither of its assets on disk — but a query that timed out
+ * returns "unknown", which outranks the disk and fences the whole process.
+ *
+ * With BOTH assets absent there is nothing for a WinSW registration to belong to, so a
+ * failed query is a question about a service that cannot exist.
+ */
+describe("WinSW probe: a timed-out query with no assets (#2108)", () => {
+  test("no xml and no exe means absent, even when the query could not be asked", () => {
+    // Only the WinSW query is unaskable. The scheduler answers absent for itself, so the
+    // whole verdict turns on whether the WinSW half fences over assets that are not on disk.
+    const { runRaw } = recorder((file, args) => args[0] === "/query"
+      ? { status: 1, stderr: "ERROR: The system cannot find the file specified." }
+      : { timedOut: true });
+
+    const result = inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw,
+      winswStatus: () => "unknown",
+    });
+
+    expect(result.kind).toBe("absent");
+  });
+
+  test("an unaskable query with WinSW assets present is still unknown", () => {
+    const dir = join(home, ".opencodex", "winsw");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "opencodex-proxy.xml"), "<service><id>opencodex-proxy</id></service>");
+    writeFileSync(join(dir, "opencodex-proxy.exe"), "MZ");
+
+    const { runRaw } = recorder(() => ({ timedOut: true }));
+
+    const result = inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw,
+      winswStatus: () => "unknown",
+    });
+
+    expect(result.kind).toBe("unknown");
+  });
+});
+
+/*
+ * The fail-open an audit caught in the first cut of the #2114 fix.
+ *
+ * systemd's user search path is not one directory: ~/.local/share/systemd/user and
+ * $XDG_CONFIG_HOME/systemd/user are also live, and system-level units are never in the
+ * user path at all. With the bus down, a foreign unit in any of those is invisible.
+ *
+ * Returning "absent" because ONE path was empty produced ownership: owned on a host a
+ * foreign service owns — exactly the failure the disk check was supposed to prevent.
+ */
+describe("bus-down absence must mean absence everywhere systemd looks (#2114)", () => {
+  const BUS_DOWN = "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined";
+
+  test("a foreign unit in the other user search dir still blocks", () => {
+    const dir = join(home, ".local", "share", "systemd", "user");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "opencodex-proxy.service"), [
+      "[Service]",
+      'Environment="CODEX_HOME=/other/.codex"',
+      'Environment="OPENCODEX_HOME=/other/.opencodex"',
+    ].join("\n"));
+    const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+    const result = inspectServiceManagerInstallation({ run, platform: "linux", home });
+
+    expect(result.kind).not.toBe("absent");
+  });
+
+  test("XDG_CONFIG_HOME is honored the way systemd honors it", () => {
+    const xdg = join(home, "xdg-config");
+    const dir = join(xdg, "systemd", "user");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "opencodex-proxy.service"), '[Service]\nEnvironment="CODEX_HOME=/other/.codex"');
+    const previous = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdg;
+    try {
+      const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+      expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).not.toBe("absent");
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previous;
+    }
+  });
+
+  test("a genuinely empty disk is still absent", () => {
+    const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("absent");
+  });
+
+  // The multi-unit branch is a fail-closed decision that nothing pinned: ablating it left the
+  // suite green. Two units on disk with the bus down is genuinely ambiguous — neither can be
+  // confirmed as the live definition — so it must refuse rather than pick one.
+  test("two units in different search dirs refuse rather than choose", () => {
+    const a = join(home, ".config", "systemd", "user");
+    const b = join(home, ".local", "share", "systemd", "user");
+    mkdirSync(a, { recursive: true });
+    mkdirSync(b, { recursive: true });
+    writeFileSync(join(a, "opencodex-proxy.service"), `[Service]\nEnvironment="CODEX_HOME=${join(home, ".codex")}"`);
+    writeFileSync(join(b, "opencodex-proxy.service"), '[Service]\nEnvironment="CODEX_HOME=/other/.codex"');
+    const { run } = recorder(() => ({ status: 1, stderr: BUS_DOWN }));
+
+    expect(inspectServiceManagerInstallation({ run, platform: "linux", home }).kind).toBe("unknown");
   });
 });

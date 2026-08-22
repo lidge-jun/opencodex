@@ -13,9 +13,12 @@ import {
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   codexMainProfileDrainingResponse,
+  __resetNativeMainFenceReasonLog,
   cooldownErrorMessage,
   cooldownErrorResponse,
   headersForCodexAuthContext,
+  materializeCodexUpstreamAuth,
+  CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   shouldMarkAccountNeedsReauthForCodexAuthFailure,
@@ -52,6 +55,7 @@ import {
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import {
+  blockNativeMainStartupForUnownedServiceHome,
   completeNativeMainRecovery,
   initializeNativeMainStartupGate,
 } from "../src/codex/native-profile-startup";
@@ -61,6 +65,7 @@ import {
   codexAccountSelectionForTurn,
   tryAdmitTurn,
 } from "../src/server/lifecycle";
+import type { CodexModelEntitlementSnapshot } from "../src/codex/model-entitlements";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
@@ -185,6 +190,12 @@ const forwardProvider: OcxProviderConfig = {
   authMode: "forward",
 };
 
+
+/** A JWT whose `exp` is far in the future, so isMainAccountTokenLive() accepts it. */
+function liveJwt(): string {
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 86_400 })).toString("base64url");
+  return `header.${payload}.signature`;
+}
 describe("Codex auth context", () => {
   test("main-profile drain routes a non-main pool account without native reads or quota priming", async () => {
     saveCodexAccountCredential("pool-a", {
@@ -330,6 +341,122 @@ describe("Codex auth context", () => {
       .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
     await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer   " }), config(), "direct"))
       .rejects.toBeInstanceOf(CodexDirectAuthenticationError);
+  });
+
+  test("direct account-gated routing checks the caller credential, not local account state", async () => {
+    let callerChecks = 0;
+    let localDiscoveries = 0;
+    const headers = new Headers({ authorization: "Bearer caller", "chatgpt-account-id": "caller-account" });
+    await expect(resolveCodexAuthContext(headers, config(), "direct", {
+      modelId: "gpt-daybreak-blue-latest",
+      isDirectCallerEntitledToCodexModel: async (received, modelId) => {
+        callerChecks += 1;
+        expect(received).toBe(headers);
+        expect(modelId).toBe("gpt-daybreak-blue-latest");
+        return true;
+      },
+      resolveCodexModelEntitlements: async () => {
+        localDiscoveries += 1;
+        throw new Error("must not inspect local accounts");
+      },
+    })).resolves.toEqual({ kind: "main", accountId: null });
+    expect(callerChecks).toBe(1);
+    expect(localDiscoveries).toBe(0);
+  });
+
+  test("Direct admission-bearer substitution checks the stored main account grant", async () => {
+    const entitledMain: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([[MAIN_CODEX_ACCOUNT_ID, new Set(["gpt-daybreak-blue-latest"])]]),
+      confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID]),
+      credentialIdentities: new Map(),
+    };
+    let callerChecks = 0;
+    await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer ocx-admission" }),
+      config(),
+      "direct",
+      {
+        modelId: "gpt-daybreak-blue-latest",
+        substituteMainCredentialForDirect: true,
+        resolveCodexModelEntitlements: async () => entitledMain,
+        isDirectCallerEntitledToCodexModel: async () => {
+          callerChecks += 1;
+          return false;
+        },
+      },
+    )).resolves.toEqual({ kind: "main", accountId: null });
+    expect(callerChecks).toBe(0);
+  });
+
+  test("account-gated native routing skips an active account without the model grant", async () => {
+    const cfg = config();
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-token", account_id: "main-account" },
+    }));
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    const entitlementSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([
+        [MAIN_CODEX_ACCOUNT_ID, new Set(["gpt-daybreak-blue-latest"])],
+        ["pool-a", new Set(["gpt-5.6-sol"])],
+      ]),
+      confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID, "pool-a"]),
+      credentialIdentities: new Map(),
+    };
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: "gpt-daybreak-blue-latest",
+      isMainAccountTokenLive: () => true,
+      getMainAccountToken: () => ({ accessToken: "main-token", chatgptAccountId: "main-account" }),
+      resolveCodexModelEntitlements: async () => entitlementSnapshot,
+      primeCodexPoolQuotas: async () => {},
+    })).resolves.toMatchObject({
+      kind: "main-pool",
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+  });
+
+  test("exact account-gated routing fails closed for an unentitled account", async () => {
+    const cfg = config();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    const entitlementSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([["pool-a", new Set(["gpt-5.6-sol"])]]),
+      confirmedAccountIds: new Set(["pool-a"]),
+      credentialIdentities: new Map(),
+    };
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      accountId: "pool-a",
+      modelId: "gpt-daybreak-blue-latest",
+      resolveCodexModelEntitlements: async () => entitlementSnapshot,
+    })).rejects.toThrow("Selected Codex account does not support this model");
+  });
+
+  test("ordinary native models do not pay the entitlement discovery path", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    let discoveries = 0;
+    await expect(resolveCodexAuthContext(new Headers(), config(), "pool", {
+      modelId: "gpt-5.6-sol",
+      resolveCodexModelEntitlements: async () => {
+        discoveries += 1;
+        throw new Error("must not run");
+      },
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(discoveries).toBe(0);
   });
 
   test("exact account resolution overrides Direct without consulting Pool selection", async () => {
@@ -617,6 +744,49 @@ describe("Codex auth context", () => {
     }
   });
 
+
+  test("an admission bearer on main substitutes the stored credential, never forwards it (#1686)", () => {
+    // The caller proved admission with one of OUR secrets. That secret must never leave the
+    // process, so the only acceptable outcome is the stored main credential in its place.
+    const admissionSecret = "ocx_data_localsecret";
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      tokens: { access_token: liveJwt(), account_id: "stored_main_acc" },
+    }));
+
+    const headers = materializeCodexUpstreamAuth(
+      new Headers({ authorization: `Bearer ${admissionSecret}`, "openai-beta": "responses=experimental" }),
+      { kind: "main", accountId: null },
+      { substituteMainCredential: true },
+    );
+
+    expect(headers.get("authorization")).not.toContain(admissionSecret);
+    expect(headers.get("authorization")).toBe(`Bearer ${liveJwt()}`);
+    expect(headers.get("chatgpt-account-id")).toBe("stored_main_acc");
+    // Unrelated forwarded headers still ride along.
+    expect(headers.get("openai-beta")).toBe("responses=experimental");
+  });
+
+  test("substitution fails closed when no usable main credential exists (#1686)", () => {
+    // Falling through here would forward the admission secret upstream, which is exactly
+    // the leak the forward guard exists to prevent. Throw before any I/O instead.
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({ tokens: {} }));
+
+    expect(() => materializeCodexUpstreamAuth(
+      new Headers({ authorization: "Bearer ocx_data_localsecret" }),
+      { kind: "main", accountId: null },
+      { substituteMainCredential: true },
+    )).toThrow(CodexMainSubstitutionUnavailableError);
+  });
+
+  test("a dedicated-header main caller keeps its own bearer as passthrough (#1686)", () => {
+    // Without the substitution flag this is the user's own ChatGPT credential on the
+    // canonical forward provider, and rewriting it would break Direct.
+    const headers = materializeCodexUpstreamAuth(
+      new Headers({ authorization: "Bearer user_chatgpt_token" }),
+      { kind: "main", accountId: null },
+    );
+    expect(headers.get("authorization")).toBe("Bearer user_chatgpt_token");
+  });
   test("selected pool headers replace inbound main auth", () => {
     const headers = headersForCodexAuthContext(
       new Headers({ authorization: "Bearer main_token", "chatgpt-account-id": "main_acc", "openai-beta": "responses=experimental" }),
@@ -1293,5 +1463,70 @@ describe("cooldown error surface", () => {
     const err = new CodexAccountCooldownError("pool-a", now - 5_000, "default");
 
     expect(cooldownErrorResponse(err, now).headers.get("Retry-After")).toBe("1");
+  });
+});
+
+// #2108: a Windows reboot can leave the native-main fence closed until `ocx restart`, and the
+// reporter could not tell us WHICH gate reason settled because nothing ever logged it. The 503
+// message must stay byte-identical (claude-messages.ts:818 matches it to keep the fence a 503
+// instead of remapping to Anthropic 529), and headers never survive to /api/logs, so stdout is
+// the only surface that reaches every path this fence fires on.
+describe("native-main fence names its gate reason", () => {
+  // Reset on BOTH sides: an afterEach only protects tests that run after this file, and the
+  // dedup is module state shared with every other file in the same process.
+  beforeEach(() => {
+    __resetNativeMainFenceReasonLog();
+  });
+
+  afterEach(() => {
+    __resetNativeMainFenceReasonLog();
+  });
+
+  test("the thrown fence carries the settled reason and says so once", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown");
+    try {
+      const err = new CodexMainProfileDrainingError();
+
+      expect(err.reason).toBe("ownership-unknown");
+      expect(err.message).toBe(CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
+      const lines = warn.mock.calls.map(call => call.join(" "));
+      expect(lines.filter(line => line.includes("ownership-unknown"))).toHaveLength(1);
+      // The homeId is derived from a profile directory path and has no business in a log line.
+      expect(lines.join("\n")).not.toContain("homeId");
+
+      // A retrying client must not turn the diagnostic into the noise it was meant to cut.
+      new CodexMainProfileDrainingError();
+      new CodexMainProfileDrainingError();
+      expect(lines.length).toBe(warn.mock.calls.length);
+    } finally {
+      warn.mockRestore();
+      await fence.release();
+    }
+  });
+
+  test("a different fence reports a different reason, so the value is read and not assumed", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    try {
+      expect(new CodexMainProfileDrainingError().reason).toBe("foreign-ownership");
+      expect(warn.mock.calls.map(call => call.join(" ")).join("\n")).toContain("foreign-ownership");
+    } finally {
+      warn.mockRestore();
+      await fence.release();
+    }
+  });
+
+  // The claimMainProfile() site throws the same error for the turn-drain fence, which
+  // is NOT the startup gate: the snapshot there reads `ready`. Inventing a reason for it would
+  // send the next reboot report chasing a startup gate that never closed.
+  test("the turn-drain fence stays silent instead of borrowing a startup reason", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(new CodexMainProfileDrainingError().reason).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
@@ -31,6 +32,17 @@ const SNAPSHOT_FILE_MAX_BYTES = 32 * 1024 * 1024;
 const STALE_TEMP_GRACE_MS = 15 * 60 * 1_000;
 const STALE_TEMP_MAX_ENTRIES = 4_096;
 const STALE_TEMP_MAX_CLEANUPS = 512;
+/** Absorbs `os.uptime()` granularity only. It is deliberately NOT the safety margin:
+ *  the unconditional 15-minute grace above is (see the boot floor in the scan loop). */
+const BOOT_FLOOR_SKEW_MS = 60 * 1_000;
+/** Per-tick budget for the periodic reclaim. Smaller than the startup budget because the
+ *  periodic pass runs synchronously on the serving process's event loop every 60 s. */
+const PERIODIC_TEMP_MAX_ENTRIES = 512;
+const PERIODIC_TEMP_MAX_CLEANUPS = 64;
+/** Wall-clock ceiling for one periodic scan. An entry cap bounds syscalls, not time: on a
+ *  network-mounted config dir each `lstat` can cost 10-20 ms, which would stall in-flight
+ *  streams. Reclaim is idempotent, so a truncated tick simply resumes on the next one. */
+const PERIODIC_TEMP_SCAN_DEADLINE_MS = 25;
 const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp$/;
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 
@@ -39,6 +51,8 @@ interface ResidentResponseState {
   createdAt: number;
   clientThreadId?: string;
   items: unknown[];
+  /** Index in `items` where provider output begins; see clientCarriedPrefixLength. */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
   sizeBytes: number;
 }
@@ -47,6 +61,8 @@ interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
   clientThreadId?: string;
+  /** Mirrors the spilled payload boundary so a spilled entry keeps its anchor. */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
@@ -130,6 +146,7 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
     createdAt: entry.createdAt,
     ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
     items: entry.items,
+    ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
     ...(entry.providers ? { providers: entry.providers } : {}),
   });
   return sizeBytes === null ? null : { kind: "resident", ...entry, sizeBytes };
@@ -252,12 +269,14 @@ function replaceSpillEntryAtomically(
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       items: candidate.items,
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -332,6 +351,7 @@ function admitOversizedCandidate(
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       items: candidate.items,
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     // Enforce the ceiling against the REAL envelope: the spill payload adds
@@ -373,9 +393,11 @@ function admitOversizedCandidate(
   }
 }
 
-// Expansion provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
+// Replay provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
 // newly appended input suffix without adding an unknown field that native passthrough could send
-// upstream. The parser uses this boundary to acknowledge historical compaction markers exactly once.
+// upstream. The parser uses this boundary to acknowledge historical compaction markers exactly
+// once. It records the boundary whether the proxy prepended the history or the client already
+// carried it — the boundary is the same either way, and only its provenance differs.
 const replayedInputPrefixLengths = new WeakMap<object, number>();
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
@@ -419,12 +441,23 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   const clientThreadId = typeof rec.clientThreadId === "string" && rec.clientThreadId.trim().length > 0
     ? rec.clientThreadId.trim()
     : undefined;
+  // A malformed boundary degrades to "never skip" rather than to a bad index: an untrusted
+  // snapshot must not be able to authorize dropping conversation history.
+  const anchorFor = (itemCount: number): number | undefined => {
+    const raw = (rec as { providerOutputStart?: unknown }).providerOutputStart;
+    return Number.isSafeInteger(raw) && (raw as number) >= 0 && (raw as number) <= itemCount
+      ? raw as number
+      : undefined;
+  };
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: rec.createdAt,
       ...(clientThreadId ? { clientThreadId } : {}),
+      // Item count is unknown until materialization, so accept any non-negative integer
+      // here; the spill payload validator re-checks it against the real array.
+      ...(anchorFor(Number.MAX_SAFE_INTEGER) !== undefined ? { providerOutputStart: anchorFor(Number.MAX_SAFE_INTEGER) } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
       spill: rec.spill,
     };
@@ -451,6 +484,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     createdAt: rec.createdAt,
     ...(clientThreadId ? { clientThreadId } : {}),
     items: rec.items,
+    ...(anchorFor(rec.items.length) !== undefined ? { providerOutputStart: anchorFor(rec.items.length) } : {}),
     ...(providers ? { providers } : {}),
   });
   if (!resident) {
@@ -472,19 +506,37 @@ export interface ResponseStateTempRecoveryResult {
   removed: number;
   failed: number;
   bytesRemoved: number;
+  /** Entries that passed EVERY gate and would be reclaimed. In a dry run nothing is
+   *  unlinked, so this is the only honest count to show an operator: `matched` is
+   *  incremented before the file-type, age, boot-floor, and liveness gates. */
+  eligible: number;
+  /** Total size of the `eligible` entries. */
+  eligibleBytes: number;
+  /** The scan stopped on a budget (entry cap, cleanup cap, or deadline) rather than reaching
+   *  the end of the directory, so the counts below describe a prefix of the backlog and not
+   *  the backlog. `eligible > removed + failed` cannot express this: outside a dry run every
+   *  eligible entry is unlinked or failed on the same iteration, so the two are always equal
+   *  and a comparison between them is dead code. */
+  truncated: boolean;
 }
 
 interface ResponseStateTempRecoveryIO {
   now: () => number;
+  /** Approximate epoch ms of the current boot; see the boot floor in the scan loop. */
+  bootTime: () => number;
   list: (dir: string) => Iterable<string>;
   inspect: (path: string) => { isFile: boolean; mtimeMs: number; size: number };
   isProcessAlive: (pid: number) => boolean;
   unlink: (path: string) => void;
 }
 
-type ResponseStateTempRecoveryOptions = Partial<ResponseStateTempRecoveryIO> & {
+export type ResponseStateTempRecoveryOptions = Partial<ResponseStateTempRecoveryIO> & {
   maxEntries?: number;
   maxCleanups?: number;
+  /** Wall-clock ceiling for the scan, or null/undefined for no deadline (startup path). */
+  deadlineMs?: number | null;
+  /** Report only: apply every gate, count what would be reclaimed, unlink nothing. */
+  dryRun?: boolean;
 };
 
 function processIsAlive(pid: number): boolean {
@@ -501,6 +553,7 @@ function processIsAlive(pid: number): boolean {
 
 const responseStateTempRecoveryIO: ResponseStateTempRecoveryIO = {
   now: Date.now,
+  bootTime: () => Date.now() - uptime() * 1_000,
   list: function* list(dir) {
     const handle = opendirSync(dir);
     try {
@@ -527,26 +580,56 @@ export function recoverStaleResponseStateTemps(
   dir = getConfigDir(),
   options: ResponseStateTempRecoveryOptions = {},
 ): ResponseStateTempRecoveryResult {
-  const { maxEntries = STALE_TEMP_MAX_ENTRIES, maxCleanups = STALE_TEMP_MAX_CLEANUPS, ...overrides } = options;
+  const {
+    maxEntries = STALE_TEMP_MAX_ENTRIES,
+    maxCleanups = STALE_TEMP_MAX_CLEANUPS,
+    deadlineMs = null,
+    dryRun = false,
+    ...overrides
+  } = options;
   const io = { ...responseStateTempRecoveryIO, ...overrides };
   const result: ResponseStateTempRecoveryResult = {
     matched: 0,
     removed: 0,
     failed: 0,
     bytesRemoved: 0,
+    eligible: 0,
+    eligibleBytes: 0,
+    truncated: false,
   };
+  const startedAt = io.now();
+  // One probe per scan, not one per entry. A non-finite or future-dated boot is anomalous, and
+  // clamping it to "now" would be the WORST response: the floor would then retire the liveness
+  // probe for every file older than the skew, which is every file past the grace. Disable it
+  // instead -- an absent floor only costs a missed reclaim, never a wrong one.
+  const rawBoot = io.bootTime();
+  const bootMs = Number.isFinite(rawBoot) && rawBoot <= startedAt ? rawBoot : Number.NEGATIVE_INFINITY;
   let names: Iterable<string>;
   try { names = io.list(dir); } catch { return result; }
   let iterator: Iterator<string>;
   try { iterator = names[Symbol.iterator](); } catch { return result; }
   let scanned = 0;
+  // Every early exit runs through this. The production `list` is a generator that closes its
+  // directory handle in a `finally`, and a `finally` does NOT run when the consumer simply
+  // stops calling `next()` -- only `return()` resumes the generator to completion. Breaking
+  // out of the loop directly therefore leaked one directory handle per truncated scan, and the
+  // periodic reclaim truncates on purpose (entry cap, cleanup cap, deadline), so on a slow
+  // filesystem that is a leak per tick, forever.
+  const stopScan = (): ResponseStateTempRecoveryResult => {
+    try { iterator.return?.(); } catch { /* closing is best-effort; never fail a reclaim on it */ }
+    return result;
+  };
   for (;;) {
     let next: IteratorResult<string>;
     try { next = iterator.next(); } catch { return result; }
     if (next.done) break;
     const name = next.value;
     scanned += 1;
-    if (scanned > maxEntries || result.removed + result.failed >= maxCleanups) break;
+    // A dry run performs no cleanups, so bounding it by the cleanup budget would truncate
+    // the very report an operator uses to size the problem.
+    if (scanned > maxEntries) { result.truncated = true; return stopScan(); }
+    if (!dryRun && result.removed + result.failed >= maxCleanups) { result.truncated = true; return stopScan(); }
+    if (deadlineMs !== null && io.now() - startedAt > deadlineMs) { result.truncated = true; return stopScan(); }
     const match = RESPONSE_STATE_TEMP_NAME.exec(name);
     if (!match) continue;
     result.matched += 1;
@@ -557,19 +640,57 @@ export function recoverStaleResponseStateTemps(
     let file: ReturnType<ResponseStateTempRecoveryIO["inspect"]>;
     try { file = io.inspect(path); } catch { continue; }
     if (!file.isFile || io.now() - file.mtimeMs < STALE_TEMP_GRACE_MS) continue;
-    if (pid === process.pid || io.isProcessAlive(pid)) continue;
+    // Boot floor. After a reboot the original writer's pid is routinely reused, which makes
+    // the liveness skip PERMANENT: the 15-minute grace above is a lower bound and never
+    // expires it, so the file is skipped on every future pass forever. A temp older than
+    // this boot cannot be owned by the pid we would probe, so the probe is vacuous and we
+    // retire it. This does NOT claim the file is provably dead: under a shared-volume
+    // container, suspend-excluding uptime, or a network config dir the computed boot can
+    // land after the real one. The unconditional 15-minute grace above remains the safety
+    // floor, and this process's own temps are never touched.
+    const predatesBoot = file.mtimeMs < bootMs - BOOT_FLOOR_SKEW_MS;
+    if (pid === process.pid) continue;
+    if (!predatesBoot && io.isProcessAlive(pid)) continue;
+
+    result.eligible += 1;
+    result.eligibleBytes += file.size;
+    if (dryRun) continue;
 
     try {
       io.unlink(path);
       result.removed += 1;
       result.bytesRemoved += file.size;
-    } catch {
+    } catch (error) {
+      // Another proxy sharing this config dir may have won the race. A file that is already
+      // gone is reclaimed, not a failure -- reporting it as one would surface "in use or
+      // locked" to an operator for a file nobody holds.
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        result.removed += 1;
+        continue;
+      }
       // Locked files remain for a later startup. Do not truncate by path: a same-user
       // replacement could turn that fallback into an arbitrary symlink-target write.
       result.failed += 1;
     }
   }
   return result;
+}
+
+/**
+ * Literal config dir plus the snapshot's resolved dir. Atomic writes place their temp beside
+ * the RESOLVED target, so a symlinked snapshot (dotfiles-managed config dir) strands temps in
+ * the link's real directory where a scan of the literal dir would never see them. The two
+ * collapse to one when nothing is symlinked.
+ */
+function responseStateSweepDirectories(): Set<string> {
+  const path = snapshotPath();
+  let resolvedDir = dirname(path);
+  try {
+    resolvedDir = dirname(resolveWriteTarget(path));
+  } catch {
+    /* unresolvable link: sweep the literal dir only */
+  }
+  return new Set([dirname(path), resolvedDir]);
 }
 
 /**
@@ -740,6 +861,94 @@ function inputItems(input: unknown): unknown[] {
   return [input];
 }
 
+/** Hard cap for canonicalizing ANY item. Past it, the item is not comparable. */
+const REPLAY_FINGERPRINT_MAX_BYTES = 8 * 1024;
+/** Depth ceiling so a pathologically nested item cannot blow the canonicalizer. */
+const REPLAY_FINGERPRINT_MAX_DEPTH = 64;
+
+let replayOverlapSkips = 0;
+
+/**
+ * Canonical, order-stable fingerprint for one input item, or null when the item cannot be
+ * compared safely.
+ *
+ * Byte-counted DURING the walk rather than serialize-then-measure: a tool result can be
+ * megabytes and this runs on the request path, so the point of the cap is to stop early,
+ * not to discover afterwards that we should have. Object keys are sorted so two
+ * semantically identical items cannot differ by key order alone.
+ *
+ * The cap applies to EVERY item. An `id`/`call_id` is additional occurrence evidence, never
+ * a substitute for content equality, so an over-cap identified tool item is non-comparable
+ * exactly like an over-cap message.
+ */
+function replayItemFingerprint(item: unknown): string | null {
+  const out: string[] = [];
+  let bytes = 0;
+  const push = (text: string): boolean => {
+    bytes += Buffer.byteLength(text, "utf8");
+    if (bytes > REPLAY_FINGERPRINT_MAX_BYTES) return false;
+    out.push(text);
+    return true;
+  };
+  const walk = (value: unknown, depth: number): boolean => {
+    if (depth > REPLAY_FINGERPRINT_MAX_DEPTH) return false;
+    if (value === null || typeof value !== "object") return push(JSON.stringify(value) ?? "null");
+    if (Array.isArray(value)) {
+      if (!push("[")) return false;
+      for (const element of value) {
+        if (!walk(element, depth + 1)) return false;
+        if (!push(",")) return false;
+      }
+      return push("]");
+    }
+    if (!push("{")) return false;
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      if (!push(JSON.stringify(key))) return false;
+      if (!walk((value as Record<string, unknown>)[key], depth + 1)) return false;
+      if (!push(",")) return false;
+    }
+    return push("}");
+  };
+  return walk(item, 0) ? out.join("") : null;
+}
+
+/** Non-empty provider-issued `id`/`call_id` on an item, else null. */
+function providerIssuedIdentity(item: unknown): string | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const record = item as { id?: unknown; call_id?: unknown };
+  for (const candidate of [record.id, record.call_id]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Number of leading stored items the client already carries verbatim, or 0.
+ *
+ * Requires an exact ordered run: every stored item must match the client input item at the
+ * same index. Any not-comparable item aborts to 0 — skipping just that item could align two
+ * different occurrences and manufacture a false positive, and a false positive here deletes
+ * real conversation history.
+ *
+ * Known gap (FU-2): stored input can contain proxy-injected guidance the client never saw,
+ * and ids repaired after recording. Those sessions do not match here and expand as before.
+ */
+function clientCarriedPrefixLength(stored: readonly unknown[], clientInput: readonly unknown[]): number {
+  if (stored.length === 0 || clientInput.length < stored.length) return 0;
+  for (let index = 0; index < stored.length; index += 1) {
+    const storedPrint = replayItemFingerprint(stored[index]);
+    if (storedPrint === null) return 0;
+    const clientPrint = replayItemFingerprint(clientInput[index]);
+    if (clientPrint === null || storedPrint !== clientPrint) return 0;
+  }
+  return stored.length;
+}
+
+/** Test-only: replay prepends skipped because the client already carried the history. */
+export function replayOverlapSkipsForTests(): number {
+  return replayOverlapSkips;
+}
+
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
     if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
@@ -765,6 +974,7 @@ function pruneResponses(at = now()): void {
         createdAt: entry.createdAt,
         ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
         items: entry.items,
+        ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
         ...(entry.providers ? { providers: entry.providers } : {}),
       });
       if (swapResidentForSpill(oldestId, entry, ref)) spillCounters.writes += 1;
@@ -787,6 +997,64 @@ export function sweepExpiredResponseStates(at = now()): number {
   return removed;
 }
 
+/**
+ * Periodic disk reclaim for abandoned atomic-write temps.
+ *
+ * `ensureLoaded` sweeps once per process, at load, BEFORE that process writes anything:
+ * every `schedulePersist` site is downstream of it. So a process that abandons a temp has
+ * already had its only look, the 15-minute grace hides the temp its predecessor's crash
+ * just produced, and `maxCleanups` caps a single pass below a large backlog. A restart
+ * loop therefore accumulates monotonically. Repeating the reclaim on a timer fixes all
+ * three: the grace expires into a later tick and the per-pass cap becomes a per-tick rate.
+ *
+ * Registered on the sweeper's LIVENESS tick, not the TTL tick: `sweepExpiredOnWrite` puts
+ * `sweepExpired` on hot write paths, and a directory scan does not belong there.
+ */
+export function reclaimAbandonedResponseStateTemps(
+  options: ResponseStateTempRecoveryOptions = {},
+): ResponseStateTempRecoveryResult {
+  const total: ResponseStateTempRecoveryResult = {
+    matched: 0, removed: 0, failed: 0, bytesRemoved: 0, eligible: 0, eligibleBytes: 0, truncated: false,
+  };
+  // The try encloses responseStateSweepDirectories() deliberately: recoverStaleResponseStateTemps
+  // already swallows its own enumeration failures, so a catch around only that call would be
+  // unreachable. snapshotPath()/getConfigDir() are the paths that can genuinely throw.
+  try {
+    for (const dir of responseStateSweepDirectories()) {
+      const result = recoverStaleResponseStateTemps(dir, options);
+      total.matched += result.matched;
+      total.removed += result.removed;
+      total.failed += result.failed;
+      total.bytesRemoved += result.bytesRemoved;
+      total.eligible += result.eligible;
+      total.eligibleBytes += result.eligibleBytes;
+      // Truncation anywhere makes the whole total a prefix.
+      total.truncated ||= result.truncated;
+    }
+  } catch {
+    /* best-effort: disk reclaim must never destabilize the caller */
+  }
+  return total;
+}
+
+/**
+ * Report-only counterpart for `ocx doctor`: applies every selection gate and unlinks
+ * nothing. It runs the SAME predicate as the reclaim, so the report and the subsequent
+ * removal cannot disagree about which files are reclaimable.
+ */
+export function inspectAbandonedResponseStateTemps(): ResponseStateTempRecoveryResult {
+  return reclaimAbandonedResponseStateTemps({ dryRun: true });
+}
+
+/** Sweeper adapter: narrows the reclaim to the `() => number` the liveness tick expects. */
+export function sweepAbandonedResponseStateTemps(): number {
+  return reclaimAbandonedResponseStateTemps({
+    maxEntries: PERIODIC_TEMP_MAX_ENTRIES,
+    maxCleanups: PERIODIC_TEMP_MAX_CLEANUPS,
+    deadlineMs: PERIODIC_TEMP_SCAN_DEADLINE_MS,
+  }).removed;
+}
+
 export function responseContinuationRetainedStoreSnapshot(): RetainedStoreSnapshot {
   return {
     count: states.size,
@@ -807,6 +1075,7 @@ export function evictOldestResponseContinuationForBudget(): number {
       createdAt: entry.createdAt,
       ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
       items: entry.items,
+      ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
       ...(entry.providers ? { providers: entry.providers } : {}),
     });
     if (swapResidentForSpill(id, entry, ref)) spillCounters.writes += 1;
@@ -848,6 +1117,9 @@ function materializeEntry(
     createdAt: result.payload.createdAt,
     ...(result.payload.clientThreadId ? { clientThreadId: result.payload.clientThreadId } : {}),
     items: result.payload.items,
+    ...(result.payload.providerOutputStart !== undefined
+      ? { providerOutputStart: result.payload.providerOutputStart }
+      : {}),
     ...(result.payload.providers ? { providers: result.payload.providers } : {}),
   });
   if (!state) {
@@ -892,6 +1164,39 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
     replayScopeMismatchDrops += 1;
     return freshRequest;
   }
+  // The client already replayed this history verbatim. Prepending the stored copy would
+  // double it, and the doubled turn is stored again, so the next turn triples (#1412 saw
+  // 127k of real context reach 1.3M tokens this way).
+  //
+  // Three conditions, all required. The run must cover the whole stored entry; it must reach
+  // the provider-output region; and some matched item in that region must carry a
+  // provider-issued id. The last one is the load-bearing part: content equality alone proves
+  // two items look alike, not that they are the same occurrence, so a client that merely
+  // repeats its own message would otherwise authorize a skip that deletes real history.
+  // There is no invariant that provider output always carries ids, so an entry whose output
+  // has none simply never skips.
+  {
+    const clientInput = inputItems(request.input);
+    const stored = materialized.state.items;
+    const anchor = materialized.state.providerOutputStart;
+    const carried = clientCarriedPrefixLength(stored, clientInput);
+    if (
+      carried === stored.length
+      && anchor !== undefined
+      && carried > anchor
+      && stored.slice(anchor, carried).some(item => providerIssuedIdentity(item) !== null)
+    ) {
+      replayOverlapSkips += 1;
+      // Keep previous_response_id: Kiro and Cursor recover their conversation ids from it
+      // (kiro-wire.ts, cursor/request-builder.ts). Only the concatenation is skipped.
+      const unchanged = { ...request };
+      // Same provenance boundary a real expansion would record, so the replayed prefix does
+      // not re-acknowledge historical compaction markers (parser.ts) and stays visible to
+      // guidance de-duplication (collaboration.ts).
+      replayedInputPrefixLengths.set(unchanged, carried);
+      return unchanged;
+    }
+  }
   const expanded = {
     ...request,
     input: [...materialized.state.items, ...inputItems(request.input)],
@@ -909,6 +1214,17 @@ export function previousResponseReplayFailure(body: unknown): PreviousResponseRe
 export function previousResponseReplayPrefixLength(body: unknown): number {
   if (!body || typeof body !== "object" || Array.isArray(body)) return 0;
   return replayedInputPrefixLengths.get(body) ?? 0;
+}
+
+/** Copy proxy-private replay provenance to an internal clone with the same materialized input. */
+export function copyPreviousResponseReplayProvenance(source: unknown, target: unknown): void {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return;
+  if (!target || typeof target !== "object" || Array.isArray(target)) return;
+  const prefixLength = replayedInputPrefixLengths.get(source);
+  if (!prefixLength) return;
+  const input = (target as { input?: unknown }).input;
+  if (!Array.isArray(input) || prefixLength > input.length) return;
+  replayedInputPrefixLengths.set(target, prefixLength);
 }
 
 /** True when a stale or foreign previous_response_id was removed from this exact request body. */
@@ -1044,10 +1360,17 @@ export function rememberResponseState(
     });
   }
   const clientThreadId = normalizedClientThreadId(opts?.clientThreadId);
+  // Compute the normalized array once and reuse it for both fields, so the recorded
+  // boundary can never disagree with the items it indexes.
+  const requestItems = inputItems(request.input);
   setResidentEntry(response.id, {
     createdAt: now(),
     ...(clientThreadId ? { clientThreadId } : {}),
-    items: [...inputItems(request.input), ...response.output],
+    items: [...requestItems, ...response.output],
+    // Where response.output begins. A replay skip requires a matched item at or past this
+    // index that also carries a provider-issued id — position alone proves only that an item
+    // sits on the provider side, not that the provider authored it.
+    providerOutputStart: requestItems.length,
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
     // Cursor conversation (multi-turn continuation). Separately track whether Cursor's own
     // checkpoint/cache is safe to reuse: a turn that ended with a pending client tool call produced an
@@ -1093,6 +1416,7 @@ export function clearResponseStateMemoryForTests(): void {
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
   replayScopeMismatchDrops = 0;
+  replayOverlapSkips = 0;
   persistAttemptHookForTests = null;
   loaded = false;
 }

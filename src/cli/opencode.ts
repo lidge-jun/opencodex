@@ -41,6 +41,7 @@ import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 
 /**
  * The provider-block serializer, its constants, and the config-path helpers now live in
@@ -494,7 +495,7 @@ async function ensureProxyForOpencode(config: OcxConfig): Promise<LiveProxy | nu
   if (live) return live;
   const cfgPort = config.port;
   const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
-  const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(pinPort)], {
+  const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(pinPort)]), {
     detached: true,
     stdio: "ignore",
     windowsHide: true,

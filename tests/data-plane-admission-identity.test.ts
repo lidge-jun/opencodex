@@ -61,6 +61,7 @@ describe("resolveDataPlaneAdmissionSecret", () => {
     expect(resolveDataPlaneAdmissionSecret("ocx_data_firstsecret", config)).toEqual({
       kind: "configured",
       keyId: "first-key",
+      source: "dedicated",
     });
   });
 
@@ -71,12 +72,13 @@ describe("resolveDataPlaneAdmissionSecret", () => {
     expect(resolveDataPlaneAdmissionSecret("ocx_data_secondsecret", config)).toEqual({
       kind: "configured",
       keyId: "second-key",
+      source: "dedicated",
     });
   });
 
   test("the environment token has no configured key to name", () => {
     process.env.OPENCODEX_API_AUTH_TOKEN = "env-secret";
-    expect(resolveDataPlaneAdmissionSecret("env-secret", remoteConfig())).toEqual({ kind: "environment" });
+    expect(resolveDataPlaneAdmissionSecret("env-secret", remoteConfig())).toEqual({ kind: "environment", source: "dedicated" });
   });
 
   test.each([
@@ -114,18 +116,40 @@ describe("no admission decision changed", () => {
 });
 
 describe("the two wrappers still differ", () => {
-  test("bearer is accepted by the broad path and rejected by the Responses path", () => {
+  test("bearer admission is accepted on both paths and names its source (#1686)", () => {
     const config = remoteConfig();
     const bearer = request({ authorization: "Bearer ocx_data_firstsecret" });
 
     // /v1/models and /v1/messages take bearer...
-    expect(resolveApiAuth(bearer, config)).toEqual({ kind: "configured", keyId: "first-key" });
+    expect(resolveApiAuth(bearer, config)).toEqual({ kind: "configured", keyId: "first-key", source: "bearer" });
     expect(hasValidApiAuth(bearer, config)).toBe(true);
 
-    // ...but Responses/Chat must not, because Authorization there may belong to
-    // Codex Direct passthrough.
-    expect(resolveResponsesApiAuth(request({ authorization: "Bearer ocx_data_firstsecret" }), config)).toBeNull();
-    expect(requireResponsesApiAuth(request({ authorization: "Bearer ocx_data_firstsecret" }), config)?.status).toBe(401);
+    // ...and Responses now does too. Rejecting it meant a Codex client configured with
+    // `env_key` could not reach Direct at all. It is safe ONLY because the upstream
+    // credential is substituted rather than forwarded -- see materializeCodexUpstreamAuth.
+    // The source is recorded so that substitution can be made conditional on it.
+    expect(resolveResponsesApiAuth(request({ authorization: "Bearer ocx_data_firstsecret" }), config))
+      .toEqual({ kind: "configured", keyId: "first-key", source: "bearer" });
+    expect(requireResponsesApiAuth(request({ authorization: "Bearer ocx_data_firstsecret" }), config)).toBeNull();
+  });
+
+  test("a bearer that is NOT our secret stays unadmitted on the Responses path (#1686)", () => {
+    const config = remoteConfig();
+    // This is the Codex Direct passthrough case: an upstream ChatGPT bearer must not be
+    // mistaken for admission, or the two bearer domains would mix after all.
+    const foreign = request({ authorization: "Bearer sk-some-upstream-key" });
+    expect(resolveResponsesApiAuth(foreign, config)).toBeNull();
+    expect(requireResponsesApiAuth(foreign, config)?.status).toBe(401);
+  });
+
+  test("the dedicated header still wins over a bearer (#1686)", () => {
+    const config = remoteConfig();
+    const both = request({
+      "x-opencodex-api-key": "ocx_data_secondsecret",
+      authorization: "Bearer ocx_data_firstsecret",
+    });
+    expect(resolveResponsesApiAuth(both, config))
+      .toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
   });
 
   test("x-api-key is accepted only by the broad path", () => {
@@ -137,8 +161,8 @@ describe("the two wrappers still differ", () => {
   test("the dedicated header works on both", () => {
     const config = remoteConfig();
     const dedicated = () => request({ "x-opencodex-api-key": "ocx_data_secondsecret" });
-    expect(resolveApiAuth(dedicated(), config)).toEqual({ kind: "configured", keyId: "second-key" });
-    expect(resolveResponsesApiAuth(dedicated(), config)).toEqual({ kind: "configured", keyId: "second-key" });
+    expect(resolveApiAuth(dedicated(), config)).toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
+    expect(resolveResponsesApiAuth(dedicated(), config)).toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
     expect(requireResponsesApiAuth(dedicated(), config)).toBeNull();
   });
 });
@@ -146,8 +170,8 @@ describe("the two wrappers still differ", () => {
 describe("loopback binds", () => {
   test("admit without reading a token, and say so", () => {
     const config = loopbackConfig();
-    expect(resolveApiAuth(request(), config)).toEqual({ kind: "loopback" });
-    expect(resolveResponsesApiAuth(request(), config)).toEqual({ kind: "loopback" });
+    expect(resolveApiAuth(request(), config)).toEqual({ kind: "loopback", source: "loopback" });
+    expect(resolveResponsesApiAuth(request(), config)).toEqual({ kind: "loopback", source: "loopback" });
     expect(hasValidApiAuth(request(), config)).toBe(true);
     expect(requireResponsesApiAuth(request(), config)).toBeNull();
   });
@@ -208,8 +232,8 @@ describe("the Responses WebSocket handshake", () => {
     // dropping `admission` from the payload fails here rather than passing a
     // socket-opened assertion that never looked at it.
     const headers = new Headers({ "x-forwarded-for": "ignored" });
-    const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key" });
-    expect(payload.admission).toEqual({ kind: "configured", keyId: "second-key" });
+    const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key", source: "dedicated" });
+    expect(payload.admission).toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
     expect(payload.headers).toBe(headers);
   });
 

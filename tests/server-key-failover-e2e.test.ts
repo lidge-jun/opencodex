@@ -465,4 +465,65 @@ describe("server 429 key failover (end-to-end)", () => {
       await server.stop(true);
     }
   });
+
+  test("Google AI Studio apiKeyPool rotates on 429 without redundant single-key retries (A sent once, B sent once)", async () => {
+    const originalFetch = globalThis.fetch;
+    const seenKeys: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("generativelanguage.googleapis.com")) {
+        const headers = new Headers(init?.headers);
+        const key = headers.get("x-goog-api-key") ?? "";
+        seenKeys.push(key);
+        if (seenKeys.length === 1) {
+          return new Response(JSON.stringify({
+            error: { code: 429, message: "Rate limit exceeded", status: "RESOURCE_EXHAUSTED" },
+          }), {
+            status: 429,
+            headers: { "retry-after": "30", "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({
+          candidates: [{
+            content: { role: "model", parts: [{ text: "response from key B" }] },
+            finishReason: "STOP",
+          }],
+          usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 4, totalTokenCount: 7 },
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "google-direct",
+      providers: {
+        "google-direct": {
+          adapter: "google",
+          baseUrl: "https://generativelanguage.googleapis.com",
+          authMode: "key",
+          apiKey: "key-alpha-111",
+          apiKeyPool: [
+            { id: "k1", key: "key-alpha-111", addedAt: 1 },
+            { id: "k2", key: "key-beta-222", addedAt: 2 },
+          ],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-direct/gemini-2.5-flash", input: "hi", stream: false }),
+      });
+      expect(res.status).toBe(200);
+      const json = await res.json() as { output?: Array<{ content?: Array<{ text?: string }> }> };
+      expect(json.output?.[0]?.content?.[0]?.text).toBe("response from key B");
+      expect(seenKeys).toEqual(["key-alpha-111", "key-beta-222"]);
+    } finally {
+      await server.stop(true);
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

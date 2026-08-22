@@ -1,10 +1,16 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import { cloneFastWire } from "./fastwire";
 import {
   PROVIDER_REGISTRY,
-  providerMatchesRegistryTransport,
   registryEntryForProviderDestination,
+  registryModelServiceTierCapabilityApplies,
   type ProviderRegistryEntry,
 } from "./registry";
+import {
+  providerMatchesRegistryTransportWithStaticGuards,
+  registryEntrySupportsLiveModelDiscovery,
+  repairStaticModelCatalogProvider,
+} from "./static-model-discovery";
 
 export interface DerivedKeyLoginProvider {
   label: string;
@@ -41,6 +47,7 @@ export interface DerivedKeyLoginProvider {
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
+  openaiChatEofTolerance?: boolean;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   project?: string;
   location?: string;
@@ -204,6 +211,7 @@ export function applyDirectReasoningEffortContracts(
  * keep distinguishing local runtimes from API-key providers after the seed round-trip.
  */
 export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderConfig {
+  const liveModels = registryEntrySupportsLiveModelDiscovery(entry) ? entry.liveModels : false;
   return {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
@@ -219,7 +227,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.staticHeaders ? { headers: { ...entry.staticHeaders } } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
     ...(entry.models ? { models: [...entry.models] } : {}),
-    ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
+    ...(liveModels !== undefined ? { liveModels } : {}),
     ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
     ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
@@ -240,6 +248,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.parallelToolCalls !== undefined ? { parallelToolCalls: entry.parallelToolCalls } : {}),
     ...(entry.promptCacheKey !== undefined ? { promptCacheKey: entry.promptCacheKey } : {}),
     ...(entry.chatServiceTier !== undefined ? { chatServiceTier: entry.chatServiceTier } : {}),
+    ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
     ...(entry.requiresAdjacentResponsesToolResults !== undefined
@@ -263,6 +272,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
   for (const entry of PROVIDER_REGISTRY) {
     if (entry.authKind !== "key") continue;
     if (!entry.dashboardUrl) throw new Error(`Registry key provider missing dashboardUrl: ${entry.id}`);
+    const liveModels = registryEntrySupportsLiveModelDiscovery(entry) ? entry.liveModels : false;
     out[entry.id] = {
       label: entry.label,
       baseUrl: entry.baseUrl,
@@ -272,7 +282,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
       dashboardUrl: entry.dashboardUrl,
       ...(entry.models ? { models: [...entry.models] } : {}),
-      ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
+      ...(liveModels !== undefined ? { liveModels } : {}),
       ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
       ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
@@ -298,6 +308,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
       ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
       ...(entry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: entry.escapeBuiltinToolNames } : {}),
+      ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
       ...(entry.googleMode ? { googleMode: entry.googleMode } : {}),
       ...(entry.project ? { project: entry.project } : {}),
       ...(entry.location ? { location: entry.location } : {}),
@@ -359,6 +370,26 @@ function applyReasoningSummaryDefaults(
   };
 }
 
+function applyServiceTierModelDefaults(
+  prov: OcxProviderConfig,
+  defaults: Readonly<Record<string, boolean>> | undefined,
+): void {
+  if (!defaults) return;
+  prov.modelSupportsServiceTier = {
+    ...defaults,
+    ...(prov.modelSupportsServiceTier ?? {}),
+  };
+}
+
+function serviceTierModelDefaultsFor(
+  entry: ProviderRegistryEntry | undefined,
+  prov: OcxProviderConfig,
+): Readonly<Record<string, boolean>> | undefined {
+  return entry && registryModelServiceTierCapabilityApplies(entry, prov)
+    ? entry.modelSupportsServiceTier
+    : undefined;
+}
+
 /**
  * Last-resort enrichment for a provider whose NAME matches no registry id.
  *
@@ -376,9 +407,17 @@ function enrichReasoningSummariesByDestination(prov: OcxProviderConfig): void {
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
 }
 
+/** Repair the exact low-only ClinePass ladder generated by older key-login presets. */
+export function hasLegacyClinePassReasoningEfforts(name: string, prov: OcxProviderConfig): boolean {
+  return name === "cline-pass"
+    && prov.reasoningWireFormat === "gateway-object"
+    && prov.reasoningEfforts?.length === 1
+    && prov.reasoningEfforts[0] === "low";
+}
+
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
-  if (!entry || !providerMatchesRegistryTransport(name, prov)) {
+  if (!entry || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) {
     // Name lookup failed, but the row may still point at a vendor route we know. #1100 was
     // reported against a hand-added provider literally named "GLM": routing worked, yet every
     // piece of registry metadata was skipped because no registry id is called "GLM".
@@ -386,6 +425,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     // which vendor endpoint is this row talking to — and is already restricted to fixed key
     // destinations, so a templated or overridable base URL cannot be claimed by it.
     enrichReasoningSummariesByDestination(prov);
+    applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(registryEntryForProviderDestination(prov), prov));
     return;
   }
   const explicitDirectReasoning: DirectReasoningEffortOverrides = {
@@ -395,6 +435,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     modelReasoningEffortMap: prov.modelReasoningEffortMap,
   };
   const seed = providerConfigSeed(entry);
+  repairStaticModelCatalogProvider(name, prov);
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
@@ -407,7 +448,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (seed.modelInputModalities) prov.modelInputModalities = fillRecordOfArrays(seed.modelInputModalities, prov.modelInputModalities);
   if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
   if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };
-  if (!prov.reasoningEfforts && seed.reasoningEfforts) prov.reasoningEfforts = [...seed.reasoningEfforts];
+  if ((!prov.reasoningEfforts || hasLegacyClinePassReasoningEfforts(name, prov)) && seed.reasoningEfforts) {
+    prov.reasoningEfforts = [...seed.reasoningEfforts];
+  }
   if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
@@ -421,6 +464,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.parallelToolCalls === undefined && seed.parallelToolCalls !== undefined) prov.parallelToolCalls = seed.parallelToolCalls;
   if (prov.promptCacheKey === undefined && seed.promptCacheKey !== undefined) prov.promptCacheKey = seed.promptCacheKey;
   if (prov.chatServiceTier === undefined && seed.chatServiceTier !== undefined) prov.chatServiceTier = seed.chatServiceTier;
+  if (prov.openaiChatEofTolerance === undefined && seed.openaiChatEofTolerance !== undefined) {
+    prov.openaiChatEofTolerance = seed.openaiChatEofTolerance;
+  }
   // Fill-only: a hand-edited path must survive, and a config saved before the registry
   // learned this route still gets backfilled.
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
@@ -430,9 +476,16 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   // Registry-only metadata (never seeded into saved config): backfill straight from
   // the entry so an explicit user value stays distinguishable from the default.
+  if (prov.fastWire === undefined && entry.fastWire !== undefined) {
+    prov.fastWire = cloneFastWire(entry.fastWire);
+  }
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
+  if (prov.supportsOpenAiWebSearchToolFields === undefined && entry.supportsOpenAiWebSearchToolFields !== undefined) {
+    prov.supportsOpenAiWebSearchToolFields = entry.supportsOpenAiWebSearchToolFields;
+  }
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
+  applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(entry, prov));
   // Registry-only repair policy (#938): fill only when the runtime provider has
   // no explicit policy, and deep-clone so saved/user values never alias the
   // registry constant.

@@ -13,6 +13,167 @@ import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
+describe("ocx agent sidecar --list (#2188)", () => {
+  test("web --list prints the server's webSearchModels — the GUI's exact list", async () => {
+    const { requests, deps } = fakeRuntime(req => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+        return {
+          webSearchModels: [
+            { value: "gpt-5.6-luna", label: "gpt-5.6-luna", model: "gpt-5.6-luna", backend: "openai", authSlot: true },
+            { value: "gpt-5.6-terra", label: "gpt-5.6-terra", model: "gpt-5.6-terra", backend: "openai" },
+          ],
+          visionModels: [],
+        };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await handleAgentCommand(["sidecar", "web", "--list"], deps);
+      expect(code).toBe(0);
+      // Read-only: exactly one GET of the settings route, never a PUT.
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.method).toBe("GET");
+      expect(requests[0]!.path).toBe("/api/sidecar-settings");
+      const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(out).toContain("gpt-5.6-luna [openai] (auth slot)");
+      expect(out).toContain("gpt-5.6-terra [openai]");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("--list combined with a write flag is a usage error, not a silent ignore", async () => {
+    const { requests, deps } = fakeRuntime();
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await handleAgentCommand(["sidecar", "web", "--list", "--model", "x"], deps);
+      expect(code).toBe(2);
+      expect(requests).toHaveLength(0);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("web --model persists the exact backend/model pair offered by the server", async () => {
+    const { requests, deps } = fakeRuntime((req, body) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+        return {
+          webSearch: { model: "gpt-5.6-luna", backend: "openai" },
+          webSearchModels: [
+            { value: "claude-haiku-4-5", label: "claude-haiku-4-5", model: "claude-haiku-4-5", backend: "anthropic", authSlot: true },
+          ],
+          visionModels: [],
+        };
+      }
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return { ok: true, saved: body };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--model", "claude-haiku-4-5"], deps)).toBe(0);
+      expect(requests).toEqual([
+        { path: "/api/sidecar-settings", method: "GET", body: null },
+        {
+          path: "/api/sidecar-settings",
+          method: "PUT",
+          body: { webSearch: { model: "claude-haiku-4-5", backend: "anthropic" } },
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("web --model preserves an explicit backend clear", async () => {
+    const { requests, deps } = fakeRuntime((req, body) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+        return {
+          webSearchModels: [
+            { value: "gpt-5.6-luna", label: "gpt-5.6-luna", model: "gpt-5.6-luna", backend: "openai" },
+          ],
+          visionModels: [],
+        };
+      }
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return { ok: true, saved: body };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand([
+        "sidecar", "web", "--model", "gpt-5.6-luna", "--backend", "-",
+      ], deps)).toBe(0);
+      expect(requests).toEqual([
+        { path: "/api/sidecar-settings", method: "GET", body: null },
+        {
+          path: "/api/sidecar-settings",
+          method: "PUT",
+          body: { webSearch: { model: "gpt-5.6-luna", backend: null } },
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("web --model surfaces the server's backend/model pair rejection", async () => {
+    const { requests, deps } = fakeRuntime(req => {
+      const url = new URL(req.url);
+      if (req.method === "GET") {
+        return {
+          webSearchModels: [
+            { value: "claude-haiku-4-5", label: "claude-haiku-4-5", model: "claude-haiku-4-5", backend: "anthropic" },
+          ],
+          visionModels: [],
+        };
+      }
+      if (req.method === "PUT") {
+        return Response.json({ error: 'webSearch.model: backend/model pair "anthropic/claude-haiku-4-5" is not a web-search sidecar candidate' }, { status: 400 });
+      }
+      return undefined;
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--model", "claude-haiku-4-5"], deps)).toBe(1);
+      expect(requests.map(request => request.method)).toEqual(["GET", "PUT"]);
+      expect(errorSpy.mock.calls.map(call => String(call[0])).join("\n")).toContain(
+        'backend/model pair "anthropic/claude-haiku-4-5"',
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("vision --list prints visionModels with backend tags; empty set names the reason", async () => {
+    const { deps } = fakeRuntime(req => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+        return { webSearchModels: [], visionModels: [{ value: "claude-haiku-4-5", label: "claude-haiku-4-5", backend: "anthropic", baseline: true }] };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "vision", "--list"], deps)).toBe(0);
+      const visionOut = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(visionOut).toContain("claude-haiku-4-5 [anthropic] (baseline)");
+      logSpy.mockClear();
+      expect(await handleAgentCommand(["sidecar", "web", "--list"], deps)).toBe(0);
+      const webOut = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(webOut).toContain("no runnable web-search sidecar models");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
+
 afterEach(() => {
   for (const server of servers.splice(0)) server.stop(true);
   process.exitCode = 0;
@@ -27,6 +188,7 @@ function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
       const body = req.method === "GET" ? null : await req.json().catch(() => null);
       requests.push({ path: `${url.pathname}${url.search}`, method: req.method, body });
       const custom = responder?.(req, body);
+      if (custom instanceof Response) return custom;
       if (custom !== undefined) return Response.json(custom);
       return Response.json({ ok: true });
     },
@@ -249,7 +411,7 @@ describe("headless GUI parity CLI", () => {
       "set", "fast", "--targets", "ark/model-a:2,openai/gpt-5.5", "--strategy", "failover", "--json",
     ], runtime.deps);
     expect(code).toBe(0);
-    expect(runtime.requests[0]?.body).toEqual({
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toEqual({
       id: "fast",
       combo: {
         strategy: "failover",
@@ -273,7 +435,7 @@ describe("headless GUI parity CLI", () => {
       "--json",
     ], runtime.deps);
     expect(code).toBe(0);
-    expect(runtime.requests[0]?.body).toMatchObject({
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toMatchObject({
       id: "nova-sol",
       combo: {
         alias: "gpt-5.6-sol",
@@ -282,6 +444,35 @@ describe("headless GUI parity CLI", () => {
         targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
       },
     });
+  });
+
+  test("combo set round-trips an existing disabled image-input capability", async () => {
+    let persisted: Record<string, unknown> = {
+      id: "text-only",
+      imageInput: "disabled",
+      targets: [{ provider: "ark", model: "old-model" }],
+    };
+    const runtime = fakeRuntime((req, body) => {
+      if (req.method === "GET") return { combos: [persisted] };
+      if (req.method === "PUT") {
+        const update = body as { id: string; combo: Record<string, unknown> };
+        persisted = { id: update.id, ...update.combo };
+        return { combo: persisted };
+      }
+      return undefined;
+    });
+
+    expect(await handleComboCommand([
+      "set", "text-only", "--targets", "ark/new-model", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(await handleComboCommand(["show", "text-only", "--json"], runtime.deps)).toBe(0);
+
+    expect(persisted).toMatchObject({
+      id: "text-only",
+      imageInput: "disabled",
+      targets: [{ provider: "ark", model: "new-model" }],
+    });
+    expect(runtime.requests.map(request => request.method)).toEqual(["GET", "PUT", "GET"]);
   });
 
   test("agent effort and roster use the same live mutation routes as GUI", async () => {
@@ -399,6 +590,70 @@ describe("headless GUI parity CLI", () => {
     }
   });
 
+
+  test("config set applies onto the disk state, not a snapshot read before the lock (#1835)", async () => {
+    // The read used to happen outside the mutation lock, so a concurrent edit landing
+    // between it and the whole-snapshot save was silently reverted.
+    const home = mkdtempSync(join(tmpdir(), "ocx-cli-set-race-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    const configPath = join(home, "config.json");
+    const base = {
+      port: 10100,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+      defaultProvider: "openai",
+    };
+    try {
+      writeFileSync(configPath, JSON.stringify(base));
+      expect(await handleConfigCommand(["set", "autoSwitchThreshold", "50", "--json"])).toBe(0);
+
+      // A competing writer adds a provider the CLI never saw.
+      const onDisk = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
+      onDisk.providers.competitor = {
+        adapter: "openai-chat",
+        baseUrl: "https://competitor.example/v1",
+        apiKey: "competitor-key",
+      };
+      writeFileSync(configPath, JSON.stringify(onDisk));
+
+      expect(await handleConfigCommand(["set", "autoSwitchThreshold", "70", "--json"])).toBe(0);
+
+      const after = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
+      expect(after.autoSwitchThreshold).toBe(70);
+      // The competing edit survives: the mutation was applied to the fresh disk state.
+      expect(Object.keys(after.providers)).toEqual(expect.arrayContaining(["openai", "competitor"]));
+      expect(after.providers.competitor).toMatchObject({ apiKey: "competitor-key" });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("config unset actually removes the key through the mutation primitive (#1835)", async () => {
+    // A merge-only callback cannot delete, so unset would report success and change nothing.
+    const home = mkdtempSync(join(tmpdir(), "ocx-cli-unset-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    const configPath = join(home, "config.json");
+    try {
+      writeFileSync(configPath, JSON.stringify({
+        port: 10100,
+        providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+        defaultProvider: "openai",
+        autoSwitchThreshold: 50,
+      }));
+      expect(await handleConfigCommand(["unset", "autoSwitchThreshold", "--json"])).toBe(0);
+
+      const after = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
+      expect(Object.hasOwn(after, "autoSwitchThreshold")).toBe(false);
+      expect(after.providers.openai).toBeDefined();
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
   test("config set releases the manual pin when it writes the selection order", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-cli-priority-pin-"));
     const previous = process.env.OPENCODEX_HOME;

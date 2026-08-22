@@ -4,6 +4,7 @@ import type { ComboCatalogOmission } from "./catalog/aggregation";
 import { CODEX_MODELS_CACHE_PATH } from "./paths";
 import { atomicWriteFile } from "../config";
 import type { OcxConfig } from "../types";
+import type { CodexCatalogSyncOptions } from "./catalog/sync";
 
 export interface CodexCatalogRefreshResult {
   added: number;
@@ -42,8 +43,9 @@ export function syncCodexModelsCacheFromCatalog(catalogPath: string): void {
 export async function refreshCodexModelCatalog(
   config: OcxConfig,
   deps: RefreshDeps = defaultDeps,
+  options?: CodexCatalogSyncOptions,
 ): Promise<CodexCatalogRefreshResult> {
-  const result = await deps.syncCatalogModels(config);
+  const result = await deps.syncCatalogModels(config, options);
   const catalogExists = deps.existsSync(result.path);
   const catalogWritten = result.catalogWritten === true;
   const comboOmissions = result.comboOmissions ?? [];
@@ -55,6 +57,6 @@ export async function refreshCodexModelCatalog(
   if (!catalogExists) {
     return { ...result, catalogExists, catalogWritten: false, cacheSynced: false, comboOmissions };
   }
-  const cacheSynced = deps.invalidateCodexModelsCache();
+  const cacheSynced = deps.invalidateCodexModelsCache(options);
   return { ...result, catalogExists, catalogWritten, cacheSynced, comboOmissions };
 }

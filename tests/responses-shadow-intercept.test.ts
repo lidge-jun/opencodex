@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../src/server/responses";
 import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
+import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
@@ -90,7 +91,12 @@ function interceptConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-async function post(config: OcxConfig, model: string, requestKind?: string): Promise<Response> {
+async function post(
+  config: OcxConfig,
+  model: string,
+  requestKind?: string,
+  logCtx: RequestLogContext = { model: "", provider: "" },
+): Promise<Response> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (requestKind) {
     headers["x-codex-turn-metadata"] = JSON.stringify({ request_kind: requestKind });
@@ -104,7 +110,7 @@ async function post(config: OcxConfig, model: string, requestKind?: string): Pro
       stream: false,
       reasoning: { effort: "high" },
     }),
-  }), config, { model: "", provider: "" });
+  }), config, logCtx);
 }
 
 describe("shadow call intercept request path (issue #311)", () => {
@@ -130,6 +136,7 @@ describe("shadow call intercept request path (issue #311)", () => {
 
   test("rewrites a gpt-5.6-luna turn request too (#1684)", async () => {
     const bodies: Array<Record<string, unknown>> = [];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
       return new Response(JSON.stringify({
@@ -138,10 +145,46 @@ describe("shadow call intercept request path (issue #311)", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    await post(interceptConfig(), "gpt-5.6-luna", "turn");
+    await post(interceptConfig(), "gpt-5.6-luna", "turn", logCtx);
 
     expect(bodies.length).toBe(1);
     expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
+    expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
+  });
+
+  // The intercept matches by PREFIX, so a caller can append anything and still be intercepted.
+  // The recorded marker is persisted to usage.jsonl and served from /api/logs, and the runtime
+  // redactor is pattern-based: a credential family it does not recognize would survive verbatim.
+  // Recording the operator-configured prefix instead of the caller's raw string removes the
+  // class, rather than adding one more pattern to a deny-list.
+  test("the recorded marker is the configured prefix, never the caller's raw model string", async () => {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+    // A Google-shaped key: the runtime redactor has no rule for this family, and the newline
+    // is stripped before redaction runs, so the old code persisted this string intact.
+    const smuggled = "gpt-5.6-luna\nAIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6";
+    await post(interceptConfig(), smuggled, "turn", logCtx);
+
+    expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
+    expect(logCtx.shadowCallRewrittenFrom ?? "").not.toContain("AIza");
+  });
+
+  test("a configured non-default prefix is recorded as itself", async () => {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+    const config = interceptConfig();
+    config.shadowCallIntercept = { enabled: true, model: "grok-4.5", sourceModels: ["gpt-5.4-mini"] };
+    await post(config, "gpt-5.4-mini-2024-07-18", "turn", logCtx);
+
+    expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.4-mini");
   });
 
   test("leaves gpt-5.6-terra requests unrewritten", async () => {

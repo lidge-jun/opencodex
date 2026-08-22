@@ -451,6 +451,13 @@ export function requireManagementAuth(
   if (hasSystemRestartCapability(req, local)) return null;
   if (hasLocalProviderReloadCapability(req, local)) return null;
   if (hasLocalReadCapability(req, local)) return null;
+  if (
+    process.env.OPENCODEX_DISABLE_ADMIN_AUTH === "true" ||
+    process.env.OPENCODEX_DISABLE_ADMIN_AUTH === "1" ||
+    config?.disableAdminAuth === true
+  ) {
+    return null;
+  }
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",

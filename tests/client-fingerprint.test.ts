@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  ANTIGRAVITY_CLI_VERSION,
-  ANTIGRAVITY_GOOG_API_CLIENT_UA,
+  ANTIGRAVITY_IDE_VERSION,
   CLAUDE_CODE_HEADERS,
   antigravityUserAgent,
   claudeCodeSessionId,
@@ -19,31 +18,41 @@ function parsed(): OcxParsedRequest {
 }
 
 describe("client fingerprint — helpers", () => {
-  test("antigravity UA has the real CLI shape, never the literal giveaway", async () => {
+  test("antigravity UA has the real IDE shape, never the literal giveaway", async () => {
     const ua = antigravityUserAgent();
-    expect(ua).toBe("antigravity/cli/1.1.12 (aidev_client; os_type=darwin; arch=arm64)");
+    expect(ua).toBe(`antigravity/ide/${ANTIGRAVITY_IDE_VERSION} (os_type=windows; arch=amd64; aidev_client; auth_method=oauth)`);
     expect(ua).not.toBe("antigravity");
   });
 
-  test("antigravity UA honors an explicit version override", async () => {
-    expect(antigravityUserAgent("9.9.9")).toBe("antigravity/cli/9.9.9 (aidev_client; os_type=darwin; arch=arm64)");
+  test("antigravity UA honors explicit version and authMethod overrides", async () => {
+    expect(antigravityUserAgent("9.9.9")).toBe("antigravity/ide/9.9.9 (os_type=windows; arch=amd64; aidev_client; auth_method=oauth)");
+    expect(antigravityUserAgent(ANTIGRAVITY_IDE_VERSION, "api_key")).toBe(
+      `antigravity/ide/${ANTIGRAVITY_IDE_VERSION} (os_type=windows; arch=amd64; aidev_client; auth_method=api_key)`,
+    );
   });
 
-  test("GOOGLE_ANTIGRAVITY_USER_AGENT env override wins over the default UA", async () => {
-    const prev = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
-    process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = "custom-ua/1.2.3";
+  test("GOOGLE_ANTIGRAVITY_USER_AGENT env override trims surrounding whitespace", async () => {
+    const prevGoogle = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
     try {
-      // Fresh module instance so the env-driven constant is re-evaluated at import time.
-      const mod = await import(`../src/adapters/google-antigravity-wire?override=${Date.now()}`);
-      expect(mod.ANTIGRAVITY_REQUEST_UA).toBe("custom-ua/1.2.3");
+      process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = "  custom-ua/1.2.3  ";
+      expect(antigravityUserAgent()).toBe("custom-ua/1.2.3");
     } finally {
-      if (prev === undefined) delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
-      else process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = prev;
+      if (prevGoogle === undefined) delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
+      else process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = prevGoogle;
     }
   });
 
-  test("secondary google api client UA is pinned", async () => {
-    expect(ANTIGRAVITY_GOOG_API_CLIENT_UA).toMatch(/^google-api-nodejs-client\/[\d.]+$/);
+  test("whitespace-only GOOGLE_ANTIGRAVITY_USER_AGENT falls back to default UA", async () => {
+    const prevGoogle = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
+    try {
+      process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = "   ";
+      expect(antigravityUserAgent()).toBe(
+        `antigravity/ide/${ANTIGRAVITY_IDE_VERSION} (os_type=windows; arch=amd64; aidev_client; auth_method=oauth)`,
+      );
+    } finally {
+      if (prevGoogle === undefined) delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
+      else process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = prevGoogle;
+    }
   });
 
   test("claude session id is a stable v4-shaped uuid per token", async () => {

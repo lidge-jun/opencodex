@@ -55,7 +55,7 @@ describe("Cursor live transport", () => {
       translatorBudget: createTestTranslatorBudget(),
       headers: new Headers(),
     });
-    const sessionId = (transport as unknown as { sessionId: string }).sessionId;
+    const sessionId = (transport as unknown as { shellOwnerId: string }).shellOwnerId;
     const fake = spawnTransportOwnedShell(sessionId);
     let closed = false;
     const closing = Promise.resolve(transport.close?.()).then(() => { closed = true; });
@@ -73,8 +73,8 @@ describe("Cursor live transport", () => {
       translatorBudget: createTestTranslatorBudget(),
       headers: new Headers(),
     });
-    const internals = transport as unknown as { sessionId: string; cancelCursorRun(): void };
-    const fake = spawnTransportOwnedShell(internals.sessionId);
+    const internals = transport as unknown as { shellOwnerId: string; cancelCursorRun(): void };
+    const fake = spawnTransportOwnedShell(internals.shellOwnerId);
     internals.cancelCursorRun();
     const closing = Promise.resolve(transport.close?.());
     await Promise.resolve();
@@ -92,18 +92,48 @@ describe("Cursor live transport", () => {
     });
     const internals = transport as unknown as {
       sessionId: string;
+      shellOwnerId: string;
       execContext: { sessionId?: string };
       mcpManager?: { listToolHandles(): Promise<unknown[]>; dispose(): Promise<void> };
       prepareMcp(): Promise<void>;
     };
-    expect(internals.execContext.sessionId).toBe(internals.sessionId);
+    expect(internals.execContext.sessionId).toBe(internals.shellOwnerId);
+    expect(internals.execContext.sessionId).not.toBe(internals.sessionId);
     internals.mcpManager = {
       listToolHandles: async () => [],
       dispose: async () => {},
     };
     await internals.prepareMcp();
-    expect(internals.execContext.sessionId).toBe(internals.sessionId);
+    expect(internals.execContext.sessionId).toBe(internals.shellOwnerId);
     await transport.close?.();
+  });
+  test("honors an injected session id for Cursor Connect x-session-id", () => {
+    const transport = createLiveCursorTransport({
+      provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
+      translatorBudget: createTestTranslatorBudget(),
+      headers: new Headers(),
+      sessionId: "cursor_from_gjc_session",
+    });
+    const internals = transport as unknown as {
+      sessionId: string;
+      shellOwnerId: string;
+      execContext: { sessionId?: string };
+    };
+    expect(internals.sessionId).toBe("cursor_from_gjc_session");
+    expect(internals.execContext.sessionId).toBe(internals.shellOwnerId);
+    expect(internals.execContext.sessionId).not.toBe("cursor_from_gjc_session");
+  });
+  test("keeps a blank injected session id from becoming the Connect x-session-id", () => {
+    const transport = createLiveCursorTransport({
+      provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
+      translatorBudget: createTestTranslatorBudget(),
+      headers: new Headers(),
+      sessionId: "   ",
+    });
+    const internals = transport as unknown as { sessionId: string };
+    expect(internals.sessionId.length).toBeGreaterThan(0);
+    expect(internals.sessionId.trim()).toBe(internals.sessionId);
+    expect(internals.sessionId).not.toBe("   ");
   });
 
   test("fails before network when no Cursor credential is configured", () => {

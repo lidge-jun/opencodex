@@ -15,6 +15,7 @@ import {
   updateComboAliasDraft,
   validateComboDraft,
 } from "../gui/src/combo-workspace-data";
+import { comboImagesSupported } from "../gui/src/combo-capabilities";
 
 const configuredProviders = {
   a: {},
@@ -95,6 +96,7 @@ describe("combo-workspace-data", () => {
         strategy: "failover",
         stickyLimit: 1,
         defaultEffort: null,
+        imageInput: "auto",
         targets: [{ provider: "a", model: "m1", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) }],
       },
       {
@@ -106,6 +108,7 @@ describe("combo-workspace-data", () => {
         strategy: "round-robin",
         stickyLimit: 4,
         defaultEffort: "high",
+        imageInput: "auto",
         targets: [
           { provider: "a", model: "m1", weight: 3, clientKey: expect.stringMatching(/^ct-\d+$/) },
           { provider: "b", model: "m2", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) },
@@ -528,5 +531,72 @@ describe("combo-workspace-data", () => {
       { ...baseline, alias: "deepseek-v4-flash" },
       { ...baseline, alias: null },
     )).toBe(false);
+  });
+});
+
+
+describe("comboImagesSupported", () => {
+  test("returns false with no targets or incomplete targets", () => {
+    expect(comboImagesSupported([], [])).toBe(false);
+    expect(comboImagesSupported([{ provider: "", model: "" }], [])).toBe(false);
+    expect(comboImagesSupported(
+      [{ provider: "a", model: "vision" }, { provider: "", model: "" }],
+      [{ provider: "a", id: "vision", inputModalities: ["text", "image"] }],
+    )).toBe(false);
+  });
+
+  test("returns true only when every complete target advertises image", () => {
+    const models = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"] },
+      { provider: "b", id: "m2", inputModalities: ["text", "image"] },
+    ];
+    expect(comboImagesSupported(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+      models,
+    )).toBe(true);
+  });
+
+  test("returns false when any target is missing from the catalog or lacks image", () => {
+    const models = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"] },
+      { provider: "b", id: "m2", inputModalities: ["text"] },
+    ];
+    expect(comboImagesSupported(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+      models,
+    )).toBe(false);
+    expect(comboImagesSupported(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "ghost" }],
+      models,
+    )).toBe(false);
+  });
+});
+
+describe("combo imageInput draft persistence", () => {
+  test("parseComboList preserves explicit disabled", () => {
+    const items = parseComboList({
+      combos: [{
+        id: "limited",
+        strategy: "failover",
+        imageInput: "disabled",
+        targets: [{ provider: "a", model: "m1" }],
+      }],
+    });
+    expect(items[0]?.imageInput).toBe("disabled");
+  });
+
+  test("draftEquals distinguishes disabled from auto", () => {
+    const base = emptyDraft("x");
+    const disabled = { ...base, imageInput: "disabled" as const };
+    expect(draftEquals(base, { ...base, imageInput: "auto" })).toBe(true);
+    expect(draftEquals(base, disabled)).toBe(false);
+  });
+
+  test("toPutBody emits imageInput only when disabled", () => {
+    const auto = emptyDraft("x");
+    auto.targets = [{ provider: "a", model: "m1" }];
+    expect(toPutBody(auto).combo).not.toHaveProperty("imageInput");
+    const disabled = { ...auto, imageInput: "disabled" as const };
+    expect(toPutBody(disabled).combo.imageInput).toBe("disabled");
   });
 });

@@ -6,11 +6,11 @@ import {
   linkSync,
   openSync,
   readFileSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { renameAtomicFile } from "../../lib/windows-atomic-replace";
 import {
   ensureLabDirs,
   labAutomationPolicyPath,
@@ -125,7 +125,7 @@ function atomicWriteJson(path: string, payload: unknown): void {
   const tmp = join(dir, `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
   const text = JSON.stringify(payload);
   writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 });
-  renameSync(tmp, path);
+  renameAtomicFile(tmp, path, undefined, "lab-automation");
 }
 
 function basename(path: string): string {

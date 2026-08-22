@@ -1,5 +1,9 @@
+import { modelRecordValue } from "../../reasoning-effort";
+import { modelInList } from "../../types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { PROVIDER_REGISTRY, type ProviderAuthKind } from "../../providers/registry";
+import { PROVIDER_REGISTRY } from "../../providers/registry";
+import { fastPolicyForModel, serviceTierSupportFromPolicy } from "../../providers/service-tier";
+import { resolveProviderAuthTransport } from "../../providers/fastwire";
 import { localFingerprint } from "../../lab/digest";
 import type { LabBehaviorSource, LabBehaviorValues } from "../../lab/live/types";
 
@@ -35,12 +39,58 @@ function behaviorRow(source: LabBehaviorSource, value: unknown) {
   return { source, value };
 }
 
+/**
+ * Membership for the provider's `no*Models`-style lists.
+ *
+ * Delegates to modelInList so the report matches the wire: every runtime gate these
+ * rows describe (openai-chat's sampling/reasoning/tool-choice gates, reasoning-effort's
+ * noReasoningModels) matches through modelInList, which also accepts a bare entry for a
+ * tagged id. ollama-cloud serves `gpt-oss:120b` and lists the bare `gpt-oss`, so an
+ * exact-only check here reported "temperature is sent" on a request that omits it.
+ */
 function includesModel(list: string[] | undefined, modelId: string): boolean {
-  return Array.isArray(list) && list.includes(modelId);
+  return modelInList(list, modelId);
 }
 
+/**
+ * Per-model override lookup for the nine family-aware report rows.
+ *
+ * Delegates to modelRecordValue so the report reads these maps the way the
+ * runtime does -- own properties only, then the pre-colon family, then a
+ * case-folded key. A bare index disagreed on all three: it missed the
+ * `gpt-oss` entry ollama-cloud's `gpt-oss:120b` actually resolves, missed a
+ * differently-cased key, and walked the prototype chain, so a routed model id
+ * of `constructor`/`toString` yielded an Object.prototype function. That last
+ * one made buildBehaviorFingerprintV1 throw ("unsupported value type
+ * function"); the caller catches it (`src/routing/compatibility/subject.ts:125`)
+ * and returns no route, so the subject is silently dropped -- and the linker
+ * contract says implementations do not throw.
+ *
+ * Not every override map belongs here. `modelPreferHostedTools` and
+ * `modelOpenRouterRouting` are exact-own at runtime and go through
+ * `exactOwnValue` below; widening those to the family would be this same bug
+ * with the sign flipped.
+ */
 function modelValue<T>(map: Record<string, T> | undefined, modelId: string): T | undefined {
-  return map?.[modelId];
+  return modelRecordValue(map, modelId);
+}
+
+/**
+ * Exact, own-property lookup for the two maps the runtime resolves that way.
+ *
+ * `modelPreferHostedTools` and `modelOpenRouterRouting` are deliberately exact: the
+ * adapter reads the first through `hasOwnProperty`
+ * (`src/adapters/openai-responses.ts:1001`) and the second through `Object.hasOwn`
+ * (`src/providers/openrouter-routing.ts:89`), and the type documents the first as
+ * "Exact-model hosted tools" (`src/types.ts:1584`). Sending them through
+ * `modelRecordValue` would make the report say a `gpt-oss` entry applies to
+ * `gpt-oss:120b` when the adapter will never apply it -- the same divergence this
+ * file exists to remove, pointed the other way. A bare index is not the answer
+ * either: it walks the prototype chain, which is the bug `modelValue` just fixed.
+ * Neither existing primitive is right for these two, so this is the third one.
+ */
+function exactOwnValue<T>(map: Record<string, T> | undefined, modelId: string): T | undefined {
+  return map !== undefined && Object.hasOwn(map, modelId) ? map[modelId] : undefined;
 }
 
 const CREDENTIAL_HEADER = /(authorization|api[-_]?key|token|secret|credential|cookie)/i;
@@ -56,20 +106,8 @@ function nonCredentialHeaderDigest(
   return localFingerprint("nonCredentialHeaders", rows, installationSalt);
 }
 
-function authTransportFor(
-  effective: OcxProviderConfig,
-  adapter: string,
-  mode: ProviderAuthKind,
-): string {
-  if (mode === "oauth") return "oauth_bearer";
-  if (mode === "forward") return "forwarded_authorization";
-  if (mode === "local") return "none";
-  if (adapter === "anthropic" && effective.apiKeyTransport !== "bearer") return "x_api_key";
-  return "authorization_bearer";
-}
-
 function effectiveOpenRouterRouting(effective: OcxProviderConfig, modelId: string) {
-  return effective.modelOpenRouterRouting?.[modelId] ?? effective.openRouterRouting;
+  return exactOwnValue(effective.modelOpenRouterRouting, modelId) ?? effective.openRouterRouting;
 }
 
 /**
@@ -103,6 +141,7 @@ export function resolveProductionBehaviorValues(
   const project = typeof effective.project === "string" && effective.project ? effective.project : null;
   const location = typeof effective.location === "string" && effective.location ? effective.location : null;
   const nativeLocalExec = effective.nativeLocalExec === "on" || effective.unsafeAllowNativeLocalExec === true;
+  const fastPolicy = fastPolicyForModel(effective, modelId, providerName, "responses", provider);
 
   const values: LabBehaviorValues = {
     "wire.adapter": behaviorRow("provider_config", adapter),
@@ -114,9 +153,23 @@ export function resolveProductionBehaviorValues(
       effective.modelSuffixBracketStrip === true ? "bracket_strip" : "none",
     ),
     "auth.mode": behaviorRow("provider_config", authMode),
-    "auth.transport": behaviorRow("provider_config", authTransportFor(effective, adapter, authMode)),
+    "auth.transport": behaviorRow(
+      "provider_config",
+      resolveProviderAuthTransport(adapter, authMode, effective.apiKeyTransport),
+    ),
     "responses.stateful": behaviorRow("provider_config", effective.statelessResponses !== true),
-    "responses.serviceTier": behaviorRow("provider_config", effective.supportsServiceTier ?? null),
+    "responses.serviceTier": behaviorRow(
+      "provider_config",
+      serviceTierSupportFromPolicy(fastPolicy) ?? null,
+    ),
+    "responses.fastWireKind": behaviorRow(
+      "provider_config",
+      fastPolicy.fastWire?.kind ?? null,
+    ),
+    "responses.fastWireValue": behaviorRow(
+      "provider_config",
+      fastPolicy.fastWire?.canonicalToWire.priority ?? null,
+    ),
     "responses.snapshotRepair": behaviorRow("provider_config", effective.responsesSnapshotRepair === true),
     "responses.itemIdRepair": behaviorRow("provider_config", effective.responsesItemIdRepair ?? null),
     "limits.contextWindow": behaviorRow(
@@ -169,12 +222,13 @@ export function resolveProductionBehaviorValues(
       effective.parallelToolCalls ?? (upstreamProtocol === "openai-chat"),
     ),
     "tools.hostedPreference": behaviorRow("provider_config", {
-      tools: modelValue(effective.modelPreferHostedTools, modelId) ?? [],
+      tools: exactOwnValue(effective.modelPreferHostedTools, modelId) ?? [],
     }),
     "tools.builtinNameEscaping": behaviorRow("provider_config", effective.escapeBuiltinToolNames === true),
     "cache.forwarding": behaviorRow("provider_config", effective.promptCacheKey === true),
     "cache.retention": behaviorRow("global_config", config.cacheRetention ?? "short"),
     "anthropic.eofPolicy": behaviorRow("provider_config", effective.anthropicEofTolerance === true ? "tolerant" : "strict"),
+    "openai-chat.eofPolicy": behaviorRow("provider_config", effective.openaiChatEofTolerance === true ? "tolerant" : "strict"),
     "google.mode": behaviorRow("provider_config", effective.googleMode ?? null),
     "google.projectFingerprint": behaviorRow(
       "provider_config",

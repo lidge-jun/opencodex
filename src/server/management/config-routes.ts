@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -37,7 +37,7 @@ import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import {
@@ -70,6 +70,13 @@ import {
   visionDescriberRejection,
   visionModelOptionsFor,
 } from "./vision-sidecar-options";
+import {
+  webSearchCandidateRows,
+  webSearchModelIsRejected,
+  webSearchModelOptionsFrom,
+  webSearchModelRejection,
+} from "./web-search-sidecar-options";
+import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
@@ -85,6 +92,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { withProviderServiceTierDTO } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
@@ -117,6 +125,100 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   return { model, reasoning, models };
 }
 
+/** One client's outcome from a fan-out sync. Absent from the list means "left alone". */
+interface ClientIntegrationSyncOutcome {
+  readonly client: "grok" | "claude-desktop" | "mcode";
+  readonly ok: boolean;
+  readonly changed?: boolean;
+  readonly reason?: string;
+}
+
+/**
+ * Re-inject native clients that are switched ON and file integrations whose
+ * OpenCodex ownership record is the operator's durable opt-in.
+ *
+ * Only Codex used to run here, so a catalog change reached Codex and nothing else: a Grok
+ * fence or a written Desktop profile kept the context windows it was created with until the
+ * next `ocx start`. The startup path already gates each client on its own toggle
+ * (`src/cli/index.ts`), and this is that same fan-out for the on-demand command.
+ *
+ * A client that is OFF or never connected is omitted from the result rather than reported as skipped — the
+ * caller has to be able to tell "not touched" from "tried and failed". A client that fails
+ * does not fail the sync: Codex is the one that matters for routing, and a broken Grok file
+ * should surface as a warning, not as a 500 on a command that did its main job.
+ */
+async function syncEnabledClientIntegrations(
+  port: number | undefined,
+  config: OcxConfig,
+): Promise<ClientIntegrationSyncOutcome[]> {
+  if (port === undefined) return [];
+  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
+  const out: ClientIntegrationSyncOutcome[] = [];
+
+  if (grokIntegrationEnabled(config)) {
+    try {
+      const { syncGrokConfig } = await import("../../grok/sync");
+      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      out.push(r.ok
+        ? { client: "grok", ok: true, changed: r.changed === true }
+        : { client: "grok", ok: false, reason: r.message });
+    } catch (error) {
+      out.push({ client: "grok", ok: false, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  if (claudeDesktopIntegrationEnabled(config)) {
+    try {
+      const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
+      const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
+      const { fetchAllModels } = await import("../management-api");
+      const routed = filterCatalogVisibleModels(await fetchAllModels(config), config)
+        .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
+      const r = writeDesktop3pConfig(
+        port,
+        [...desktopVisibleNativeSlugs(config)],
+        routed,
+        config.apiKeys?.[0]?.key,
+        "static",
+        config.claudeCode?.desktopProfile,
+        nativeContextLimits(config),
+      );
+      out.push(r.written
+        ? { client: "claude-desktop", ok: true, changed: true }
+        : { client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
+    } catch (error) {
+      out.push({ client: "claude-desktop", ok: false, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  try {
+    const { refreshOwnedIntegration } = await import("../../integrations/owned-refresh");
+    const result = await refreshOwnedIntegration({
+      clientId: "mcode",
+      models: async () => {
+        const { loadExportModels } = await import("./model-rows");
+        return loadExportModels(config);
+      },
+      config,
+      port,
+    });
+    if (result) {
+      out.push(result.ok
+        ? {
+            client: "mcode",
+            ok: true,
+            changed: result.changed === true,
+            ...(result.reason ? { reason: result.reason } : {}),
+          }
+        : { client: "mcode", ok: false, reason: result.reason });
+    }
+  } catch (error) {
+    out.push({ client: "mcode", ok: false, reason: error instanceof Error ? error.message : String(error) });
+  }
+
+  return out;
+}
+
 function publicVisionSidecarSettings(
   config: OcxConfig,
   vision: Awaited<ReturnType<typeof sidecarVisionResponseSettings>>,
@@ -134,8 +236,9 @@ function publicVisionSidecarSettings(
 
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
   if (url.pathname === "/api/config" && req.method === "GET") {
-    return jsonResponse(safeConfigDTO(config));
+    return jsonResponse(withProviderServiceTierDTO(safeConfigDTO(config), config));
   }
 
   if (url.pathname === "/api/config" && req.method === "PUT") {
@@ -189,7 +292,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
-      startupHealth: await getCachedStartupHealth(config),
+      startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,
@@ -211,7 +314,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/startup-health" && req.method === "GET") {
-    return jsonResponse(await getCachedStartupHealth(config));
+    return jsonResponse(await readStartupHealth(config));
   }
 
   if (url.pathname === "/api/startup-action" && req.method === "POST") {
@@ -368,7 +471,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
       catalogRefreshPending,
-      startupHealth: await getCachedStartupHealth(config),
+      startupHealth: await readStartupHealth(config),
     });
   }
 
@@ -385,10 +488,19 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
     const runtime = readRuntimePort(process.pid);
-    const result = await syncModelsToCodex(runtime?.port, loadConfig(), null);
+    const config = loadConfig();
+    const result = await syncModelsToCodex(runtime?.port, config, null);
+    // A sync used to stop here, so a Grok fence or a Desktop profile kept whatever
+    // context windows it was written with while the Codex catalog moved on. The
+    // startup path already fans out to every enabled client; this is the same fan-out
+    // for the on-demand command. Codex goes first because the others read its catalog.
+    const integrations = result.status === "refused"
+      ? []
+      : await syncEnabledClientIntegrations(runtime?.port, config);
     const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
     return jsonResponse({
       ...attachStaleAppServerHint(result),
+      ...(integrations.length > 0 ? { integrations } : {}),
       ...(result.ok ? {} : { error: result.message }),
     }, status);
   }
@@ -432,14 +544,19 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
+    const webSearchCandidates = await webSearchCandidateRows(config);
     return jsonResponse({
       webSearch: {
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
+        ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
+      // ALWAYS present: the dashboard treats an omitted list as "no filter" and
+      // falls back to the full model union, so empty must be [] (review B3).
+      webSearchModels: webSearchModelOptionsFrom(config, webSearchCandidates),
     });
   }
 
@@ -452,7 +569,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown };
+      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -462,9 +579,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         timeoutMs?: unknown;
       };
     };
+    const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
-      && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
-      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, or null" }, 400);
+      && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
+      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
+    }
+    if (body.webSearch?.model !== undefined && typeof body.webSearch.model !== "string") {
+      return jsonResponse({ error: "webSearch.model must be a string" }, 400);
     }
     if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
       && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
@@ -521,21 +642,92 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
 
     if (body.webSearch) {
-      config.webSearchSidecar = { ...config.webSearchSidecar };
+      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
+      const effectiveBackend = body.webSearch.backend === "anthropic"
+        ? "anthropic"
+        : body.webSearch.backend === "openai" || body.webSearch.backend === null
+          ? "openai"
+          : config.webSearchSidecar?.backend ?? "openai";
+      const effectiveModel = typeof body.webSearch.model === "string"
+        ? body.webSearch.model || undefined
+        : config.webSearchSidecar?.model;
+      if (pairTouched && effectiveModel) {
+        const candidates = await webSearchCandidateRows(config);
+        if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
+          return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
+        }
+      }
+      const webSearchCandidate = { ...config.webSearchSidecar };
       if (typeof body.webSearch.model === "string") {
-        if (body.webSearch.model === "") delete config.webSearchSidecar.model;
-        else config.webSearchSidecar.model = body.webSearch.model;
+        if (body.webSearch.model === "") delete webSearchCandidate.model;
+        else webSearchCandidate.model = body.webSearch.model;
       }
-      if (body.webSearch.backend === null) delete config.webSearchSidecar.backend;
-      else if (body.webSearch.backend === "openai" || body.webSearch.backend === "anthropic") {
-        config.webSearchSidecar.backend = body.webSearch.backend;
+      if (body.webSearch.backend === null) delete webSearchCandidate.backend;
+      else if (WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
+        webSearchCandidate.backend = body.webSearch.backend as typeof WEB_SEARCH_BACKENDS_UNION[number];
       }
-      if (typeof body.webSearch.reasoning === "string") config.webSearchSidecar.reasoning = body.webSearch.reasoning;
+      if (typeof body.webSearch.reasoning === "string") webSearchCandidate.reasoning = body.webSearch.reasoning;
+      // Operator secret for the exa backend: string sets, empty string clears. The GET
+      // payload deliberately never carries it and redact.ts strips the key from logs.
+      if (typeof body.webSearch.exaApiKey === "string") {
+        if (body.webSearch.exaApiKey === "") delete webSearchCandidate.exaApiKey;
+        else webSearchCandidate.exaApiKey = body.webSearch.exaApiKey;
+      }
+      // Opt-in x_search block (L7): null clears; an object is doc-validated before persisting.
+      if (body.webSearch.xSearch === null) delete webSearchCandidate.xSearch;
+      else if (body.webSearch.xSearch !== undefined) {
+        if (!isPlainRecord(body.webSearch.xSearch)) {
+          return jsonResponse({ error: "webSearch.xSearch must be an object or null" }, 400);
+        }
+        const x = body.webSearch.xSearch as Record<string, unknown>;
+        const allowedXSearchKeys = new Set([
+          "enabled",
+          "allowedXHandles",
+          "excludedXHandles",
+          "fromDate",
+          "toDate",
+        ]);
+        const unknownKey = Object.keys(x).find(key => !allowedXSearchKeys.has(key));
+        if (unknownKey !== undefined) {
+          return jsonResponse({ error: `webSearch.xSearch.${unknownKey} is not a supported field` }, 400);
+        }
+        if (x.enabled !== undefined && typeof x.enabled !== "boolean") {
+          return jsonResponse({ error: "webSearch.xSearch.enabled must be a boolean" }, 400);
+        }
+        for (const field of ["allowedXHandles", "excludedXHandles"] as const) {
+          const value = x[field];
+          if (value !== undefined && (!Array.isArray(value) || !value.every(handle => typeof handle === "string"))) {
+            return jsonResponse({ error: `webSearch.xSearch.${field} must be an array of strings` }, 400);
+          }
+        }
+        for (const field of ["fromDate", "toDate"] as const) {
+          if (x[field] !== undefined && typeof x[field] !== "string") {
+            return jsonResponse({ error: `webSearch.xSearch.${field} must be an ISO-8601 date (YYYY-MM-DD)` }, 400);
+          }
+        }
+        const candidate = {
+          ...(x.enabled === true ? { enabled: true } : {}),
+          ...(x.allowedXHandles !== undefined ? { allowedXHandles: x.allowedXHandles as string[] } : {}),
+          ...(x.excludedXHandles !== undefined ? { excludedXHandles: x.excludedXHandles as string[] } : {}),
+          ...(x.fromDate !== undefined ? { fromDate: x.fromDate as string } : {}),
+          ...(x.toDate !== undefined ? { toDate: x.toDate as string } : {}),
+        };
+        const invalid = validateXaiSearchOptions({
+          xSearch: candidate.enabled,
+          allowedXHandles: candidate.allowedXHandles,
+          excludedXHandles: candidate.excludedXHandles,
+          fromDate: candidate.fromDate,
+          toDate: candidate.toDate,
+        });
+        if (invalid) return jsonResponse({ error: `webSearch.xSearch invalid: ${invalid}` }, 400);
+        webSearchCandidate.xSearch = candidate;
+      }
       if (typeof body.webSearch.streamRoutedModelOutput === "boolean") {
         // `false` is the default — drop the key so config files stay minimal.
-        if (body.webSearch.streamRoutedModelOutput) config.webSearchSidecar.streamRoutedModelOutput = true;
-        else delete config.webSearchSidecar.streamRoutedModelOutput;
+        if (body.webSearch.streamRoutedModelOutput) webSearchCandidate.streamRoutedModelOutput = true;
+        else delete webSearchCandidate.streamRoutedModelOutput;
       }
+      config.webSearchSidecar = webSearchCandidate;
     }
     if (body.vision) {
       config.visionSidecar = { ...config.visionSidecar };
@@ -566,15 +758,21 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     saveConfigPreservingClaudeCode(config);
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
+    const savedWebSearchCandidates = await webSearchCandidateRows(config);
     return jsonResponse({
       ok: true,
       webSearch: {
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
+        ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
+      // Echoed for the same reason GET always carries it: the dashboard rebuilds
+      // its sidecar state from this body, and an omitted key reads as "old
+      // server" and falls back to the full union (review F1).
+      webSearchModels: webSearchModelOptionsFrom(config, savedWebSearchCandidates),
     });
   }
 
@@ -615,27 +813,22 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/orchestration" && req.method === "GET") {
-    const { homedir } = await import("node:os");
     const { join } = await import("node:path");
-    const codexConfigPath = join(homedir(), ".codex", "config.toml");
-    let tomlText = "";
-    try {
-      tomlText = readFileSync(codexConfigPath, "utf-8");
-    } catch {}
-
-    let planner = "root";
-    let executor = "github-copilot/gpt-4.1-mini";
-    let judge = "anthropic/claude-opus-5";
-
-    const plannerMatch = tomlText.match(/\[agents\.codex-orchestration-planner\][\s\S]*?model\s*=\s*"([^"]+)"/);
-    const executorMatch = tomlText.match(/\[agents\.codex-orchestration-executor\][\s\S]*?model\s*=\s*"([^"]+)"/);
-    const judgeMatch = tomlText.match(/\[agents\.codex-orchestration-judge\][\s\S]*?model\s*=\s*"([^"]+)"/);
-
-    if (plannerMatch) planner = plannerMatch[1]!;
-    if (executorMatch) executor = executorMatch[1]!;
-    if (judgeMatch) judge = judgeMatch[1]!;
-
-    return jsonResponse({ planner, executor, judge });
+    // The v2 configure_orchestration.py script persists roles as standalone custom
+    // agents under <codex-home>/agents, not as [agents.*] config.toml sections.
+    const readAgentModel = (fileName: string): string | null => {
+      try {
+        const text = readFileSync(join(resolveCodexHomeDir(), "agents", fileName), "utf-8");
+        return text.match(/model\s*=\s*"([^"]+)"/)?.[1] ?? null;
+      } catch {
+        return null;
+      }
+    };
+    return jsonResponse({
+      planner: "root",
+      executor: readAgentModel("codex-orchestration-executor.toml") ?? "github-copilot/gpt-4.1-mini",
+      judge: readAgentModel("codex-orchestration-advisor.toml") ?? "anthropic/claude-opus-5",
+    });
   }
 
   if (url.pathname === "/api/orchestration" && req.method === "PUT") {
@@ -643,11 +836,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     const { planner, executor, judge } = raw;
 
-    const os = await import("node:os");
     const fs = await import("node:fs");
     const pathLib = await import("node:path");
-    const homeDir = os.homedir().replace(/\\/g, "/");
-    const pluginsDir = `${homeDir}/.codex/plugins/cache/codex-orchestration/codex-orchestration`;
+    const homeDir = resolveCodexHomeDir().replace(/\\/g, "/");
+    const pluginsDir = `${homeDir}/plugins/cache/codex-orchestration/codex-orchestration`;
     let scriptPath = "";
     try {
       const versions = fs.readdirSync(pluginsDir);
@@ -657,7 +849,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
     } catch {}
     if (!scriptPath) {
-      scriptPath = `${homeDir}/.codex/plugins/cache/codex-orchestration/codex-orchestration/0.9.3/skills/codex-orchestration/scripts/configure_orchestration.py`;
+      scriptPath = `${homeDir}/plugins/cache/codex-orchestration/codex-orchestration/0.9.3/skills/codex-orchestration/scripts/configure_orchestration.py`;
     }
 
     const candidates = ["python", "py", "python3"];
@@ -685,6 +877,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
     for (const pythonCmd of candidates) {
       const args = [pythonCmd, scriptPath];
+      // Persist roles under the user's Codex home, never under the process cwd
+      // (the app can be launched with cwd C:\Windows\System32, which is not writable).
+      args.push("--scope", "personal");
+      args.push("--codex-home", homeDir);
       args.push("--executor-model", executor || "github-copilot/gpt-4.1-mini");
       args.push("--executor-effort", "low");
       if (judge && judge !== "none") {
@@ -738,7 +934,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     config.favorites = models;
     saveConfigPreservingClaudeCode(config);
-    await refreshCodexCatalogBestEffort();
+    await convergeCodexCatalog();
     return jsonResponse({ ok: true, models: config.favorites });
   }
 

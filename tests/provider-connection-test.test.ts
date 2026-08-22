@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setFetchCursorUsableModelsForTests } from "../src/adapters/cursor/live-models";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
 import { OAUTH_PROVIDERS } from "../src/oauth";
@@ -21,6 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setFetchCursorUsableModelsForTests(null);
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -51,6 +53,61 @@ async function probe(config: OcxConfig, name: string): Promise<{ status: number;
 }
 
 describe("POST /api/providers/test (WP040 connectivity probe)", () => {
+  test("Cursor probes GetUsableModels and reports the live model count", async () => {
+    const calls: { apiKey: string; baseUrl?: string }[] = [];
+    setFetchCursorUsableModelsForTests(async options => {
+      calls.push({ apiKey: options.apiKey, baseUrl: options.baseUrl });
+      return { ok: true, models: ["gpt-5.6-high", "claude-4.6-opus-high"] };
+    });
+    await saveCredential("cursor", {
+      access: "cursor-access-token",
+      refresh: "cursor-refresh-token",
+      expires: Date.now() + 3_600_000,
+    });
+    const config = baseConfig({
+      cursor: { ...structuredClone(OAUTH_PROVIDERS.cursor.providerConfig) },
+    });
+
+    const { body } = await probe(config, "cursor");
+
+    expect(body).toMatchObject({ ok: true, models: 2, message: "Connected. 2 models." });
+    expect(calls).toEqual([{ apiKey: "cursor-access-token", baseUrl: "https://api2.cursor.sh" }]);
+  });
+
+  test("Cursor discovery failures are surfaced with their classification", async () => {
+    setFetchCursorUsableModelsForTests(async () => ({ ok: false, error: "http" }));
+    await saveCredential("cursor", {
+      access: "cursor-access-token",
+      refresh: "cursor-refresh-token",
+      expires: Date.now() + 3_600_000,
+    });
+    const config = baseConfig({
+      cursor: { ...structuredClone(OAUTH_PROVIDERS.cursor.providerConfig) },
+    });
+
+    const { body } = await probe(config, "cursor");
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("cursor discovery http");
+  });
+
+  test("disabled Cursor fails fast without probing discovery", async () => {
+    let probes = 0;
+    setFetchCursorUsableModelsForTests(async () => {
+      probes += 1;
+      return { ok: true, models: ["should-not-be-used"] };
+    });
+    const config = baseConfig({
+      cursor: { ...structuredClone(OAUTH_PROVIDERS.cursor.providerConfig), disabled: true },
+    });
+
+    const { body } = await probe(config, "cursor");
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("Provider is disabled");
+    expect(probes).toBe(0);
+  });
+
   test("unreachable upstream reports ok:false with the failure reason", async () => {
     globalThis.fetch = (async () => { throw new TypeError("connection refused"); }) as typeof fetch;
     const config = baseConfig({

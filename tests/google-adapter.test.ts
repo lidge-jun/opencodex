@@ -278,3 +278,148 @@ describe("google adapter — tool_choice on the wire", () => {
     });
   });
 });
+
+describe("google adapter — direct -tiered wire renames", () => {
+  function renamedParsed(modelId: string): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: {},
+      context: { messages: [{ role: "user", content: "hi" }], tools: [] },
+    } as unknown as OcxParsedRequest;
+  }
+
+  function identityParsed(modelId: string): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: {},
+      context: {
+        systemPrompt: ["You are Codex, a coding agent based on GPT-5."],
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+      },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("default maps the picker id to the -tiered wire id", async () => {
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const { url } = await createGoogleAdapter(provider).buildRequest(renamedParsed(modelId));
+      expect(url).toContain(`/v1beta/models/${modelId}-tiered:generateContent`);
+    }
+  });
+
+  test("directGeminiWireRenames: false keeps the bare wire id", async () => {
+    const adapter = createGoogleAdapter({ ...provider, directGeminiWireRenames: false });
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const { url } = await adapter.buildRequest(renamedParsed(modelId));
+      expect(url).toContain(`/v1beta/models/${modelId}:generateContent`);
+    }
+  });
+
+  test("directGeminiWireRenames: true still maps to the -tiered wire id", async () => {
+    const adapter = createGoogleAdapter({ ...provider, directGeminiWireRenames: true });
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const request = await adapter.buildRequest(identityParsed(modelId));
+      const { url } = request;
+      expect(url).toContain(`/v1beta/models/${modelId}-tiered:generateContent`);
+      const body = JSON.parse(request.body) as {
+        systemInstruction?: { parts?: Array<{ text?: string }> };
+      };
+      const systemText = body.systemInstruction?.parts?.[0]?.text ?? "";
+      expect(systemText).toContain(`powered by the ${modelId}`);
+      expect(systemText).not.toContain(`${modelId}-tiered`);
+    }
+  });
+
+  test("directGeminiWireRenames does not affect Cloud Code Assist requests", async () => {
+    const ccaProvider = {
+      ...provider,
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      project: "proj-123",
+    } as const;
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const parsed = renamedParsed(modelId);
+      const defaultRequest = await createGoogleAdapter(ccaProvider).buildRequest(parsed);
+      const optOutRequest = await createGoogleAdapter({ ...ccaProvider, directGeminiWireRenames: false })
+        .buildRequest(parsed);
+      expect(optOutRequest.url).toBe(defaultRequest.url);
+      // The envelope's requestId/sessionId are minted per request; compare the wire model only.
+      const defaultModel = JSON.parse(defaultRequest.body).model as string;
+      const optOutModel = JSON.parse(optOutRequest.body).model as string;
+      expect(optOutModel).toBe(defaultModel);
+    }
+  });
+
+  test("Cloud Code Assist identity follows a migrated wire model", async () => {
+    const ccaProvider = {
+      ...provider,
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      project: "proj-123",
+    } as const;
+    const request = await createGoogleAdapter(ccaProvider).buildRequest(identityParsed("gemini-3.6-flash"));
+    const envelope = JSON.parse(request.body) as {
+      model: string;
+      request: { systemInstruction?: { parts?: Array<{ text?: string }> } };
+    };
+    const systemText = envelope.request.systemInstruction?.parts?.[0]?.text ?? "";
+
+    expect(envelope.model).toBe("gemini-3.7-flash-tiered");
+    expect(systemText).toContain("powered by the gemini-3.7-flash-tiered");
+    expect(systemText).not.toContain("powered by the gemini-3.6-flash.");
+  });
+
+  test("directGeminiWireRenames does not affect Vertex requests", async () => {
+    const vertexProvider = { ...provider, googleMode: "vertex" as const };
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const parsed = renamedParsed(modelId);
+      const defaultRequest = await createGoogleAdapter(vertexProvider).buildRequest(parsed);
+      const optOutRequest = await createGoogleAdapter({ ...vertexProvider, directGeminiWireRenames: false })
+        .buildRequest(parsed);
+      expect(optOutRequest.url).toBe(defaultRequest.url);
+      expect(optOutRequest.body).toBe(defaultRequest.body);
+    }
+  });
+
+  // The test above compares the two settings against each other, which stays true even
+  // if Vertex stopped preserving the requested id — both sides would be wrong together.
+  // These two assert what Vertex actually sends, so a regression in Vertex's wire id or
+  // its identity line fails here instead of reaching a user.
+  //
+  // An ablation puts the `googleMode === "vertex"` arm itself in its place: deleting it
+  // leaves all 24 tests green, because Vertex builds its own URL from `parsed.modelId`
+  // (see the `aiplatform.googleapis.com` paths) and `identityModelId` only special-cases
+  // Cloud Code Assist, so `routedModelId` never reaches Vertex either way. The arm is
+  // defensive, not load-bearing — worth keeping as a guard against a future refactor
+  // that routes Vertex through the shared URL builder, but no test can prove it fires
+  // today, and pretending otherwise would be the kind of unfalsifiable coverage this
+  // comment exists to prevent.
+  test("Vertex sends the requested model id, never the -tiered rename", async () => {
+    const vertexProvider = { ...provider, googleMode: "vertex" as const };
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      for (const renames of [undefined, true, false]) {
+        const adapter = createGoogleAdapter(
+          renames === undefined ? vertexProvider : { ...vertexProvider, directGeminiWireRenames: renames },
+        );
+        const { url } = await adapter.buildRequest(renamedParsed(modelId));
+        expect(url).toContain(`/models/${modelId}:generateContent`);
+        expect(url).not.toContain("-tiered");
+      }
+    }
+  });
+
+  test("Vertex identity names the requested model, not a renamed wire id", async () => {
+    const vertexProvider = { ...provider, googleMode: "vertex" as const };
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const request = await createGoogleAdapter(vertexProvider).buildRequest(identityParsed(modelId));
+      const body = JSON.parse(request.body) as {
+        systemInstruction?: { parts?: Array<{ text?: string }> };
+      };
+      const systemText = body.systemInstruction?.parts?.[0]?.text ?? "";
+      expect(systemText).toContain(`powered by the ${modelId}`);
+      expect(systemText).not.toContain("-tiered");
+    }
+  });
+});

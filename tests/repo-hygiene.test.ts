@@ -153,7 +153,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
    * narrow and path-pinned — a NEW unit gets no exemption, so the check still fires
    * for real triage.
    *
-   * The unit closed and moved to `_fin/` (devlog/_plan/260805_devlog_fin_sweep), which
+   * The unit closed and moved to `_fin/` (devlog/_fin/260805_devlog_fin_sweep), which
    * makes this exemption redundant: the scan below reads `_plan/` only. It is repointed
    * rather than deleted so the reason survives — if the unit ever returns to `_plan/`,
    * or a reader asks why the tripwire tolerates a document full of its own trigger

@@ -39,6 +39,51 @@ const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
  */
 const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 8_000;
 
+/**
+ * The same budget, widened for a contended CI runner.
+ *
+ * 8s is a generous ceiling for `powershell.exe -Command` on a real desktop and is not one
+ * on a GitHub Windows runner executing a quarter of this suite: the composed-acceptance
+ * cases fail there with "Windows effective-account lookup timed out" while the child is
+ * still starting. That is runner contention, not a hung lookup, and the budget exists to
+ * bound the latter.
+ *
+ * Gated on `CI` alone. A user's machine keeps the 8s ceiling exactly as before, so the
+ * recoverable-refusal contract this budget protects is unchanged where it matters.
+ */
+const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS = 30_000;
+
+function windowsIdentityLookupTimeoutMs(): number {
+  return process.env.CI === "true"
+    ? WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS
+    : WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;
+}
+
+/**
+ * FOLDERID_LocalAppData, and the flag that makes the lookup ignore the caller's
+ * environment.
+ *
+ * The obvious spelling, .NET's
+ * `GetFolderPath(SpecialFolder.LocalApplicationData)`, is unusable here: on
+* Windows it resolves through `USERPROFILE`, and when the profile named there has
+ * no local AppData directory on disk it returns an EMPTY STRING rather than an
+ * error. Any
+* caller that redirected `USERPROFILE` (the test sandbox does, and so does a
+ * service account whose profile has not been materialized) therefore refused every
+ * coordinator lookup with "returned an empty value", which is the exact
+ * environment dependence this module exists to eliminate.
+ *
+ * `SHGetKnownFolderPath` with a null token and `KF_FLAG_DEFAULT_PATH` reads the
+ * known-folder registration for the effective token instead: it returns the real
+ * per-user path whether or not the directory exists, and it is unaffected by
+ * `USERPROFILE`, `LOCALAPPDATA`, `HOMEDRIVE`, or `HOMEPATH`. A non-null token argument
+* is NOT equivalent: passing (HANDLE)-1 resolves the DEFAULT USER profile
+ * (the built-in "Default" profile), which would key coordination to a namespace
+ * no real account writes to.
+*/
+const WINDOWS_LOCAL_APPDATA_FOLDER_ID = "F1B32785-6FBA-4FCF-9D55-7B8E7F157091";
+const WINDOWS_KF_FLAG_DEFAULT_PATH = "0x00000400";
+
 export class CodexUserIdentityRefusal extends Error {
   readonly code = "CODEX_USER_IDENTITY_REFUSED";
 
@@ -83,7 +128,7 @@ function windowsIdentityPowerShellSpawnOptions(): {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    timeout: WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS,
+    timeout: windowsIdentityLookupTimeoutMs(),
     windowsHide: true,
   };
 }
@@ -91,6 +136,42 @@ function windowsIdentityPowerShellSpawnOptions(): {
 /** Test-only readback of the trusted executable and static arguments (#1278). */
 export function windowsIdentityPowerShellCommandForTests(expression: string): string[] {
   return windowsIdentityPowerShellCommand(expression);
+}
+
+/**
+ * PowerShell expression yielding the effective account's local AppData path.
+ *
+ * P/Invoke rather than a .NET convenience wrapper, for the reason recorded on
+ * WINDOWS_LOCAL_APPDATA_FOLDER_ID: the wrapper follows `USERPROFILE` and answers
+ * an empty string for a profile whose directory is absent, which is precisely
+ * the environment dependence this module refuses to inherit. The type is added
+ * under a unique name per process because `Add-Type` cannot redefine one.
+ *
+ * The whole sequence is wrapped in one `$(...)` subexpression because the caller
+ * substitutes this text into `[string](<expression>)`; several statements
+ * spliced in bare would close that cast's parenthesis early and fail to parse.
+ */
+function windowsLocalAppDataExpression(): string {
+  const signature =
+    '[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int '
+    + 'SHGetKnownFolderPath(ref System.Guid id, uint flags, System.IntPtr token, out System.IntPtr path);';
+  const statements = [
+    `$ocxShell = Add-Type -MemberDefinition '${signature}'`
+      + " -Name OcxKnownFolder -Namespace OcxIdentity -PassThru",
+    `$ocxFolderId = [System.Guid]'${WINDOWS_LOCAL_APPDATA_FOLDER_ID}'`,
+    "$ocxPathPtr = [System.IntPtr]::Zero",
+    "$ocxHr = $ocxShell::SHGetKnownFolderPath([ref]$ocxFolderId, "
+      + `${WINDOWS_KF_FLAG_DEFAULT_PATH}, [System.IntPtr]::Zero, [ref]$ocxPathPtr)`,
+    "if ($ocxHr -ne 0) { throw 'SHGetKnownFolderPath failed' }",
+    "try { [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ocxPathPtr) }"
+      + " finally { [System.Runtime.InteropServices.Marshal]::FreeCoTaskMem($ocxPathPtr) }",
+  ];
+  return `$(${statements.join("; ")})`;
+}
+
+/** Test-only readback of the environment-independent known-folder expression. */
+export function windowsLocalAppDataExpressionForTests(): string {
+  return windowsLocalAppDataExpression();
 }
 
 /** Test-only readback of the spawn options shared by the identity lookups (#1278). */
@@ -122,7 +203,31 @@ export function decodeWindowsIdentityPowerShellOutputForTests(output: Uint8Array
   return decodeWindowsIdentityPowerShellOutput(output);
 }
 
+/**
+ * Per-process memo for the Windows lookups.
+ *
+ * Both values -- the effective token's SID and its known-folder local AppData --
+ * are fixed for the lifetime of a process: neither can change without a new logon
+ * token, and the lookups deliberately ignore the environment, so nothing a caller
+ * does between two calls can alter the answer. Each call otherwise spawns a fresh
+ * PowerShell, roughly 150ms for the SID and 310ms for the folder, and the
+ * coordinator asks for both on every config write and lock acquisition. That cost
+ * pushed real multi-process injection tests past their budget while proving
+ * nothing: the second spawn re-derives what the first already established.
+ *
+ * Only successful lookups are memoized, so a transient failure cannot pin the
+ * process into a permanently refusing state.
+ */
+const windowsIdentityValueCache = new Map<string, string>();
+
+/** Test-only reset so a suite can force a fresh lookup. */
+export function resetWindowsIdentityValueCacheForTests(): void {
+  windowsIdentityValueCache.clear();
+}
+
 function powershellValue(expression: string): string {
+  const memoized = windowsIdentityValueCache.get(expression);
+  if (memoized !== undefined) return memoized;
   let command: string[];
   try {
     command = windowsIdentityPowerShellCommand(expression);
@@ -145,6 +250,7 @@ function powershellValue(expression: string): string {
   if (result.exitCode !== 0) refuse("Windows effective-account lookup failed.");
   const value = decodeWindowsIdentityPowerShellOutput(result.stdout ?? Buffer.alloc(0));
   if (!value) refuse("Windows effective-account lookup returned an empty value.");
+  windowsIdentityValueCache.set(expression, value);
   return value;
 }
 
@@ -265,9 +371,7 @@ export function probeCodexCoordinatorNamespace(identity: UserIdentity): Coordina
   }
 
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(
-    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-  );
+  const localAppData = powershellValue(windowsLocalAppDataExpression());
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
   const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());
   let entry;
@@ -297,9 +401,7 @@ export function probeCodexCoordinatorNamespace(identity: UserIdentity): Coordina
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(
-    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-  );
+  const localAppData = powershellValue(windowsLocalAppDataExpression());
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 
   // The SID and known-folder values come from the effective token/.NET OS APIs,

@@ -46,20 +46,43 @@ import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
-import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
+import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
-import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
-import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
+import {
+  shouldSyncGrokOnStart,
+  syncCodexOnStartIfEnabled,
+} from "../codex/desired-state";
+import {
+  reconcileClientStartupBeforeReady,
+  syncClaudeAgentDefsAtProxyStartup,
+} from "./claude-agent-startup-sync";
+import {
+  grokSyncFailureMessage,
+  reconcileEnsureDesiredIntegrations,
+} from "./ensure-desired-integrations";
+
+/**
+ * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
+ * `claude-env.sh` from every new interactive shell, pointing at a proxy or a CLI that may no
+ * longer exist. `reconcileShellHook` already reports `state: "failed"`, but both call sites
+ * discarded it, so the one outcome the user has to act on was the one they never saw.
+ */
+function reportShellHookFailure(result: { state: "installed" | "absent" | "failed"; reason?: string }): void {
+  if (result.state !== "failed") return;
+  console.warn(`   Claude shell hook not reconciled${result.reason ? `: ${result.reason}` : ""}`);
+  console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
+}
 
 
 import { removeOwnedConfigState } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
@@ -104,28 +127,13 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
   return null;
 }
 
-/**
- * A Grok fence sync that throws is best-effort by design — it must never block startup.
- * Reporting nothing, however, is what lets a STALE fence survive: `~/.grok/config.toml`
- * keeps naming whatever port the last successful sync wrote, and once that listener is
- * gone every grok turn retries against a refused connection while our own log stays
- * silent (2026-07-27 field report: 8 entries pinned to a dead 127.0.0.1:4179).
- * So say what failed and name the single command that repairs it.
- */
-function grokSyncFailureMessage(err: unknown): string {
-  const detail = err instanceof Error ? err.message : String(err);
-  return `Grok Build config sync failed: ${detail}. `
-    + "~/.grok/config.toml may still point at a previous proxy port — "
-    + "run 'ocx ensure' (or apply from the dashboard's Grok page) to repoint it.";
-}
-
 /** Argv for detached `start`, optionally hard-pinning the listen port. */
 function startArgv(port?: number): string[] {
-  const args = [process.argv[1], "start"];
+  const args = ["start"];
   if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
     args.push("--port", String(Math.trunc(port)));
   }
-  return args;
+  return selfLaunchArgv(args);
 }
 
 async function chooseListenPort(requestedPort?: number): Promise<number> {
@@ -365,17 +373,22 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   // System-wide env injection AFTER signal handlers are registered (crash safety:
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
-  await injectSystemEnv(port, config).catch(() => {});
-  // Auto-install .zshrc hook (idempotent — skips if already present).
-  installShellHook();
-
+  const systemEnv = await injectSystemEnv(port, config).catch(() => ({ injected: false }));
+  // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
+  // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
+  reportShellHookFailure(reconcileShellHook(systemEnv.injected));
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
-  // Post-startup sync drives the readiness gate AND the #1046 stale app-server
-  // warning. `syncCodexOnStartIfEnabled` respects the Codex integration toggle
-  // (OFF → no sync) and reports whether anything was written; the readiness gate
-  // observes the real sync outcome (ok/warning) so /readyz never advertises a
-  // half-synced proxy as ready while /healthz stays live.
-  const startupSync = await syncCodexOnStartIfEnabled(port, config, undefined, readinessGate);
+  // Codex sync owns the ready/failed verdict, but its successful transition is
+  // deferred until the best-effort Claude roster reconciliation settles. This
+  // keeps /readyz closed across both startup writes without making an optional
+  // Claude integration failure prevent the proxy from starting.
+  const startupSync = await reconcileClientStartupBeforeReady(
+    readinessGate,
+    gate => syncCodexOnStartIfEnabled(port, config, undefined, gate),
+    () => systemEnv.injected
+      ? Promise.resolve(null)
+      : syncClaudeAgentDefsAtProxyStartup(config, port),
+  );
   if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
@@ -454,15 +467,17 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
       });
       if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-      await injectSystemEnv(live.port, config).catch(() => {});
+      const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
+      reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+      if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
       // Refresh the Grok Build fence too (same contract as start). live.hostname is the
       // hostname the running proxy actually bound — config.hostname may have drifted.
-      try {
-        const { syncGrokConfig } = await import("../grok/sync");
-        const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
-        if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-        else if (!g.ok) console.error(`⚠️  ${g.message}`);
-      } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
+      // The reconciler re-reads immediately before each client-file mutation; only
+      // the live proxy's observed bind host is safe to carry across this boundary.
+      await reconcileEnsureDesiredIntegrations(
+        live.port,
+        { kind: "live", hostname: live.hostname },
+      );
       console.log(`✅ Proxy running on port ${live.port}`);
       return true;
     }
@@ -482,15 +497,12 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     process.exitCode = 1;
     return false;
   }
-  // Deterministic fence guarantee: the spawned child injects late in its own startup, but
-  // this parent returns as soon as /healthz responds — inject here too (idempotent block
-  // replace) so `ocx ensure` never returns without the Grok fence in place.
-  try {
-    const { syncGrokConfig } = await import("../grok/sync");
-    const g = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
-    if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-    else if (!g.ok) console.error(`⚠️  ${g.message}`);
-  } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
+  // Deterministic fence guarantee when the durable switch is ON: the spawned child
+  // injects late in its own startup, but this parent returns as soon as /healthz
+  // responds — align here too so `ocx ensure` never returns with a stale ON/OFF mismatch.
+  // Persisted state is loaded inside each mutation after waitForProxy, so a
+  // toggle while the child starts wins over the pre-spawn snapshot.
+  await reconcileEnsureDesiredIntegrations(port, { kind: "spawned" });
   // Always sync the LIVE port: after a fallback-port start, config.port still names the
   // busy preferred port — syncing that would point Codex at a dead listener.
   const synced = await syncModelsToCodex(port).catch(e => {
@@ -498,6 +510,10 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     return null;
   });
   if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+  // The child opens /healthz before its best-effort roster reconcile. Await the same idempotent
+  // operation in the parent so `ocx ensure` cannot report success while stale ocx-*.md files are
+  // still observable. Always use the live port, including fallback-port starts.
+  await syncClaudeAgentDefsAtProxyStartup(config, port);
   console.log(`✅ Proxy running on port ${port}`);
   return true;
 }

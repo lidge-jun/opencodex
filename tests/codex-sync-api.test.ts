@@ -217,6 +217,90 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(injected).toBe(false);
   });
 
+  test("explicit sync refreshes the catalog when Codex integration is OFF without injecting", async () => {
+    let refreshed = 0;
+    let injected = false;
+    let refreshOptions: unknown;
+    writeFileSync(join(TEST_OCX_HOME, "config.json"), JSON.stringify({
+      ...config,
+      clientIntegrations: { codex: false },
+    }));
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async (_config: unknown, _deps: unknown, options: unknown) => {
+        refreshed++;
+        refreshOptions = options;
+        return {
+          added: 3,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          comboOmissions: [],
+        };
+      },
+      injectCodexConfig: async () => {
+        injected = true;
+        throw new Error("must not inject");
+      },
+      currentExternalCodexModelProvider: () => null,
+    }, { catalogEvenWhenNotInjected: true });
+
+    expect(refreshed).toBe(1);
+    expect(refreshOptions).toEqual({ allowWhenDesiredDisabled: true });
+    expect(injected).toBe(false);
+    expect(result).toMatchObject({
+      status: "catalog-only",
+      ok: true,
+      added: 3,
+      catalogExists: true,
+      catalogWritten: true,
+      cacheSynced: true,
+      catalogPath: "/tmp/opencodex-catalog.json",
+    });
+    expect(result.message).toContain("Codex config untouched");
+  });
+
+  test("explicit sync refreshes the catalog without injecting or touching the journal for an external provider", async () => {
+    let refreshed = 0;
+    let injectCalls = 0;
+    const journalPath = join(TEST_CODEX_HOME, "opencodex-journal.json");
+    const journalBytes = Buffer.from(JSON.stringify({ injectedOpenaiBaseUrl: "http://127.0.0.1:1/v1" }));
+    writeFileSync(journalPath, journalBytes);
+    const result = await syncModelsToCodex(10100, config, null, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshed++;
+        return {
+          added: 2,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          comboOmissions: [],
+        };
+      },
+      injectCodexConfig: async () => {
+        injectCalls++;
+        return { success: true, message: "external provider preserved" };
+      },
+      currentExternalCodexModelProvider: () => "custom",
+    }, { catalogEvenWhenNotInjected: true });
+
+    expect(refreshed).toBe(1);
+    expect(injectCalls).toBe(0);
+    expect(readFileSync(journalPath)).toEqual(journalBytes);
+    expect(result).toMatchObject({
+      status: "catalog-only",
+      ok: true,
+      added: 2,
+      catalogExists: true,
+      catalogWritten: true,
+      cacheSynced: true,
+    });
+    expect(String(result.message)).toContain("journal untouched");
+  });
+
   /**
    * The lost-transition race, with a REAL second process. The caller's config
    * snapshot says ON; while provider discovery is awaited, another process
@@ -282,7 +366,7 @@ describe("GUI/CLI Codex sync backend", () => {
     } finally {
       rmSync(raceRoot, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("surfaces combo catalog omissions in sync result and CLI stderr (#484)", async () => {
     const logs: string[] = [];

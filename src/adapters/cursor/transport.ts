@@ -12,12 +12,19 @@ export interface CursorTransport {
    * accepted is never replayed. Absent (undefined) is treated as "committed" — safe by default.
    */
   requestCommitted?(): boolean;
+  /**
+   * Last ConversationStateStructure captured from conversationCheckpointUpdate on this transport.
+   * Test and adapter seams use this instead of reaching into LiveCursorTransport.
+   */
+  capturedConversationCheckpoint?(): Uint8Array | undefined;
 }
 
 export interface CursorTransportFactoryInput {
   provider: OcxProviderConfig;
   translatorBudget: TranslatorBudget;
   headers?: Headers;
+  /** Router-prepared fetch that preserves provider overrides and per-request pacing. */
+  fetch?: typeof globalThis.fetch;
   /** Pre-first-frame deadline (dial + first server frame). Defaults to 30s when omitted. */
   firstFrameTimeoutMs?: number;
   /** Grace (ms) between close() and the force-destroy fallback after a first-frame timeout. Defaults to 1s. */
@@ -33,6 +40,11 @@ export interface CursorTransportFactoryInput {
    * native local exec authorization because the text is caller-controlled.
    */
   requestDeclaresFullAccess?: boolean;
+  /**
+   * Stable Cursor Connect `x-session-id` across transport rebuilds for the same
+   * client thread. Distinct from the per-transport native-exec/shell owner.
+   */
+  sessionId?: string;
 }
 
 export type CursorTransportFactory = (input: CursorTransportFactoryInput) => CursorTransport;

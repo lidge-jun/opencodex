@@ -78,7 +78,7 @@ test("a selected foreign standard profile is never mutated, but owned residue ca
   expect(JSON.parse(readFileSync(join(library, "_meta.json"), "utf8"))).toMatchObject({ appliedId: foreign, entries: [{ id: foreign }] });
 });
 
-test("an owned but drifted gateway profile is refused without a write", () => {
+test("an owned but drifted gateway profile can still be disabled", () => {
   const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
   const id = "drifted-owned";
   writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
@@ -86,12 +86,35 @@ test("an owned but drifted gateway profile is refused without a write", () => {
     inferenceProvider: "gateway", inferenceCredentialKind: "static",
     inferenceGatewayBaseUrl: "http://127.0.0.1:10100", inferenceGatewayApiKey: "not-a-secret",
   }));
-  const before = readFileSync(join(library, "_meta.json"), "utf8");
+  writeFileSync(join(library, `${id}.json.bak`), "{}");
 
   expect(inspectDesktop3pConfigLibrary({ env: envFor(library), appliedFingerprint: "other" }).kind).toBe("gateway_drifted");
-  expect(removeDesktop3pStandardPivot({ env: envFor(library), appliedFingerprint: "other" })).toMatchObject({ ok: false, changed: false, kind: "unsafe" });
-  expect(readFileSync(join(library, "_meta.json"), "utf8")).toBe(before);
-  expect(existsSync(join(library, `${id}.json`))).toBe(true);
+  // Missing/mismatched fingerprint must not trap OFF: the selected row is still our
+  // owned gateway, so disable pivots to standard and deletes the credential-bearing files.
+  const result = removeDesktop3pStandardPivot({ env: envFor(library), appliedFingerprint: "other" });
+  expect(result).toMatchObject({ ok: true, changed: true, kind: "removed" });
+  expect(existsSync(join(library, `${id}.json`))).toBe(false);
+  expect(existsSync(join(library, `${id}.json.bak`))).toBe(false);
+  const metadata = JSON.parse(readFileSync(join(library, "_meta.json"), "utf8")) as { appliedId: string; entries: Array<{ id: string; name: string }> };
+  expect(metadata.entries.map(entry => entry.id)).not.toContain(id);
+  expect(metadata.entries.some(entry => entry.name === "opencodex-standard")).toBe(true);
+  expect(JSON.parse(readFileSync(join(library, `${metadata.appliedId}.json`), "utf8"))).toEqual({});
+});
+
+test("an owned gateway with no saved fingerprint is treated as drifted and can be disabled", () => {
+  const library = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-"));
+  const id = "fingerprint-missing";
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, `${id}.json`), JSON.stringify({
+    inferenceProvider: "gateway", inferenceCredentialKind: "static",
+    inferenceGatewayBaseUrl: "http://127.0.0.1:10100", inferenceGatewayApiKey: "not-a-secret",
+  }));
+
+  expect(inspectDesktop3pConfigLibrary({ env: envFor(library), appliedFingerprint: null }).kind).toBe("gateway_drifted");
+  expect(removeDesktop3pStandardPivot({ env: envFor(library), appliedFingerprint: null })).toMatchObject({
+    ok: true, changed: true, kind: "removed",
+  });
+  expect(existsSync(join(library, `${id}.json`))).toBe(false);
 });
 
 test("a delete interruption leaves the standard pivot selected and reports only residual paths", () => {

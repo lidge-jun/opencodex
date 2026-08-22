@@ -44,6 +44,9 @@ import {
 } from "../src/codex/runtime";
 import { markModelsFetchFailure } from "../src/codex/model-cache";
 import { legacyCustomModelCatalogSlugs } from "../src/codex/custom-model-catalog-migration";
+import { resetCodexModelEntitlementCacheForTests } from "../src/codex/model-entitlements";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
 
 // The canonical-bytes case spawns real syncs and runs ~2.5s in isolation, on this
 // tree and on a clean baseline alike. That is half of bun's 5s default, but full
@@ -223,6 +226,7 @@ function primeCodexRuntimeFixture(): void {
   process.env.CODEX_CLI_PATH = createCodexRuntimeFixture();
   resetCatalogRuntimeStateForTests();
   resetCodexRuntimeResolveCacheForTests();
+  resetCodexModelEntitlementCacheForTests();
   expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.5");
 }
 
@@ -263,6 +267,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = opencodexHome;
   resetCatalogRuntimeStateForTests();
   resetCodexRuntimeResolveCacheForTests();
+  resetCodexModelEntitlementCacheForTests();
 });
 
 afterEach(() => {
@@ -355,8 +360,11 @@ test("convergence drops unsupported bare native rows and never qualifies them", 
     ))).toBe(true);
 });
 
-test("convergence preserves an observed account-only native id without creating a bare row", async () => {
+test("convergence projects the observed Daybreak row onto its selector and one bare row", async () => {
   writeCatalog([nativeEntry()]);
+  writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+    tokens: { access_token: "main-token", account_id: "main-chatgpt-account" },
+  }));
   writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
     models: [{
       slug: "gpt-daybreak-blue-latest",
@@ -371,15 +379,32 @@ test("convergence preserves an observed account-only native id without creating 
     }],
   }, null, 2) + "\n");
 
-  const catalog = await convergeCatalog(config(true));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+      return Response.json({ models: [{
+        slug: "gpt-daybreak-blue-latest",
+        supported_in_api: true,
+        visibility: "list",
+      }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  let catalog: RawCatalog;
+  try {
+    catalog = await convergeCatalog(config(true));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
   const models = catalog.models ?? [];
   const daybreak = models.find(entry => entry.slug === "desktop/gpt-daybreak-blue-latest");
   expect(daybreak).toMatchObject({
     visibility: "list",
     opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
-    context_window: 372_000,
-    max_context_window: 372_000,
-    auto_compact_token_limit: 334_800,
+    context_window: 272_000,
+    max_context_window: 272_000,
+    auto_compact_token_limit: 244_800,
     comp_hash: "3000",
     tool_mode: "code_mode_only",
     use_responses_lite: true,
@@ -388,8 +413,52 @@ test("convergence preserves an observed account-only native id without creating 
   });
   expect((daybreak?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
     .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
-  expect(models.some(entry => entry.slug === "team/gpt-daybreak-blue-latest")).toBe(false);
-  expect(models.some(entry => entry.slug === "gpt-daybreak-blue-latest")).toBe(false);
+  // Main's authenticated roster confirms Daybreak, so the bare row and main selector exist.
+  // The side account has no confirmed grant and must not receive a selector row.
+  expect(models.filter(entry => entry.slug === "team/gpt-daybreak-blue-latest")).toHaveLength(0);
+  expect(models.filter(entry => entry.slug === "desktop/gpt-daybreak-blue-latest")).toHaveLength(1);
+  expect(models.filter(entry => entry.slug === "gpt-daybreak-blue-latest")).toHaveLength(1);
+});
+
+test("Direct convergence does not borrow a Pool-only Daybreak grant for the bare row", async () => {
+  writeCatalog([nativeEntry()]);
+  writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+    tokens: { access_token: "main-token", account_id: "main-chatgpt-account" },
+  }));
+  saveCodexAccountCredential("side-account-id", {
+    accessToken: "side-token",
+    refreshToken: "side-refresh",
+    expiresAt: Date.now() + 5 * 60_000,
+    chatgptAccountId: "side-chatgpt-account",
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+      const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+      return Response.json({ models: [
+        { slug: "gpt-5.6-sol", supported_in_api: true, visibility: "list" },
+        ...(accountId === "side-chatgpt-account"
+          ? [{ slug: "gpt-daybreak-blue-latest", supported_in_api: true, visibility: "list" }]
+          : []),
+      ] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const directConfig = config(true);
+  directConfig.providers.openai!.codexAccountMode = "direct";
+  let catalog: RawCatalog;
+  try {
+    catalog = await convergeCatalog(directConfig);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const models = catalog.models ?? [];
+
+  expect(models.filter(entry => entry.slug === "gpt-daybreak-blue-latest")).toHaveLength(0);
+  expect(models.filter(entry => entry.slug === "desktop/gpt-daybreak-blue-latest")).toHaveLength(0);
+  expect(models.filter(entry => entry.slug === "team/gpt-daybreak-blue-latest")).toHaveLength(1);
 });
 
 test("convergence preserves unrelated foreign rows alongside fresh configured provider rows", async () => {
@@ -802,7 +871,10 @@ test("retained sync and convergence produce identical canonical bytes in either 
     const models = (JSON.parse(bytes) as RawCatalog).models ?? [];
     const slugs = models
       ?.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []) ?? [];
-    for (const slug of NATIVE_OPENAI_MODELS) expect(slugs).toContain(slug);
+    for (const slug of NATIVE_OPENAI_MODELS) {
+      if (ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)) expect(slugs).not.toContain(slug);
+      else expect(slugs).toContain(slug);
+    }
     expect(slugs).not.toContain("gpt-legacy-unsupported");
     expect(slugs).toContain("user-native");
     expect(models.find(entry => entry.slug === "gpt-5.6-sol")?.visibility)

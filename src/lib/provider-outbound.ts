@@ -148,6 +148,13 @@ async function providerOutboundRequest(
     resolved = await resolveAddresses(url, {
       context: "provider URL",
       allowPrivateNetwork: allowPrivate,
+      // Clash/Surge/Mihomo fake-IP DNS (198.18.0.0/15) answers are admitted only
+      // when this exact host will use the configured outbound proxy: the hostname
+      // then rides the proxy as an ordinary CONNECT instead of failing as a private
+      // destination or being pin-connected to the fake-IP (credit #1748). A NO_PROXY
+      // match is a direct route, so it keeps the benchmark answer rejected. Image/Lab
+      // fetch never passes this flag.
+      allowBenchmarkAddresses: proxyConfigured && !noProxyMatches(parsed),
     });
   } catch (error) {
     const dnsResolutionFailed = error instanceof DestinationDnsResolutionError

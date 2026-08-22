@@ -117,7 +117,7 @@ export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly A
   return { decision: "continue", reason: "suspicious_no_tool", assistantText: text, userText, hasToolCall };
 }
 
-function assistantMessageFromEvents(events: readonly AdapterEvent[]): OcxAssistantMessage | undefined {
+function assistantMessageFromEvents(events: readonly AdapterEvent[], timestamp: number): OcxAssistantMessage | undefined {
   let text = "";
   let thinking = "";
   let signature: string | undefined;
@@ -134,14 +134,18 @@ function assistantMessageFromEvents(events: readonly AdapterEvent[]): OcxAssista
   }
   if (text) content.push({ type: "text", text });
   if (content.length === 0) return undefined;
-  return { role: "assistant", content, timestamp: Date.now() };
+  return { role: "assistant", content, timestamp };
 }
 
 export function buildContinuationRequest(parsed: OcxParsedRequest, events: readonly AdapterEvent[]): OcxParsedRequest {
   const messages = [...parsed.context.messages];
-  const assistant = assistantMessageFromEvents(events);
+  // One clock read for the whole rebuild. Two Date.now() calls could straddle a millisecond
+  // boundary, which made the retained-heartbeat contract test fail intermittently in CI on a
+  // 1ms skew between the assistant message and the nudge that follows it.
+  const timestamp = Date.now();
+  const assistant = assistantMessageFromEvents(events, timestamp);
   if (assistant) messages.push(assistant);
-  messages.push({ role: "developer", content: TERMINAL_GUARD_NUDGE, timestamp: Date.now() });
+  messages.push({ role: "developer", content: TERMINAL_GUARD_NUDGE, timestamp });
   return { ...parsed, context: { ...parsed.context, messages } };
 }
 
@@ -151,6 +155,16 @@ export interface GuardedEventStreamOptions {
   continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
   adapterName?: string;
   maxAutoContinuations?: number;
+}
+
+/**
+ * Events that are useful to the downstream stream consumer but carry no state used by the
+ * terminal-continuation decision or its rebuilt request. Keep them out of the retained event
+ * list so adapter liveness markers and arbitrarily large tool-argument fragments cannot make
+ * the guard's per-turn memory grow without adding any continuation semantics.
+ */
+export function isTerminalGuardPassthroughOnly(event: AdapterEvent): boolean {
+  return event.type === "heartbeat" || event.type === "tool_call_delta";
 }
 
 function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
@@ -193,9 +207,16 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
     const seen: AdapterEvent[] = [];
     let terminalSeen = false;
     for await (const event of source) {
+      // Liveness markers and tool argument fragments are passed through to the bridge, but
+      // neither analyzeTerminalTurn nor buildContinuationRequest consumes them. Retaining the
+      // fragments would duplicate arbitrarily large argument payloads in `seen` for no effect.
+      if (isTerminalGuardPassthroughOnly(event)) {
+        yield event;
+        continue;
+      }
       if (event.type === "done") {
         terminalSeen = true;
-        const analysis = options.adapterName === "anthropic"
+        const analysis = (options.adapterName === "anthropic" || options.adapterName === "openai-chat")
           ? analyzeTerminalTurn(parsed, seen)
           : { decision: "pass" as const };
         const normalStop = event.stopReason !== "max_tokens" && event.stopReason !== "content_filter";

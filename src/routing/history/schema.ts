@@ -3,7 +3,7 @@
  *
  * `usage.jsonl` remains the canonical append-only evidence ledger;
  * `routing-history.sqlite` is a disposable, rebuildable query projection
- * (ADR-1/ADR-8 in devlog/_plan/260804_router_intelligence/000_master_plan.md).
+ * (ADR-1/ADR-8 in devlog/_fin/260804_router_intelligence/000_master_plan.md).
  */
 
 export const HISTORY_SCHEMA_VERSION = 1;

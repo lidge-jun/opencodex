@@ -1,17 +1,27 @@
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
+import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
-import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
+import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import {
+  CODEX_FORWARD_BASE_URL,
+  destinationDecodesNativeCompactionBlob,
+  isCanonicalOpenAiForwardProvider,
+  isOpenAiOperatedResponsesDestination,
+} from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
+import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
+import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
+import {
+  createAdapterTierMetadata,
+} from "../providers/fastwire";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -37,7 +47,11 @@ export const FORWARD_HEADERS = [
 
 export function sanitizeReasoningInputContent(
   body: unknown,
-  opts?: { preserveRawReasoningContent?: boolean },
+  opts?: {
+    preserveRawReasoningContent?: boolean;
+    dropNullContentChannel?: boolean;
+    stripEncryptedContent?: boolean;
+  },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -52,14 +66,40 @@ export function sanitizeReasoningInputContent(
     // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
-    if (!hasRawContent && !hasOcxEnvelope) return item;
-    if (hasOcxEnvelope) {
-      changed = true;
-      const next: Record<string, unknown> = { ...rec };
-      delete next.encrypted_content;
-      if (!opts?.preserveRawReasoningContent) next.content = [];
-      return next;
+    const hasOutputStatus = Object.prototype.hasOwnProperty.call(rec, "status");
+    const hasEncryptedContent = Object.prototype.hasOwnProperty.call(rec, "encrypted_content");
+    const stripEncryptedContent = hasOcxEnvelope
+      || (opts?.stripEncryptedContent === true && hasEncryptedContent);
+    // Codex serializes an absent reasoning content channel as `"content": null`. The field is
+    // optional and null carries nothing, but a strict gateway rejects the item on its declared type
+    // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
+    // rather than the field it actually refused, which is why this reads as a blob failure. Drop the
+    // key so the item matches the shape the upstream issued.
+    //
+    // Gated to routed destinations. An OpenAI-operated backend binds the blob to the item's exact
+    // shape, so deleting a field there invalidates it (`The encrypted content ... could not be
+    // verified`); the two requirements are exactly opposed, and a live regression proved it. That
+    // gate is also why this drop may touch an item that keeps its blob: xAI demonstrably accepts its
+    // own blob without the null channel, and the destinations that bind blobs to item shape never
+    // reach this branch. This is independent of the output-only status removal below.
+    const dropNullContentChannel = opts?.dropNullContentChannel === true
+      && "content" in rec && !Array.isArray(rec.content);
+    // `status` is output-only. Measured OpenAI reasoning items never contain it, and Grok accepts
+    // its own encrypted_content with status removed. Keeping a foreign status beside a retained
+    // blob makes OpenAI reject the field before blob validation, starving the provenance recovery
+    // of the opaque-blob error it needs. Content blanking remains the separate pre-existing rule.
+    const stripOutputStatus = hasOutputStatus;
+    const blankContent = !dropNullContentChannel
+      && !opts?.preserveRawReasoningContent
+      && (hasRawContent || hasOcxEnvelope);
+    if (!blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel) {
+      return item;
     }
+    changed = true;
+    const next: Record<string, unknown> = { ...rec };
+    if (dropNullContentChannel) delete next.content;
+    if (stripOutputStatus) delete next.status;
+    if (stripEncryptedContent) delete next.encrypted_content;
     // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
     // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
     // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.
@@ -67,9 +107,8 @@ export function sanitizeReasoningInputContent(
     // guide merges reasoning items into the adjacent assistant message), so providers flagged
     // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
     // continuations after tool calls (issue #875 family).
-    if (opts?.preserveRawReasoningContent) return item;
-    changed = true;
-    return { ...rec, content: [] };
+    if (blankContent) next.content = [];
+    return next;
   });
 
   return changed ? { ...raw, input } : body;
@@ -141,6 +180,71 @@ function stripEmptyNameFromInputItems(body: unknown): unknown {
 }
 
 /**
+ * Codex-private tool fields that only the ChatGPT backend understands.
+ *
+ * A third-party Responses gateway validates its schema and rejects the whole request before
+ * inference — xAI answers `Argument not supported: external_web_access` — so these are removed at
+ * the noncanonical boundary while the tool and every public option stay.
+ *
+ * Keep this a table. Each private bit Codex attaches has so far arrived as its own bespoke strip
+ * with its own traversal, and the traversals disagreed about which containers they covered; a new
+ * one should be a row here instead. `toolTypes` omitted means the field is private on any tool.
+ */
+const CANONICAL_ONLY_TOOL_FIELDS: readonly { field: string; toolTypes?: ReadonlySet<string>; capabilityGated?: boolean }[] = [
+  // ChatGPT's browsing policy bit. The public hosted tool is enabled by its presence alone.
+  // OWNERSHIP: official OpenAI API-key traffic and unclassified gateways ACCEPT this field, so
+  // it is only stripped when the provider capability denies it (supportsOpenAiWebSearchToolFields
+  // === false), matching stripOpenAiOnlyWebSearchFields; see
+  // tests/responses-routed-web-search-fields.test.ts.
+  { field: "external_web_access", toolTypes: new Set(["web_search", "web_search_preview"]), capabilityGated: true },
+  // Deferred-discovery marker. `activateDeferredTool` clears it only for tools a `tool_search_output`
+  // already loaded, so a still-deferred declaration — including one promoted out of a namespace
+  // group — otherwise reaches the wire carrying it.
+  { field: "defer_loading" },
+];
+
+function stripCanonicalOnlyToolFields(body: unknown, includeCapabilityGated: boolean): unknown {
+  if (!isPlainObject(body)) return body;
+
+  const rewriteTools = (tools: unknown[]): unknown[] => {
+    let changed = false;
+    const rewritten = tools.map(tool => {
+      if (!isPlainObject(tool)) return tool;
+      let next = tool;
+      for (const { field, toolTypes, capabilityGated } of CANONICAL_ONLY_TOOL_FIELDS) {
+        if (capabilityGated && !includeCapabilityGated) continue;
+        if (!Object.hasOwn(next, field)) continue;
+        if (toolTypes && (typeof next.type !== "string" || !toolTypes.has(next.type))) continue;
+        const { [field]: _private, ...rest } = next;
+        next = rest;
+      }
+      if (next === tool) return tool;
+      changed = true;
+      return next;
+    });
+    return changed ? rewritten : tools;
+  };
+
+  let rewrittenBody = body;
+  if (Array.isArray(body.tools)) {
+    const tools = rewriteTools(body.tools);
+    if (tools !== body.tools) rewrittenBody = { ...rewrittenBody, tools };
+  }
+  if (!Array.isArray(body.input)) return rewrittenBody;
+
+  let input: unknown[] | undefined;
+  for (let index = 0; index < body.input.length; index += 1) {
+    const item = body.input[index];
+    if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) continue;
+    const tools = rewriteTools(item.tools);
+    if (tools === item.tools) continue;
+    input ??= [...body.input];
+    input[index] = { ...item, tools };
+  }
+  return input ? { ...rewrittenBody, input } : rewrittenBody;
+}
+
+/**
  * When `store` is false, the upstream API does not persist response items. Any item ID
  * forwarded in `input` is then interpreted as a reference to a stored item that does not
  * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
@@ -163,25 +267,41 @@ function stripItemIdsWhenUnstored(body: unknown): unknown {
 }
 
 /**
- * Replace proxy-minted compaction items (`encrypted_content` starting with `ocx1:`) with plain
- * user messages before forwarding to the ChatGPT backend. Our envelope is transparent base64, not
- * OpenAI encryption — the native backend cannot decrypt it and would reject the request. Real
- * OpenAI-encrypted compaction items are forwarded untouched.
+ * Normalize replayed compaction items for the destination backend.
+ *
+ * A compaction item carries an `encrypted_content` blob the client replays verbatim on every later
+ * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` envelopes are
+ * transparent base64 rather than encryption, so no upstream can read them and they always become
+ * plain user messages. Native blobs have multiple possible minters, so a destination's ability to
+ * decode its own blobs does not make a blob from a previous serving identity portable. On a known
+ * identity mismatch the blob degrades to the same note the bridged parser uses, even when the
+ * destination normally accepts native blobs. Without a known mismatch, the destination capability
+ * keeps the existing behavior.
+ *
+ * A bare `context_compaction` marker carries no blob and is forwarded untouched.
  */
-function scrubOcxCompactionItems(body: unknown): unknown {
+function scrubOcxCompactionItems(
+  body: unknown,
+  destinationDecodesNativeBlob: boolean,
+  threadServingIdentityChanged: boolean,
+): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   let changed = false;
   const input = body.input.map(item => {
-    if (!isPlainObject(item)) return item;
-    if (item.type !== "compaction" && item.type !== "compaction_summary" && item.type !== "context_compaction") return item;
-    const decoded = typeof item.encrypted_content === "string" ? decodeCompactionSummary(item.encrypted_content) : null;
-    if (decoded === null) return item;
+    if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
+    const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
+    if (encrypted === undefined) return item;
+    if (
+      decodeCompactionSummary(encrypted) === null
+      && destinationDecodesNativeBlob
+      && !threadServingIdentityChanged
+    ) return item;
     changed = true;
     return {
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\n${decoded}` }],
+      content: [{ type: "input_text", text: compactionItemToText(encrypted) }],
     };
   });
 
@@ -204,6 +324,28 @@ function stripUnsupportedReasoningParams(body: unknown): unknown {
   const { context: _ctx, summary: _sum, generate_summary: _gs, ...rest } = reasoning;
   if (_ctx === undefined && _sum === undefined && _gs === undefined) return body;
   return { ...body, reasoning: Object.keys(rest).length > 0 ? rest : undefined };
+}
+
+/**
+ * GPT-5.6 replaced the legacy 24-hour retention field with `prompt_cache_options.ttl`, and the
+ * ChatGPT backend 400s the whole request when the retired field is present (issue #2092).
+ *
+ * The retired field is NOT translated to the replacement: 5.6 carries a different TTL contract,
+ * and implicit caching still applies when the caller sent no replacement options. Inventing a
+ * value here would silently change a caching decision the caller never made.
+ *
+ * Deliberately narrow on both axes, because a wider strip is a behavior change rather than a fix:
+ * only the gpt-5.6 family (an older model may still honor the field), and only on the canonical
+ * ChatGPT backend, which is the deployment that rejects it. Matching is exact-or-dashed-prefix so
+ * a future `gpt-5.60` is not swept up by a bare `startsWith`.
+ */
+function stripDeprecatedPromptCacheRetention(body: unknown, modelId: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  if (typeof modelId !== "string") return body;
+  if (modelId !== "gpt-5.6" && !modelId.startsWith("gpt-5.6-")) return body;
+  if (!Object.hasOwn(body, "prompt_cache_retention")) return body;
+  const { prompt_cache_retention: _retention, ...rest } = body;
+  return rest;
 }
 
 /**
@@ -596,6 +738,15 @@ function toolOutputText(output: unknown): string {
  * expansion misses (proxy restart, unrecorded prior turn), previous_response_id is stripped
  * (the ChatGPT backend rejects it), so the delta may carry items that reference now-absent
  * prior items and 400 upstream:
+ * - `function_call`/`local_shell_call`/`custom_tool_call` without their paired output item
+ *   ("No tool output found for tool call <call_id>"). A stateless upstream cannot resolve
+ *   the pair from its own storage, so a placeholder output is synthesized to keep the
+ *   turn continuable without pretending the result was real. Synthetic outputs are
+ *   emitted after the complete parallel call batch, in call order alongside any real
+ *   outputs, so the adjacency normalizer can still recognize the batch as one
+ *   reasoning-bearing assistant turn (#1477). Gated on
+ *   `synthesizeMissingCallOutputs` (stateless AND non-forward wires); forward replay keeps
+ *   fail-closed behavior.
  * - `function_call_output`/`custom_tool_call_output` without their paired call item
  *   ("No tool call found for function call output with call_id ..."). Converted to user
  *   messages so the result text survives. `function_call_output` also pairs with
@@ -632,26 +783,38 @@ function backfillWebSearchQueries(body: unknown): unknown {
   return changed ? { ...body, input } : body;
 }
 
-function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknown {
+function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthesizeMissingCallOutputs = false): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const input = body.input;
 
   const functionCallIds = new Set<string>();
   const customCallIds = new Set<string>();
+  const functionOutputIds = new Set<string>();
+  const customOutputIds = new Set<string>();
   for (const item of input) {
     if (!isPlainObject(item) || typeof item.call_id !== "string") continue;
     if (item.type === "function_call" || item.type === "local_shell_call") functionCallIds.add(item.call_id);
     else if (item.type === "custom_tool_call") customCallIds.add(item.call_id);
+    else if (item.type === "function_call_output") functionOutputIds.add(item.call_id);
+    else if (item.type === "custom_tool_call_output") customOutputIds.add(item.call_id);
   }
 
   let changed = false;
   const repaired: unknown[] = [];
+  const syntheticKeys = new Set<string>();
+  const pendingSyntheticOutputs: unknown[] = [];
+  const flushPendingSyntheticOutputs = (): void => {
+    if (pendingSyntheticOutputs.length === 0) return;
+    repaired.push(...pendingSyntheticOutputs);
+    pendingSyntheticOutputs.length = 0;
+  };
   for (const item of input) {
-    if (!isPlainObject(item)) { repaired.push(item); continue; }
+    if (!isPlainObject(item)) { flushPendingSyntheticOutputs(); repaired.push(item); continue; }
     if (dropReasoning && item.type === "reasoning") { changed = true; continue; }
     const isFnOutput = item.type === "function_call_output";
     const isCustomOutput = item.type === "custom_tool_call_output";
     if (isFnOutput || isCustomOutput) {
+      flushPendingSyntheticOutputs();
       const callId = typeof item.call_id === "string" ? item.call_id : "";
       const paired = isFnOutput ? functionCallIds.has(callId) : customCallIds.has(callId);
       if (!paired) {
@@ -664,10 +827,97 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
         continue;
       }
     }
+    const isFnCall = item.type === "function_call" || item.type === "local_shell_call";
+    const isCustomCall = item.type === "custom_tool_call";
+    if (isFnCall || isCustomCall) {
+      repaired.push(item);
+      if (synthesizeMissingCallOutputs) {
+        const callId = typeof item.call_id === "string" ? item.call_id : "";
+        const hasOutput = isFnCall ? functionOutputIds.has(callId) : customOutputIds.has(callId);
+        if (!hasOutput && callId) {
+          changed = true;
+          const name = typeof item.name === "string" && item.name.length > 0 ? item.name : callId;
+          const text = `[ocx] no tool result was recorded for "${name}"; execution status unknown — do not treat this as success, failure, or user-provided input.`;
+          syntheticKeys.add(`${isFnCall ? "function" : "custom"}:${callId}`);
+          pendingSyntheticOutputs.push(isFnCall
+            ? { type: "function_call_output", call_id: callId, output: text }
+            : { type: "custom_tool_call_output", call_id: callId, output: text });
+        }
+      }
+      continue;
+    }
+    flushPendingSyntheticOutputs();
     repaired.push(item);
   }
+  flushPendingSyntheticOutputs();
 
-  return changed ? { ...body, input: repaired } : body;
+  const callKeyOf = (item: unknown): string | null => {
+    if (!isPlainObject(item) || typeof item.call_id !== "string") return null;
+    if (item.type === "function_call" || item.type === "local_shell_call") return `function:${item.call_id}`;
+    if (item.type === "custom_tool_call") return `custom:${item.call_id}`;
+    return null;
+  };
+  const outputKeyOf = (item: unknown): string | null => {
+    if (!isPlainObject(item) || typeof item.call_id !== "string") return null;
+    if (item.type === "function_call_output") return `function:${item.call_id}`;
+    if (item.type === "custom_tool_call_output") return `custom:${item.call_id}`;
+    return null;
+  };
+  const reorderBatchOutputs = (items: unknown[]): unknown[] => {
+    const ordered: unknown[] = [];
+    const claimedOutputIndexes = new Set<number>();
+    const outputIndexesByKey = new Map<string, { indexes: number[]; offset: number }>();
+    for (let outputIndex = 0; outputIndex < items.length; outputIndex += 1) {
+      const outputKey = outputKeyOf(items[outputIndex]);
+      if (outputKey === null) continue;
+      const bucket = outputIndexesByKey.get(outputKey);
+      if (bucket) bucket.indexes.push(outputIndex);
+      else outputIndexesByKey.set(outputKey, { indexes: [outputIndex], offset: 0 });
+    }
+    let index = 0;
+    while (index < items.length) {
+      if (claimedOutputIndexes.has(index)) { index += 1; continue; }
+      const key = callKeyOf(items[index]);
+      if (key === null) { ordered.push(items[index]); index += 1; continue; }
+      const batch: unknown[] = [];
+      const batchKeys: string[] = [];
+      let cursor = index;
+      while (cursor < items.length) {
+        const nextKey = callKeyOf(items[cursor]);
+        if (nextKey === null) break;
+        batch.push(items[cursor]);
+        batchKeys.push(nextKey);
+        cursor += 1;
+      }
+      const hasSynthetic = batchKeys.some(batchKey => syntheticKeys.has(batchKey));
+      if (!hasSynthetic) {
+        ordered.push(...batch);
+        index = cursor;
+        continue;
+      }
+      const batchOutputs: unknown[] = [];
+      for (const batchKey of batchKeys) {
+        const bucket = outputIndexesByKey.get(batchKey);
+        if (!bucket) continue;
+        while (bucket.offset < bucket.indexes.length && bucket.indexes[bucket.offset]! < cursor) {
+          bucket.offset += 1;
+        }
+        while (bucket.offset < bucket.indexes.length) {
+          const outputIndex = bucket.indexes[bucket.offset]!;
+          bucket.offset += 1;
+          if (claimedOutputIndexes.has(outputIndex)) continue;
+          claimedOutputIndexes.add(outputIndex);
+          batchOutputs.push(items[outputIndex]);
+          break;
+        }
+      }
+      ordered.push(...batch, ...batchOutputs);
+      index = cursor;
+    }
+    return ordered;
+  };
+
+  return changed ? { ...body, input: reorderBatchOutputs(repaired) } : body;
 }
 
 /**
@@ -788,6 +1038,15 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
   return rest;
 }
 
+/** Apply the settled tier only to a fresh outbound object; `_rawBody` remains caller-owned. */
+function applyTierDecisionToResponsesBody(body: unknown, decision: TierDecision | undefined): unknown {
+  if (!decision || decision.kind === "forward-caller" || !isPlainObject(body)) return body;
+  const next: Record<string, unknown> = { ...body };
+  if (decision.kind === "set") next.service_tier = decision.value;
+  else delete next.service_tier;
+  return next;
+}
+
 /**
  * Drop request parameters a stateless Responses upstream cannot implement, and pin
  * `store` false.
@@ -802,8 +1061,8 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
  * `prompt` is a reference to a server-stored prompt template — the most stateful
  * field in the accepted schema.
  *
- * `service_tier` is deliberately NOT dropped: the server writes it for fast mode
- * (`responses/core.ts`), and silently deleting a configured knob inside an adapter is
+ * `service_tier` is deliberately NOT dropped: the final TierDecision is applied to a
+ * detached outbound body before this sanitizer chain, and silently deleting a configured knob is
  * worse than forwarding a parameter the upstream ignores.
  *
  * MUST run before the composed sanitize chain below: `stripItemIdsWhenUnstored` keys
@@ -1257,6 +1516,30 @@ function stripUnsupportedHostedTools(body: unknown): unknown {
   return tools.length === body.tools.length ? body : { ...body, tools };
 }
 
+/**
+ * OpenAI hosted web_search config fields that a capability-classified Responses
+ * upstream may reject wholesale. xAI's /v1/responses 400s the entire request on
+ * `external_web_access` and `search_context_size` ("Argument not supported"),
+ * which killed every routed Grok turn whose client (Codex) attaches its
+ * default web_search tool config (probe 2026-08-21: both fields 400
+ * individually; `user_location` and `filters` are accepted and kept).
+ * The caller decides whether to apply this compatibility transform from explicit
+ * provider capability metadata; an unclassified upstream keeps the fields.
+ */
+const OPENAI_ONLY_WEB_SEARCH_FIELDS = ["external_web_access", "search_context_size"] as const;
+export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
+  let changed = false;
+  const tools = body.tools.map(t => {
+    if (!isPlainObject(t) || (t.type !== "web_search" && t.type !== "web_search_preview")) return t;
+    if (!OPENAI_ONLY_WEB_SEARCH_FIELDS.some(field => Object.hasOwn(t, field))) return t;
+    const { external_web_access: _access, search_context_size: _size, ...rest } = t;
+    changed = true;
+    return rest;
+  });
+  return changed ? { ...body, tools } : body;
+}
+
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -1386,11 +1669,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
+      let convertedRoutedToolSearchNames: Set<string> | undefined;
+      let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string }> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
+      // tier write so a force-fast/default decision can never mutate parsed._rawBody.
+      outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
       const stateless = provider.statelessResponses === true;
       if (stateless) outBody = stripStatefulResponsesParams(outBody);
       // A replay miss can leave a function_call_output whose paired function_call sat
@@ -1399,13 +1687,18 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // backend gets — dropping previous_response_id is not much use if the body that
       // reaches the wire is unparseable.
       if (forward || stateless) {
-        outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
       }
       if (provider.requiresAdjacentResponsesToolResults === true) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
+        // Only the canonical ChatGPT backend rejects the retired field; a self-hosted or
+        // third-party forward gateway may still accept it, so this must not be widened.
+        if (isCanonicalOpenAiForwardProvider(provider)) {
+          outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
+        }
       } else {
         outBody = preferConfiguredHostedTools(
           outBody,
@@ -1432,17 +1725,59 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = promoteClientLoadedTools(outBody);
       }
-      if (provider.authMode !== "forward") {
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
         const rewritten = rewriteRoutedCustomToolsForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
-      const body = JSON.stringify(stripDisabledReasoningSummaries(
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        // Run after custom-tool lowering so the search compatibility layer can choose a
+        // collision-free public function name against the final routed function catalog.
+        const rewritten = rewriteRoutedToolSearchForUpstream(outBody);
+        outBody = rewritten.body;
+        convertedRoutedToolSearchNames = rewritten.names;
+        // xAI rejects these OpenAI web_search extensions with HTTP 400. Keep them
+        // for OpenAI API-key traffic and unclassified gateways; only an explicit
+        // provider capability denial activates the compatibility transform.
+        if (provider.supportsOpenAiWebSearchToolFields === false) {
+          outBody = stripOpenAiOnlyWebSearchFields(outBody);
+        }
+      }
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        // Codex 0.147 emits private namespace tool groups, while public/third-party Responses
+        // gateways accept only flat tool variants. Run after custom/tool-search lowering so
+        // namespace children already carry their final public kind before they are promoted.
+        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody);
+        outBody = rewritten.body;
+        convertedRoutedNamespaceToolAliases = rewritten.aliases;
+        // Last, so promoted namespace children are also cleared of Codex-private fields.
+        outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
+      }
+      const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripEmptyNameFromInputItems(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(
+        outBody,
+        destinationDecodesNativeCompactionBlob(provider),
+        threadServingIdentityChanged,
+      ), {
+        preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+        dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
+        stripEncryptedContent: threadServingIdentityChanged,
+      }))))))));
+      const finalBody = stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
         parsed.modelId,
-      ));
+      );
+      const actualServiceTier = isPlainObject(finalBody) && typeof finalBody.service_tier === "string"
+        ? finalBody.service_tier
+        : null;
+      const tierLog = createAdapterTierMetadata(
+        parsed.options?.tierObservation,
+        parsed.options?.tierDecision,
+        actualServiceTier === null ? null : "service-tier",
+        actualServiceTier,
+      );
+      const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         new TextEncoder().encode(body).byteLength,
@@ -1454,6 +1789,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         body,
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
+        ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
+        ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
+        ...(tierLog ? { tierLog } : {}),
       };
     },
 

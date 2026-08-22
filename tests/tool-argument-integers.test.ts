@@ -191,3 +191,71 @@ describe("#1611 wiring: bridge emits repaired arguments", () => {
     expect(done?.data.arguments).toBe('{"n":7.0}');
   });
 });
+
+/** The code-mode wait shape from the #1938 report: cell_id declared string. */
+const WAIT_SCHEMA = {
+  type: "object",
+  properties: {
+    cell_id: { type: "string" },
+    yield_time_ms: { type: "integer" },
+    max_tokens: { type: "integer" },
+    label: { type: ["string", "null"] },
+    loose: { type: ["integer", "string"] },
+  },
+};
+
+describe("bare-integer-for-string tool argument repair (#1938)", () => {
+  test("repairs the exact call cursor/gpt-5.6-sol emitted in the report", () => {
+    // invalid type: integer `4`, expected a string — 19/19 wait calls rejected
+    expect(coerceIntegerToolArguments('{"cell_id":4,"yield_time_ms":10000}', WAIT_SCHEMA))
+      .toBe('{"cell_id":"4","yield_time_ms":10000}');
+  });
+
+  test("repairs a string-or-null union field", () => {
+    expect(coerceIntegerToolArguments('{"label":12}', WAIT_SCHEMA))
+      .toBe('{"label":"12"}');
+  });
+
+  test("a union that also accepts a numeric type keeps the number", () => {
+    const clean = '{"loose":4}';
+    expect(coerceIntegerToolArguments(clean, WAIT_SCHEMA)).toBe(clean);
+  });
+
+  test("a non-integral number in a string field is not manufactured into a string", () => {
+    const clean = '{"cell_id":4.5}';
+    expect(coerceIntegerToolArguments(clean, WAIT_SCHEMA)).toBe(clean);
+  });
+
+  test("a value beyond 2^53-1 keeps its original bytes", () => {
+    const clean = '{"cell_id":18446744073709551615}';
+    expect(coerceIntegerToolArguments(clean, WAIT_SCHEMA)).toBe(clean);
+  });
+
+  test("a real string stays untouched and bytes are preserved", () => {
+    const clean = '{"cell_id":"4","yield_time_ms":10000}';
+    expect(coerceIntegerToolArguments(clean, WAIT_SCHEMA)).toBe(clean);
+  });
+
+  test("both repairs compose in one payload", () => {
+    expect(coerceIntegerToolArguments('{"cell_id":4,"yield_time_ms":120000.0}', WAIT_SCHEMA))
+      .toBe('{"cell_id":"4","yield_time_ms":120000}');
+  });
+
+  test("nested objects and arrays repair against their declared schemas", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        page: { type: "object", properties: { id: { type: "string" } } },
+        tags: { type: "array", items: { type: "string" } },
+      },
+    };
+    expect(coerceIntegerToolArguments('{"page":{"id":7},"tags":[1,2]}', schema))
+      .toBe('{"page":{"id":"7"},"tags":["1","2"]}');
+  });
+
+  test("an integer field arriving as an integer is never stringified", () => {
+    const clean = '{"yield_time_ms":10000}';
+    expect(coerceIntegerToolArguments(clean, WAIT_SCHEMA)).toBe(clean);
+  });
+});
+

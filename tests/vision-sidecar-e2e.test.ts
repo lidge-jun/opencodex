@@ -420,7 +420,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
    * omission marker is there instead.
    *
    * `big-pickle` is the id that reproduced the reported 400 verbatim against the
-   * live endpoint (devlog/_plan/260805_bug_fix_stack/002_zen_modality_probe.md).
+   * live endpoint (devlog/_fin/260805_bug_fix_stack/002_zen_modality_probe.md).
    */
   test("a text-only Zen model has its image stripped before the upstream request (#1043)", async () => {
     let upstreamBody = "";

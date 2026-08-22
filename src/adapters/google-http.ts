@@ -14,6 +14,11 @@ const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
 
+export interface GoogleRetryOptions {
+  /** Repair-and-replay structurally invalid 400 bodies (Vertex/Antigravity behavior). */
+  repairInvalid400?: boolean;
+}
+
 async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
@@ -22,13 +27,21 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
 }
 
 /**
- * Fetch a Google-family upstream (Vertex / Antigravity) with Kiro-style hardening: per-attempt
- * timeout (`AbortSignal.any([parent, timeout])`), bounded retry on transient status / network
- * errors, `Retry-After` honoring, jittered exponential backoff, and a classified + redacted final
- * error body. `label` is the provider-facing prefix used in error messages.
+ * Fetch a Google-family upstream with Kiro-style hardening: per-attempt timeout
+ * (`AbortSignal.any([parent, timeout])`), bounded retry on transient status / network errors,
+ * `Retry-After` honoring, jittered exponential backoff, and (unless raw mode is used) a
+ * classified + redacted final error body. `label` is the provider-facing prefix used in error
+ * messages.
  */
-export async function fetchGoogleWithRetry(label: string, request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
+export async function fetchGoogleWithRetry(
+  label: string,
+  request: AdapterRequest,
+  ctx: AdapterFetchContext = {},
+  opts: GoogleRetryOptions = {},
+): Promise<Response> {
+  const repairInvalid400 = opts.repairInvalid400 ?? true;
   const timeoutMs = ctx.timeoutMs ?? 200_000;
+  const executor = ctx.executor ?? globalThis.fetch;
   let lastError: unknown;
   let activeRequest = request;
   let compatibilityReplayUsed = false;
@@ -39,8 +52,8 @@ export async function fetchGoogleWithRetry(label: string, request: AdapterReques
         method: activeRequest.method,
         headers: activeRequest.headers,
         body: activeRequest.body,
-      }, timeoutMs, ctx.abortSignal, ctx.stream);
-      if (res.status === 400 && !compatibilityReplayUsed) {
+      }, timeoutMs, ctx.abortSignal, ctx.stream, executor);
+      if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
         let payloadText = "";
         try {
           payloadText = await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal);
@@ -61,10 +74,11 @@ export async function fetchGoogleWithRetry(label: string, request: AdapterReques
       }
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
       // it won't recover for hours and burns retries). Peek the body to tell them apart.
-      if (res.status === 429 && !ctx.returnRawErrors) {
-        const peek = await readDisplaySafeErrorPayloadText(res, ctx.abortSignal);
+      if (res.status === 429) {
+        const peekTarget = ctx.returnRawErrors ? res.clone() : res;
+        const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
         if (isQuotaExhaustedBody(peek)) {
-          return normalizeUpstreamHttpErrorResponse(res, {
+          return ctx.returnRawErrors ? res : normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
           });
@@ -87,6 +101,20 @@ export async function fetchGoogleWithRetry(label: string, request: AdapterReques
     }
   }
   throw lastError ?? new Error(`${label} fetch failed`);
+}
+
+/**
+ * AI Studio direct (`generativelanguage.googleapis.com`) retry wrapper.
+ *
+ * Direct requests keep the default server error surface — the raw `Provider error <status>:
+ * <body>` text the shared Responses path formats — and keep single-shot 400 semantics (no
+ * request-shape compatibility replay). The wrapper exists for the failure mode observed in
+ * production: AI Studio's transient `503 UNAVAILABLE` "model is currently experiencing high
+ * demand" spikes, plus plain rate-limit 429s, both of which previously failed immediately
+ * because the default server fetch path only retries connection resets.
+ */
+export function fetchDirectGeminiWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
+  return fetchGoogleWithRetry("Gemini", request, { ...ctx, returnRawErrors: true }, { repairInvalid400: false });
 }
 
 /** Vertex AI retry wrapper. */

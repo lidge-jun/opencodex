@@ -51,12 +51,35 @@ describe("Command Code provider", () => {
     expect(registry?.models).toBeUndefined();
     expect(registry?.modelReasoningEfforts).toMatchObject({
       "deepseek/deepseek-v4-flash": ["high", "max"],
-      "zai-org/glm-5.2": ["high", "max"],
+      "zai-org/GLM-5.2": ["high", "max"],
     });
     expect(OAUTH_PROVIDERS["command-code"]?.providerConfig).toMatchObject({
       adapter: "command-code",
       baseUrl: "https://api.commandcode.ai",
       authMode: "oauth",
+    });
+  });
+
+  test("API-key preset shares the official reasoning-facts table with the OAuth entry", () => {
+    const oauth = PROVIDER_REGISTRY.find(row => row.id === "command-code");
+    const apiKey = PROVIDER_REGISTRY.find(row => row.id === "commandcode");
+    expect(apiKey).toMatchObject({
+      adapter: "openai-chat",
+      authKind: "key",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+      liveModels: true,
+    });
+    // Without this the API-key preset never advertises a reasoning picker, and the
+    // router's known-ids decode source misses the native slash ids — the Codex-facing
+    // slug `commandcode/deepseek-deepseek-v4-pro` is then sent upstream verbatim and
+    // rejected with `unsupported_model`.
+    expect(apiKey?.modelReasoningEfforts).toEqual(oauth?.modelReasoningEfforts);
+    expect(apiKey?.modelReasoningEfforts).toMatchObject({
+      "deepseek/deepseek-v4-pro": ["high", "max"],
+      "zai-org/GLM-5": ["high", "max"],
+      "zai-org/GLM-5.1": ["high", "max"],
+      "zai-org/GLM-5.2-Fast": ["high", "max"],
+      "zai-org/GLM-5.3": ["low", "high", "max"],
     });
   });
 
@@ -369,7 +392,7 @@ describe("Command Code provider", () => {
     expect(JSON.parse(built.body).params.tools).toEqual([]);
   });
 
-  test("matches a forced namespaced tool choice by dot alias", async () => {
+  test("matches a forced namespaced tool choice by dot or unique bare alias", async () => {
     const namespacedParsed = {
       ...parsed(),
       context: {
@@ -381,6 +404,12 @@ describe("Command Code provider", () => {
     const built = await builtRequest(namespacedParsed);
     const tools = JSON.parse(built.body).params.tools;
     expect(tools).toEqual([{ name: "functions__exec_command", description: "exec", input_schema: { type: "object" } }]);
+
+    const bareBuilt = await builtRequest({
+      ...namespacedParsed,
+      options: { toolChoice: { name: "exec_command" } },
+    });
+    expect(JSON.parse(bareBuilt.body).params.tools).toEqual(tools);
   });
 
   test("refreshes a stale official effort record only after a reasoning rejection and retries without it", async () => {

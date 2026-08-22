@@ -72,7 +72,7 @@ const isToolItem = (item: Record<string, unknown>): boolean =>
   String(item.type ?? "").includes("call");
 
 type BridgeMaps = [
-  toolNsMap?: Map<string, { namespace: string; name: string }>,
+  toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>,
   freeformToolNames?: Set<string>,
   toolSearchToolNames?: Set<string>,
 ];

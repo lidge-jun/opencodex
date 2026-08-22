@@ -34,7 +34,8 @@ import { sweepExpiredAnthropicRoutingHealth } from "../oauth/anthropic-routing";
 import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/store";
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
-import { sweepExpiredResponseStates } from "../responses/state";
+import { reconcileProviderRequestPacing } from "../providers/request-pacing";
+import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates } from "../responses/state";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { reconcileProviderAccountQuotaRows } from "../providers/quota";
 import { reconcileRouterWarningMemos } from "../router";
@@ -75,6 +76,7 @@ export function buildGenerationContext(): GenerationContext {
 export const STATE_STORE_REGISTRATIONS = [
   { name: "subagent-model-health", sweepExpired: sweepExpiredSubagentModelHealth },
   { name: "api-key-cooldowns", sweepExpired: sweepExpiredApiKeyCooldowns },
+  { name: "provider-request-pacing", reconcileGeneration: reconcileProviderRequestPacing },
   {
     name: "combo-target-cooldowns",
     sweepExpired: sweepExpiredComboTargetCooldowns,
@@ -82,7 +84,13 @@ export const STATE_STORE_REGISTRATIONS = [
   },
   { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
-  { name: "responses-continuation", sweepExpired: sweepExpiredResponseStates },
+  {
+    name: "responses-continuation",
+    sweepExpired: sweepExpiredResponseStates,
+    // Disk reclaim rides the liveness tick, not the TTL tick: sweepExpiredOnWrite puts
+    // sweepExpired on hot write paths, where a directory scan does not belong.
+    sweepLiveness: sweepAbandonedResponseStateTemps,
+  },
   { name: "antigravity-replay", sweepExpired: sweepExpiredAntigravityReplay },
   { name: "config-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileConfigWarningMemos(context.generation) },
   { name: "catalog-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileCatalogWarningMemos(context.generation) },

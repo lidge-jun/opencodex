@@ -21,10 +21,10 @@ describe("claude context-window map (devlog 260712 B2)", () => {
 
   test("registers native slugs (bare + desktop alias + legacy alias)", () => {
     const map = buildClaudeContextWindows(["gpt-5.6-sol", "gpt-5.4"], []);
-    // Authoritative native overrides: gpt-5.6 natives 372k, gpt-5.4 native 1M.
-    expect(map["gpt-5.6-sol"]).toBe(372_000);
-    expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(372_000);
-    expect(map["claude-ocx-native--gpt-5.6-sol"]).toBe(372_000);
+    // Authoritative native overrides: gpt-5.6 natives follow Codex 272k, gpt-5.4 native 1M.
+    expect(map["gpt-5.6-sol"]).toBe(272_000);
+    expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(272_000);
+    expect(map["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
     expect(map["gpt-5.4"]).toBe(1_000_000);
   });
 
@@ -79,7 +79,7 @@ describe("claude context-window map (devlog 260712 B2)", () => {
 });
 
 describe("auto-context (devlog 260712 020 + audit 021)", () => {
-  test("resolveAutoContext: default on at 350k, valid custom, range fallback, off switches", () => {
+  test("resolveAutoContext: default on at AUTO_COMPACT_WINDOW_DEFAULT, valid custom, range fallback, off switches", () => {
     expect(resolveAutoContext(undefined)).toEqual({ enabled: true, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT });
     expect(resolveAutoContext({ autoCompactWindow: 300_000 })).toEqual({ enabled: true, compactWindow: 300_000 });
     // Out-of-range config (hand-edit) falls back to the default (API rejects these).
@@ -129,19 +129,24 @@ describe("auto-context (devlog 260712 020 + audit 021)", () => {
     ]);
     expect(map["gpt-5.6-luna"]).toBe(400_000);
     expect(map["shared-model"]).toBeUndefined();
-    expect(map["gpt-5.6-sol"]).toBe(372_000); // native override, not 999k
+    expect(map["gpt-5.6-sol"]).toBe(272_000); // native default, not 999k
   });
 
-  test("effectiveModelEnv auto-marks a 372k native slot under the default auto mode", () => {
+  test("auto-context marks a wide native slot, and turning it off unmarks anything under 1M", () => {
     const windows = buildClaudeContextWindows(["gpt-5.6-sol"], []);
     const env = effectiveModelEnv({ model: "gpt-5.6-sol" }, windows);
-    expect(env.ANTHROPIC_MODEL).toBe("gpt-5.6-sol[1m]");
-    // Readable-alias slot value gets the same marking (audit 051 #4).
+    // Default 272k sits under the 829,800 compact window, so the marker stays off.
+    expect(env.ANTHROPIC_MODEL).toBe("gpt-5.6-sol");
     const readable = effectiveModelEnv({ model: "claude-ocx-native--gpt-5.6-sol" }, windows);
-    expect(readable.ANTHROPIC_MODEL).toBe("claude-ocx-native--gpt-5.6-sol[1m]");
-    // Explicit off: no marking below 1M.
-    const off = effectiveModelEnv({ model: "gpt-5.6-sol", autoContext: false }, windows);
-    expect(off.ANTHROPIC_MODEL).toBe("gpt-5.6-sol");
+    expect(readable.ANTHROPIC_MODEL).toBe("claude-ocx-native--gpt-5.6-sol");
+    // Opting into the measured 922k ceiling clears the compact window and marks [1m].
+    const opted = buildClaudeContextWindows(["gpt-5.6-sol"], [], 922_000);
+    expect(effectiveModelEnv({ model: "gpt-5.6-sol" }, opted).ANTHROPIC_MODEL).toBe("gpt-5.6-sol[1m]");
+    const solOff = effectiveModelEnv({ model: "gpt-5.6-sol", autoContext: false }, opted);
+    expect(solOff.ANTHROPIC_MODEL).toBe("gpt-5.6-sol");
+    const subWindows = buildClaudeContextWindows(["gpt-5.5"], []);
+    const off = effectiveModelEnv({ model: "gpt-5.5", autoContext: false }, subWindows);
+    expect(off.ANTHROPIC_MODEL).toBe("gpt-5.5");
   });
 
   test("[1m] handling is case-insensitive (audit #7)", () => {

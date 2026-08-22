@@ -14,6 +14,7 @@
  */
 
 import {
+  ARTIFACT_CLASSES,
   EVIDENCE_LAYERS,
   EXECUTION_MODES,
   EVENT_KINDS,
@@ -30,6 +31,7 @@ import {
   LabProjectionIncompatibleError,
   LabProjectionUnavailableError,
   LAB_QUERY_MAX_PAGE_SIZE,
+  PASSIVE_PRODUCTION_MAX_LIMIT,
   queryLabArtifactByDigest,
   queryLabArtifacts,
   queryLabCatalogEntries,
@@ -42,6 +44,15 @@ import {
   queryLabVerdicts,
   queryPassiveProductionSignals,
 } from "../../lab/query";
+import {
+  exportLocalPublicEvidence,
+  importCommunityEvidenceValue,
+  listCommunityEvidenceContext,
+  parseStrictPublicJson,
+  previewLocalPublicEvidence,
+  summarizePublicEvidenceVerification,
+  PublicEvidenceValidationError,
+} from "../../lab/public";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
@@ -75,20 +86,24 @@ function projectionErrorResponse(err: unknown, ctx: ManagementContext): Response
   return null;
 }
 
-function parseLimit(raw: string | null, ctx: ManagementContext): number | undefined | Response {
+function parseLimit(
+  raw: string | null,
+  ctx: ManagementContext,
+  max = LAB_QUERY_MAX_PAGE_SIZE,
+): number | undefined | Response {
   const parsed = raw === null ? undefined : parseQueryInt(raw);
   if (parsed === "invalid") {
     return errorResponse(
       "invalid_limit",
-      `limit must be an integer from 1 to ${LAB_QUERY_MAX_PAGE_SIZE}`,
+      `limit must be an integer from 1 to ${max}`,
       400,
       ctx,
     );
   }
-  if (parsed !== undefined && (parsed < 1 || parsed > LAB_QUERY_MAX_PAGE_SIZE)) {
+  if (parsed !== undefined && (parsed < 1 || parsed > max)) {
     return errorResponse(
       "invalid_limit",
-      `limit must be an integer from 1 to ${LAB_QUERY_MAX_PAGE_SIZE}`,
+      `limit must be an integer from 1 to ${max}`,
       400,
       ctx,
     );
@@ -155,7 +170,7 @@ function parseExecutionMode(raw: string | null, ctx: ManagementContext): Executi
   if (!raw) return undefined;
   const trimmed = raw.trim();
   if (!EXECUTION_MODES.includes(trimmed as ExecutionMode)) {
-    return errorResponse("invalid_execution_mode", "executionMode must be a supported execution mode", 400, ctx);
+    return errorResponse("invalid_execution_mode", "executionMode must be a supported lab execution mode", 400, ctx);
   }
   return trimmed as ExecutionMode;
 }
@@ -186,9 +201,154 @@ function paginatedEnvelope<T>(page: { items: T[]; nextCursor?: string; hasMore: 
   };
 }
 
+const MAX_PUBLIC_REQUEST_BYTES = 2 * 1024 * 1024;
+
+async function readBoundedPublicJson(req: Request): Promise<unknown> {
+  const lengthRaw = req.headers.get("content-length");
+  if (lengthRaw) {
+    const length = Number(lengthRaw);
+    if (!Number.isFinite(length) || length < 0 || length > MAX_PUBLIC_REQUEST_BYTES) {
+      throw new PublicEvidenceValidationError(
+        "public_request_too_large",
+        "public evidence request exceeds 2 MiB",
+      );
+    }
+  }
+  if (!req.body) {
+    throw new PublicEvidenceValidationError("public_request_body", "JSON body is required");
+  }
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_PUBLIC_REQUEST_BYTES) {
+      await reader.cancel();
+      throw new PublicEvidenceValidationError(
+        "public_request_too_large",
+        "public evidence request exceeds 2 MiB",
+      );
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return parseStrictPublicJson(bytes, "public evidence request");
+}
+
+function publicEventIds(raw: unknown): string[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PublicEvidenceValidationError("public_request_body", "request body must be an object");
+  }
+  const keys = Object.keys(raw);
+  if (keys.length !== 1 || keys[0] !== "eventIds") {
+    throw new PublicEvidenceValidationError("public_request_body", "only eventIds is accepted");
+  }
+  const eventIds = (raw as { eventIds?: unknown }).eventIds;
+  if (!Array.isArray(eventIds) || !eventIds.every((value) => typeof value === "string")) {
+    throw new PublicEvidenceValidationError("public_request_body", "eventIds must be a string array");
+  }
+  return eventIds as string[];
+}
+
+function publicBundleValue(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PublicEvidenceValidationError("public_request_body", "request body must be an object");
+  }
+  const keys = Object.keys(raw);
+  if (keys.length !== 1 || keys[0] !== "bundle") {
+    throw new PublicEvidenceValidationError("public_request_body", "only bundle is accepted");
+  }
+  return (raw as { bundle?: unknown }).bundle;
+}
+
+function publicErrorResponse(err: unknown, ctx: ManagementContext): Response {
+  if (err instanceof PublicEvidenceValidationError) {
+    const status = err.code === "community_cache_busy" ? 503 : 400;
+    const response = errorResponse(err.code, err.message, status, ctx);
+    if (status === 503) response.headers.set("Retry-After", "1");
+    return response;
+  }
+  const projected = projectionErrorResponse(err, ctx);
+  if (projected) return projected;
+  return errorResponse("public_evidence_internal", "internal public evidence failure", 500, ctx);
+}
+
 export async function handleLabRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { url, req, config } = ctx;
   if (!url.pathname.startsWith("/api/lab")) return null;
+
+  if (req.method === "GET" && url.pathname === "/api/lab/public/community") {
+    try {
+      return jsonResponse(listCommunityEvidenceContext(), 200, req, config);
+    } catch (err) {
+      return publicErrorResponse(err, ctx);
+    }
+  }
+
+  if (req.method === "POST") {
+    if (url.pathname === "/api/lab/public/preview") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        return jsonResponse(
+          previewLocalPublicEvidence({ eventIds: publicEventIds(body) }),
+          200,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    if (url.pathname === "/api/lab/public/export") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        return jsonResponse(
+          exportLocalPublicEvidence({ eventIds: publicEventIds(body) }),
+          200,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    if (url.pathname === "/api/lab/public/verify") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        const result = summarizePublicEvidenceVerification(publicBundleValue(body));
+        return jsonResponse(
+          result,
+          result.status === "cryptographically_valid" ? 200 : 400,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    if (url.pathname === "/api/lab/public/community/import") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        return jsonResponse(
+          importCommunityEvidenceValue(publicBundleValue(body)),
+          200,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    return null;
+  }
+
   if (req.method !== "GET") return null;
 
   if (url.pathname === "/api/lab/status") {
@@ -198,7 +358,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
   if (url.pathname === "/api/lab/production-signals") {
     const subjectId = url.searchParams.get("subjectId")?.trim();
     if (!subjectId) return errorResponse("invalid_subject", "subjectId is required", 400, ctx);
-    const limit = parseLimit(url.searchParams.get("limit"), ctx);
+    const limit = parseLimit(url.searchParams.get("limit"), ctx, PASSIVE_PRODUCTION_MAX_LIMIT);
     if (limit instanceof Response) return limit;
     try {
       return jsonResponse(queryPassiveProductionSignals(subjectId, limit), 200, req, config);
@@ -213,10 +373,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     if (layerParsed instanceof Response) return layerParsed;
     const suiteId = url.searchParams.get("suiteId")?.trim() || url.searchParams.get("suite")?.trim() || undefined;
     try {
-      const scenarios = queryLabCatalogEntries({
-        layer: layerParsed,
-        suiteId,
-      });
+      const scenarios = queryLabCatalogEntries({ layer: layerParsed, suiteId });
       return jsonResponse({ scenarios }, 200, req, config);
     } catch (err) {
       const mapped = projectionErrorResponse(err, ctx);
@@ -255,11 +412,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     const limit = parseLimit(url.searchParams.get("limit"), ctx);
     if (limit instanceof Response) return limit;
     try {
-      const page = queryLabSubjects(
-        url.searchParams.get("kind")?.trim() || undefined,
-        url.searchParams.get("cursor"),
-        limit,
-      );
+      const page = queryLabSubjects(url.searchParams.get("kind")?.trim() || undefined, url.searchParams.get("cursor"), limit);
       return jsonResponse(paginatedEnvelope(page, "subjects"), 200, req, config);
     } catch (err) {
       const mapped = projectionErrorResponse(err, ctx);
@@ -323,9 +476,10 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     const eventKind = parseEventKind(url.searchParams.get("eventKind"), ctx);
     if (eventKind instanceof Response) return eventKind;
     const excludedRaw = url.searchParams.get("excluded");
-    let excluded: boolean | undefined;
-    if (excludedRaw === "true") excluded = true;
-    else if (excludedRaw === "false") excluded = false;
+    if (excludedRaw !== null && excludedRaw !== "true" && excludedRaw !== "false") {
+      return errorResponse("invalid_excluded", "excluded must be true or false", 400, ctx);
+    }
+    const excluded = excludedRaw === "true" ? true : excludedRaw === "false" ? false : undefined;
     try {
       const page = queryLabEvents({
         eventKind,
@@ -366,6 +520,14 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     const artifactClass = url.searchParams.get("artifactClass")?.trim() || undefined;
     if (statusRaw && !["present", "corrupt", "purged_unavailable"].includes(statusRaw)) {
       return errorResponse("invalid_status", "status must be present, corrupt, or purged_unavailable", 400, ctx);
+    }
+    if (artifactClass && !ARTIFACT_CLASSES.includes(artifactClass as (typeof ARTIFACT_CLASSES)[number])) {
+      return errorResponse(
+        "invalid_artifact_class",
+        "artifactClass must be a supported artifact class",
+        400,
+        ctx,
+      );
     }
     try {
       const page = queryLabArtifacts({

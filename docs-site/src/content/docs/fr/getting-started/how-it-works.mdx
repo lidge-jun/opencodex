@@ -1,0 +1,108 @@
+---
+title: Fonctionnement
+description: Le cycle de vie complet d’une requête opencodex — analyse, routage, adaptation, pont et diffusion.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex communique au moyen de l’**API Responses** d’OpenAI. opencodex accepte `POST /v1/responses`
+sur HTTP avec des événements envoyés par le serveur, ainsi qu’une mise à niveau WebSocket facultative
+sur le même chemin. Il traduit la requête vers le protocole du fournisseur, puis reconvertit la réponse
+en événements Responses. Codex ignore ainsi qu’il ne dialogue pas avec OpenAI.
+
+```
+            ┌──────────────────────────── opencodex ────────────────────────────┐
+            │                                                                     │
+ Codex ──▶  │  parser ──▶ router ──▶ [vision] ──▶ adapter ──▶ provider           │  ──▶ Codex
+ (/v1/      │     │          │          │            │           │                │   (SSE / WS)
+  responses)│   OcxParsed  provider   describe    buildRequest  parseStream       │
+            │   Request    +adapter   images       + fetch      AdapterEvent[]    │
+            │                                          │           │              │
+            │                                  [web-search loop]  bridge ─▶ SSE   │
+            └─────────────────────────────────────────────────────────────────────┘
+```
+
+![Routage Codex multicomptes : les fils existants conservent le même compte ChatGPT, tandis que les nouvelles sessions peuvent actualiser les quotas et sélectionner un compte opérationnel peu utilisé.](../../../../assets/multi-auth-routing.svg)
+
+## Sélection du compte d’authentification Codex
+
+Lorsque le fournisseur sélectionné est le relais ChatGPT/Codex, opencodex peut choisir un compte dans
+le pool enregistré avant de transmettre la requête en amont. Cette règle distingue volontairement deux cas :
+
+- **Les fils existants conservent leur affinité.** Un fil reste lié à la génération du compte qui l’a
+  démarré. Une longue session SSH, tmux ou Codex connectée depuis un appareil mobile conserve donc le
+  même compte au lieu d’être rééquilibrée en pleine conversation.
+- **Les nouvelles sessions peuvent être rééquilibrées.** Pour un nouveau fil, opencodex choisit parmi les comptes admissibles selon
+  `accountPoolStrategy` (`quota` par défaut, ou `round-robin` / `fill-first`). La stratégie `quota`
+  compare l’utilisation connue sur les fenêtres de 5 heures, d’une semaine et de 30 jours. Il peut choisir
+  un compte moins utilisé lorsque le compte actif franchit `autoSwitchThreshold`. Les comptes en délai de
+  récupération ou nécessitant une réauthentification sont ignorés, quelle que soit la stratégie.
+- **Les signaux de quota et d’échec alimentent le routage.** Le tableau de bord peut forcer l’actualisation des quotas avec
+  `GET /api/codex-auth/accounts?refresh=1` ; les réponses réussies en amont capturent les en-têtes de quota,
+  une réponse 429 place le compte en délai de récupération, et une réponse 401/403 exige sa réauthentification.
+
+## Sélection du modèle de sous-agent
+
+Sur une nouvelle installation, `subagentModels` comprend `gpt-5.5`, le trio GPT-5.6 Sol/Terra/Luna et
+`gpt-5.4-mini` dans le sélecteur de sous-agents de Codex. Le tableau de bord peut réorganiser ou remplacer jusqu'à cinq entrées
+avec des modèles natifs ou routés. Pour les requêtes de collaboration v1, les paramètres `injectionModel`
+et `injectionEffort` ajoutent des instructions destinées au développeur afin d’indiquer à `spawn_agent`
+le modèle et l’effort de raisonnement à utiliser. Les requêtes v2 conservent le guidage multi-agent natif de Codex.
+
+## Le cycle de vie
+
+<Steps>
+
+1. **Analyse** — `responses/parser.ts` valide la requête avec un schéma Zod (`responses/schema.ts`)
+   et la convertit en un `OcxParsedRequest` interne : invite système, liste normalisée de messages
+   (texte, images, appels d'outils, résultats d'outils), les définitions d'outils, les options de génération et les fonctionnalités
+   indicateurs tels que `_webSearch` (recherche web hébergée demandée) et `_structuredOutput` (un schéma JSON ou
+   un objet JSON a été défini dans `text.format`). Les images restent de véritables parties du contenu, jamais du
+   texte en base64.
+
+2. **Routage** — `router.ts` associe l’identifiant du modèle demandé à un fournisseur configuré selon
+   l’ordre de priorité suivant : `provider/model` explicite → `defaultModel` d’un fournisseur → préfixes de modèles intégrés
+   (`claude-`, `gpt-`, `o1-`/`o3-`/`o4-`, `llama-`/`mixtral-`/`gemma-`) → le `models[]` d'un fournisseur →
+   `defaultProvider` de secours. Consultez [Routage des modèles](/fr/guides/model-routing/).
+
+3. **Authentification** — pour un fournisseur `oauth`, opencodex injecte un jeton d’accès automatiquement
+   actualisé comme jeton Bearer, ce qui permet aux adaptateurs existants de s’authentifier sans modification.
+   Pour les comptes du pool ChatGPT/Codex, `codex/auth-context.ts` résout d’abord le compte et l’adaptateur
+   de transfert direct refuse de poursuivre si les informations d’identification requises sont indisponibles.
+
+4. **Service auxiliaire de vision (facultatif)** — si le modèle routé figure dans `provider.noVisionModels` et que
+   la requête contient une image, opencodex fait décrire chaque image par le service auxiliaire de vision ChatGPT
+   configuré, puis la remplace par du texte afin qu’un modèle textuel puisse tout de même la traiter.
+   Voir [Services auxiliaires](/fr/guides/sidecars/).
+
+5. **Transfert direct rapide** — si l’adaptateur transfère directement les Responses (`openai-responses` ou
+   `azure-openai`), opencodex conserve le corps Responses, applique les réécritures de routage et de
+   compatibilité ciblées, puis relaie la réponse sans la convertir en événements `AdapterEvent`.
+
+6. **Service auxiliaire de recherche web (facultatif)** — si Codex active l’outil hébergé `web_search` alors que
+   le modèle routé n’est pas un modèle OpenAI, opencodex expose une fonction synthétique `web_search` et
+   exécute le modèle dans une courte boucle agentique. Par défaut, les recherches réelles passent par
+   `gpt-5.6-luna` avec votre connexion ChatGPT, puis leurs résultats sont réinjectés comme résultats d’outil.
+
+7. **Compactage (sur demande)** — Codex v1 appelle `POST /v1/responses/compact` ; v2 ajoute un
+   `compaction_trigger` à un tour de réponses. Le passthrough natif achemine le compactage en amont, tandis qu'un
+   modèle routé produit un résumé sans outil et renvoie l’historique de remplacement attendu par Codex.
+
+8. **Adaptation** — sinon, la méthode `buildRequest()` de l’adaptateur choisi produit la requête HTTP en amont
+   (URL, en-têtes et corps) dans le format natif du fournisseur, puis opencodex l’envoie avec `fetch`.
+9. **Pont de réponse** — la méthode `parseStream()` (ou `parseResponse()`) de l’adaptateur produit des `AdapterEvent` internes
+   (texte, raisonnement, début/delta/fin d’appel d’outil, fin et erreur). `bridge.ts` reconvertit ce flux
+   en événements Responses SSE — `response.output_text.delta`, `response.reasoning_summary_text.delta`,
+   `response.function_call_arguments.delta`, `response.completed`, etc. L'option WebSocket
+   transporte les mêmes charges utiles d’événement que les blocs de texte.
+
+</Steps>
+
+## Pourquoi un proxy et pas un fork Codex ?
+
+Codex utilise directement l’API Responses. En traduisant les échanges à la frontière du protocole,
+opencodex fonctionne avec les **CLI, App et SDK** Codex sans modification, résiste aux mises à jour de
+Codex et permet de changer de fournisseur pour chaque requête sans toucher au client. La traduction est
+bidirectionnelle et fidèle à la diffusion : résumés de raisonnement, espaces de noms d’outils MCP, outils
+libres (`apply_patch`) et découverte `tool_search` effectuent tous un aller-retour correct. Consultez la
+[référence d’architecture](/fr/reference/architecture/) pour la correspondance événement par événement.

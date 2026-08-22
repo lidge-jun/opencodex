@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../src/config";
+import { getConfigPath, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../src/server/gui-static";
@@ -39,6 +39,10 @@ import {
   createLocalManagementReadCapability,
 } from "../src/lib/local-management-capability";
 import {
+  CODEX_APP_SERVER_STATE_PATH,
+  CODEX_RESTART_PATH,
+} from "../src/lib/codex-restart-contract";
+import {
   SYSTEM_RESTART_CAPABILITY_HEADER,
   SYSTEM_RESTART_EXPECTED_PID_HEADER,
   SYSTEM_RESTART_METHOD,
@@ -63,6 +67,7 @@ import { setSystemRestartIoForTests } from "../src/server/management/system-rest
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+const previousDisableAdminAuth = process.env.OPENCODEX_DISABLE_ADMIN_AUTH;
 let testHome = "";
 
 function remoteConfig(): OcxConfig {
@@ -121,6 +126,8 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
   if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+  if (previousDisableAdminAuth === undefined) delete process.env.OPENCODEX_DISABLE_ADMIN_AUTH;
+  else process.env.OPENCODEX_DISABLE_ADMIN_AUTH = previousDisableAdminAuth;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
   testHome = "";
 });
@@ -582,6 +589,50 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
+
+  test("config salvage does not weaken the management auth boundary (#1785)", async () => {
+    // Salvage keeps a config loading after dropping an invalid entry. That must not turn into
+    // a way to reach the management plane: the credential separation is enforced before route
+    // dispatch, and a partially-salvaged config has to behave exactly like a clean one.
+    const salvageable = remoteConfig() as Record<string, unknown>;
+    salvageable.routingProfiles = {
+      good: { candidates: [{ provider: "test", model: "gpt-test" }] },
+      bad:  { candidates: [{ provider: "not-configured", model: "gpt-test" }] },
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(salvageable, null, 2), { mode: 0o600 });
+
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const server = startServer(0);
+    try {
+      const anonymous = await fetch(new URL("/api/config", server.url));
+      expect(anonymous.status).toBe(401);
+
+      const withDataToken = await fetch(new URL("/api/config", server.url), {
+        headers: { "x-opencodex-api-key": "data-secret" },
+      });
+      expect(withDataToken.status).toBe(401);
+
+      const withWrongAdminToken = await fetch(new URL("/api/config", server.url), {
+        headers: { "x-opencodex-api-key": "not-the-admin-secret" },
+      });
+      expect(withWrongAdminToken.status).toBe(401);
+
+      const withAdminToken = await fetch(new URL("/api/config", server.url), {
+        headers: { "x-opencodex-api-key": "admin-secret" },
+      });
+      expect(withAdminToken.status).toBe(200);
+
+      // The salvaged config is what the authorized caller sees: the provider survives and only
+      // the invalid profile is gone. A fallback here would hand back built-in defaults, which a
+      // later write would persist over the operator's providers.
+      const body = await withAdminToken.json() as Record<string, any>;
+      expect(Object.keys(body.providers ?? {})).toContain("test");
+      expect(Object.keys(body.routingProfiles ?? {})).not.toContain("bad");
+    } finally {
+      await server.stop(true);
+      errorSpy.mockRestore();
+    }
+  });
   test("a management token that matches the data environment token closes only the management plane", async () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "data-secret";
     saveConfig(remoteConfig());
@@ -1036,6 +1087,68 @@ describe("management and data-plane credential separation", () => {
         headers: { "x-opencodex-api-key": "env-admin-secret" },
       });
       expect(management.status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("OPENCODEX_DISABLE_ADMIN_AUTH bypasses management auth entirely", async () => {
+    process.env.OPENCODEX_DISABLE_ADMIN_AUTH = "1";
+    saveConfig(remoteConfig());
+    const state = initializeManagementAuthState(remoteConfig());
+    const req = new Request("http://localhost:10100/api/config");
+    expect(requireManagementAuth(req, state, remoteConfig())).toBeNull();
+
+    // Verify it works with config.disableAdminAuth as well
+    delete process.env.OPENCODEX_DISABLE_ADMIN_AUTH;
+    const configWithBypass = remoteConfig();
+    configWithBypass.disableAdminAuth = true;
+    expect(requireManagementAuth(req, state, configWithBypass)).toBeNull();
+  });
+});
+
+describe("codex app-server restart routes ride the management gate", () => {
+  // The service itself is unit-tested with injected seams
+  // (tests/codex-app-server-restart-service.test.ts). These cases exist for one
+  // reason: the route terminates the user's Codex app-servers, so it must be
+  // unreachable without management credentials and from a foreign origin.
+  test("both routes reject an unauthenticated caller and a cross-origin caller", async () => {
+    const server = startServer(0);
+    try {
+      const stateUrl = new URL(CODEX_APP_SERVER_STATE_PATH, server.url);
+      const restartUrl = new URL(CODEX_RESTART_PATH, server.url);
+
+      const anonymousState = await fetch(stateUrl, { method: "GET" });
+      expect(anonymousState.status).toBe(401);
+
+      const anonymousRestart = await fetch(restartUrl, { method: "POST" });
+      expect(anonymousRestart.status).toBe(401);
+
+      // An admin token authenticates, but the shared management-origin gate runs
+      // ahead of every route, so a foreign Origin is refused before dispatch.
+      const foreignOrigin = await fetch(restartUrl, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-secret",
+          Origin: "https://evil.example",
+        },
+      });
+      expect(foreignOrigin.status).toBe(403);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the data-plane token does not authorize the restart route", async () => {
+    // The data token is handed to Codex itself. It must never be able to restart
+    // the app-servers it belongs to.
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL(CODEX_RESTART_PATH, server.url), {
+        method: "POST",
+        headers: { Authorization: "Bearer data-secret" },
+      });
+      expect(response.status).toBe(401);
     } finally {
       await server.stop(true);
     }

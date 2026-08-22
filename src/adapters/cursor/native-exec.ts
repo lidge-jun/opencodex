@@ -117,6 +117,7 @@ interface CursorBlobLimits {
 interface CursorBlobRequestScopeState {
   keys: Set<string>;
   sealed: boolean;
+  kind: "request" | "checkpoint";
 }
 
 const DEFAULT_BLOB_LIMITS: CursorBlobLimits = {
@@ -376,7 +377,7 @@ export function createCursorBlobRequestScope(): CursorBlobRequestScopeToken {
   // IDENTITY, not just pin counts (review C2-2: identical descriptions made
   // scope-swap bugs invisible to deep comparison).
   const scope = Symbol(`cursor-blob-request-${++blobScopeSequence}`);
-  blobRequestScopes.set(scope, { keys: new Set(), sealed: false });
+  blobRequestScopes.set(scope, { keys: new Set(), sealed: false, kind: "request" });
   return scope;
 }
 
@@ -400,6 +401,48 @@ export function storeCursorBlob(data: Uint8Array, requestScope?: CursorBlobReque
   const admission = setBlob(key(blobId), data, "local-regenerated", requestScope);
   if (!admission.admitted) throw new CursorBlobAdmissionError(admission.reason);
   return blobId;
+}
+
+/**
+ * Long-lived pin for blobs referenced by an active Cursor conversation checkpoint.
+ * Unlike a request scope, this lease is not sealed and is not released by getBlob hydration.
+ */
+export function createCursorBlobCheckpointLease(label: string): CursorBlobRequestScopeToken {
+  const scope = Symbol("cursor-blob-checkpoint-" + (++blobScopeSequence) + "-" + label.slice(0, 16));
+  blobRequestScopes.set(scope, { keys: new Set(), sealed: false, kind: "checkpoint" });
+  return scope;
+}
+
+export function pinCursorBlobIdsForCheckpoint(
+  blobIds: readonly Uint8Array[],
+  lease: CursorBlobRequestScopeToken,
+): boolean {
+  const state = blobRequestScopes.get(lease);
+  if (!state || state.sealed) return false;
+  const added: Array<{ entry: { requestPins: Set<CursorBlobRequestScopeToken> }; key: string }> = [];
+  for (const blobId of blobIds) {
+    if (blobId.byteLength === 0) continue;
+    const k = key(blobId);
+    const entry = blobs.get(k);
+    if (!entry || (isExpired(entry, Date.now()) && entry.requestPins.size === 0 && entry.provenance !== "remote-setBlobArgs")) {
+      for (const pinned of added) {
+        pinned.entry.requestPins.delete(lease);
+        state.keys.delete(pinned.key);
+      }
+      return false;
+    }
+    if (!entry.requestPins.has(lease)) {
+      entry.requestPins.add(lease);
+      state.keys.add(k);
+      added.push({ entry, key: k });
+    }
+  }
+  reconcileBlobClassAccountingAndEnforce();
+  return true;
+}
+
+export function hasCursorBlob(blobId: Uint8Array): boolean {
+  return getBlob(key(blobId)) !== undefined;
 }
 
 export interface CursorBlobMetrics {
@@ -459,6 +502,15 @@ export function evictOldestCursorBlobForBudget(): number {
 export function setCursorBlobLimitsForTests(limits?: Partial<CursorBlobLimits>): void {
   resetCursorBlobStateForTests();
   blobLimits = limits ? { ...DEFAULT_BLOB_LIMITS, ...limits } : { ...DEFAULT_BLOB_LIMITS };
+}
+
+/**
+ * The live per-blob admission ceiling. Callers that build a blob must budget against THIS value
+ * rather than a copy of the constant: the limit is test-overridable, and a hardcoded 16 MiB would
+ * silently drift from admission the moment either side changes.
+ */
+export function cursorBlobMaxEntryBytes(): number {
+  return blobLimits.maxEntryBytes;
 }
 
 export function resetCursorBlobStateForTests(): void {
@@ -565,7 +617,9 @@ export function handleCursorNativeKv(
   if (kvMsg.message.case === "getBlobArgs") {
     const blobKey = key(kvMsg.message.value.blobId);
     const blobData = getBlob(blobKey);
-    if (blobData) releaseHydratedBlob(blobKey, requestScope);
+    if (blobData && requestScope && blobRequestScopes.get(requestScope)?.kind === "request") {
+      releaseHydratedBlob(blobKey, requestScope);
+    }
     return clientBytes({
       message: {
         case: "kvClientMessage",

@@ -3,6 +3,7 @@ import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import { convergeCodexCatalog } from "./convergence";
 import type {
   CatalogDisposition,
+  CatalogFailureCause,
   CatalogOnlyOutcome,
   CodexHistoryState,
   CodexObservedState,
@@ -49,6 +50,58 @@ function notEvaluatedObserved(history: CodexHistoryState): CodexObservedState {
   };
 }
 
+/** Recognized errno/code tokens. Anything else is dropped rather than echoed. */
+const RECOGNIZED_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "ENOSPC", "EACCES", "EPERM", "EROFS", "ENOENT", "SQLITE_BUSY",
+]);
+
+/**
+ * Reduce a caught error to an allowlisted cause (#1784).
+ *
+ * Nothing from the error text reaches the caller: `kind` is chosen from a closed set and
+ * `code` is only emitted when it is a recognized token. An `Error.message` routinely carries
+ * paths, home directories and account ids, and `redactSecretString` masks token shapes but
+ * none of those, so the message is never a safe thing to forward from here.
+ */
+function catalogFailureCause(error: unknown): CatalogFailureCause {
+  const raw = (error as { code?: unknown } | null)?.code;
+  const code = typeof raw === "string" && RECOGNIZED_FAILURE_CODES.has(raw)
+    ? raw as CatalogFailureCause["code"]
+    : undefined;
+  if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError) {
+    return { kind: "invalid-request", ...(code ? { code } : {}) };
+  }
+  if (code === "SQLITE_BUSY") return { kind: "lock-busy", code };
+  if (code !== undefined) return { kind: "io", code };
+  return { kind: "unknown" };
+}
+
+/**
+ * Classify a failure that is NOT a filesystem problem.
+ *
+ * `disk` used to be the catch-all, so an operator saw "non-retryable disk failure" for a
+ * malformed request. Reserve `disk` for real IO and route the rest to honest reasons.
+ */
+function classifiedCatalogFailure(error: unknown, commitBegan: boolean): CatalogDisposition {
+  const cause = catalogFailureCause(error);
+  const reason = cause.kind === "invalid-request"
+    ? "request-invalid" as const
+    : cause.kind === "lock-busy"
+      ? "admission" as const
+      : cause.kind === "io"
+        ? "disk" as const
+        : "internal" as const;
+  return {
+    status: "failed",
+    reason,
+    phase: commitBegan ? "commit" : "gather",
+    // Contention is the one class worth retrying unchanged.
+    retryable: reason === "admission",
+    partialWrite: commitBegan,
+    cause,
+  };
+}
+
 function unexpectedCatalogFailure(commitBegan: boolean): CatalogDisposition {
   return {
     status: "failed",
@@ -64,7 +117,7 @@ function admissionFailure(error: unknown): CatalogDisposition {
   if (message.includes("config generation is busy") || message.includes("config generation is database")) {
     return { status: "skipped", reason: "busy", retryable: true };
   }
-  return unexpectedCatalogFailure(false);
+  return classifiedCatalogFailure(error, false);
 }
 
 /** Project catalog work into the shared no-change/not-evaluated outcome shape. */
@@ -107,7 +160,7 @@ export function createManagementConvergeCodex(
     } catch (error) {
       return projectCatalogOnlyOutcome({
         changed: false,
-        catalogRefresh: commitBegan ? unexpectedCatalogFailure(true) : admissionFailure(error),
+        catalogRefresh: commitBegan ? classifiedCatalogFailure(error, true) : admissionFailure(error),
       });
     }
   };

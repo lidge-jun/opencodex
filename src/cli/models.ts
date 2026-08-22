@@ -5,14 +5,71 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
-import { routedSlug } from "../providers/slug-codec";
+import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { encodedModelIdCollides, routedSlug, slugEquals } from "../providers/slug-codec";
+import { knownModelIdsForProvider } from "../router";
 import { findLiveProxy } from "../server/proxy-liveness";
-import type { OcxConfig, OcxCustomModel } from "../types";
+import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 
-const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio]";
+const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio] [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra>] [--default-reasoning-effort <level>]";
 const REMOVE_USAGE = "Usage: ocx models remove <customId|provider/modelId> [--yes]";
 const LIST_CUSTOM_USAGE = "Usage: ocx models list-custom [--json]";
 const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
+
+/**
+ * Parse and validate the reasoning flags shared by `ocx models add` (offline path).
+ * "-" means "inherit" and omits the field entirely; "" means an explicit empty ladder
+ * ("no reasoning" override, the same state the dashboard stores for the toggle-off
+ * checkbox set). Malformed CSV like `low,,high` or `,,` is rejected instead of being
+ * silently normalized. Values are canonicalized into Codex ladder order so the stored
+ * config matches what the API stores.
+ */
+export function parseReasoningArgs(
+  reasoningEffortsValue: string | undefined,
+  defaultEffortValue: string | undefined,
+): { reasoningEfforts?: string[]; defaultReasoningEffort?: string; error?: string } {
+  if (reasoningEffortsValue === undefined && defaultEffortValue === undefined) return {};
+  let reasoningEfforts: string[] | undefined;
+  if (reasoningEffortsValue !== undefined) {
+    const trimmed = reasoningEffortsValue.trim();
+    if (trimmed === "-") {
+      reasoningEfforts = undefined;
+    } else if (trimmed === "") {
+      // Explicit no-reasoning override, exactly like the API's [] / the dashboard's
+      // uncheck-all state.
+      reasoningEfforts = [];
+    } else {
+      const parts = trimmed.split(",").map(value => value.trim());
+      if (parts.some(part => part === "")) {
+        return { error: "--reasoning-efforts must be comma-separated values from none, minimal, low, medium, high, xhigh, max, ultra (\"\" for no reasoning, \"-\" to inherit)" };
+      }
+      const invalid = parts.filter(value => !isDeclaredReasoningEffort(value));
+      if (invalid.length > 0) {
+        return { error: `unsupported reasoning effort: ${invalid.join(", ")} (allowed: none, minimal, low, medium, high, xhigh, max, ultra)` };
+      }
+      reasoningEfforts = canonicalizeReasoningEfforts(parts);
+    }
+  }
+  let defaultReasoningEffort: string | undefined;
+  if (defaultEffortValue !== undefined) {
+    const trimmed = defaultEffortValue.trim();
+    if (trimmed === "-") {
+      defaultReasoningEffort = undefined;
+    } else {
+      if (!isDeclaredReasoningEffort(trimmed)) {
+        return { error: `unsupported reasoning effort: ${trimmed} (allowed: none, minimal, low, medium, high, xhigh, max, ultra)` };
+      }
+      if (!reasoningEfforts || reasoningEfforts.length === 0) {
+        return { error: "--default-reasoning-effort requires --reasoning-efforts" };
+      }
+      if (!reasoningEfforts.includes(trimmed)) {
+        return { error: `--default-reasoning-effort "${trimmed}" is not in the declared reasoning efforts` };
+      }
+      defaultReasoningEffort = trimmed;
+    }
+  }
+  return { reasoningEfforts, defaultReasoningEffort };
+}
 
 interface ModelEntry {
   provider: string;
@@ -41,15 +98,22 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       if (seen.has(model)) return;
       seen.add(model);
 
-      const noVision = prov.noVisionModels?.includes(model);
-      const modalities = inputModalities[model] ?? (noVision ? ["text"] : null);
-      const efforts = reasoningEfforts[model] ?? prov.reasoningEfforts ?? null;
+      // Resolve exactly as the runtime does, or this command reports capabilities the
+      // proxy will not honour: `isModelTextOnly` matches noVisionModels with modelInList
+      // and reads modelInputModalities with modelRecordValue, so a `gpt-oss` entry covers
+      // `gpt-oss:120b`. A bare lookup reported that model as unclassified on every field.
+      // noVisionModels is checked first because `isModelTextOnly` returns true on that
+      // match before it ever reads modelInputModalities: a `gpt-oss` noVision entry beats
+      // an exact `gpt-oss:120b` entry that lists "image", and the proxy rejects the image.
+      const noVision = modelInList(prov.noVisionModels, model);
+      const modalities = noVision ? ["text"] : (modelRecordValue(inputModalities, model) ?? null);
+      const efforts = modelRecordValue(reasoningEfforts, model) ?? prov.reasoningEfforts ?? null;
 
       entries.push({
         provider: provName,
         model,
         isDefault,
-        contextWindow: contextWindows[model] ?? globalContext,
+        contextWindow: modelRecordValue(contextWindows, model) ?? globalContext,
         inputModalities: modalities,
         reasoningEfforts: efforts,
       });
@@ -118,11 +182,12 @@ async function handleCustomAdd(args: string[]): Promise<void> {
   const displayNameValue = consumeFlagValue(rest, "--display-name");
   const contextWindowValue = consumeFlagValue(rest, "--context-window");
   const modalitiesValue = consumeFlagValue(rest, "--modalities");
+  const reasoningEffortsValue = consumeFlagValue(rest, "--reasoning-efforts");
+  const defaultEffortValue = consumeFlagValue(rest, "--default-reasoning-effort");
   rejectUnexpectedArgs(rest, ADD_USAGE);
 
   if (!provider || !modelId) fail("provider and modelId are required", ADD_USAGE);
   if (!isValidProviderName(provider)) fail(`invalid provider name "${provider}"`);
-  if (modelId.includes("/")) fail("modelId must not contain /");
 
   const config = loadConfig();
   if (!hasOwnProvider(config.providers, provider)) {
@@ -150,10 +215,17 @@ async function handleCustomAdd(args: string[]): Promise<void> {
     inputModalities = [...new Set(inputModalities)];
   }
 
+  const parsed = parseReasoningArgs(reasoningEffortsValue, defaultEffortValue);
+  if (parsed.error) fail(parsed.error);
+
   const existing = config.customModels ?? [];
   const slug = routedSlug(provider, modelId);
   if (existing.some(model => routedSlug(model.provider, model.modelId) === slug)) {
     fail(`custom model "${slug}" already exists`);
+  }
+  const known = knownModelIdsForProvider(provider, config.providers[provider], config);
+  if (encodedModelIdCollides(modelId, known)) {
+    fail(`custom model "${slug}" is ambiguous; it encodes to an existing model id`);
   }
 
   const entry: OcxCustomModel = {
@@ -163,6 +235,8 @@ async function handleCustomAdd(args: string[]): Promise<void> {
     ...(displayName ? { displayName } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
+    ...(parsed.reasoningEfforts ? { reasoningEfforts: parsed.reasoningEfforts } : {}),
+    ...(parsed.defaultReasoningEffort ? { defaultReasoningEffort: parsed.defaultReasoningEffort } : {}),
     addedAt: new Date().toISOString(),
   };
   config.customModels = [...existing, entry];
@@ -193,10 +267,16 @@ async function handleCustomRemove(args: string[]): Promise<void> {
 
   const config = loadConfig();
   const existing = config.customModels ?? [];
-  const index = target.includes("/")
-    ? existing.findIndex(model => routedSlug(model.provider, model.modelId) === target)
-    : existing.findIndex(model => model.id === target);
-  if (index === -1) fail(`custom model "${target}" not found`);
+  const matchingIndexes = existing.flatMap((model, index) => (
+    target.includes("/")
+      ? slugEquals(target, model.provider, model.modelId)
+      : model.id === target
+  ) ? [index] : []);
+  if (matchingIndexes.length === 0) fail(`custom model "${target}" not found`);
+  if (matchingIndexes.length > 1) {
+    fail(`custom model selector "${target}" is ambiguous; use the custom model id`);
+  }
+  const index = matchingIndexes[0]!;
 
   const model = existing[index];
   if (!confirmed && !(await confirmCustomRemoval(model))) {
@@ -218,12 +298,14 @@ function customModelCells(model: OcxCustomModel): string[] {
     model.displayName ?? "-",
     model.contextWindow ? `${Math.round(model.contextWindow / 1000)}k` : "-",
     model.inputModalities?.join(",") ?? "-",
+    model.reasoningEfforts?.join(",") ?? "-",
+    model.defaultReasoningEffort ?? "-",
   ];
 }
 
 function printCustomModelGroup(provider: string, models: OcxCustomModel[]): void {
   const rows = models.map(customModelCells);
-  const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES"];
+  const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES", "EFFORTS", "DEFAULT EFFORT"];
   const widths = headers.map((header, column) => Math.max(header.length, ...rows.map(row => row[column].length)));
   const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column])).join("  ");
   console.log(`${provider}:`);

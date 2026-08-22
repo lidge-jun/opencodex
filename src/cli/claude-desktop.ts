@@ -11,10 +11,11 @@ import {
   type DesktopProfile,
 } from "../claude/desktop-profile";
 import { writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
-import { filterCatalogVisibleModels, desktopVisibleNativeSlugs } from "../codex/catalog";
+import { filterCatalogVisibleModels, desktopVisibleNativeSlugs, nativeContextLimits } from "../codex/catalog";
 import { buildClaudeDesktopState, fetchAllModels } from "../server/management-api";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { runtimeRequest } from "./runtime-api";
+import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 
 function isFamily(value: string | undefined): value is DesktopFamily {
   return !!value && (DESKTOP_FAMILIES as readonly string[]).includes(value);
@@ -98,6 +99,7 @@ export async function applyProfile(
     config.apiKeys?.[0]?.key,
     mode,
     state.profile,
+    nativeContextLimits(config),
   );
   return { ok: result.written, path: result.path, reason: result.reason };
 }

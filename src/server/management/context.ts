@@ -1,5 +1,8 @@
 import type { OcxConfig } from "../../types";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
+import type { CodexLogGuardProtectionDeps } from "../../codex/log-guard/protection";
+import type { CodexLogGuardMaintenanceDeps } from "../../codex/log-guard/maintenance";
+import type { StartupHealth } from "../../codex/autostart-health";
 import type { StartupInstallAction } from "../startup-action-control";
 import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
@@ -7,11 +10,19 @@ import type { injectGrokConfig } from "../../grok/inject";
 import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import type { RuntimePortState } from "../../config";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
+import type {
+  performCodexRestart,
+  readCodexAppServerState,
+} from "../../codex/app-server-restart-service";
 
 export interface ManagementApiDeps {
+  /** Platform seam for capability projections; does not alter host-level startup behavior. */
+  platform?: NodeJS.Platform;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  /** Startup-health seam keeps route tests from launching platform probes. */
+  getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
   /**
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config
@@ -52,7 +63,30 @@ export interface ManagementApiDeps {
    * Native-main profile persistence seam for server-boundary tests. Production
    * leaves this unset, so the route creates its normal NativeProfileManager.
    */
+  /**
+   * Codex app-server restart seam (devlog/_fin/260815_gui_codex_restart).
+   * Grouped rather than three separate fields: the route is an adapter over one
+   * service, and a route test that could not stub it would really terminate the
+   * developer's own Codex app-servers.
+   */
+  codexRestartService?: {
+    readState: typeof readCodexAppServerState;
+    performRestart: typeof performCodexRestart;
+  };
   nativeProfileApi?: NativeProfileApiDeps;
+  /**
+   * Log Guard mutation seam. Production leaves this unset and therefore uses the
+   * owner-verified process enumerator, trusted L namespace and real config store.
+   * Route tests inject all three so they cannot depend on local Codex processes
+   * or create lock/config state outside the fixture.
+   */
+  codexLogGuardProtectionDeps?: CodexLogGuardProtectionDeps;
+  /**
+   * Log Guard maintenance seam. Production reuses the same fail-closed process
+   * enumerator and L namespace as Protect; route tests keep all maintenance
+   * state inside their temporary Codex home.
+   */
+  codexLogGuardMaintenanceDeps?: CodexLogGuardMaintenanceDeps;
 }
 
 

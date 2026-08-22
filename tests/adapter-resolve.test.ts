@@ -92,6 +92,40 @@ describe("per-model wire override (#404)", () => {
 });
 
 describe("registry per-model wire defaults", () => {
+  function xai(authMode: "oauth" | "key", overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+    return gateway({
+      baseUrl: "https://api.x.ai/v1",
+      authMode,
+      ...overrides,
+    });
+  }
+
+  test("keeps current xAI subscription models on Chat by default", () => {
+    for (const model of ["grok-4.6", "grok-4.5"]) {
+      expect(resolveWireProtocolOverride("xai", model, xai("oauth"), "responses").adapter)
+        .toBe("openai-chat");
+    }
+  });
+
+  test("keeps xAI key auth and translated callers on their existing Chat wire", () => {
+    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("key"), "responses").adapter)
+      .toBe("openai-chat");
+    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("oauth"), "chat").adapter)
+      .toBe("openai-chat");
+    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("oauth"), "anthropic").adapter)
+      .toBe("openai-chat");
+    expect(resolveWireProtocolOverride("xai", "grok-4.3", xai("oauth"), "responses").adapter)
+      .toBe("openai-chat");
+  });
+
+  test("an explicit xAI Responses override opts into the native wire", () => {
+    for (const model of ["grok-4.6", "grok-4.5"]) {
+      const provider = xai("oauth", { modelAdapters: { [model]: "openai-responses" } });
+      expect(resolveWireProtocolOverride("xai", model, provider, "responses").adapter)
+        .toBe("openai-responses");
+    }
+  });
+
   function deepseek(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
     return gateway({
       baseUrl: "https://api.deepseek.com",

@@ -74,7 +74,15 @@ describe("native-main auth temp startup scrub", () => {
     const target = join(f.codexHome, "near-miss-target");
     const residue = join(f.codexHome, "auth.json.ocx.123.1.tmp");
     writeFileSync(target, "target-private-value");
-    symlinkSync(target, residue, "file");
+    try {
+      symlinkSync(target, residue, "file");
+    } catch (err) {
+      // Windows without Developer Mode / elevated privileges cannot create symlinks,
+      // and a file symlink is what this case is about. The hard-link case below still
+      // covers refusing to truncate a shared target on this machine.
+      if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") return;
+      throw err;
+    }
 
     expectCleanupRequired(() => scrubNativeMainAuthTempResidues(f.context));
     expect(lstatSync(residue).isSymbolicLink()).toBe(true);

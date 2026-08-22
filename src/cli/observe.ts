@@ -18,7 +18,7 @@ const USAGE = `Usage:
   ocx logs rebuild-index
   ocx logs index-status
   ocx observe usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
-  ocx observe storage [--json]
+  ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
   ocx observe claude-inbound [--limit <n>] [--json]
@@ -147,6 +147,42 @@ async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promi
   printData(result, wantsJson, summaryLines(result));
 }
 
+async function storage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  if (argv[0] !== "codex-logs") {
+    await simple("/api/storage", argv, deps);
+    return;
+  }
+
+  const args = argv.slice(1);
+  const action = args[0] && !args[0].startsWith("-") ? args.shift()! : "status";
+  const wantsJson = takeFlag(args, "--json");
+  const mode = takeOption(args, "--mode");
+  rejectArgs(args, USAGE);
+
+  let result: unknown;
+  if (action === "status") {
+    if (mode !== undefined) throw new CliUsageError("--mode is only valid with codex-logs protect", USAGE);
+    result = await runtimeRequest("/api/storage/codex-logs", {}, deps);
+  } else if (action === "protect") {
+    const requestedMode = mode ?? "compat";
+    if (requestedMode !== "compat" && requestedMode !== "quiet") {
+      throw new CliUsageError("--mode must be compat or quiet", USAGE);
+    }
+    result = await runtimeRequest("/api/storage/codex-logs/protect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: requestedMode }),
+    }, deps);
+  } else if (action === "unprotect" || action === "repair" || action === "compact") {
+    if (mode !== undefined) throw new CliUsageError("--mode is only valid with codex-logs protect", USAGE);
+    result = await runtimeRequest(`/api/storage/codex-logs/${action}`, { method: "POST" }, deps);
+  } else {
+    throw new CliUsageError(`unknown codex-logs action ${action}`, USAGE);
+  }
+
+  printData(result, wantsJson, summaryLines(result));
+}
+
 export async function handleObserveCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const [sub = "logs", ...rest] = argv;
@@ -158,7 +194,7 @@ export async function handleObserveCommand(argv: string[], deps: RuntimeApiDeps 
       else await logs(rest, deps);
     }
     else if (sub === "usage") await usage(rest, deps);
-    else if (sub === "storage") await simple("/api/storage", rest, deps);
+    else if (sub === "storage") await storage(rest, deps);
     else if (sub === "memory") await simple("/api/system/memory", rest, deps);
     else if (sub === "debug") await simple("/api/debug", rest, deps);
     else if (sub === "claude-inbound") await simple("/api/claude/inbound-debug", rest, deps);

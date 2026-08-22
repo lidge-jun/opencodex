@@ -17,8 +17,15 @@ export const CURSOR_STRUCTURED_EDIT_TOOLS = [CURSOR_EDIT_FILE_TOOL, CURSOR_MULTI
 export const CURSOR_EXEC_COMMAND_TOOL = CODEX_EXEC_COMMAND_TOOL;
 export const CODEX_SHELL_BRIDGE_TOOL_NAMES = [CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL] as const;
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
-  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell; never say native shell is blocked.';
+  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell.';
 const NEIGHBOR_AGENT_TOOL_NAMES = ["Read", "Grep", "Glob", "Bash", "LS"] as const;
+const NEIGHBOR_AGENT_TOOL_ALIASES: Record<(typeof NEIGHBOR_AGENT_TOOL_NAMES)[number], readonly string[]> = {
+  Read: ["read", "read_file"],
+  Grep: ["grep"],
+  Glob: ["glob", "find"],
+  Bash: ["bash", "shell"],
+  LS: ["ls"],
+};
 
 export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
   "For generic tool-use/count demos, satisfy the request with repeated Codex shell bridge calls (`shell_command` or `exec_command`) for harmless commands.",
@@ -29,8 +36,7 @@ export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
   "The Cursor bridge may suspend after the first returned bridge tool call, so emit sibling calls together before any result is needed.",
   "If parallel emission is unavailable, continue with separate shell-bridge calls until the requested count has returned.",
   "Do not use `tool_search`, external MCP, or resource discovery just to pad the count unless explicitly asked.",
-  "Do not suggest or switch to neighboring-agent tools such as `Grep`, `Read`, `Glob`, `Bash`, or `LS` unless this turn's catalog lists those exact names.",
-  "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Do not narrate Cursor-native Shell/Read routing.",
+  "Do not suggest or switch to neighboring-agent tools such as `Grep`, `Read`, `Glob`, `Bash`, or `LS` unless this turn's catalog lists those exact names or an equivalent listed client tool.",
 ].join(" ");
 
 export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
@@ -189,6 +195,38 @@ export function isCursorExecutionPathTool(tool: Pick<OcxTool, "namespace" | "nam
 /** `wait` only resumes a yielded exec cell; it is unusable without an execution-path tool. */
 export function isCursorWaitTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
   return isCursorResponsesProvider(tool.namespace) && tool.name === CODEX_WAIT_TOOL;
+}
+
+/**
+ * True for Codex's unified-exec "code mode" tool: a freeform `exec` whose body is JavaScript
+ * evaluated in a V8 isolate, not a shell command string.
+ */
+export function isCursorCodeModeExecTool(
+  tool: Pick<OcxTool, "namespace" | "name" | "freeform">,
+): boolean {
+  return isCursorResponsesProvider(tool.namespace)
+    && tool.name === CODEX_UNIFIED_EXEC_TOOL
+    && tool.freeform === true;
+}
+
+/**
+ * Codex code mode advertises ONE freeform `exec` tool and no bare shell bridge. Shell, file
+ * edits, and MCP calls are reachable only as nested `tools.<name>(...)` helpers described inside
+ * that tool's own description, so a flat catalog scan cannot see them.
+ *
+ * This matters because the shell-bridge guidance below is written for a flat catalog. Emitting
+ * "call \`exec_command\`" into a code-mode turn names a top-level tool that does not exist: the
+ * model calls it, gets nothing back, and burns turns rediscovering the real contract from error
+ * messages (empty output until \`text()\` is called, \`require is not defined\` because the isolate
+ * is not Node, \`apply_patch\` rejected because it too is only a nested helper here).
+ */
+export function cursorRequestUsesCodeMode(
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
+  toolChoice?: OcxRequestOptions["toolChoice"],
+): boolean {
+  const catalog = tools ?? [];
+  const visible = catalog.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog));
+  return visible.some(isCursorCodeModeExecTool) && !visible.some(isBareCodexShellBridgeTool);
 }
 
 /** @deprecated Prefer isBareCodexShellBridgeTool; kept for older call sites/tests. */
@@ -493,7 +531,12 @@ export function nonEmptyShellBridgeCommandFromArgs(
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
-  for (const key of shellBridgeRequiredCommandKeys(toolName, schema)) {
+  const requiredKeys = shellBridgeRequiredCommandKeys(toolName, schema);
+  const candidateKeys = new Set<"cmd" | "command">([
+    ...requiredKeys,
+    requiredKeys.includes("cmd") ? "command" : "cmd",
+  ]);
+  for (const key of candidateKeys) {
     const value = record[key];
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
   }
@@ -526,9 +569,14 @@ function quotedNames(names: readonly string[]): string {
   return names.map(name => `\`${name}\``).join(", ");
 }
 
+function advertisedCoversNeighbor(wireNames: readonly string[], neighbor: (typeof NEIGHBOR_AGENT_TOOL_NAMES)[number]): boolean {
+  const advertised = new Set(wireNames.map(name => name.toLowerCase()));
+  if (advertised.has(neighbor.toLowerCase())) return true;
+  return NEIGHBOR_AGENT_TOOL_ALIASES[neighbor].some(alias => advertised.has(alias.toLowerCase()));
+}
+
 function unavailableNeighborAgentToolNames(wireNames: readonly string[]): string[] {
-  const advertised = new Set(wireNames);
-  return NEIGHBOR_AGENT_TOOL_NAMES.filter(name => !advertised.has(name));
+  return NEIGHBOR_AGENT_TOOL_NAMES.filter(name => !advertisedCoversNeighbor(wireNames, name));
 }
 
 function discoveryToolLabel(wireNames: readonly string[]): string | undefined {
@@ -554,6 +602,14 @@ export function buildCursorToolGuidanceSystemNote(
   const listedNames = quotedNames(wireNames);
   const shellBridgeNames = wireNames.filter(isCodexShellBridgeToolName);
   const hasBareExec = shellBridgeNames.length > 0;
+  const codeMode = cursorRequestUsesCodeMode(tools, toolChoice);
+  // Code mode describes how the freeform exec tool works; it does not suppress the rest of the
+  // catalog. A turn can advertise freeform `exec` AND ordinary top-level tools at once, and
+  // telling the model those are "not separate top-level tools" would make it refuse tools that
+  // are right there in its catalog. Name the ones that stay callable instead.
+  const codeModeOtherTopLevelNames = codeMode
+    ? wireNames.filter(name => name !== CODEX_UNIFIED_EXEC_TOOL && !isCodexShellBridgeToolName(name))
+    : [];
   const shellBridgeLabel = quotedNames(shellBridgeNames.length > 0 ? shellBridgeNames : [...CODEX_SHELL_BRIDGE_TOOL_NAMES]);
   const hasApplyPatch = cursorRequestAdvertisesApplyPatch(tools, toolChoice);
   const structuredEditNames = tools
@@ -572,6 +628,14 @@ export function buildCursorToolGuidanceSystemNote(
     unavailableNeighborNames.length > 0
       ? `This turn does not expose neighboring-agent tool names ${quotedNames(unavailableNeighborNames)}; do not call or suggest them unless the catalog lists them.`
       : undefined,
+    // Code mode: shell/edit/MCP live inside freeform `exec` as nested helpers. Without this the
+    // model probes for a top-level shell tool that is not there.
+    codeMode
+      ? `\`${CODEX_UNIFIED_EXEC_TOOL}\` is Codex code mode: its body is JavaScript evaluated in a V8 isolate, not a shell command and not Node. Shell, file edits, and MCP are nested helpers called INSIDE that body as \`await tools.<name>(...)\`, for example \`await tools.exec_command({cmd: \"ls\"})\`. Read the tool description and the isolate global \`ALL_TOOLS\` (not \`tools.ALL_TOOLS\`) for helpers this turn provides; absence from the top-level catalog or from \`exec\`'s description is not absence. Those nested helpers are not themselves top-level tools, so do not call \`exec_command\` or \`shell_command\` at the top level here${codeModeOtherTopLevelNames.length > 0 ? `; every other tool this turn lists, including ${quotedNames(codeModeOtherTopLevelNames)}, remains callable at the top level as usual` : ""}.`
+      : undefined,
+    codeMode
+      ? "In code mode the isolate returns nothing on its own: call `text(...)` (or `notify(...)`) on any value you need to see, or the call completes with empty output. There is no `require`, no `module`, and no filesystem or network globals; reach the host only through the nested helpers."
+      : undefined,
     hasBareExec
       ? `${shellBridgeLabel} is the Codex Responses shell bridge for this turn, exposed through Cursor's tool protocol; it is not an external MCP server tool. \`shell_command\` and \`exec_command\` are aliases of the same bridge.`
       : undefined,
@@ -579,7 +643,7 @@ export function buildCursorToolGuidanceSystemNote(
       ? "Your tool list may display it under a longer `mcp_opencodex-responses_shell_command` / `mcp_opencodex-responses_exec_command` name; those are the SAME tool — call whichever your list shows, and do not comment on the naming difference to the user."
       : undefined,
     hasBareExec
-      ? "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Prefer the bridge over Cursor-native Shell/Read; do not narrate phrases like \"Native shell access is blocked\" — silently call `shell_command` / `exec_command`."
+      ? `Prefer the Codex shell bridge over Cursor-native Shell/Read. If a Cursor-native file read, directory listing, grep, or shell operation is rejected, continue with the listed catalog tool ${shellBridgeLabel}.`
       : undefined,
     hostShellNote,
     "Cursor product features (Chronicle, screen recording, Notes, Plans, background agents) are available only if this turn's catalog lists a matching tool; do not offer or promise them otherwise.",
@@ -603,7 +667,7 @@ export function buildCursorToolGuidanceSystemNote(
       : undefined,
     "Do not count or report a tool call unless a tool result was actually returned.",
     hasBareExec
-      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). Do not tell the user access is blocked. For file edits, use ${structuredEditNames.length > 0 ? `the structured edit tools (${quotedNames(structuredEditNames)}) or ` : ""}\`apply_patch\` when available.`
+      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, use ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). For file edits, use ${structuredEditNames.length > 0 ? `the structured edit tools (${quotedNames(structuredEditNames)}) or ` : ""}\`apply_patch\` when available.`
       : undefined,
   ].filter((note): note is string => typeof note === "string");
   return notes.join(" ");

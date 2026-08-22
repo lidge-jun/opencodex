@@ -1,9 +1,8 @@
 import type { OcxProviderConfig } from "../types";
-import { getValidAccessToken } from "../oauth";
+import { getValidAccessToken, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
-import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
 import type { WebSearchSource } from "./parse";
@@ -127,7 +126,7 @@ export async function runAnthropicWebSearch(
   try {
     token = await getValidAccessToken(providerName);
   } catch (e) {
-    return { text: "", sources: [], error: `anthropic sidecar auth failed: ${e instanceof Error ? e.message : String(e)}` };
+    return { text: "", sources: [], error: `anthropic sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(e)}` };
   }
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -174,8 +173,11 @@ export async function runAnthropicWebSearch(
       const t = await res.text().catch(() => "");
       detachBodyGuard();
       console.warn(`[web-search] anthropic sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
-      // Redact before surfacing: the body can echo auth headers/tokens (#398 review).
-      return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
+      if (res.status === 401) {
+        return { text: "", sources: [], error: `anthropic sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(new Error(t))}` };
+      }
+      // Upstream bodies are untrusted and may contain credentials, paths, or provider diagnostics.
+      return { text: "", sources: [], error: `sidecar HTTP ${res.status}` };
     }
     try {
       return await parseAnthropicSidecarSSE(res);
@@ -185,7 +187,7 @@ export async function runAnthropicWebSearch(
   } catch (e) {
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[web-search] anthropic sidecar ${kind} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
-    return { text: "", sources: [], error: e instanceof Error ? e.message : String(e) };
+    return { text: "", sources: [], error: `anthropic sidecar ${kind}` };
   } finally {
     sidecarExit();
     linkedSignal.cleanup();

@@ -131,6 +131,50 @@ function registryAllowsPrivateNetwork(name: string): boolean {
 }
 
 /**
+ * OAuth registry entries that opt into `allowBaseUrlOverride` send bearer credentials to a
+ * user-configured endpoint (review findings, PR #2109 / PR #2110): a cleartext `http:`
+ * override would expose the OAuth token on the wire. `https:` is therefore required for
+ * every non-local destination. Loopback/localhost/private relays keep working over
+ * `http:` because they already sit behind the explicit `allowPrivateNetwork` opt-in
+ * enforced by {@link providerDestinationConfigError}. Keyed/local providers (Ollama,
+ * vLLM, LM Studio, LiteLLM, Moonshot, Qwen, Alibaba) are untouched: they are not
+ * `authKind: "oauth"`, so this check never fires for them.
+ */
+function registrySendsOAuthToOverriddenBaseUrl(name: string): boolean {
+  const entry = getProviderRegistryEntry(name);
+  return entry?.authKind === "oauth" && entry.allowBaseUrlOverride === true;
+}
+
+export function providerSecureTransportConfigError(
+  name: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">,
+): string | null {
+  if (!registrySendsOAuthToOverriddenBaseUrl(name)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(provider.baseUrl.trim());
+  } catch {
+    return null; // invalid URLs are providerBaseUrlConfigError's concern
+  }
+  if (parsed.protocol !== "http:") return null;
+  const assessment = assessDestination(provider.baseUrl);
+  // Classify FIRST, then consult the opt-in. `allowPrivateNetwork` says "this destination is
+  // intentionally local", which is a statement about the address, not a waiver of transport
+  // security — reading it before classification let `http://attacker.example` with the opt-in
+  // set carry an OAuth bearer in cleartext to a public host.
+  if (!assessment) return null;
+  const local = assessment.kind === "localhost"
+    || assessment.kind === "loopback"
+    || assessment.kind === "private";
+  if (local && providerAllowsPrivateNetwork(name, provider)) {
+    // A genuinely local relay over http stays reachable through the explicit opt-in; the
+    // private-network gate still governs whether it may be reached at all.
+    return null;
+  }
+  return "baseUrl must use https: this provider sends OAuth credentials to its endpoint, and http is allowed only for loopback/private relays";
+}
+
+/**
  * Whether a provider may reach loopback/private addresses.
  *
  * Two sources, and both have to be consulted at every boundary: the operator's explicit
@@ -150,6 +194,8 @@ export function providerAllowsPrivateNetwork(
 }
 
 export function providerDestinationConfigError(name: string, provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">): string | null {
+  const secureTransportError = providerSecureTransportConfigError(name, provider);
+  if (secureTransportError) return secureTransportError;
   const assessment = assessDestination(provider.baseUrl);
   if (!assessment) return null;
   if (assessment.kind === "public" || assessment.kind === "hostname") return null;
@@ -241,10 +287,18 @@ export function assessUrlDestination(url: string): UrlDestinationAssessment | nu
  * Returns the validated addresses so direct callers can pin the connect peer and
  * avoid a second, rebindable resolution. DNS failures remain fail-closed here;
  * the provider proxy wrapper alone may recognize that typed failure and degrade.
+ *
+ * `allowBenchmarkAddresses` is an explicit outbound-only opt-in for Clash/Surge/
+ * Mihomo fake-IP DNS (IANA benchmark space 198.18.0.0/15, credit #1748): a hostname
+ * answer in that range is accepted without marking the destination private, so the
+ * caller can keep the hostname on its configured HTTP(S) proxy path. It applies to
+ * resolved answers only — a literal 198.18.x URL still rejects — and mixed answers
+ * that include any other non-public address still fail. Callers that do not pass it
+ * (image and Lab fetch) keep rejecting benchmark space.
  */
 export async function resolvePublicAddresses(
   url: string,
-  options?: string | { context?: string; allowPrivateNetwork?: boolean },
+  options?: string | { context?: string; allowPrivateNetwork?: boolean; allowBenchmarkAddresses?: boolean },
 ): Promise<{
   hostname: string;
   addresses: { address: string; family: number }[];
@@ -254,6 +308,7 @@ export async function resolvePublicAddresses(
     ? `${options.trim() || "image"} URL`
     : options?.context?.trim() || "image URL";
   const privateNetworkAllowed = typeof options === "object" && options?.allowPrivateNetwork === true;
+  const benchmarkAllowed = typeof options === "object" && options?.allowBenchmarkAddresses === true;
   let hostname: string;
   try {
     hostname = normalizeHostname(new URL(url.trim()).hostname);
@@ -294,6 +349,14 @@ export async function resolvePublicAddresses(
     const ipKind = isIP(address) || (family === 4 || family === 6 ? family : 0);
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind !== "public") {
+      // Hostname → 198.18.0.0/15 under the explicit opt-in is Clash/Surge/Mihomo
+      // fake-IP DNS, not a LAN provider. Accept it without allowPrivateNetwork and
+      // do not mark the destination private, so the caller's HTTP(S)_PROXY path
+      // still applies (credit #1748).
+      if (benchmarkAllowed && assessment?.kind === "private" && assessment.detail === "benchmark address") {
+        validatedAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
+        continue;
+      }
       const allowedPrivateAddress = privateNetworkAllowed
         && assessment
         && (assessment.kind === "loopback" || assessment.kind === "private");
@@ -314,3 +377,4 @@ export async function resolvePublicAddresses(
 export async function assertUrlResolvesPublic(url: string): Promise<void> {
   await resolvePublicAddresses(url);
 }
+

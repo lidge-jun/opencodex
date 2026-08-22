@@ -9,6 +9,8 @@
  * and under a bounded timeout so a hung child cannot wedge those paths.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { readProcessStartMsBatch } from "../src/codex/app-server-processes";
 import {
@@ -49,7 +51,22 @@ describe("Windows identity lookup popup fix (#1278)", () => {
     expect(options.stdin).toBe("ignore");
     // Assert the exact budget: the identity lookup contract is an 8-second
     // bound, and a looser assertion would let a silent re-tune through.
-    expect(options.timeout).toBe(8_000);
+    //
+    // Both values are pinned, because there are now two. A contended CI runner cannot start
+    // powershell.exe inside 8s while it runs a quarter of this suite, and the composed
+    // acceptance cases failed there with "Windows effective-account lookup timed out" —
+    // contention, not a hung child, which is the only thing this budget exists to bound.
+    // A user's machine keeps 8s exactly as before.
+    const previous = process.env.CI;
+    try {
+      delete process.env.CI;
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(8_000);
+      process.env.CI = "true";
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(30_000);
+    } finally {
+      if (previous === undefined) delete process.env.CI;
+      else process.env.CI = previous;
+    }
   });
 
   test("decodes non-ASCII known-folder values from the ASCII-safe envelope", () => {
@@ -83,5 +100,49 @@ describe("Windows process-lookup popup fix (#1278)", () => {
     } else {
       expect(startedAtMs).toBeNull();
     }
+  });
+});
+
+describe("no direct PowerShell argv carries the Bun-incompatible window flag (#1589)", () => {
+  // src/codex/user-identity.ts records the invariant in prose: PowerShell's
+  // `-WindowStyle Hidden` CLI pair can fail under Bun 1.3.14 before the command
+  // runs, and process-level `windowsHide` is what actually suppresses the window.
+  // The prose held for the file that carried it and drifted everywhere else, so
+  // this sweeps the whole runtime instead of one file.
+  //
+  // Only the ARGV form is forbidden. Passing `-WindowStyle Hidden` inside a
+  // PowerShell script string (`Start-Process ... -WindowStyle Hidden`) is a
+  // different construct that Bun never parses, and six legitimate call sites
+  // rely on it.
+  const runtimeFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...runtimeFiles(full));
+      else if (entry.name.endsWith(".ts")) out.push(full);
+    }
+    return out;
+  };
+
+  // "-WindowStyle" and "Hidden" as adjacent quoted argv elements, in either
+  // quote style, tolerating whitespace or a line break between them.
+  const FORBIDDEN_ARGV = /["']-WindowStyle["']\s*,\s*["']Hidden["']/;
+
+  const srcRoot = join(import.meta.dir, "..", "src");
+
+  test("no src/**/*.ts passes -WindowStyle Hidden as an argv pair", () => {
+    const offenders = runtimeFiles(srcRoot)
+      .filter(file => FORBIDDEN_ARGV.test(readFileSync(file, "utf8")))
+      .map(file => file.slice(srcRoot.length + 1).replaceAll("\\", "/"));
+    expect(offenders).toEqual([]);
+  });
+
+  test("the pattern accepts the script-string form and rejects the argv form", () => {
+    // Guard the guard: if this ever stops discriminating, the sweep above is
+    // either vacuous or about to fail six correct call sites.
+    expect(FORBIDDEN_ARGV.test('"-NonInteractive", "-WindowStyle", "Hidden",')).toBe(true);
+    expect(FORBIDDEN_ARGV.test("'-WindowStyle', 'Hidden'")).toBe(true);
+    expect(FORBIDDEN_ARGV.test('" -Verb RunAs -WindowStyle Hidden -PassThru -Wait;"')).toBe(false);
+    expect(FORBIDDEN_ARGV.test('"$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden"')).toBe(false);
   });
 });

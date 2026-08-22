@@ -45,7 +45,7 @@ describe("Grok orphan adoption (#511)", () => {
       "[model.ocx-gpt-5-6-sol]",
       'model = "gpt-5.6-sol"',
       'base_url = "http://127.0.0.1:10100/v1"',
-      'api_backend = "chat_completions"',
+      'api_backend = "responses"',
       'api_key = "opencodex-loopback"',
       'name = "OCX gpt-5.6-sol"',
       "",
@@ -140,7 +140,7 @@ describe("Grok orphan adoption (#511)", () => {
     expect(content).toContain("[ui]");
     expect(content).toContain('theme = "dark"');
     // No key from the removed table leaked into [ui].
-    expect(content).not.toContain('api_backend = "chat_completions"\ntheme');
+    expect(content).not.toContain('api_backend = "responses"\ntheme');
   });
 
   // F5: an orphan with no replacement stays, and its reference is not rewritten to
@@ -272,7 +272,7 @@ describe("Grok orphan adoption (#511)", () => {
       "[model.ocx-gpt-5-6-sol]",            // stale generation: dead port
       'model = "gpt-5.6-sol"',
       'base_url = "http://127.0.0.1:4179/v1"',
-      'api_backend = "chat_completions"',
+      'api_backend = "responses"',
       'api_key = "opencodex-loopback"',
       "context_window = 372000",
       "",

@@ -6,6 +6,7 @@ import {
   CURSOR_ROUTING_LEVELS,
   CURSOR_STATIC_MODELS,
   cursorCodexToWireModelId,
+  cursorCheckpointModelAffinityId,
   filterCursorConfiguredModelsByLiveDiscovery,
   isCursorModelAvailableForAccount,
   cursorModelContextWindows,
@@ -16,6 +17,7 @@ import {
   inferCursorContextWindow,
   isCursorExternalWireModel,
   isCursorNativeWireModel,
+  cursorNeedsExternalToolContinuation,
   normalizeCursorModels,
 } from "../src/adapters/cursor/discovery";
 
@@ -186,5 +188,26 @@ describe("Cursor discovery metadata", () => {
     expect(isCursorExternalWireModel("gpt-5.6-sol-xhigh")).toBe(true);
     expect(isCursorExternalWireModel("claude-4.6-sonnet-high")).toBe(true);
     expect(isCursorExternalWireModel("cursor/gpt-5.6-sol")).toBe(true);
+  });
+
+  test("routes composer-2.5 tool continuations through the external userMessageAction path", () => {
+    expect(cursorNeedsExternalToolContinuation("composer-2.5")).toBe(true);
+    expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5")).toBe(true);
+    expect(cursorNeedsExternalToolContinuation("composer-2.5-fast")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5-fast")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("auto")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("gpt-5.6-sol")).toBe(true);
+  });
+
+  test("normalizes Cursor checkpoint model affinity across prefix and effort", () => {
+    expect(cursorCheckpointModelAffinityId("cursor/grok-4.6")).toBe(
+      cursorCheckpointModelAffinityId("cursor-grok-4.6-low"),
+    );
+    expect(cursorCheckpointModelAffinityId("grok-4.6")).toBe(
+      cursorCheckpointModelAffinityId("cursor/grok-4.6"),
+    );
+    expect(cursorCheckpointModelAffinityId("cursor/gpt-5.6-sol")).not.toBe(
+      cursorCheckpointModelAffinityId("cursor/grok-4.6"),
+    );
   });
 });

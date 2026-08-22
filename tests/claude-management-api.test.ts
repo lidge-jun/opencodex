@@ -20,12 +20,6 @@ let previousClaudeConfigDir: string | undefined;
 let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", { configurable: true, value: platform });
-}
-
-const originalPlatform = process.platform;
-
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -47,7 +41,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setPlatform(originalPlatform);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -78,6 +71,57 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
   }
 });
 
+
+test("PUT round-trips classifier routing settings and clears them with null (#1697)", async () => {
+  const server = startServer(0);
+  try {
+    const put = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        classifierModel: " mock/test-model ",
+        classifierFallbacks: [" mock/test-model ", "mock/other"],
+      }),
+    });
+    expect(put.status).toBe(200);
+
+    const get = await fetch(new URL("/api/claude-code", server.url));
+    const d = await get.json() as Record<string, any>;
+    expect(d.classifierModel).toBe("mock/test-model");
+    expect(d.classifierFallbacks).toEqual(["mock/test-model", "mock/other"]);
+
+    // null clears both, which is how the operator turns classifier routing back off.
+    const cleared = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ classifierModel: "", classifierFallbacks: null }),
+    });
+    expect(cleared.status).toBe(200);
+    const after = await (await fetch(new URL("/api/claude-code", server.url))).json() as Record<string, any>;
+    expect(after.classifierModel).toBe("");
+    expect(after.classifierFallbacks).toEqual([]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("PUT rejects a malformed classifierFallbacks instead of persisting it (#1697)", async () => {
+  const server = startServer(0);
+  try {
+    for (const body of [{ classifierFallbacks: "mock/test-model" }, { classifierFallbacks: [1] }, { classifierFallbacks: [""] }]) {
+      const res = await fetch(new URL("/api/claude-code", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+      const err = await res.json() as Record<string, unknown>;
+      expect(String(err.error)).toContain("classifierFallbacks");
+    }
+  } finally {
+    await server.stop(true);
+  }
+});
 test("PUT round-trips settings and persists to config", async () => {
   const server = startServer(0);
   try {
@@ -332,23 +376,38 @@ test("Claude sidecar overrides round-trip, partially update, clear, and reject u
   });
   try {
     let response = await put({
-      webSearchSidecar: { backend: "anthropic", model: "claude-search" },
+      // The web-search override now passes the #2188 membership gate; the
+      // Haiku auth slot is always a legal setting regardless of login state.
+      webSearchSidecar: { backend: "anthropic", model: "claude-haiku-4-5" },
       visionSidecar: { backend: "openai", model: "gpt-vision" },
     });
     expect(response.status).toBe(200);
     expect(loadConfig().claudeCode).toMatchObject({
-      webSearchSidecar: { backend: "anthropic", model: "claude-search" },
+      webSearchSidecar: { backend: "anthropic", model: "claude-haiku-4-5" },
       visionSidecar: { backend: "openai", model: "gpt-vision" },
     });
 
     let get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
-    expect(get.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-search" });
+    expect(get.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-haiku-4-5" });
     expect(get.visionSidecar).toEqual({ backend: "openai", model: "gpt-vision" });
 
-    // Nested partial updates preserve omitted fields and omitted sections.
-    response = await put({ webSearchSidecar: { model: "claude-search-2" } });
+    // A model outside (runnable candidates ∪ auth slots) is refused with the
+    // filter named — this route shares the gate with /api/sidecar-settings.
+    response = await put({ webSearchSidecar: { model: "claude-search" } });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain("web-search sidecar candidate");
+
+    // A partial model update is validated against the effective preserved backend.
+    response = await put({ webSearchSidecar: { model: "gpt-5.6-luna" } });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain("backend/model pair");
+    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-haiku-4-5" });
+    expect(loadConfig().claudeCode?.visionSidecar).toEqual({ backend: "openai", model: "gpt-vision" });
+
+    // Updating both fields to a runnable pair succeeds and preserves omitted sections.
+    response = await put({ webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" } });
     expect(response.status).toBe(200);
-    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-search-2" });
+    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna" });
     expect(loadConfig().claudeCode?.visionSidecar).toEqual({ backend: "openai", model: "gpt-vision" });
 
     // null backend is the explicit Auto/inherit transition; empty model deletes only model.
@@ -357,10 +416,10 @@ test("Claude sidecar overrides round-trip, partially update, clear, and reject u
       visionSidecar: { backend: null, model: "" },
     });
     expect(response.status).toBe(200);
-    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ model: "claude-search-2" });
+    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ model: "gpt-5.6-luna" });
     expect(loadConfig().claudeCode?.visionSidecar).toBeUndefined();
     get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
-    expect(get.webSearchSidecar).toEqual({ model: "claude-search-2" });
+    expect(get.webSearchSidecar).toEqual({ model: "gpt-5.6-luna" });
     expect(get.visionSidecar).toBeUndefined();
 
     // null and empty sections both clear the whole override.
@@ -369,7 +428,10 @@ test("Claude sidecar overrides round-trip, partially update, clear, and reject u
     expect(loadConfig().claudeCode?.webSearchSidecar).toBeUndefined();
     expect(loadConfig().claudeCode?.visionSidecar).toBeUndefined();
 
-    await put({ webSearchSidecar: { backend: "openai", model: "stable" } });
+    // Auth-slot id: passes the membership gate regardless of login state, so the
+    // known-good snapshot below is real (a non-slot id would silently 400 here).
+    const snapshotPut = await put({ webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" } });
+    expect(snapshotPut.status).toBe(200);
     const beforeInvalid = loadConfig().claudeCode;
     for (const body of [
       { webSearchSidecar: { backend: "other" } },
@@ -460,7 +522,7 @@ test("PUT/GET round-trips the context/effort levers (devlog 136 B6)", async () =
 test("PUT/GET round-trips auto-context (devlog 260712 020)", async () => {
   const server = startServer(0);
   try {
-    // Defaults: on, window null (GUI shows the 350000 placeholder).
+    // Defaults: on, window null — the GUI renders the runtime default as the empty choice.
     let get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
     expect(get.autoContext).toBe(true);
     expect(get.autoCompactWindow).toBeNull();
@@ -576,8 +638,7 @@ test("PUT validation rejects bad shapes", async () => {
 });
 
 test("GET /api/claude-code reports Auto-connect support on Darwin", async () => {
-  setPlatform("darwin");
-  const server = startServer(0);
+  const server = startServer(0, { managementApi: { platform: "darwin" } });
   try {
     const r = await fetch(new URL("/api/claude-code", server.url));
     expect(r.status).toBe(200);
@@ -593,8 +654,7 @@ test("GET /api/claude-code reports Auto-connect unsupported outside Darwin", asy
     ...loadConfig(),
     claudeCode: { systemEnv: true },
   } as OcxConfig);
-  setPlatform("linux");
-  const server = startServer(0);
+  const server = startServer(0, { managementApi: { platform: "linux" } });
   try {
     const r = await fetch(new URL("/api/claude-code", server.url));
     expect(r.status).toBe(200);

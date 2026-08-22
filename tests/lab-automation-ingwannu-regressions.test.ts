@@ -117,7 +117,7 @@ describe("CL-08 Ingwannu regressions", () => {
 
   test("CL-08 plan has no trailing whitespace", () => {
     const text = readFileSync(
-      join(import.meta.dir, "..", "devlog", "_plan", "260807_compatibility_lab", "008_cl08_automation.md"),
+      join(import.meta.dir, "..", "devlog", "_fin", "260807_compatibility_lab", "008_cl08_automation.md"),
       "utf8",
     );
     const offenders = text

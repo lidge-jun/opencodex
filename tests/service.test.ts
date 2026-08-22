@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, posix, win32 } from "node:path";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, prepareServiceInstall, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
+import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
 import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../src/lib/config-ownership";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
@@ -110,6 +111,69 @@ describe("systemd service unit", () => {
     expect(unit).not.toContain('StandardError="append:');
   });
 
+  test("bakes outbound proxy env into the unit so the service is not cut off from upstream (#2107)", () => {
+    // systemd does not inherit the installing shell's environment, and ExecStart runs
+    // /bin/sh -lc — which is dash on Ubuntu/WSL and reads .profile, not .bashrc. A user
+    // whose proxy lives in the shell therefore gets a service that dials upstream direct,
+    // the socket is reset, and the request surfaces as 502 Provider unreachable.
+    //
+    // The shell is passed in rather than assigned onto `process.env`. Mutating the real
+    // environment here leaked `HTTP_PROXY` out of this file: Bun runs a `bun test a b`
+    // invocation in ONE process, and the Lab sandbox calls `rejectProxyEnvironment()` on
+    // the live `process.env`, so every Lab file that loaded afterwards died with
+    // `harness_failure`. That was 73 failures on the unsharded macOS lane and zero when
+    // the Lab suites ran alone.
+    const proxyEnv = resolvedProxyEnv({
+      HTTP_PROXY: "http://127.0.0.1:7890",
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      NO_PROXY: "localhost,127.0.0.1",
+    });
+
+    const unit = buildUnit(proxyEnv);
+    expect(unit).toContain('Environment="HTTP_PROXY=http://127.0.0.1:7890"');
+    expect(unit).toContain('Environment="HTTPS_PROXY=http://127.0.0.1:7890"');
+    expect(unit).toContain("NO_PROXY=");
+    // An unset key must not produce an empty assignment.
+    expect(unit).not.toContain('Environment="ALL_PROXY="');
+
+    const plist = buildPlist(proxyEnv);
+    expect(plist).toContain("<key>HTTP_PROXY</key><string>http://127.0.0.1:7890</string>");
+    expect(plist).not.toContain("<key>ALL_PROXY</key>");
+  });
+
+  test("omits proxy env entirely when the installing shell has none (#2107)", () => {
+    const unit = buildUnit(resolvedProxyEnv({}));
+    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
+      expect(unit).not.toContain(`${key}=`);
+    }
+  });
+
+  test("lower-case shell spellings are baked under the canonical name (#2107)", () => {
+    // curl-style tooling sets the lower-case pair; only the upper-case name is emitted so a
+    // definition never carries two spellings of one setting.
+    const unit = buildUnit(resolvedProxyEnv({ http_proxy: "http://127.0.0.1:7890" }));
+
+    expect(unit).toContain('Environment="HTTP_PROXY=http://127.0.0.1:7890"');
+    expect(unit).not.toContain("http_proxy=");
+  });
+
+  test("the Windows wrapper bakes proxy env the same way the unit and plist do (#2107)", () => {
+    // This builder was the only one of the three with no proxy assertion, because the only way
+    // to reach it was to assign process.env — the pattern that leaked HTTP_PROXY across files.
+    const script = buildWindowsServiceScript(
+      { bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" },
+      10100,
+      resolvedProxyEnv({ HTTP_PROXY: "http://127.0.0.1:7890", no_proxy: "localhost" }),
+    );
+
+    expect(script).toContain("HTTP_PROXY=http://127.0.0.1:7890");
+    // Lower-case spellings are baked under the canonical name, never both.
+    expect(script).toContain("NO_PROXY=localhost");
+    expect(script).not.toContain("no_proxy=");
+    expect(script).not.toContain("HTTPS_PROXY=");
+  });
+
+
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
@@ -152,7 +216,9 @@ describe("systemd service unit", () => {
     expect(startSystemd).toContain("ocx service install");
     expect(startSystemd).toContain("process.exit(1)");
 
-    const writeAt = installSystemd.indexOf('writeFileSync(unitPath(), buildUnit(), "utf8")');
+    // The write goes through writeServiceDefinitionFile so the unit lands 0600: it can carry a
+    // proxy credential (#2107). What this test pins is the ORDER — write, then reload.
+    const writeAt = installSystemd.indexOf('writeServiceDefinitionFile(unitPath(), buildUnit(), "utf8")');
     const reloadAt = installSystemd.indexOf("systemctl --user daemon-reload");
     const enableAt = installSystemd.indexOf("systemctl --user enable");
     const restartAt = installSystemd.indexOf("systemctl --user restart");
@@ -523,6 +589,33 @@ describe("Windows service task", () => {
     expect(script).not.toContain("timeout /t");
   });
 
+  test("stops instead of restart-looping when an update removed the baked runtime or CLI (#1849)", () => {
+    const script = buildWindowsServiceScript({
+      bun: "C:\\OpenCodex\\bun.exe",
+      bunRuntimeSource: "bundled",
+      cli: "C:\\OpenCodex\\cli.ts",
+    });
+    const loopAt = script.indexOf(":loop");
+    const bunCheckAt = script.indexOf('if not exist "%OCX_BUN%"');
+    const cliCheckAt = script.indexOf('if not exist "%OCX_CLI%"');
+    const launchAt = script.indexOf('"%OCX_BUN%" "%OCX_CLI%" start --port');
+    const retryAt = script.indexOf("goto loop");
+
+    expect(loopAt).toBeGreaterThanOrEqual(0);
+    expect(bunCheckAt).toBeGreaterThan(loopAt);
+    expect(cliCheckAt).toBeGreaterThan(bunCheckAt);
+    expect(launchAt).toBeGreaterThan(cliCheckAt);
+    expect(retryAt).toBeGreaterThan(launchAt);
+    expect(script).toContain("installation is incomplete: bundled Bun is missing");
+    expect(script).toContain("installation is incomplete: CLI entry is missing");
+    expect(script.match(/exit \/b 3/g)).toHaveLength(2);
+    // #1942: each missing-artifact branch first attempts a transactional-update backup
+    // restore, then re-checks before the hard stop — 2 artifacts x (probe + recheck).
+    expect(script.slice(loopAt, launchAt).match(/if not exist/g)).toHaveLength(4);
+    expect(script).toContain(":restore_backup");
+    expect(script).toContain(".ocx-backup-*");
+  });
+
   test("rewrites profile-relative paths to env indirection so non-ASCII usernames survive OEM-codepage batch parsing", () => {
     const oldUserProfile = process.env.USERPROFILE;
     const oldAppData = process.env.APPDATA;
@@ -661,6 +754,61 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
+    }
+  });
+
+  // A POSIX unit must carry the literal POSIX path no matter which host writes it. The two
+  // cases above are where this actually bites: on a Windows host `resolve("/tmp/x")` anchors
+  // to the current drive and the generated file said `D:\tmp\codex-sqlite-home`, while
+  // CODEX_HOME beside it kept `/tmp/codex-home`. The same file disagreed with itself about two
+  // variables holding the same kind of value. This states the rule directly so the intent
+  // survives; on a POSIX host `resolve()` is identity here, so only Windows can catch it.
+  test("carries an absolute POSIX sqlite home into POSIX units without host anchoring", () => {
+    const inherited = process.env.CODEX_SQLITE_HOME;
+    try {
+      process.env.CODEX_SQLITE_HOME = "/var/lib/opencodex/codex-sqlite";
+
+      expect(buildPlist()).toContain(
+        "<key>CODEX_SQLITE_HOME</key><string>/var/lib/opencodex/codex-sqlite</string>",
+      );
+      expect(buildUnit()).toContain(
+        'Environment="CODEX_SQLITE_HOME=/var/lib/opencodex/codex-sqlite"',
+      );
+    } finally {
+      if (inherited === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = inherited;
+    }
+  });
+
+  // The relative case is why the resolve() is there at all: a service unit has no meaningful
+  // working directory, so a relative home must still be made absolute.
+  test("still absolutizes a relative sqlite home", () => {
+    const inherited = process.env.CODEX_SQLITE_HOME;
+    try {
+      process.env.CODEX_SQLITE_HOME = "relative-sqlite-home";
+      const plist = buildPlist();
+
+      // Assert the emitted value is actually absolute. Rejecting only the raw string would
+      // stay green for any other non-absolute transform, which is the whole thing this test
+      // exists to catch. The two artifact formats differ, so each is extracted on its own
+      // terms: launchd is XML, systemd is a quoted Environment= line.
+      const plistValue = /<key>CODEX_SQLITE_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+      expect(plistValue).toBeDefined();
+      expect(
+        isAbsolute(plistValue!) || posix.isAbsolute(plistValue!) || win32.isAbsolute(plistValue!),
+      ).toBe(true);
+      expect(plistValue!.endsWith("relative-sqlite-home")).toBe(true);
+
+      const unit = buildUnit();
+      const unitValue = /Environment="CODEX_SQLITE_HOME=([^"]*)"/.exec(unit)?.[1];
+      expect(unitValue).toBeDefined();
+      expect(
+        isAbsolute(unitValue!) || posix.isAbsolute(unitValue!) || win32.isAbsolute(unitValue!),
+      ).toBe(true);
+      expect(unitValue!.endsWith("relative-sqlite-home")).toBe(true);
+    } finally {
+      if (inherited === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = inherited;
     }
   });
 });
@@ -2021,5 +2169,96 @@ describe("service serving confirmation", () => {
       const xml = buildWinswXml({ bun: "C:\\pkg\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\pkg\\src\\cli\\index.ts" });
       expect(winswListenPort({ readXml: () => xml })).toBe(resolveServiceListenPort());
     });
+  });
+});
+
+// #2107 baked the outbound proxy environment into the installed service definition, and a
+// proxy URL routinely carries user:password. That made these files credential-bearing, so
+// they must not be written at the umask default.
+describe("service definitions are not world-readable", () => {
+  const modeOf = (path: string): string => (statSync(path).mode & 0o777).toString(8);
+
+  // Windows does not implement POSIX permission bits — Bun reports 0666 for an ordinary
+  // file regardless of what `mode` asked for, and the real boundary there is the NTFS ACL
+  // applied by hardenSecretPath. Asserting the octal on Windows tests the emulation layer
+  // rather than the security property, so these three pin the POSIX half only. The Windows
+  // half is covered by the credential-detection tests below, which decide whether that ACL
+  // is applied strictly.
+  const posixOnly = process.platform === "win32" ? test.skip : test;
+
+  posixOnly("a freshly written definition is owner-only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-service-mode-"));
+    try {
+      const path = join(dir, "unit");
+      writeServiceDefinitionFile(path, buildUnit(resolvedProxyEnv({ HTTP_PROXY: "http://u:p@127.0.0.1:7890" })), "utf8");
+
+      expect(modeOf(path)).toBe("600");
+      // The credential is still written — this test pins who can read it, not that it is absent.
+      expect(readFileSync(path, "utf8")).toContain("u:p@127.0.0.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  posixOnly("an install over a loose definition from an older version tightens it", () => {
+    // `mode` applies only on creation, so a reinstall would otherwise leave 0644 standing.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-service-mode-"));
+    try {
+      const path = join(dir, "plist");
+      writeFileSync(path, "stale", { encoding: "utf8", mode: 0o644 });
+      expect(modeOf(path)).toBe("644");
+
+      writeServiceDefinitionFile(path, buildPlist(resolvedProxyEnv({})), "utf8");
+
+      expect(modeOf(path)).toBe("600");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  posixOnly("utf16le scheduler assets take the same mode", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-service-mode-"));
+    try {
+      const path = join(dir, "task.xml");
+      writeServiceDefinitionFile(path, "\uFEFF<Task />", "utf16le");
+
+      expect(modeOf(path)).toBe("600");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// A pre-promotion audit flagged that this file's proxy-credential write used a soft-failing
+// Windows ACL while the two adjacent secret writes — the API token and the install state —
+// both fail closed. On Windows the POSIX mode bits are advisory, so a soft ACL failure can
+// leave a proxy password readable by other local principals.
+describe("credential-bearing definitions harden the Windows ACL strictly", () => {
+  test("a proxy URL with userinfo is treated as a secret publication", () => {
+    // `pw@chatgpt.com` is the repo's existing URL-userinfo fixture: the privacy scanner
+    // reads "pw@host" as an email otherwise, and this exact pair is already allowlisted for
+    // tests/ (scripts/privacy-scan.ts:102). The shape under test is the userinfo authority,
+    // not the particular credential.
+    const unit = buildUnit(resolvedProxyEnv({ HTTPS_PROXY: "https://user:pw@chatgpt.com:8080" }));
+
+    expect(definitionCarriesCredential(unit)).toBe(true);
+  });
+
+  test("a bare proxy URL is not a secret, so an icacls stall must not fail the install", () => {
+    // Before #2107 these files had no hardening at all; refusing an install over a stall
+    // would regress a user who has nothing to protect.
+    const unit = buildUnit(resolvedProxyEnv({ HTTP_PROXY: "http://127.0.0.1:7890", NO_PROXY: "localhost" }));
+
+    expect(definitionCarriesCredential(unit)).toBe(false);
+  });
+
+  test("lower-case spellings and the plist form are covered too", () => {
+    const plist = buildPlist(resolvedProxyEnv({ all_proxy: "socks5://u:p@127.0.0.1:1080" }));
+
+    expect(definitionCarriesCredential(plist)).toBe(true);
+  });
+
+  test("a definition with no proxy env at all carries no credential", () => {
+    expect(definitionCarriesCredential(buildUnit(resolvedProxyEnv({})))).toBe(false);
   });
 });

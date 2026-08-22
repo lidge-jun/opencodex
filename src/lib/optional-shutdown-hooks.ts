@@ -16,7 +16,7 @@
  * absolute deadline, so a hook that throws must not prevent its siblings — or
  * `server.stop` — from running.
  *
- * See devlog/_plan/260814_lab_core_decoupling/010_lifecycle_shutdown_registry.md
+ * See devlog/_fin/260814_lab_core_decoupling/010_lifecycle_shutdown_registry.md
  */
 
 type ShutdownHook = () => void;

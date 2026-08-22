@@ -271,7 +271,7 @@ describe("CL-09 no-feedback architecture guards", () => {
 
   test("production request path only links the exact subject and never reads passive history", () => {
     const source = readFileSync("src/server/responses/core.ts", "utf8");
-    // Inverted by devlog/_plan/260814_lab_core_decoupling: subject construction moved OUT of
+    // Inverted by devlog/_fin/260814_lab_core_decoupling: subject construction moved OUT of
     // the per-request path into a core-owned slot, so an install with no routing profile
     // executes no Lab code. Core must now name only the slot, never Lab.
     expect(source).toContain("resolvePassiveRouteSubjectId");

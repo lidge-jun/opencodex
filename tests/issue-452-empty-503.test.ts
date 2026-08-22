@@ -13,6 +13,7 @@ import { startServer } from "../src/server";
 import { formatPassthroughUpstreamError } from "../src/server/responses/passthrough-error";
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -208,7 +209,10 @@ describe("passthrough empty 503 (#452)", () => {
         },
       );
     }
-  });
+    // Two full pool-passthrough cycles, each binding a real proxy and a real upstream,
+    // so the wait is the assertion rather than an accident: it measured ~6s here against
+    // Bun's 5s default.
+  }, SERVER_BUDGET_MS);
 
   test("direct /v1/responses drops invalid Retry-After on empty-body 503", async () => {
     await withPoolPassthrough(

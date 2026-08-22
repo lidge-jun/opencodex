@@ -16,6 +16,7 @@ import {
   comboIdFromRawBody,
   comboModelId,
   comboPublicModelId,
+  comboRequestHasImageInput,
   concreteComboRequestBody,
   coolComboTarget,
   getCombo,
@@ -214,6 +215,48 @@ describe("combo request cloning", () => {
     expect(comboIdFromRawBody(null, config)).toBeNull();
   });
 
+  test("comboRequestHasImageInput scans Responses input only, not tools or metadata", () => {
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }],
+    })).toBe(true);
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{ type: "input_image", image_url: "https://example.test/i.png" }],
+    })).toBe(true);
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{
+        type: "function_call_output",
+        call_id: "call_1",
+        output: [{ type: "input_image", image_url: "https://example.test/tool.png" }],
+      }],
+    })).toBe(true);
+    // Tool schemas / metadata may legally mention the same type string without
+    // carrying image content for the model.
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{ role: "user", content: "text only" }],
+      tools: [{
+        type: "function",
+        name: "describe",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["input_image", "input_text"] },
+            example: { type: "input_image" },
+          },
+        },
+      }],
+      metadata: { note: { type: "input_image" } },
+    })).toBe(false);
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: "plain text",
+      tools: [{ type: "function", function: { name: "x", parameters: { type: "input_image" } } }],
+    })).toBe(false);
+  });
+
   test("clones the untouched body and injects an omitted combo default", () => {
     const raw = { model: "combo/free", input: [{ role: "user", content: "hi" }] };
     const concrete = concreteComboRequestBody(raw, target, "high", ["low", "high"]);
@@ -314,6 +357,19 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(409, "conflict")).toBe("stop");
     expect(comboFailureDecision(499, "client cancelled")).toBe("stop");
     expect(comboFailureDecision(422, "invalid_api_key")).toBe("hop");
+    // #1524: a LOCAL input-admission refusal means "this candidate cannot fit the request",
+    // not "the request is impossible". The next candidate may have a larger context window,
+    // so the chain must continue instead of ending at the first incompatible target.
+    //
+    // The decision keys on the STRUCTURED code, which the proxy now preserves through
+    // classifyError. Matching raw text instead would let any upstream override a terminal
+    // verdict by echoing the token, so that shape must NOT hop.
+    expect(comboFailureDecision(413, 'refused', { code: 'input_admission_refused' })).toBe('hop');
+    expect(comboFailureDecision(400, 'upstream mentions input_admission_refused in prose')).toBe('stop');
+    // An UPSTREAM context verdict still stops: retrying that elsewhere is guesswork, and a
+    // generic 413 with no structured code keeps its existing conservative handling.
+    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("stop");
+    expect(comboFailureDecision(413, "request too large")).toBe("stop");
   });
 
   test("failure clears the active sticky target without adding a success", () => {
@@ -589,6 +645,7 @@ describe("combo validation and normalization", () => {
       strategy: "failover",
       stickyLimit: 1,
       defaultEffort: "high",
+      imageInput: "auto",
       alias: null,
       nativeAlias: false,
       displayName: null,

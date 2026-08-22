@@ -127,7 +127,8 @@ let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
 export type CodexUpstreamOutcome = number | "connect_error" | "timeout" | "connect_neutral";
-export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "neutral" | "unknown";
+export type CodexUpstreamOutcomeClass = "success" | "credential"
+  | "workspace" | "quota" | "transient" | "caller" | "neutral" | "unknown";
 export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
 /**
  * Native Codex quota groups known to be independent upstream. Keep the mapping
@@ -193,6 +194,12 @@ export type CodexUpstreamOutcomeMeta = {
   now?: number;
   /** (provider, host) ledger key for account-neutral reachability failures (#914). */
   hostKey?: string;
+  /**
+   * Upstream denial evidence for a 403. A workspace/entitlement denial means the CREDENTIAL
+   * is fine and the account simply cannot reach this workspace, so it must not be quarantined
+   * for reauthentication (#1789). Absent evidence keeps the historical credential handling.
+   */
+  denial?: "workspace" | "entitlement";
   /** Stable transport code recorded alongside a neutral host failure. */
   lastFailureCode?: string;
   /** Native model selected for this request; used only for confirmed scoped quotas. */
@@ -315,19 +322,28 @@ function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): void {
 export function computeCodexUsageScore(quota: {
   weeklyPercent?: number;
   monthlyPercent?: number;
+  shortPercent?: number;
 } | null, plan?: unknown): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
-  if (isThirtyDayOnlyCodexPlan(plan)) {
-    return typeof quota.monthlyPercent === "number" && Number.isFinite(quota.monthlyPercent)
-      ? quota.monthlyPercent
-      : CODEX_UNKNOWN_USAGE_SCORE;
-  }
-  const values = [quota.weeklyPercent, quota.monthlyPercent]
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  return values.length > 0 ? Math.max(...values) : CODEX_UNKNOWN_USAGE_SCORE;
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  const longWindows = isThirtyDayOnlyCodexPlan(plan)
+    ? [quota.monthlyPercent]
+    : [quota.weeklyPercent, quota.monthlyPercent];
+  const knownLong = longWindows.filter(finite);
+  // The short burst window only REFINES a known long-window position; it cannot stand in for
+  // one. A snapshot carrying just `shortPercent: 0` would otherwise score a flat 0 and make an
+  // account whose weekly/monthly usage is entirely unverified look like the emptiest in the
+  // pool, so `pickLowestUsageAmong` would send every request to it. Unknown has to stay
+  // unknown until a governing window is actually observed.
+  if (knownLong.length === 0) return CODEX_UNKNOWN_USAGE_SCORE;
+  const values = finite(quota.shortPercent) ? [...knownLong, quota.shortPercent] : knownLong;
+  return Math.max(...values);
 }
 
-export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): CodexUpstreamOutcomeClass {
+export function classifyCodexUpstreamOutcome(
+  outcome: CodexUpstreamOutcome,
+  denial?: "workspace" | "entitlement",
+): CodexUpstreamOutcomeClass {
   if (outcome === "connect_neutral") return "neutral";
   if (outcome === "connect_error" || outcome === "timeout") return "transient";
   if (!Number.isFinite(outcome)) return "unknown";
@@ -337,6 +353,11 @@ export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): Cod
   // and says nothing about the credential. Relayed as the neutral class so a
   // stray 3xx cannot increment an account's transient streak.
   if (outcome >= 300 && outcome < 400) return "neutral";
+  // 401 is always a credential problem. A 403 is only a credential problem when nothing
+  // tells us otherwise: a workspace/entitlement denial (#1789) means the credential is valid
+  // and the account simply lacks access here, so quarantining it for reauth is wrong advice.
+  // Absent denial evidence the historical mapping stands, so the change fails safe.
+  if (outcome === 403 && denial !== undefined) return "workspace";
   if (outcome === 401 || outcome === 403) return "credential";
   // 402 Payment Required is treated as quota exhaustion for pool cooldown/failover
   // (same-request alternate retry records this outcome for the depleted account).
@@ -1596,7 +1617,7 @@ export function recordCodexUpstreamOutcome(
   const writerGeneration = meta.writerGeneration ?? captureConfigGeneration();
   if (writerGeneration < lastReconciledGeneration && !liveHealthAccountIds.has(accountId)) return;
   const now = meta.now ?? Date.now();
-  const outcomeClass = classifyCodexUpstreamOutcome(outcome);
+  const outcomeClass = classifyCodexUpstreamOutcome(outcome, meta.denial);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
   if (outcomeClass === "success") {
     const scopedProbe = meta.probeQuotaScope
@@ -1676,6 +1697,18 @@ export function recordCodexUpstreamOutcome(
   }
 
   const lastFailureStatus = typeof outcome === "number" ? outcome : 0;
+  if (outcomeClass === "workspace") {
+    // The credential is valid; this account just cannot reach this workspace (#1789).
+    // Record the failure so routing stops preferring it, but do not mark it for
+    // reauthentication and do not sweep its thread affinities: telling the user to
+    // re-login is wrong advice that cannot fix a workspace grant.
+    upstreamHealth.set(accountId, {
+      consecutiveFailures: (upstreamHealth.get(accountId)?.consecutiveFailures ?? 0) + 1,
+      lastFailureStatus,
+      lastFailureAt: now,
+    });
+    return;
+  }
   if (outcomeClass === "credential") {
     // 401/403 quarantines the account for reauth. That supersedes quota state
     // entirely: a cooldown (and any probe lease) on an unusable account is moot.

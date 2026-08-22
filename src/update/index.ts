@@ -10,6 +10,7 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -248,7 +249,7 @@ export async function runUpdate(): Promise<void> {
   if (serviceWasInstalled || readPid() || readRuntimePort()) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopStdio = updateChildStdio();
-    const stop = spawnSync(process.execPath, [process.argv[1], "stop"], {
+    const stop = spawnSync(process.execPath, selfLaunchArgv(["stop"]), {
       stdio: stopStdio,
       encoding: stopStdio === "pipe" ? "utf8" : undefined,
       windowsHide: true,
@@ -298,13 +299,13 @@ export async function runUpdate(): Promise<void> {
       console.warn(`⚠️  Shim repair skipped: ${e instanceof Error ? e.message : e}`);
     }
     if (trayWasInstalled) {
-      const trayArgs = [process.argv[1], ...planWindowsTrayUpdate({ installed: trayWasInstalled, running: trayWasRunning }).installArgs];
+      const trayArgs = selfLaunchArgv(planWindowsTrayUpdate({ installed: trayWasInstalled, running: trayWasRunning }).installArgs);
       const tray = spawnSync(process.execPath, trayArgs, { stdio: "inherit", windowsHide: true });
       if (tray.status === 0) {
         console.log("🔧 Refreshed Windows tray startup paths.");
       } else {
         console.warn("⚠️  Windows tray refresh failed. Run 'ocx tray install'.");
-        if (trayWasRunning) spawnSync(process.execPath, [process.argv[1], "tray", "start"], { stdio: "ignore", windowsHide: true });
+        if (trayWasRunning) spawnSync(process.execPath, selfLaunchArgv(["tray", "start"]), { stdio: "ignore", windowsHide: true });
       }
     }
     // The stop above unloaded any managed service; repair it with the NEW files
@@ -328,7 +329,7 @@ export async function runUpdate(): Promise<void> {
       process.env.OCX_BAKE_PORT = String(capturedListen.port);
       try {
         const svcStdio = updateChildStdio();
-        const svc = spawnSync(process.execPath, [process.argv[1], ...serviceReinstallArgs()], {
+        const svc = spawnSync(process.execPath, selfLaunchArgv(serviceReinstallArgs()), {
           stdio: svcStdio,
           encoding: svcStdio === "pipe" ? "utf8" : undefined,
           windowsHide: true,
@@ -372,7 +373,7 @@ export async function runUpdate(): Promise<void> {
               : "   Run 'ocx service repair' to refresh the background service and see why it failed.");
             const env = { ...process.env };
             delete env.OCX_SERVICE;
-            const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(capturedListen.port)], {
+            const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(capturedListen.port)]), {
               detached: true,
               stdio: "ignore",
               windowsHide: true,

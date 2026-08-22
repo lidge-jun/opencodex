@@ -100,10 +100,11 @@ describe("policy execution (RI-05)", () => {
     expect(trace.selected.provider).toBe("a");
     expect(trace.selected.model).toBe("m1");
     // RI-06/07/08: unknown health/quota/cost under the default "penalize"
-    // policy folds penalized floors into the score.
+    // policy folds penalized floors into the score. #1837: optimize.latency is now
+    // actually spent, and an unmeasured candidate takes the neutral 0.5 rather than
+    // having its weight fall through into configuredPriority.
     expect(trace.candidates[0]!.score).toMatchObject({
-      total: 0.685,
-      components: { configuredPriority: 1, health: 0.3, quota: 0.3, cost: 0.3 },
+      components: { configuredPriority: 1, health: 0.3, quota: 0.3, cost: 0.3, latency: 0.5 },
     });
   });
 

@@ -77,17 +77,18 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
     expect(fc).toMatchObject({ call_id: "call_1", name: "read_file" });
   });
 
-  test("streamed visible (flag off): current raw shape unchanged", async () => {
+  test("streamed visible (flag off): raw reasoning rides the expandable summary channel (#2007)", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "reasoning_raw_delta", text: "visible raw" },
       { type: "done" },
     ]), "routed/model"));
-    expect(frames.some(f => f.event === "response.reasoning_text.delta")).toBe(true);
+    expect(frames.some(f => f.event === "response.reasoning_summary_text.delta")).toBe(true);
+    expect(frames.some(f => f.event === "response.reasoning_text.delta")).toBe(false);
     const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
     const output = completed.output as Record<string, unknown>[];
     expect(output[0]).toMatchObject({
-      type: "reasoning", summary: [],
-      content: [{ type: "reasoning_text", text: "visible raw" }],
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "visible raw" }],
     });
   });
 
@@ -117,14 +118,14 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
     expect(decodeReasoningEnvelope(reasoning.encrypted_content as string)?.txt).toBe("quiet");
   });
 
-  test("non-streaming visible: raw shape unchanged", () => {
+  test("non-streaming visible: raw reasoning lands in the summary channel (#2007)", () => {
     const json = buildResponseJSON([
       { type: "reasoning_raw_delta", text: "loud" },
       { type: "done" },
     ], "routed/model", {});
     const output = (json as { output: Record<string, unknown>[] }).output;
     expect(output.find(o => o.type === "reasoning")).toMatchObject({
-      content: [{ type: "reasoning_text", text: "loud" }],
+      summary: [{ type: "summary_text", text: "loud" }],
     });
   });
 

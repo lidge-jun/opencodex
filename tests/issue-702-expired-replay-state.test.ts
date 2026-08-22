@@ -20,6 +20,7 @@ import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -334,7 +335,10 @@ describe("Issue #702 expired forward replay state", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
-  });
+    // Three route classes, each binding a real proxy: the per-class servers ARE the
+    // assertion that no route reaches upstream, and they measured ~6s against Bun's
+    // 5s default.
+  }, SERVER_BUDGET_MS);
 
   test("forward mode fails closed when previous response replay state has expired", async () => {
     let quotaPrimeCalls = 0;

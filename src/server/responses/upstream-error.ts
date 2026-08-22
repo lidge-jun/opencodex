@@ -5,7 +5,12 @@
  * #553 looking for an adapter URL bug that does not exist. Name the likely cause and the
  * command that settles it.
  */
+import { RequestPacingQueueOverloadError } from "../../providers/request-pacing";
+
 export function describeUpstreamConnectFailure(err: unknown, connectMs: number): string {
+  // Local pacing admission is not a transport failure. Let the outer response boundary
+  // preserve its retryable 429 identity instead of laundering it into a 502.
+  if (err instanceof RequestPacingQueueOverloadError) throw err;
   if (err instanceof Error && err.name === "TimeoutError") {
     return `Provider connect timeout after ${connectMs}ms`;
   }

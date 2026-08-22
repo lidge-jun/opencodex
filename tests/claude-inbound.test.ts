@@ -285,6 +285,44 @@ describe("claude inbound translation", () => {
     expect(resolveInboundModel("anything", undefined)).toBe("anything");
   });
 
+  test("Claude Code Auto Mode classifier routing uses only operator-declared targets (#1697)", () => {
+    // A bare classifier check carries no provider, so without this it falls through to
+    // defaultProvider -- which may not speak Anthropic at all. What it must NOT do is pick a
+    // provider nobody chose.
+
+    // 1. Explicit classifierModel is used.
+    const ccExplicit = { model: "RelayA/claude-fable-5", classifierModel: "RelayB/claude-opus-5" };
+    expect(resolveInboundModel("claude-opus-5", ccExplicit)).toBe("RelayB/claude-opus-5");
+    expect(resolveInboundModel("claude-opus-5-20250514", ccExplicit)).toBe("RelayB/claude-opus-5");
+
+    // 2. modelMap outranks it: an explicit per-model mapping is the operator's most specific say.
+    const ccWithModelMap = {
+      model: "RelayA/claude-fable-5",
+      classifierModel: "RelayB/claude-opus-5",
+      modelMap: { "claude-opus-5": "Custom/my-opus-5" },
+    };
+    expect(resolveInboundModel("claude-opus-5", ccWithModelMap)).toBe("Custom/my-opus-5");
+
+    // 3. Ordered fallbacks are used when no classifierModel is set.
+    const ccWithFallbacks = { classifierFallbacks: ["RelayC/claude-opus-5", "RelayD/claude-opus-5"] };
+    expect(resolveInboundModel("claude-opus-5", ccWithFallbacks)).toBe("RelayC/claude-opus-5");
+
+    // 4. NO affinity inferred from cc.model. That value is the injected/default config slot, not
+    // the provider the live session actually selected, so it goes stale the moment the user
+    // changes the model picker -- and acting on it would silently move a classifier turn onto a
+    // provider with its own privacy and billing consequences.
+    expect(resolveInboundModel("claude-opus-5", { model: "RelayA/claude-fable-5" })).toBe("claude-opus-5");
+    expect(resolveInboundModel("claude-opus-5", { model: "claude-ocx-RelayA--claude-fable-5" })).toBe("claude-opus-5");
+    expect(resolveInboundModel("claude-opus-5", { model: "native/claude-opus-5" })).toBe("claude-opus-5");
+
+    // 5. Malformed operator config is ignored rather than half-applied.
+    expect(resolveInboundModel("claude-opus-5", { classifierModel: "   " })).toBe("claude-opus-5");
+    expect(resolveInboundModel("claude-opus-5", { classifierFallbacks: [] })).toBe("claude-opus-5");
+
+    // 6. A non-classifier model is untouched by any of this.
+    expect(resolveInboundModel("claude-fable-5", ccExplicit)).toBe("claude-fable-5");
+  });
+
   test("error cases: no model, empty messages, bad role, bad tool_result", () => {
     expect(() => anthropicToResponsesBody({ max_tokens: 1, messages: [{ role: "user", content: "x" }] })).toThrow(AnthropicRequestError);
     expect(() => anthropicToResponsesBody({ model: "m", max_tokens: 1, messages: [] })).toThrow(AnthropicRequestError);

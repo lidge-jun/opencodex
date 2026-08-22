@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -9,8 +9,11 @@ import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../src/codex/subagent-defaults";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 // Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
@@ -25,6 +28,7 @@ function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { std
     cwd: repoRoot,
     env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome, TEST_OCX_CONFIG: configJson },
     encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS - 5_000,
   });
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
 }
@@ -38,6 +42,7 @@ function runRestore(codexHome: string, ocxHome: string): { stdout: string; statu
     cwd: repoRoot,
     env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
     encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS - 5_000,
   });
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
 }
@@ -87,6 +92,31 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(1);
   });
 
+  test("upgrade path: a non-loopback legacy env_http_headers config converts to env_key (#2073)", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model_provider = "opencodex"',
+      "",
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://192.168.1.50:10100/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      'env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }',
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.50" }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    expect(config).not.toContain("env_http_headers");
+    // Still exactly one provider block, no duplicate accumulation.
+    expect(config.match(/\[model_providers\.opencodex]/g)?.length).toBe(1);
+  });
+
   test("re-inject over a Design B config is idempotent", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
@@ -98,6 +128,94 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
     expect(second.match(/Auto-injected by opencodex/g)?.length).toBe(1);
     expect(second).toBe(first);
+  });
+
+  test.each([
+    'model_catalog_json = "custom-catalog.json" # user catalog',
+    '"model_catalog_json" = "custom-catalog.json" # user catalog',
+  ])(
+    "preserves a commented user catalog assignment without duplicating it: %s",
+    (assignment) => {
+      writeFileSync(join(codexHome, "config.toml"), [
+        assignment,
+        "",
+        "[features]",
+        "fast_mode = true",
+        "",
+      ].join("\n"), "utf8");
+
+      const result = runInject(codexHome, ocxHome);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).success).toBe(true);
+
+      const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(
+        config.match(/^(?:model_catalog_json|"model_catalog_json"|'model_catalog_json')\s*=/gm)?.length,
+      ).toBe(1);
+      expect(config).toContain(assignment);
+      expect(() => Bun.TOML.parse(config)).not.toThrow();
+
+      const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+      expect(profile).toContain('model_catalog_json = "custom-catalog.json"');
+    },
+  );
+
+  test("repairs an owned duplicate without replacing a commented user catalog", () => {
+    const userAssignment = 'model_catalog_json = "custom-catalog.json" # user catalog';
+    writeFileSync(join(codexHome, "config.toml"), [
+      userAssignment,
+      'model_catalog_json = "opencodex-catalog.json"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config.match(/^model_catalog_json\s*=/gm)?.length).toBe(1);
+    expect(config).toContain(userAssignment);
+    expect(config).not.toContain('model_catalog_json = "opencodex-catalog.json"');
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).toContain('model_catalog_json = "custom-catalog.json"');
+  });
+
+  test("removes a stale OpenCodex catalog assignment with a trailing comment", () => {
+    writeFileSync(
+      join(codexHome, "config.toml"),
+      'model_catalog_json = "opencodex-catalog.json" # stale catalog\n',
+      "utf8",
+    );
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).not.toContain("model_catalog_json");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+  });
+
+  test("does not strip a catalog-shaped assignment from a user table", () => {
+    const nestedAssignment = '"model_catalog_json" = "opencodex-catalog.json" # user table value';
+    writeFileSync(join(codexHome, "config.toml"), [
+      "[user_metadata]",
+      nestedAssignment,
+      "",
+    ].join("\n"), "utf8");
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain(nestedAssignment);
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
   });
 
   test("fastMode=false forces fast_mode=false in both config and profile", () => {

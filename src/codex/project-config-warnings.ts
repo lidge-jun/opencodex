@@ -70,7 +70,7 @@ export function parseTomlDocument(content: string): TomlDocument {
       current = section;
       continue;
     }
-    const kv = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*("(?:\\.|[^"])*"|'[^']*'|[^\s#]+)\s*(?:#.*)?$/);
+    const kv = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s#]+)\s*(?:#.*)?$/);
     if (kv) current[kv[1]!] = parseTomlString(kv[2]!);
   }
 

@@ -679,7 +679,21 @@ describe("multi_agent_mode_hint_text native capability probe", () => {
     writeFileSync(js, "#!/usr/bin/env node\n");
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "test" }));
     writeFileSync(binary, native(true));
-    symlinkSync(js, join(binDir, "codex.opencodex-real"));
+    // This case is irreducibly about symlink semantics: the resolver follows the bare
+    // PATH entry through `realpath` to `@openai/codex/bin/`, and that is how it finds
+    // the sibling platform package. No privilege-free substitute preserves it -- a
+    // copy erases the association being resolved, a hard link reports its own path as
+    // its realpath, and a .cmd wrapper is never matched for a bare command. So report
+    // a visible skip where the OS withholds the privilege, in the shape
+    // claude-agents-inject and codex-service-manager-probe already use, rather than
+    // failing on EPERM before the probe under test has run.
+    try {
+      symlinkSync(js, join(binDir, "codex.opencodex-real"));
+    } catch (err) {
+      // Windows without Developer Mode / elevated privileges cannot create symlinks.
+      if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") return;
+      throw err;
+    }
     const oldPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
     try {
@@ -1015,8 +1029,21 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
   });
 
   test("feature toggling delegates to exactly the multi_agent_v2 native key", () => {
-    expect(codexFeaturesInvocation("enable", "linux").args).toEqual(["features", "enable", "multi_agent_v2"]);
-    expect(codexFeaturesInvocation("disable", "linux").args).toEqual(["features", "disable", "multi_agent_v2"]);
+    // Named platform and resolution seams, like the invocation-shape test below.
+    // Called bare, this reads the developer's OWN Codex install: on a Windows box
+    // whose codex is the npm `codex.cmd`, the invocation is correctly wrapped in
+    // `cmd /d /s /c "..."` and the raw-args assertion fails -- reporting the machine's
+    // install shape rather than the key delegation this case is about.
+    const seams = {
+      env: { PATH: "/usr/bin" },
+      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-key-")),
+      existsSync: () => false,
+      execFileSync: () => "codex-cli 0.145.0",
+    };
+    expect(codexFeaturesInvocation("enable", "multi_agent_v2", "linux", seams).args)
+      .toEqual(["features", "enable", "multi_agent_v2"]);
+    expect(codexFeaturesInvocation("disable", "multi_agent_v2", "linux", seams).args)
+      .toEqual(["features", "disable", "multi_agent_v2"]);
   });
 
   test("getAgentsEnabled is tri-state: absent, true, false", () => {

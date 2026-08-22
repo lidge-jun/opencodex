@@ -5,7 +5,7 @@
  * These are activation tests, not coverage tests. Each end-to-end case drives a
  * real failing assertion through a real event constructor and asserts on the
  * persisted bytes, because a green suite does not demonstrate that a sanitizer
- * fired. Plan: devlog/_plan/260810_release_train_and_triage/040_sec02_remediation.md
+ * fired. Plan: devlog/_fin/260810_release_train_and_triage/040_sec02_remediation.md
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";

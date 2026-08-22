@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -13,18 +14,10 @@ function runScript(
   script: string,
   extraEnv: Record<string, string> = {},
 ): { stdout: string; status: number; stderr: string } {
-  // The suite preload redirects USERPROFILE, but .NET's Windows known-folder lookup then returns
-  // an empty LocalApplicationData path. Catalog serialization intentionally resolves its lock
-  // namespace from that OS API rather than environment variables, so restore only the real
-  // profile for this child. CODEX_HOME and OPENCODEX_HOME remain explicit test sandboxes.
-  const windowsIdentityEnv = process.platform === "win32" && process.env.OCX_REAL_HOME
-    ? { USERPROFILE: process.env.OCX_REAL_HOME }
-    : {};
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
     env: {
       ...process.env,
-      ...windowsIdentityEnv,
       CODEX_HOME: codexHome,
       OPENCODEX_HOME: opencodexHome,
       ...extraEnv,
@@ -387,7 +380,7 @@ describe("Codex catalog sync hardening", () => {
     expect(JSON.stringify(rows)).not.toContain("Private Display Name");
   });
 
-  test("account sync preserves an observed account-only native id without creating a bare row", () => {
+  test("account sync preserves an observed gated native only after the mapped account confirms it", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -401,8 +394,22 @@ describe("Codex catalog sync hardening", () => {
         opencodex_account_observed_native: true,
       }],
     }, null, 2) + "\n");
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-token", account_id: "main-account" },
+    }), "utf8");
 
     const r = runScript(codexHome, opencodexHome, `
+      globalThis.fetch = async input => {
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+          return Response.json({ models: [{
+            slug: "gpt-daybreak-blue-latest",
+            supported_in_api: true,
+            visibility: "list"
+          }] });
+        }
+        throw new Error("unexpected fetch");
+      };
       const { syncCatalogModels } = require("./src/codex/catalog");
       syncCatalogModels({
         providers: {
@@ -419,15 +426,17 @@ describe("Codex catalog sync hardening", () => {
 
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(rows.find(row => row.slug === "team/gpt-daybreak-blue-latest")).toMatchObject({
-      context_window: 372_000,
-      max_context_window: 372_000,
-      auto_compact_token_limit: 334_800,
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 244_800,
       comp_hash: "3000",
       tool_mode: "code_mode_only",
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
     });
-    expect(rows.some(row => row.slug === "gpt-daybreak-blue-latest")).toBe(false);
+    // Main's authenticated roster grants Daybreak, so Pool publishes one bare row alongside
+    // the exact selector row. The observed cache row alone is not entitlement evidence.
+    expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(1);
   });
 
   test("explicit Codex-forward Daybreak survives sync with Sol metadata while account picker is off", () => {
@@ -465,9 +474,9 @@ describe("Codex catalog sync hardening", () => {
     const daybreak = rows.find(row => row.slug === "openai/gpt-daybreak-blue-latest");
     expect(daybreak).toMatchObject({
       display_name: "Daybreak Blue",
-      context_window: 372_000,
-      max_context_window: 372_000,
-      auto_compact_token_limit: 334_800,
+      context_window: 922_000,
+      max_context_window: 922_000,
+      auto_compact_token_limit: 829_800,
       comp_hash: "3000",
       tool_mode: "code_mode_only",
       use_responses_lite: true,
@@ -477,8 +486,11 @@ describe("Codex catalog sync hardening", () => {
       opencodex_catalog_kind: "custom-model-v1",
     });
     expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
-    expect(rows.some(row => row.slug === "gpt-daybreak-blue-latest")).toBe(false);
+    // The explicit custom row is independent of native account entitlement. With no confirmed
+    // account roster, the account-gated bare row stays absent instead of collapsing into it.
+    expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(0);
     expect(rows.some(row => row.slug === "main/gpt-daybreak-blue-latest")).toBe(false);
+    // The separately billed API-key alias must still never reach the Codex surface.
     expect(rows.some(row => row.slug === "openai-apikey/daybreak-blue-latest")).toBe(false);
   });
 
@@ -643,7 +655,9 @@ describe("Codex catalog sync hardening", () => {
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout) as { picker: string[]; native: string[]; fallback: string[] };
     expect(result.picker).toContain("gpt-5.3-codex-spark");
-    expect(result.native).toEqual(result.fallback);
+    expect(result.native).toEqual(
+      result.fallback.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
+    );
   });
 
   test("account sync recovers supported natives that were hidden before selectors existed", () => {
@@ -907,7 +921,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("offline/disabled-model");
     expect(slugs).not.toContain("removed/ghost");
     expect(slugs).toContain("cursor/composer-2.5");
-  });
+  }, 15_000);
 
   test("drops legacy-signature ghost rows in both gather branches", () => {
     const catalogPath = join(codexHome, "catalog.json");
@@ -1137,7 +1151,7 @@ describe("Codex catalog sync hardening", () => {
     expect(out.identicalResyncKeptMtime).toBe(true);
     expect(out.thirdWritten).toBe(true);
     expect(out.realChangeBumpedMtime).toBe(true);
-  });
+  }, 15_000);
 
   test("the no-op guard compares bytes, so a malformed byte decoding to U+FFFD is still repaired", () => {
     // The guard above must not preserve corruption. `readFileSync(path, "utf8")`

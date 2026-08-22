@@ -122,9 +122,267 @@ describe("google provider hardening", () => {
 
     expect(events).toEqual([{
       type: "error",
-      message: "google response contained invalid candidates",
+      message: "google response contained invalid candidates (candidate_not_object; valueType=null)",
     }]);
     expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  // `content.parts` sits one rung below the candidate guard above. It is claimed model output
+  // inside a well-formed frame, so it follows the same fail-closed rule rather than #1240's
+  // root-frame padding rule. Before this, each of these escaped as a raw TypeError.
+  const invalidPartsCases: [string, unknown, string][] = [
+    ["an object container", {}, "google response contained invalid content parts (parts_not_array; valueType=object)"],
+    ["a number container", 5, "google response contained invalid content parts (parts_not_array; valueType=number)"],
+    ["a string container", "txt", "google response contained invalid content parts (parts_not_array; valueType=string)"],
+    ["a null element", [null], "google response contained invalid content parts (part_not_object; partIndex=0; valueType=null)"],
+    ["a number element", [5], "google response contained invalid content parts (part_not_object; partIndex=0; valueType=number)"],
+    ["an array element", [[]], "google response contained invalid content parts (part_not_object; partIndex=0; valueType=array)"],
+    ["a bad element after a good one", [{ text: "hi" }, null], "google response contained invalid content parts (part_not_object; partIndex=1; valueType=null)"],
+  ];
+
+  for (const [label, parts, message] of invalidPartsCases) {
+    test(`${label} in content.parts is a terminal stream error`, async () => {
+      const events = await collect(createGoogleAdapter(provider()).parseStream(
+        sseResponse([
+          { candidates: [{ content: { parts } }] },
+          { candidates: [{ finishReason: "STOP" }] },
+        ]),
+      ));
+
+      expect(events).toEqual([{ type: "error", message }]);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+
+    test(`${label} in content.parts is a terminal non-streaming error`, async () => {
+      const events = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify({ candidates: [{ content: { parts }, finishReason: "STOP" }] }), { status: 200 }),
+      );
+
+      expect(events).toEqual([{ type: "error", message }]);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+  }
+
+  // A Google functionCall is delivered atomically in one part, so there is no later delta that
+  // can repair a missing name. Passing one through violates AdapterEvent's string-name contract
+  // and lets the bridge attempt to dispatch a call that cannot be identified. Keep streaming and
+  // buffered parsing fail-closed on the same field shapes (#2233).
+  const invalidFunctionCallCases: [string, unknown, string][] = [
+    ["a string call", "x", "google response contained invalid function call (function_call_not_object; partIndex=0; valueType=string) — cannot dispatch"],
+    ["a numeric call", 5, "google response contained invalid function call (function_call_not_object; partIndex=0; valueType=number) — cannot dispatch"],
+    ["an array call", [], "google response contained invalid function call (function_call_not_object; partIndex=0; valueType=array) — cannot dispatch"],
+    ["a call without a name", { args: {} }, "google response contained invalid function call name (function_call_name_invalid; partIndex=0; valueType=undefined) — cannot dispatch"],
+    ["a call with a numeric name", { name: 5, args: {} }, "google response contained invalid function call name (function_call_name_invalid; partIndex=0; valueType=number) — cannot dispatch"],
+    ["a call with an empty name", { name: "", args: {} }, "google response contained blank function call name (function_call_name_blank; partIndex=0; valueType=string) — cannot dispatch"],
+    ["a call with a whitespace name", { name: "   ", args: {} }, "google response contained blank function call name (function_call_name_blank; partIndex=0; valueType=string) — cannot dispatch"],
+  ];
+
+  for (const [label, functionCall, message] of invalidFunctionCallCases) {
+    test(`${label} is a terminal stream error`, async () => {
+      const events = await collect(createGoogleAdapter(provider()).parseStream(
+        sseResponse([{
+          candidates: [{ content: { parts: [{ functionCall }] }, finishReason: "STOP" }],
+        }]),
+      ));
+
+      expect(events).toEqual([{ type: "error", message }]);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+
+    test(`${label} is a terminal non-streaming error`, async () => {
+      const events = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{ functionCall }] }, finishReason: "STOP" }],
+        }), { status: 200 }),
+      );
+
+      expect(events).toEqual([{ type: "error", message }]);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+  }
+
+  // Text is optional, but when present it must already be a string. Coercing an object or number
+  // would invent assistant output, while terminating an otherwise valid turn would be harsher than
+  // the field warrants. Drop only the malformed text field and keep other parts/terminal state.
+  const nonStringTextParts: [string, Record<string, unknown>][] = [
+    ["numeric text", { text: 5 }],
+    ["object text", { text: { a: 1 } }],
+    ["array text", { text: [1, 2] }],
+    ["numeric thought text", { text: 5, thought: true }],
+  ];
+
+  for (const [label, part] of nonStringTextParts) {
+    test(`${label} is dropped on both response paths`, async () => {
+      const payload = {
+        candidates: [{ content: { parts: [part] }, finishReason: "STOP" }],
+      };
+      const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([payload])));
+      const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      );
+
+      for (const events of [streamEvents, responseEvents]) {
+        expect(events.some(event => event.type === "text_delta")).toBe(false);
+        expect(events.some(event => event.type === "reasoning_raw_delta")).toBe(false);
+        expect(events.some(event => event.type === "error")).toBe(false);
+        expect(events.at(-1)?.type).toBe("done");
+      }
+    });
+  }
+
+  // `content` itself has the same status as `parts`: claimed output the parser cannot read. The
+  // one tolerated non-record form is an empty array, which is how a JSON writer with no distinct
+  // empty-object form spells an empty `content`. A NON-empty array is where the payload used to
+  // disappear: `content?.parts` reads `undefined` from it, so the candidate completed empty.
+  const invalidContentCases: [string, unknown, string][] = [
+    ["a number", 5, "google response contained invalid content (content_not_object; valueType=number)"],
+    ["a string", "txt", "google response contained invalid content (content_not_object; valueType=string)"],
+    ["a boolean", true, "google response contained invalid content (content_not_object; valueType=boolean)"],
+    ["a non-empty array holding the payload", [{ parts: [{ text: "lost" }] }], "google response contained invalid content (content_not_object; valueType=array)"],
+  ];
+
+  for (const [label, content, message] of invalidContentCases) {
+    test(`${label} as candidate content is a terminal stream error`, async () => {
+      const events = await collect(createGoogleAdapter(provider()).parseStream(
+        sseResponse([
+          { candidates: [{ content }] },
+          { candidates: [{ finishReason: "STOP" }] },
+        ]),
+      ));
+
+      expect(events).toEqual([{ type: "error", message }]);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+
+    test(`${label} as candidate content is a terminal non-streaming error`, async () => {
+      const events = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify({ candidates: [{ content, finishReason: "STOP" }] }), { status: 200 }),
+      );
+
+      expect(events).toEqual([{ type: "error", message }]);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+  }
+
+  test("a null candidates container mid-stream is absence, not corruption", async () => {
+    // The #1219 shape one rung in: before this, the frame between the content delta and the
+    // finish chunk terminated a turn whose answer had already fully arrived.
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      sseResponse([
+        { candidates: [{ content: { parts: [{ text: "PONG" }] } }] },
+        { candidates: null },
+        { candidates: [{ finishReason: "STOP" }] },
+      ]),
+    ));
+
+    expect(events).toContainEqual({ type: "text_delta", text: "PONG" });
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("a stream of nothing but null candidates still fails closed", async () => {
+    // Absence is not a terminal signal, so the truncation guard still owns this stream: skipping
+    // the frames must not turn a stream that never finished into a successful empty turn.
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      sseResponse([{ candidates: null }, { candidates: null }]),
+    ));
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "upstream stream ended without a terminal signal — possible truncation",
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("a malformed nested candidate is a terminal non-streaming error too", async () => {
+    // The streaming parser has rejected these since #1332; the buffered parser returned a bare
+    // `done`, reporting a claimed-but-malformed candidate to the caller as a successful empty turn.
+    for (const [candidates, valueType] of [[[null], "null"], [[5], "number"], [["x"], "string"], [[[]], "array"]] as const) {
+      const events = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify({ candidates }), { status: 200 }),
+      );
+
+      expect(events).toEqual([{
+        type: "error",
+        message: `google response contained invalid candidates (candidate_not_object; valueType=${valueType})`,
+      }]);
+    }
+  });
+
+  test("a non-array candidates container is rejected rather than counted", async () => {
+    // `"abc".length` is 3, so the emptiness check passed and `candidates[0]` was the character
+    // `"a"`; `{}` and `5` were reported as an absent candidate list rather than a malformed one.
+    for (const [candidates, valueType] of [["abc", "string"], [{}, "object"], [5, "number"], [true, "boolean"]] as const) {
+      const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(
+        sseResponse([{ candidates }, { candidates: [{ finishReason: "STOP" }] }]),
+      ));
+      const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify({ candidates }), { status: 200 }),
+      );
+
+      const expected = [{
+        type: "error",
+        message: `google response contained invalid candidates (candidates_not_array; valueType=${valueType})`,
+      }];
+      expect(streamEvents).toEqual(expected);
+      expect(responseEvents).toEqual(expected);
+    }
+  });
+
+  test("absent, null and empty containers stay legal on both paths", async () => {
+    // Absence is not corruption: a finish-only chunk, an explicit `null`, and an empty array are
+    // all ordinary shapes and must keep completing the turn.
+    for (const candidate of [
+      { finishReason: "STOP" },
+      { content: null, finishReason: "STOP" },
+      { content: [], finishReason: "STOP" },
+      { content: {}, finishReason: "STOP" },
+      { content: { parts: null }, finishReason: "STOP" },
+      { content: { parts: [] }, finishReason: "STOP" },
+    ]) {
+      const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(
+        sseResponse([{ candidates: [candidate] }]),
+      ));
+      const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify({ candidates: [candidate] }), { status: 200 }),
+      );
+
+      expect(streamEvents.some(event => event.type === "error")).toBe(false);
+      expect(streamEvents.at(-1)?.type).toBe("done");
+      expect(responseEvents).toEqual([{ type: "done", usage: undefined }]);
+    }
+  });
+
+  test("an absent candidates list is still reported as absent, not malformed", async () => {
+    for (const body of [{}, { candidates: null }, { candidates: [] }]) {
+      const events = await createGoogleAdapter(provider()).parseResponse!(
+        new Response(JSON.stringify(body), { status: 200 }),
+      );
+
+      expect(events).toEqual([{ type: "error", message: "google response contained no candidates" }]);
+    }
+  });
+
+  test("well-formed parts still stream and buffer unchanged", async () => {
+    const payload = {
+      candidates: [{
+        content: { parts: [{ text: "visible" }, { functionCall: { name: "lookup", args: { q: 1 } } }] },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([payload])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "text_delta", text: "visible" });
+      expect(events.some(event => event.type === "tool_call_start" && event.name === "lookup")).toBe(true);
+      expect(events).toContainEqual({ type: "tool_call_delta", arguments: JSON.stringify({ q: 1 }) });
+      expect(events.at(-1)?.type).toBe("done");
+      expect(events.some(event => event.type === "error")).toBe(false);
+    }
   });
 
   test("EOF residual data frame without a trailing newline is parsed", async () => {

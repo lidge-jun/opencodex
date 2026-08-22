@@ -12,7 +12,7 @@
  * call site so the guarantee belongs to the mechanism instead of being restated by every
  * caller.
  *
- * See devlog/_plan/260814_lab_core_decoupling/020_request_path_gate.md
+ * See devlog/_fin/260814_lab_core_decoupling/020_request_path_gate.md
  */
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { InboundWire } from "../providers/registry";

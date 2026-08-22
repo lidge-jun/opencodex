@@ -21,8 +21,8 @@ describe("update stops the running proxy before replacing files", () => {
   });
 
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {
-    expect(updateSource).toContain('spawnSync(process.execPath, [process.argv[1], "stop"]');
-    const stopAt = updateSource.indexOf('[process.argv[1], "stop"]');
+    expect(updateSource).toContain('spawnSync(process.execPath, selfLaunchArgv(["stop"])');
+    const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
     const updateAt = updateSource.indexOf("spawnSync(target.bin, target.args");
     expect(stopAt).toBeGreaterThan(-1);
     expect(updateAt).toBeGreaterThan(-1);
@@ -33,7 +33,7 @@ describe("update stops the running proxy before replacing files", () => {
   test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
     const gateAt = updateSource.indexOf("const integrity = checkUpdatePackageIntegrity(latest);");
     const abortAt = updateSource.indexOf("aborting the update before stopping the proxy");
-    const stopAt = updateSource.indexOf('[process.argv[1], "stop"]');
+    const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
     expect(gateAt).toBeGreaterThan(-1);
     expect(abortAt).toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(stopAt);
@@ -42,7 +42,7 @@ describe("update stops the running proxy before replacing files", () => {
 
   test("cache access gates in both CLI entry points precede every tray/proxy stop", () => {
     const runtimeGate = updateSource.indexOf("const cachePreflight = runNpmCachePreflight();");
-    const runtimeStop = updateSource.indexOf('[process.argv[1], "stop"]');
+    const runtimeStop = updateSource.indexOf('selfLaunchArgv(["stop"])');
     const launcherGate = launcherSource.indexOf("const cachePreflight = runNpmCachePreflight();");
     const launcherTrayStop = launcherSource.indexOf('runTrayLifecycle(launcher, "stop")');
     const launcherProxyStop = launcherSource.indexOf('[launcher, "stop"]');
@@ -57,7 +57,9 @@ describe("update stops the running proxy before replacing files", () => {
   test("npm launcher update path stops via its own launcher path before npm install", () => {
     expect(launcherSource).toContain('spawnSync(process.execPath, [launcher, "stop"]');
     const stopAt = launcherSource.indexOf('[launcher, "stop"]');
-    const installAt = launcherSource.indexOf("spawnSync(installInvocation.file, installInvocation.args");
+    // #1942: the destructive step is now the transactional staged update, not a direct
+    // global npm install. The stop must still precede it.
+    const installAt = launcherSource.indexOf("transactionalNpmUpdate({");
     expect(stopAt).toBeGreaterThan(-1);
     expect(installAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(installAt);
@@ -67,7 +69,7 @@ describe("update stops the running proxy before replacing files", () => {
 
   test("Windows npm paths resolve safely before stop and never use shell:true", () => {
     const updateResolveAt = updateSource.indexOf("const target = updateSpawnTarget(bin, cmdArgs);");
-    const updateStopAt = updateSource.indexOf('[process.argv[1], "stop"]');
+    const updateStopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
     const launcherResolveAt = launcherSource.indexOf("const installInvocation = npmInvocation(");
     const launcherStopAt = launcherSource.indexOf('[launcher, "stop"]');
 
@@ -114,7 +116,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
     expect(launcherSource).toContain("if (historyRestoreIncomplete())");
     const warnAt = launcherSource.indexOf("Codex resume history was NOT restored");
-    const installAt = launcherSource.indexOf("spawnSync(installInvocation.file, installInvocation.args");
+    const installAt = launcherSource.indexOf("transactionalNpmUpdate({");
     expect(warnAt).toBeGreaterThan(-1);
     expect(installAt).toBeGreaterThan(-1);
     expect(warnAt).toBeLessThan(installAt);

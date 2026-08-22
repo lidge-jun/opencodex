@@ -3,10 +3,20 @@ import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   AgentServerMessageSchema,
+  CreatePlanArgsSchema,
+  CreatePlanRequestQuerySchema,
   GetUsableModelsResponseSchema,
+  InteractionQuerySchema,
+  KvServerMessageSchema,
+  McpArgsSchema,
+  McpToolCallSchema,
   ModelDetailsSchema,
+  TextDeltaUpdateSchema,
+  ToolCallSchema,
+  ToolCallStartedUpdateSchema,
+  InteractionUpdateSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
-import { encodeConnectFrame } from "../src/adapters/cursor/framing";
+import { CONNECT_FLAG_END_STREAM, encodeConnectFrame } from "../src/adapters/cursor/framing";
 import { fetchCursorUsableModels } from "../src/adapters/cursor/live-models";
 import { armTimeoutDestroyFallback, createLiveCursorTransport, createTerminalSettler } from "../src/adapters/cursor/live-transport";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -15,11 +25,11 @@ import { clearModelCache, getProviderDiscoveryStatus } from "../src/codex/model-
 import { handleManagementAPI } from "../src/server/management-api";
 
 async function withDiscoveryServer<T>(
-  handler: (stream: http2.ServerHttp2Stream) => void,
+  handler: (stream: http2.ServerHttp2Stream, headers: http2.IncomingHttpHeaders) => void,
   run: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
   const server = http2.createServer();
-  server.on("stream", handler);
+  server.on("stream", (stream, headers) => handler(stream, headers));
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => reject(error);
     server.once("error", onError);
@@ -73,6 +83,170 @@ describe("Cursor live-model discovery hardening", () => {
       fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
 
     expect(result).toEqual({ ok: true, models: ["gpt-5.5-high"] });
+  });
+
+  test("filters every shared model-id control-character class", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [
+        create(ModelDetailsSchema, { modelId: "good-model" }),
+        create(ModelDetailsSchema, { modelId: "bad-del\u007f" }),
+        create(ModelDetailsSchema, { modelId: "bad-c1\u0085" }),
+        create(ModelDetailsSchema, { modelId: "bad-line\u2028separator" }),
+      ],
+    }));
+    const result = await withDiscoveryServer(respond(200, body), baseUrl =>
+      fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+
+    expect(result).toEqual({ ok: true, models: ["good-model"] });
+  });
+
+  test("rejects a cleartext non-loopback discovery URL before connecting", async () => {
+    const result = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "http://api2.cursor.sh",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "transport",
+      detail: "Cursor discovery URL must use HTTPS",
+    });
+  });
+
+  test("HTTP/1.1 discovery uses fetch with Bun's protocol pin", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "claude-opus-5" })],
+    }));
+    let seenUrl = "";
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seenUrl = String(input);
+      seenInit = init;
+      return new Response(body, { status: 200, headers: { "content-type": "application/proto" } });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({ ok: true, models: ["claude-opus-5"] });
+    expect(seenUrl).toBe("https://api2.cursor.sh/agent.v1.AgentService/GetUsableModels");
+    expect(seenInit?.method).toBe("POST");
+    expect(seenInit?.redirect).toBe("manual");
+    expect((seenInit as RequestInit & { protocol?: string }).protocol).toBe("http1.1");
+    expect(new Headers(seenInit?.headers).get("authorization")).toBe("Bearer test-token");
+  });
+
+  test("HTTP/1.1 discovery rejects announced and streamed 4 MiB overflow before decode", async () => {
+    let announcedCalls = 0;
+    const announced = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        announcedCalls += 1;
+        return new Response(new Uint8Array(), {
+          status: 200,
+          headers: { "content-length": String(4 * 1024 * 1024 + 1) },
+        });
+      }) as typeof fetch,
+    });
+    expect(announced).toMatchObject({ ok: false, error: "too_large" });
+    expect(announcedCalls).toBe(1);
+
+    let streamedCalls = 0;
+    const streamed = await fetchCursorUsableModels({
+      apiKey: "test-token",
+      baseUrl: "https://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: (async () => {
+        streamedCalls += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+            controller.enqueue(Uint8Array.of(0));
+            controller.close();
+          },
+        }), { status: 200 });
+      }) as typeof fetch,
+    });
+    expect(streamed).toMatchObject({ ok: false, error: "too_large" });
+    expect(streamedCalls).toBe(1);
+  });
+
+  test("discovery rejects a cleartext non-loopback URL before exposing the token, even with an HTTP/1.1 pin", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "must-not-leave-process",
+      baseUrl: "http://api2.cursor.sh",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({ ok: false, error: "transport", detail: "Cursor discovery URL must use HTTPS" });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("HTTP/1.1 discovery rejects an admitted loopback URL without retrying or invoking fetch", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchCursorUsableModels({
+      apiKey: "must-not-leave-process",
+      baseUrl: "http://127.0.0.1:1",
+      upstreamHttpVersion: "http1.1",
+      fetch: fetchImpl,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "policy",
+      detail: "Cursor HTTP/1.1 discovery requires HTTPS",
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("Cursor catalog propagates the provider HTTP/1.1 pin to discovery", async () => {
+    const providerName = "cursor-http1-discovery";
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "claude-opus-5" })],
+    }));
+    let seenProtocol: string | undefined;
+    const fetchImpl = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seenProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      return new Response(body, { status: 200, headers: { "content-type": "application/proto" } });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [providerName]: {
+            adapter: "cursor",
+            baseUrl: "https://api2.cursor.sh",
+            apiKey: "test-token",
+            upstreamHttpVersion: "http1.1",
+            models: ["claude-opus-5"],
+            fetch: fetchImpl,
+          } as Parameters<typeof gatherRoutedModels>[0]["providers"][string] & { fetch: typeof fetch },
+        },
+      });
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toContain(`${providerName}/claude-opus-5`);
+      expect(seenProtocol).toBe("http1.1");
+    } finally {
+      clearModelCache(providerName);
+    }
   });
 
   test("classifies authentication failures", async () => {
@@ -371,6 +545,256 @@ describe("Cursor timeout destroy fallback", () => {
 });
 
 describe("Cursor live transport unexpected EOF", () => {
+  test("synthesizes done after assistant text on clean Connect EOF without turnEnded", async () => {
+    const textFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionUpdate",
+        value: create(InteractionUpdateSchema, {
+          message: {
+            case: "textDelta",
+            value: create(TextDeltaUpdateSchema, { text: "hello" }),
+          },
+        }),
+      },
+    })));
+    const kvFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "kvServerMessage",
+        value: create(KvServerMessageSchema, { id: 7 }),
+      },
+    })));
+    const connectEnd = encodeConnectFrame(new TextEncoder().encode("{}"), {
+      flags: CONNECT_FLAG_END_STREAM,
+    });
+
+    await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end(Buffer.from(new Uint8Array([...textFrame, ...kvFrame, ...connectEnd])));
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        firstFrameTimeoutMs: 2_000,
+      });
+      const messages: Array<{ type: string }> = [];
+      try {
+        for await (const message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_clean_eof_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          messages.push(message);
+        }
+      } finally {
+        await transport.close?.();
+      }
+
+      expect(messages).toContainEqual({ type: "text", text: "hello" });
+      expect(messages.at(-1)).toMatchObject({ type: "done" });
+    });
+  });
+  test("sends the injected session id as Connect x-session-id", async () => {
+    let seenSessionId: string | undefined;
+    await withDiscoveryServer((stream, headers) => {
+      const raw = headers["x-session-id"];
+      seenSessionId = Array.isArray(raw) ? raw[0] : raw;
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end();
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        firstFrameTimeoutMs: 2_000,
+        sessionId: "cursor_from_gjc_session",
+      });
+      try {
+        for await (const _ of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_header_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) { /* drain */ }
+      } catch { /* fixture closes immediately */ }
+      finally {
+        await transport.close?.();
+      }
+    });
+    expect(seenSessionId).toBe("cursor_from_gjc_session");
+  });
+
+  test("settles as a failure when clean EOF synthesis exceeds the transport budget", async () => {
+    const textFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionUpdate",
+        value: create(InteractionUpdateSchema, {
+          message: {
+            case: "textDelta",
+            value: create(TextDeltaUpdateSchema, { text: "x" }),
+          },
+        }),
+      },
+    })));
+    const connectEnd = encodeConnectFrame(new TextEncoder().encode("{}"), {
+      flags: CONNECT_FLAG_END_STREAM,
+    });
+
+    await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end(Buffer.from(new Uint8Array([
+        ...Array.from({ length: 37 }, () => [...textFrame]).flat(),
+        ...connectEnd,
+      ])));
+    }, async baseUrl => {
+      const budget = createTestTranslatorBudget({ maxTurnBytes: 1_000 });
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: budget,
+        firstFrameTimeoutMs: 2_000,
+      });
+      const iterator = transport.run({
+        modelId: "composer-2",
+        conversationId: "cursor_clean_eof_budget_test",
+        system: [],
+        messages: [{ role: "user", content: "hello" }],
+      })[Symbol.asyncIterator]();
+      let failure: Error | undefined;
+      try {
+        expect(await iterator.next()).toMatchObject({ value: { type: "text" } });
+        await Bun.sleep(20);
+        while (!(await iterator.next()).done) {}
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
+
+      expect(failure).toMatchObject({
+        name: "TranslatorBudgetExceededError",
+        code: "translation_buffer_limit",
+      });
+      expect(budget.snapshot().currentBytes).toBe(0);
+    });
+  });
+
+  test("synthesizes done after createPlanRequestQuery text on clean Connect EOF", async () => {
+    const planFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionQuery",
+        value: create(InteractionQuerySchema, {
+          id: 7,
+          query: {
+            case: "createPlanRequestQuery",
+            value: create(CreatePlanRequestQuerySchema, {
+              args: create(CreatePlanArgsSchema, {
+                name: "Fix bridge",
+                overview: "Two steps.",
+                plan: "1. read\n2. patch",
+              }),
+            }),
+          },
+        }),
+      },
+    })));
+    const connectEnd = encodeConnectFrame(new TextEncoder().encode("{}"), {
+      flags: CONNECT_FLAG_END_STREAM,
+    });
+
+    await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end(Buffer.from(new Uint8Array([...planFrame, ...connectEnd])));
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        firstFrameTimeoutMs: 2_000,
+      });
+      const messages: Array<{ type: string; text?: string }> = [];
+      try {
+        for await (const message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_plan_eof_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          messages.push(message);
+        }
+      } finally {
+        await transport.close?.();
+      }
+
+      expect(messages.some(message => message.type === "text" && message.text?.includes("Fix bridge"))).toBe(true);
+      expect(messages.at(-1)).toMatchObject({ type: "done" });
+    });
+  });
+
+  test("open tool call plus clean Connect EOF emits a truncation error, not a thrown failure", async () => {
+    const startedFrame = encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionUpdate",
+        value: create(InteractionUpdateSchema, {
+          message: {
+            case: "toolCallStarted",
+            value: create(ToolCallStartedUpdateSchema, {
+              callId: "call_1",
+              modelCallId: "model_1",
+              toolCall: create(ToolCallSchema, {
+                tool: {
+                  case: "mcpToolCall",
+                  value: create(McpToolCallSchema, {
+                    args: create(McpArgsSchema, {
+                      name: "get_time",
+                      toolName: "get_time",
+                      toolCallId: "call_1",
+                      providerIdentifier: "opencodex-responses",
+                    }),
+                  }),
+                },
+              }),
+            }),
+          },
+        }),
+      },
+    })));
+    const connectEnd = encodeConnectFrame(new TextEncoder().encode("{}"), {
+      flags: CONNECT_FLAG_END_STREAM,
+    });
+
+    await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end(Buffer.from(new Uint8Array([...startedFrame, ...connectEnd])));
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        firstFrameTimeoutMs: 2_000,
+      });
+      const messages: Array<{ type: string; message?: string }> = [];
+      let failure: Error | undefined;
+      try {
+        for await (const message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_open_tool_eof_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+          tools: [{ name: "get_time", description: "t", parameters: { type: "object", properties: {} } }],
+        })) {
+          messages.push(message);
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
+
+      expect(failure).toBeUndefined();
+      expect(messages.at(-1)).toMatchObject({
+        type: "error",
+        message: expect.stringContaining("incomplete tool call"),
+      });
+    });
+  });
+
   test("zero-frame stream end surfaces as a transport error, not success", async () => {
     // Real h2c peer that accepts the request stream and immediately ends it with no
     // response frames — the shape the WP4 reviewer reproduced as a silent success.

@@ -200,4 +200,56 @@ describe("resolvePublicAddresses — caller-specific diagnostics", () => {
     expect(resolved.privateNetwork).toBe(true);
     expect(resolved.addresses).toEqual([{ address: "192.168.1.50", family: 4 }]);
   });
+
+  test("hostname Clash fake-IP answers are accepted only under the explicit benchmark opt-in (#1748)", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "198.18.56.214", family: 4 }]);
+
+    const resolved = await resolvePublicAddresses(
+      "https://www.packyapi.com/v1/models",
+      { context: "provider URL", allowBenchmarkAddresses: true },
+    );
+
+    expect(resolved.privateNetwork).toBe(false);
+    expect(resolved.addresses).toEqual([{ address: "198.18.56.214", family: 4 }]);
+  });
+
+  test("hostname Clash fake-IP answers still reject without the benchmark opt-in", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "198.18.56.214", family: 4 }]);
+
+    await expect(resolvePublicAddresses(
+      "https://www.packyapi.com/v1/models",
+      { context: "provider URL" },
+    )).rejects.toThrow("benchmark address (198.18.56.214)");
+  });
+
+  test("benchmark opt-in mixed with RFC1918 still requires the private-network opt-in", async () => {
+    lookupMock.mockResolvedValueOnce([
+      { address: "198.18.56.214", family: 4 },
+      { address: "10.0.0.5", family: 4 },
+    ]);
+
+    await expect(resolvePublicAddresses(
+      "https://rebind.example.com/v1/models",
+      { context: "provider URL", allowBenchmarkAddresses: true },
+    )).rejects.toThrow("private-network address (10.0.0.5)");
+  });
+
+  test("benchmark opt-in does not admit a literal 198.18.x URL", async () => {
+    await expect(resolvePublicAddresses(
+      "https://198.18.56.214/v1/models",
+      { context: "provider URL", allowBenchmarkAddresses: true },
+    )).rejects.toThrow("benchmark address");
+  });
+
+  test("image/Lab fetch (no opt-in) still rejects hostnames resolving to 198.18.x (#1748 SSRF guard)", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "198.18.4.2", family: 4 }]);
+    await expect(resolvePublicAddresses("https://fakeip.example.com/img.png"))
+      .rejects.toThrow("image URL hostname fakeip.example.com resolves to benchmark address (198.18.4.2)");
+
+    lookupMock.mockResolvedValueOnce([{ address: "198.19.7.9", family: 4 }]);
+    await expect(resolvePublicAddresses(
+      "https://fakeip.example.com/v1/models",
+      { context: "Lab provider destination", allowPrivateNetwork: false },
+    )).rejects.toThrow("benchmark address (198.19.7.9)");
+  });
 });

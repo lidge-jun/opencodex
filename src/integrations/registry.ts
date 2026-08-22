@@ -20,11 +20,19 @@ import {
   hermesHomeDir,
   kimiConfigPath,
   kimiHomeDir,
+  mcodeConfigPath,
+  mcodeHomeDir,
   ompAgentDir,
   ompModelsConfigPath,
   opencodeGlobalConfigPath,
   openclawConfigPath,
   openclawHomeDir,
+  piAgentDir,
+  piConfigPath,
+  primeAgentDir,
+  primeConfigPath,
+  zcodeConfigPath,
+  zcodeHomeDir,
   type ExportClientId,
 } from "../clients/config-export";
 
@@ -73,8 +81,18 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
   },
   pi: {
     id: "pi",
-    configPath: (_env = process.env, home = homedir()) => join(home, ".pi", "agent", "models.json"),
-    detectDir: (_env = process.env, home = homedir()) => join(home, ".pi"),
+    configPath: (env = process.env, home = homedir()) => piConfigPath(env, home),
+    /*
+     * Deliberately not `piAgentDir` unconditionally. Without an override the
+     * install signal stays `~/.pi`, which is what it has always been: narrowing
+     * it to `~/.pi/agent` would flip a user who has the former without the
+     * latter from installed to absent, and this change is about honoring the
+     * override, not about redefining detection. With an override there is no
+     * parent worth testing — the variable names the agent directory itself — so
+     * that directory becomes the signal.
+     */
+    detectDir: (env = process.env, home = homedir()) =>
+      env.PI_CODING_AGENT_DIR?.trim() ? piAgentDir(env, home) : join(home, ".pi"),
   },
   omp: {
     id: "omp",
@@ -111,6 +129,25 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     detectDir: (env = process.env, home = homedir()) => dshHomeDir(env, home),
     sourcePreservingYaml: { path: ["llm-pi-ai", "providers", "opencodex"] },
     writerLock: { suffix: ".lock" },
+  },
+  mcode: {
+    id: "mcode",
+    configPath: (env = process.env, home = homedir()) => mcodeConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => mcodeHomeDir(env, home),
+    writerLock: { suffix: ".lock" },
+  },
+  zcode: {
+    id: "zcode",
+    configPath: (env = process.env, home = homedir()) => zcodeConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => zcodeHomeDir(env, home),
+  },
+  prime: {
+    id: "prime",
+    configPath: (env = process.env, home = homedir()) => primeConfigPath(env, home),
+    // The agent directory, not its parent: `PRIME_AGENT_CODING_AGENT_DIR` names
+    // that directory directly, so there is no parent to test when the override
+    // is set. Same choice as OMP, whose detect signal is `ompAgentDir`.
+    detectDir: (env = process.env, home = homedir()) => primeAgentDir(env, home),
   },
 };
 

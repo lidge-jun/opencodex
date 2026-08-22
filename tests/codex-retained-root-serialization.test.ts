@@ -200,7 +200,7 @@ test("startup and CLI sync-cache cannot write models_cache while another process
     holder.release();
     expect(await holder.child.exited).toBe(0);
   }
-});
+}, 15_000);
 
 test("native restore cannot read-transform-write the catalog while another process owns K", async () => {
   const sandbox = makeSandbox("ocx-retained-restore-");

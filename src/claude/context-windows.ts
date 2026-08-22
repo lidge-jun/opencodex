@@ -10,12 +10,24 @@
  */
 import { aliasForNative, aliasForRoute } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
-import { nativeOpenAiContextWindow, type CatalogModel } from "../codex/catalog";
+import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 
 const ONE_MILLION = 1_000_000;
 
-/** Auto-context defaults (devlog 260712 020, user-approved). */
-export const AUTO_COMPACT_WINDOW_DEFAULT = 350_000;
+/**
+ * Auto-context defaults (devlog 260712 020, user-approved).
+ *
+ * The compact window is the token count at which Claude Code starts compacting, and it is
+ * also the floor `shouldMarkOneMillion` uses — a model may only carry the marker if it can
+ * host this window. 350,000 was chosen when the widest native row advertised 372,000.
+ *
+ * It now matches the auto-compaction limit the Codex catalog ships for the same models
+ * (`nativeAutoCompactLimit`: 829,800 against the 922,000 native window). Leaving the two
+ * apart meant one model compacting at 350k under Claude Code and at 829,800 under Codex.
+ * The value stays clear of the measured 922,000 ceiling by ~92k, so compaction still has
+ * room to run before the upstream refuses.
+ */
+export const AUTO_COMPACT_WINDOW_DEFAULT = 829_800;
 export const AUTO_CONTEXT_FLOOR = 200_000;
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
 export const AUTO_COMPACT_WINDOW_MIN = 100_000;
@@ -59,7 +71,7 @@ function inAutoCompactRange(value: number): boolean {
  * predicate so marker and threshold never separate (audit 021 #2); an invalid
  * value disables auto marking entirely (the CLI would ignore it, leaving marked
  * sub-1M models without their safety net). Out-of-range CONFIG values fall back
- * to the 350k default (the management API rejects them; this guards hand-edits).
+ * to AUTO_COMPACT_WINDOW_DEFAULT (the management API rejects them; this guards hand-edits).
  */
 export function resolveAutoContext(claudeCode: AutoContextConfigSlice | undefined, envOverride?: string): AutoContextMode {
   if (claudeCode?.autoContext === false) return AUTO_CONTEXT_OFF;
@@ -89,6 +101,10 @@ export function shouldMarkOneMillion(window: number | undefined, auto: AutoConte
 export function buildClaudeContextWindows(
   nativeSlugs: readonly string[],
   routedModels: readonly CatalogModel[],
+  // A configured providerContextCaps.openai has to reach the native rows here too. Without
+  // it the Claude surface keeps advertising the uncapped authoritative window while the
+  // Codex catalog advertises the capped one, and the two disagree about the same model.
+  nativeContextCap?: NativeContextLimitsInput,
 ): Record<string, number> {
   const out: Record<string, number> = {};
   const put = (key: string | null, value: number) => {
@@ -96,7 +112,7 @@ export function buildClaudeContextWindows(
     if (out[key] === undefined) out[key] = value; // first-wins (registry policy)
   };
   for (const slug of nativeSlugs) {
-    const window = nativeOpenAiContextWindow(slug);
+    const window = nativeOpenAiContextWindow(slug, nativeContextCap);
     if (typeof window !== "number" || window <= 0) continue;
     put(slug, window);
     put(desktop3pAlias("native", slug), window);

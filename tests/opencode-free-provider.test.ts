@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../src/providers/derive";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { routedProviderConfig } from "../src/router";
+import { buildModelsRequest } from "../src/oauth";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function minimalRequest(model = "kimi-k2.7-code"): OcxParsedRequest {
@@ -27,14 +29,16 @@ describe("opencode-free provider", () => {
     expect(entry?.models).toBeUndefined();
   });
 
-  test("static headers include only the public client marker", () => {
+  test("static headers include only the public client markers", () => {
     expect(entry?.staticHeaders?.["Authorization"]).toBeUndefined();
+    expect(entry?.staticHeaders?.["User-Agent"]).toBe("opencode");
     expect(entry?.staticHeaders?.["x-opencode-client"]).toBe("desktop");
   });
 
   test("providerConfigSeed propagates static headers", () => {
     const seed = providerConfigSeed(entry!);
     expect(seed.headers?.["Authorization"]).toBeUndefined();
+    expect(seed.headers?.["User-Agent"]).toBe("opencode");
     expect(seed.headers?.["x-opencode-client"]).toBe("desktop");
     expect(seed.keyOptional).toBe(true);
     expect(seed.liveModels).toBe(true);
@@ -55,6 +59,7 @@ describe("opencode-free provider", () => {
     const req = adapter.buildRequest(minimalRequest());
     const headers = req.headers as Record<string, string>;
     expect(headers["Authorization"]).toBeUndefined();
+    expect(headers["User-Agent"]).toBe("opencode");
     expect(headers["x-opencode-client"]).toBe("desktop");
     expect(req.url).toBe("https://opencode.ai/zen/v1/chat/completions");
   });
@@ -82,6 +87,66 @@ describe("opencode-free provider", () => {
     expect(headers["Authorization"]).toBe("Bearer user-secret-key");
     expect(headers["x-opencode-client"]).toBe("desktop");
     expect(Object.keys(headers)).toContain("Authorization");
+  });
+
+  // A seeded config is the easy case. The one that actually reaches users is a config written
+  // BEFORE a static header existed: it is on disk with the old header set (or with none at all,
+  // because the management API strips a block that exactly matches the registry), and nothing
+  // rewrites it. If the header only arrives at seed time, every existing install stays on the
+  // old fingerprint forever — which is what the original #2067 patch would have shipped.
+  describe("existing installs receive newly added static headers", () => {
+    const persisted = (headers?: Record<string, string>): OcxProviderConfig => ({
+      adapter: "openai-chat",
+      baseUrl: "https://opencode.ai/zen/v1",
+      keyOptional: true,
+      ...(headers ? { headers } : {}),
+    });
+
+    test("a config saved with no header block gains the full registry set", () => {
+      const routed = routedProviderConfig("opencode-free", persisted());
+      expect(routed.headers?.["User-Agent"]).toBe("opencode");
+      expect(routed.headers?.["x-opencode-client"]).toBe("desktop");
+    });
+
+    test("a config saved with only the older marker gains the new one", () => {
+      const routed = routedProviderConfig("opencode-free", persisted({ "x-opencode-client": "desktop" }));
+      expect(routed.headers?.["User-Agent"]).toBe("opencode");
+      expect(routed.headers?.["x-opencode-client"]).toBe("desktop");
+    });
+
+    test("the merged headers reach the wire, not just the resolved config", () => {
+      const routed = routedProviderConfig("opencode-free", persisted({ "x-opencode-client": "desktop" }));
+      const req = createOpenAIChatAdapter(routed).buildRequest(minimalRequest());
+      expect((req.headers as Record<string, string>)["User-Agent"]).toBe("opencode");
+    });
+
+    test("a user override wins and does not become a second comma-joined value", () => {
+      // HTTP header names are case-insensitive but object keys are not: a naive spread would
+      // leave both "user-agent" and "User-Agent", which `Headers` serializes as
+      // "custom-agent, opencode" — a corrupted request rather than an override.
+      const routed = routedProviderConfig("opencode-free", persisted({ "user-agent": "custom-agent" }));
+      const uaKeys = Object.keys(routed.headers ?? {}).filter(k => k.toLowerCase() === "user-agent");
+      expect(uaKeys).toEqual(["user-agent"]);
+      expect(routed.headers?.["user-agent"]).toBe("custom-agent");
+      expect(new Headers(routed.headers as Record<string, string>).get("user-agent")).toBe("custom-agent");
+      // Names the user did not claim are still filled.
+      expect(routed.headers?.["x-opencode-client"]).toBe("desktop");
+    });
+
+    test("model discovery carries the same fingerprint as inference", () => {
+      // A provider identified as `opencode` when it completes but anonymous when it lists its
+      // own models reads as two different clients to an upstream rate limiter.
+      const req = buildModelsRequest(persisted({ "x-opencode-client": "desktop" }), undefined, "opencode-free");
+      expect(req.headers["User-Agent"]).toBe("opencode");
+      expect(req.headers["x-opencode-client"]).toBe("desktop");
+    });
+
+    test("model discovery honors a user User-Agent override", () => {
+      const req = buildModelsRequest(persisted({ "user-agent": "custom-agent" }), undefined, "opencode-free");
+      const uaKeys = Object.keys(req.headers).filter(k => k.toLowerCase() === "user-agent");
+      expect(uaKeys).toEqual(["user-agent"]);
+      expect(req.headers["user-agent"]).toBe("custom-agent");
+    });
   });
 
   test("provider note mentions no key needed", () => {

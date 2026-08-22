@@ -4,6 +4,7 @@ import { deriveInitProviders, deriveProviderPresets, listRegistryEntries, provid
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../src/providers/registry";
 import {
   isCanonicalOpenAiForwardProvider,
+  isOpenAiOperatedResponsesDestination,
   LEGACY_CHATGPT_PROVIDER_ID,
   LEGACY_OPENAI_MULTI_PROVIDER_ID,
   OPENAI_API_PROVIDER_ID,
@@ -35,6 +36,58 @@ describe("OpenAI single-provider option foundation", () => {
     expect(isCanonicalOpenAiForwardProvider({ ...canonical, adapter: "openai-chat" })).toBe(false);
     expect(isCanonicalOpenAiForwardProvider({ ...canonical, authMode: "key" })).toBe(false);
     expect(isCanonicalOpenAiForwardProvider({ ...canonical, baseUrl: `${canonical.baseUrl}?x=1` })).toBe(false);
+  });
+
+  test("classifies only exact official OpenAI Responses destinations", () => {
+    const responsesProvider = {
+      adapter: "openai-responses",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    };
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com/v1",
+    })).toBe(true);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com",
+      responsesPath: "/v1/responses",
+    })).toBe(true);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://gateway.example.test/v1",
+    })).toBe(false);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com.evil.test/v1",
+    })).toBe(false);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      adapter: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+    })).toBe(false);
+    // The adapter sends key-auth traffic to `baseUrl + responsesPath`, so an official-looking base
+    // pointed at a non-Responses path is not an OpenAI-operated Responses destination.
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com",
+      responsesPath: "/other",
+    })).toBe(false);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com/v1",
+      responsesPath: "/other",
+    })).toBe(false);
+    // The conventional defaults still classify: no `responsesPath` resolves to `/v1/responses`.
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com",
+    })).toBe(true);
+    expect(isOpenAiOperatedResponsesDestination({
+      ...responsesProvider,
+      baseUrl: "https://api.openai.com/v1",
+      responsesPath: "/responses",
+    })).toBe(true);
   });
 
   test("publishes one Codex-login registry, preset, init, and default row", () => {

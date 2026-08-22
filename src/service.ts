@@ -9,7 +9,7 @@ import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve, win32 } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
@@ -19,6 +19,7 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from 
 import type { BunRuntimeSource } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
+import { PROXY_ENV_KEYS } from "./lib/proxy-env";
 import { randomUUID } from "node:crypto";
 import {
   ELEVATION_REQUEST_TIMEOUT_MS,
@@ -45,6 +46,7 @@ import {
 } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
+import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
 
 const LABEL = "com.opencodex.proxy";
@@ -113,12 +115,19 @@ function currentCodexSqliteHomeAbsolute(target: "native" | "windows" = "native")
   const raw = process.env.CODEX_SQLITE_HOME?.trim();
   if (!raw) return undefined;
   const expanded = expandUserPath(raw);
-  // Windows service artifacts can be rendered by cross-platform tests and
-  // repair tooling. Preserve an already-absolute drive/UNC path instead of
-  // anchoring it beneath the current POSIX worktree.
-  return target === "windows" && win32.isAbsolute(expanded)
-    ? win32.normalize(expanded)
-    : resolve(expanded);
+  // Service artifacts can be rendered by cross-platform tests and repair tooling, so an
+  // already-absolute path for the TARGET platform is preserved rather than re-anchored
+  // against the writing host. `resolve()` is host-relative in both directions: on a POSIX
+  // host it turns `C:\data` into `<cwd>/C:\data`, and on a Windows host it turns `/tmp/x`
+  // into `D:\tmp\x` — neither is a path the target can use. A relative value still resolves,
+  // because a service unit has no meaningful working directory.
+  //
+  // CODEX_HOME and OPENCODEX_HOME are carried through literally, so without this the same
+  // generated file disagreed with itself about two variables holding the same kind of value.
+  if (target === "windows") {
+    return win32.isAbsolute(expanded) ? win32.normalize(expanded) : resolve(expanded);
+  }
+  return posix.isAbsolute(expanded) ? posix.normalize(expanded) : resolve(expanded);
 }
 
 function currentOpenCodexHome(): string {
@@ -381,7 +390,7 @@ function writeServiceApiTokenFile(): string | null {
   return path;
 }
 
-export function buildPlist(): string {
+export function buildPlist(proxyEnv: { name: string; value: string }[] = resolvedProxyEnv()): string {
   const { bun, bunRuntimeSource, cli } = cliEntry();
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
@@ -396,6 +405,8 @@ export function buildPlist(): string {
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
+    ...proxyEnv.map(({ name, value }) =>
+      `    <key>${name}</key><string>${plistString(value)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
   const command = buildServiceShellCommand(bun, cli);
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -630,6 +641,31 @@ function systemdQuote(value: string): string {
 function systemdEnvironmentAssignment(name: string, value: string | undefined): string | null {
   if (!value) return null;
   return `Environment=${systemdQuote(`${name}=${value}`)}`;
+}
+
+/**
+ * Outbound proxy settings the installing shell had, resolved for baking into a service
+ * definition.
+ *
+ * A service manager does not inherit the environment of the shell that installed it, and
+ * `ExecStart=/bin/sh -lc` is dash on Ubuntu/WSL — login dash reads `.profile`, not
+ * `.bashrc`, which is where proxy exports usually live. So a user who needs a proxy to
+ * reach the upstream got a service that dialed direct: the socket was reset, the retry
+ * budget drained, and the request surfaced as `502 Provider unreachable` (#2107). The
+ * same install driven through `ocx codex-shim` worked, because that path spawns with
+ * `{ ...process.env }`.
+ *
+ * Lower-case variants are honored because curl-style tooling sets them and the runtime's
+ * own `applyProxyEnv` already treats both cases as equivalent. Only the canonical
+ * upper-case name is baked, so a definition never carries two spellings of one setting.
+ */
+export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: string; value: string }[] {
+  const resolved: { name: string; value: string }[] = [];
+  for (const key of PROXY_ENV_KEYS) {
+    const value = env[key]?.trim() || env[key.toLowerCase()]?.trim();
+    if (value) resolved.push({ name: key, value });
+  }
+  return resolved;
 }
 
 function systemdOutputTarget(value: string): string {
@@ -1505,7 +1541,11 @@ function taskXmlRunLevelAcceptable(principal: string): boolean {
   return value === "leastprivilege" || value === "highestavailable";
 }
 
-export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
+export function buildWindowsServiceScript(
+  entry = cliEntry(),
+  port = resolveServiceListenPort(),
+  proxyEnv: { name: string; value: string }[] = resolvedProxyEnv(),
+): string {
   // Provenance rides along with the entry: a second durableBunRuntime() call here could
   // resolve differently from the binary the caller actually baked.
   const { bun, bunRuntimeSource, cli } = entry;
@@ -1523,10 +1563,14 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
+    ...proxyEnv.map(({ name, value }) => windowsBatchSet(name, value)),
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli, "path"),
+    // Package root for the transactional-update restore path (#1942): cli is
+    // <pkg>\src\cli\index.ts, so the package dir is three levels up.
+    'for %%I in ("%OCX_CLI%\\..\\..\\..") do set "OCX_PKG_DIR=%%~fI"',
     'if exist "%OCX_API_TOKEN_FILE%" (',
     '  set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"',
     ")",
@@ -1538,6 +1582,20 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     '>>"%OCX_SERVICE_LOG%" echo opencodex_home="%OPENCODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo token_file="%OCX_API_TOKEN_FILE%"',
+    'if not exist "%OCX_BUN%" (',
+    "  call :restore_backup",
+    ")",
+    'if not exist "%OCX_BUN%" (',
+    '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: bundled Bun is missing; reinstall opencodex, then run ocx service repair',
+    "  exit /b 3",
+    ")",
+    'if not exist "%OCX_CLI%" (',
+    "  call :restore_backup",
+    ")",
+    'if not exist "%OCX_CLI%" (',
+    '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: CLI entry is missing; reinstall opencodex, then run ocx service repair',
+    "  exit /b 3",
+    ")",
     `"%OCX_BUN%" "%OCX_CLI%" start --port ${port} >>"%OCX_SERVICE_LOG%" 2>&1`,
     "if %ERRORLEVEL% NEQ 0 (",
     '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] child exited with code %ERRORLEVEL%; restarting in 5s',
@@ -1547,6 +1605,26 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     "  goto loop",
     ")",
     "endlocal",
+    "goto :eof",
+    "",
+    // #1942/#1849: a power loss mid-swap leaves the live package dir missing/broken and
+    // a sibling .ocx-backup-* holding the previous version. This wrapper lives OUTSIDE
+    // the package tree, so it can restore when the launcher itself is gone — the exact
+    // window the in-launcher boot probe cannot reach.
+    ":restore_backup",
+    '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] install incomplete - looking for a transactional-update backup to restore',
+    'for /f "delims=" %%B in (\'dir /b /ad /o-n "%OCX_PKG_DIR%\\..\\.ocx-backup-*" 2^>nul\') do (',
+    '  if exist "%OCX_PKG_DIR%\\..\\%%B\\opencodex\\package.json" (',
+    '    if exist "%OCX_PKG_DIR%" rmdir /s /q "%OCX_PKG_DIR%" 2>nul',
+    '    move "%OCX_PKG_DIR%\\..\\%%B\\opencodex" "%OCX_PKG_DIR%" >nul 2>&1',
+    '    if exist "%OCX_PKG_DIR%\\package.json" (',
+    '      >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] restored previous install from %%B',
+    "      goto :eof",
+    "    )",
+    "  )",
+    ")",
+    '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] no restorable backup found',
+    "goto :eof",
   ].filter((line): line is string => Boolean(line));
   return `${lines.join("\r\n")}\r\n`;
 }
@@ -1807,7 +1885,7 @@ function installLaunchd(): void {
   // Capture this BEFORE writing: the write below makes the plist exist unconditionally,
   // so a post-write existsSync would call every fresh install an "installed" service.
   const wasInstalled = existsSync(p);
-  writeFileSync(p, buildPlist(), "utf8");
+  writeServiceDefinitionFile(p, buildPlist(), "utf8");
   // Best-effort: an absent job is fine here, and a failed unload is caught by the
   // load verification below with a better message than a raw unload error.
   runLaunchctl(["unload", p]);
@@ -1870,6 +1948,52 @@ function uninstallLaunchd(): void {
   if (existsSync(p)) unlinkSync(p);
 }
 
+/**
+ * Write a service definition with owner-only permissions.
+ *
+ * These files carry the outbound proxy environment (#2107), and a proxy URL routinely
+ * carries `user:password`. `writeFileSync` without a mode lands at 0644 under the default
+ * umask, so the credential would be world-readable on a shared host. Every other
+ * secret-bearing write in this file already uses 0600 — the service API token and the
+ * install state — and a service definition holding a proxy credential belongs in the same
+ * class.
+ *
+ * The explicit `chmodSync` is not redundant: `mode` only applies when the file is
+ * created, so an install over a definition left at 0644 by an earlier version would keep
+ * the loose mode.
+ *
+ * On Windows the POSIX bits are advisory, so the ACL is the real boundary — and whether it
+ * may soft-fail depends on what the definition actually contains. A definition carrying a
+ * proxy credential is a secret publication and fails closed like the API token and the
+ * install state do; one carrying only paths and a port is not worth refusing an install
+ * over, since before #2107 these files had no hardening at all and a failure here would
+ * regress a user who has no credential to protect.
+ */
+export function writeServiceDefinitionFile(path: string, content: string, encoding: "utf8" | "utf16le"): void {
+  writeFileSync(path, content, { encoding, mode: 0o600 });
+  try { chmodSync(path, 0o600); } catch { /* superseded by the Windows ACL below */ }
+  if (process.platform === "win32") {
+    hardenSecretPath(path, { required: definitionCarriesCredential(content) });
+  }
+}
+
+/**
+ * Does this service definition embed a credential-bearing proxy URL?
+ *
+ * Only the userinfo form leaks something: `http://user:pass@host` in any of the four proxy
+ * variables. A bare `http://127.0.0.1:7890` is not a secret, and treating it as one would
+ * make an icacls stall fail an install that had nothing to protect.
+ *
+ * The scan is over any URL in the rendered definition rather than over a `KEY=value` shape,
+ * because the three formats render differently — systemd writes `Environment="K=V"`, the
+ * plist writes `<key>K</key><string>V</string>`, and the Windows wrapper writes
+ * `set "K=V"`. Keying on the assignment syntax silently missed the plist.
+ */
+export function definitionCarriesCredential(content: string): boolean {
+  // A userinfo authority: scheme, then anything that is not a delimiter, then '@'.
+  return /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>/@]+@/i.test(content);
+}
+
 // ── Windows (Task Scheduler) ──
 /**
  * In-place service-asset write that tolerates the transient EBUSY/EPERM/EACCES Windows
@@ -1878,7 +2002,7 @@ function uninstallLaunchd(): void {
 function writeServiceAssetWithRetry(path: string, content: string, encoding: "utf8" | "utf16le"): void {
   for (let attempt = 0; ; attempt++) {
     try {
-      writeFileSync(path, content, encoding);
+      writeServiceDefinitionFile(path, content, encoding);
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -2308,45 +2432,17 @@ function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TA
 /**
  * Best-effort termination of surviving Windows scheduler launcher/wrapper processes.
  * `schtasks /end` ends the task instance but often leaves wscript/cmd running the
- * `:loop` batch, which brings the proxy back during a stop or restart. Same killer
- * the update job uses, so both teardown paths share the guarantee.
+ * `:loop` batch, which brings the proxy back during a stop or restart.
  *
- * Matching is scoped to the CANONICAL paths of THIS installation (opencodex-service.cmd
- * and opencodex-service-launcher.vbs under the current config dir), never a bare
- * filename: a wrapper from another OpenCodex home — or an unrelated process whose
- * command line merely contains the filename — must not be force-terminated.
- * The path must appear as a COMPLETE command-line token (wscript.exe spawns the
- * .vbs as an argument; cmd.exe /c runs the .cmd), so a substring-only match is
- * excluded.
+ * The matching rule — canonical paths of THIS installation, as complete
+ * command-line tokens — lives in lib/windows-service-wrappers so the update job
+ * cannot drift away from it again.
  */
 function killWindowsServiceWrapperProcesses(): void {
-  if (process.platform !== "win32") return;
-  try {
-    const script = windowsServiceScriptPath();
-    const launcher = windowsLauncherVbsPath();
-    // Quote for PowerShell: single-quote the value and double any embedded quote.
-    const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
-    const ps = [
-      `$pats = @(${quote(script)}, ${quote(launcher)});`,
-      "Get-CimInstance Win32_Process | Where-Object {",
-      "  if ($_.ProcessId -eq $PID) { return $false };",
-      "  $c = $_.CommandLine; if (-not $c) { return $false };",
-      "  foreach ($p in $pats) {",
-      "    $i = $c.IndexOf($p, [System.StringComparison]::OrdinalIgnoreCase);",
-      "    if ($i -lt 0) { continue };",
-      "    $before = if ($i -gt 0) { $c.Substring($i - 1, 1) } else { ' ' };",
-      "    $end = $i + $p.Length;",
-      "    $after = if ($end -lt $c.Length) { $c.Substring($end, 1) } else { ' ' };",
-      "    if ($before -match '[\\s\"'']' -and $after -match '[\\s\"'']') { return $true };",
-      "  };",
-      "  $false",
-      "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-    ].join(" ");
-    spawnSync(resolveTrustedWindowsPowerShellExe(), [
-      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
-      "-Command", ps,
-    ], { stdio: "ignore", timeout: 5000, windowsHide: true });
-  } catch { /* best-effort */ }
+  killWindowsSchedulerWrappers({
+    scriptPath: windowsServiceScriptPath(),
+    launcherPath: windowsLauncherVbsPath(),
+  });
 }
 function uninstallWindows(): void {
   const probe = probeWindowsSchedulerTask(TASK);
@@ -2398,7 +2494,7 @@ function unitPath(): string {
   return join(unitDir(), `${TASK}.service`);
 }
 
-export function buildUnit(): string {
+export function buildUnit(proxyEnv: { name: string; value: string }[] = resolvedProxyEnv()): string {
   const { bun, bunRuntimeSource, cli } = cliEntry();
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
@@ -2413,6 +2509,7 @@ export function buildUnit(): string {
     codexHome,
     codexSqliteHome,
     opencodexHome,
+    ...proxyEnv.map(({ name, value }) => systemdEnvironmentAssignment(name, value)),
   ].filter((line): line is string => Boolean(line)).join("\n");
   return `[Unit]
 Description=OpenCodex Proxy Server
@@ -2473,7 +2570,7 @@ function installSystemd(): void {
   recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
-  writeFileSync(unitPath(), buildUnit(), "utf8");
+  writeServiceDefinitionFile(unitPath(), buildUnit(), "utf8");
   sh("systemctl --user daemon-reload");
   sh(`systemctl --user enable ${TASK}`);
   sh(`systemctl --user restart ${TASK}`);

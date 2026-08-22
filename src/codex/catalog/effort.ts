@@ -12,7 +12,7 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
-import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
+import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
@@ -31,7 +31,7 @@ import { redactSecretString, redactUserPath } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { readCatalog, readCodexCatalogPath } from "./parsing";
+import { generatedModelMetadata, readCatalog, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, RawEntry } from "./parsing";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import { nativeOpenAiCapabilitySourceSlug } from "./native-models";
@@ -122,11 +122,14 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
   // so genuine upstream marketing names are preserved untouched.
   const displayName = typeof model.displayName === "string" ? model.displayName.trim() : "";
   if (displayName) entry.display_name = displayName;
-  if (typeof model.contextWindow === "number" && model.contextWindow > 0) {
-    entry.context_window = model.contextWindow;
-    entry.max_context_window = model.contextWindow;
+  const resolvedContext = typeof model.contextWindow === "number" && model.contextWindow > 0
+    ? model.contextWindow
+    : (model.contextCap !== undefined ? resolveUnknownRoutedContextWindow(model.contextCap) : undefined);
+  if (typeof resolvedContext === "number" && resolvedContext > 0) {
+    entry.context_window = resolvedContext;
+    entry.max_context_window = resolvedContext;
     entry.auto_compact_token_limit = Math.min(
-      Math.floor(model.contextWindow * 0.9),
+      Math.floor(resolvedContext * 0.9),
       model.maxInputTokens ?? Number.POSITIVE_INFINITY,
     );
   }
@@ -139,6 +142,63 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
   if (typeof model.supportsReasoningSummaries === "boolean") {
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
+  if (model.supportsServiceTier === true) {
+    entry.default_service_tier = null;
+    entry.service_tiers = [{
+      id: "priority",
+      name: "Fast",
+      description: "1.5x speed, increased usage",
+    }];
+    entry.additional_speed_tiers = ["fast"];
+  }
+  stampCapabilityProvenance(entry, model);
+}
+
+/**
+ * Record which capability values a real source actually asserted (#1796).
+ *
+ * `ensureStrictCatalogFields` fills `context_window` and `input_modalities` with
+ * compatibility defaults so Codex's strict parser accepts the file, which means
+ * an entry ALWAYS carries both and their presence proves nothing. Routing has to
+ * tell "the provider said text-only" apart from "nobody said anything", so it
+ * reads this block and never the entry itself ("unknown is not zero",
+ * src/routing/capability.ts).
+ *
+ * Two real sources exist and both are consulted here, in the same precedence the
+ * writers use (`applyCatalogMetadata` runs first, the model's own fields
+ * overwrite it): the `CatalogModel` and the generated jawcode metadata table.
+ * Reading only the model would silently drop every provider whose capabilities
+ * live in that table.
+ */
+function stampCapabilityProvenance(entry: RawEntry, model: CatalogModel): void {
+  // Virtual combo rows are synthesized from last-resort defaults (a generic 128k
+  // context and a `["text"]` modality), so their values are placeholders rather
+  // than assertions. Stamping them would reintroduce the exact false-evidence
+  // defect this block exists to prevent.
+  if (model.provider === COMBO_NAMESPACE) return;
+
+  const meta = generatedModelMetadata(model.provider, model.id);
+  const metaContext = typeof meta?.contextWindow === "number" && meta.contextWindow > 0
+    // The generated context is capped before it reaches the entry, so provenance
+    // must apply the same cap or routing would advertise a window the cap refused.
+    ? applyProviderContextCap(meta.contextWindow, model.contextCap) ?? meta.contextWindow
+    : undefined;
+  const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
+    ? model.contextWindow
+    : metaContext;
+  const inputModalities = Array.isArray(model.inputModalities) && model.inputModalities.length > 0
+    ? model.inputModalities
+    : (Array.isArray(meta?.input) && meta.input.length > 0 ? meta.input : undefined);
+
+  entry.opencodex_capability_provenance = {
+    provider: model.provider,
+    model_id: model.id,
+    ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+    ...(inputModalities !== undefined ? { input_modalities: [...inputModalities] } : {}),
+    ...(Array.isArray(model.capabilities) && model.capabilities.length > 0
+      ? { capabilities: [...model.capabilities] }
+      : {}),
+  };
 }
 
 export function applyReasoningLevels(
@@ -153,8 +213,9 @@ export function applyReasoningLevels(
   // (no ultra->max client conversion) and codex-rs validates it by catalog membership,
   // so a missing max rung hard-fails spawn_agent effort overrides. The wire stays honest:
   // routed adapters clamp via clampToSupportedCodexEffort and natives via
-  // nativeEffortClamp (max -> the model's real top rung).
-  if (!preserveExact && efforts.length > 0) {
+  // nativeEffortClamp (max -> the model's real top rung). A `none`-only ladder is NOT
+  // reasoning-capable, so it must not grow synthetic top rungs.
+  if (!preserveExact && efforts.length > 0 && efforts.some(effort => effort !== "none" && effort !== "minimal")) {
     const additions: string[] = [];
     if (!efforts.includes("max")) additions.push("max");
     if (!efforts.includes("ultra")) additions.push("ultra");
@@ -177,7 +238,9 @@ export function applyReasoningLevels(
   }
   entry.default_reasoning_level = defaultOverride && efforts.includes(defaultOverride)
     ? defaultOverride
-    : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high" : efforts[0];
+    : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high"
+    // Sentinels never become the implicit default when real rungs are declared.
+    : efforts.find(effort => effort !== "none" && effort !== "minimal") ?? efforts[0];
 }
 
 export function isGpt56NativeSlug(slug: string): boolean {

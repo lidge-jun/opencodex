@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * The proxy core must not reach Compatibility Lab.
@@ -13,7 +14,7 @@ import { dirname, join, resolve } from "node:path";
  * job is to know which optional subsystems exist. It is covered by a behavioral assertion
  * instead (see below).
  *
- * Design and rationale: devlog/_plan/260814_lab_core_decoupling/
+ * Design and rationale: devlog/_fin/260814_lab_core_decoupling/
  */
 const PROTECTED = [
   "src/router.ts",
@@ -25,7 +26,12 @@ const PROTECTED = [
   "src/server/management-api.ts",
 ] as const;
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+// `fileURLToPath`, not `URL.pathname`: on Windows the latter yields "/C:/...", and
+// resolving that against the cwd produced "C:\\C:\\..." -- so every guard below threw
+// ENOENT instead of reading a file. A boundary test that cannot open its own sources
+// reports a broken path as a failure and would report a real Lab import the same way,
+// which means it was proving nothing on this platform.
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
  * Runtime imports only: `import type` is erased and costs nothing at runtime.
@@ -74,11 +80,16 @@ function firstLabPath(entry: string): string[] | null {
       const next = resolveSpec(spec, current);
       if (!next || previous.has(next)) continue;
       previous.set(next, current);
-      if (next.includes("/src/lab/")) {
+      // Compare on a slash-normalized path: `resolve`/`join` produce backslashes on
+      // Windows, so a literal "/src/lab/" test silently matched nothing there and the
+      // guard reported clean for every possible violation.
+      if (next.replaceAll("\\", "/").includes("/src/lab/")) {
         const chain: string[] = [];
         let node: string | null = next;
         while (node) {
-          chain.push(node.slice(repoRoot.length + 1));
+          // Repository-relative and slash-spelled, so the printed chain reads the same
+          // on every platform and callers can match it without knowing the separator.
+          chain.push(node.slice(repoRoot.length + 1).replaceAll("\\", "/"));
           node = previous.get(node) ?? null;
         }
         return chain.reverse();
@@ -89,16 +100,29 @@ function firstLabPath(entry: string): string[] | null {
   return null;
 }
 
+/**
+ * Guard 1's predicate, defined ONCE so the test that claims to protect it actually calls it.
+ *
+ * It previously lived inline in the assertion while the self-test below re-declared its own
+ * copy of the regex — so the self-test proved a local literal behaved, not that the guard did.
+ * A copy cannot fail when the original drifts, which is the specific way a guard rots.
+ *
+ * The trailing-slash forms are not sufficient either: `src/lab/index.ts` exists, so
+ * `import("../lab")` resolves to the Lab entrypoint while matching none of them. The
+ * directory specifier is matched explicitly.
+ */
+export function namesLabDirectly(source: string): boolean {
+  return /^\s*(?:import|export)\s+(?!type\b)[^;]*?["'][^"']*\/lab(?:\/|["'])/m.test(source)
+    || /^\s*import\s+["'][^"']*\/lab(?:\/|["'])/m.test(source)
+    // A protected file may lazily reach Lab through a handler it imports, but must not
+    // name Lab itself -- not even dynamically, and not as a bare directory.
+    || /\bimport\s*\(\s*["'][^"']*\/lab(?:\/|["'])/.test(source);
+}
+
 describe("core / Compatibility Lab boundary", () => {
   // Guard 1: the obvious case, a direct import.
   test.each(PROTECTED)("%s has no direct src/lab import", file => {
-    const source = readFileSync(resolve(repoRoot, file), "utf8");
-    const direct = /^\s*(?:import|export)\s+(?!type\b)[^;]*?["'][^"']*\/lab\//m.test(source)
-      || /^\s*import\s+["'][^"']*\/lab\//m.test(source)
-      // A protected file may lazily reach Lab through a handler it imports, but must not
-      // name Lab itself -- not even dynamically.
-      || /\bimport\s*\(\s*["'][^"']*\/lab\//.test(source);
-    expect(direct).toBe(false);
+    expect(namesLabDirectly(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
   });
 
   // Guard 2: the case that actually caused this work. The original defect reached Lab
@@ -145,11 +169,18 @@ describe("boundary guard cannot be defeated", () => {
   // -- lazy loading is the remedy, not the defect. Guard 1 is what stops a protected file
   // from naming Lab dynamically, so the coverage moves there rather than disappearing.
   test("guard 1 forbids a direct dynamic Lab import in a protected file", () => {
-    const direct = (source: string) => /\bimport\s*\(\s*["'][^"']*\/lab\//.test(source);
-    expect(direct('void import("../lab/paths");')).toBe(true);
-    expect(direct('const m = await import("./management/lab-routes");')).toBe(false);
+    // Calls the SAME predicate the guard uses, so a drift in one cannot pass in the other.
+    expect(namesLabDirectly('void import("../lab/paths");')).toBe(true);
+    // A bare directory specifier resolves to src/lab/index.ts and must be caught too --
+    // matching only `/lab/` left this shape as a silent way through.
+    expect(namesLabDirectly('void import("../lab");')).toBe(true);
+    expect(namesLabDirectly('import "../lab";')).toBe(true);
+    expect(namesLabDirectly('import { x } from "../lab";')).toBe(true);
+    // A module whose NAME merely contains "lab" is not Lab.
+    expect(namesLabDirectly('const m = await import("./management/lab-routes");')).toBe(false);
+    expect(namesLabDirectly('import { x } from "./collaboration";')).toBe(false);
     for (const file of PROTECTED) {
-      expect(direct(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
+      expect(namesLabDirectly(readFileSync(resolve(repoRoot, file), "utf8"))).toBe(false);
     }
   });
 

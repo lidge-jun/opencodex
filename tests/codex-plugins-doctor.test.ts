@@ -120,6 +120,64 @@ describe("diagnoseCodexBundledPlugins (direct, platform-injected)", () => {
     }
   });
 
+  test("malformed quoted marketplace values cannot wedge diagnosis", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
+      expect(result.applicable).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+
+  test("malformed quoted values with long trailing whitespace are not parsed as bare values", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${" ".repeat(20_000)}x\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
+      expect(result.applicable).toBe(true);
+      if (result.applicable) {
+        expect(result.marketplace.sourceType).toBe("local");
+        expect(result.marketplace.source).toBeNull();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+
+  test("unterminated quoted values are rejected instead of parsed as bare values", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "unterminated\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
+      expect(result.applicable).toBe(true);
+      if (result.applicable) {
+        expect(result.marketplace.sourceType).toBe("local");
+        expect(result.marketplace.source).toBeNull();
+        expect(result.stale).toBe(false);
+        expect(result.suggestedRepair).toBeNull();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("parses a table header with a trailing inline comment", () => {
     const { dir, configPath } = makeConfig(
       `[marketplaces.openai-bundled] # bundled\nsource_type = "local"\nsource = "X:\\\\gone"\n`,

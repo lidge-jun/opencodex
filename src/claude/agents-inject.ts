@@ -11,16 +11,17 @@
  * Ownership contract: this module only creates/overwrites/deletes files matching
  * `ocx-*.md` inside the agents dir. User-authored agents are never touched.
  */
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
+import { renameAtomicFile } from "../lib/windows-atomic-replace";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
 import { knownModelIdsForProvider } from "../router";
-import { decodeRoutedModelId } from "../providers/slug-codec";
+import { decodeRoutedModelIdOrThrow } from "../providers/slug-codec";
 
 export interface ClaudeAgentDef {
   file: string;
@@ -85,7 +86,7 @@ function entryParts(entry: string, config: OcxConfig): { alias: string; id: stri
     const provider = entry.slice(0, slash);
     const prov = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
     const id = prov
-      ? decodeRoutedModelId(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov))
+      ? decodeRoutedModelIdOrThrow(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov, config))
       : entry.slice(slash + 1);
     return { alias: claudeCodeAlias(provider, id), id, provider };
   }
@@ -235,7 +236,7 @@ export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir =
       } catch { /* does not exist: ours to create */ }
       const tmp = `${target}.tmp-${process.pid}`;
       writeFileSync(tmp, renderAgentDef(def), { encoding: "utf8", mode: 0o644 });
-      renameSync(tmp, target);
+      renameAtomicFile(tmp, target, undefined, "claude-agents");
       written.push(def.file);
     }
     return written;

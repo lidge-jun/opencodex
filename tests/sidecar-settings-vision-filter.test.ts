@@ -295,9 +295,12 @@ describe("sidecar-settings vision model filter", () => {
     }
   });
 
-  test("14. the web-search sidecar is deliberately NOT gated", async () => {
-    // False-positive guard: only the vision describer needs eyes. If this ever
-    // starts failing, the gate has leaked into the wrong field.
+  test("14. the web-search sidecar now has its OWN membership gate (#2188)", async () => {
+    // This test used to pin "deliberately NOT gated". #2188 replaced that
+    // contract: web-search rejects on non-membership (closed executor set),
+    // while vision keeps rejecting only on proven blindness. The two gates
+    // remain different predicates; full web-search coverage lives in
+    // tests/sidecar-settings-web-search-gate.test.ts.
     const config = emptyConfig();
     const url = new URL("http://localhost/api/sidecar-settings");
     const response = await handleManagementAPI(
@@ -309,7 +312,7 @@ describe("sidecar-settings vision model filter", () => {
       url,
       config,
     );
-    expect(response?.status).toBe(200);
-    expect(config.webSearchSidecar?.model).toBe("o3-mini");
+    expect(response?.status).toBe(400);
+    expect(config.webSearchSidecar?.model).toBeUndefined();
   });
 });

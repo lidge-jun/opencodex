@@ -2,6 +2,7 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import {
   customToolItemId,
   restoreRoutedCustomCalls,
+  routedCustomToolWireName,
   unwrapRoutedCustomToolArguments,
 } from "../responses/custom-tool-compat";
 import {
@@ -181,7 +182,8 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       && typeof parsed.item.name === "string"
     ) {
       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
-      const routed = names.has(parsed.item.name);
+      const wireName = routedCustomToolWireName(parsed.item);
+      const routed = wireName !== undefined && names.has(wireName);
       if (upstreamItemId) {
         if (routed) {
           itemNames.set(upstreamItemId, parsed.item.name);

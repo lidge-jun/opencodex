@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import {
   openRouterRoutingConfigError,
   openRouterProviderPayload,
 } from "../src/providers/openrouter-routing";
+import { fastPolicyForModel } from "../src/providers/service-tier";
+import { clearKeyCooldowns, rotateProviderTransportOn429 } from "../src/providers/key-failover";
 import { routeModel } from "../src/router";
 import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function provider(baseUrl: string, overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   return { adapter: "openai-chat", baseUrl, apiKey: "test-key", ...overrides };
@@ -23,6 +29,18 @@ function parsed(modelId: string, stream = false): OcxParsedRequest {
 
 function body(baseUrl: string, modelId: string, overrides: Partial<OcxProviderConfig> = {}, stream = false): Record<string, unknown> {
   const request = createOpenAIChatAdapter(provider(baseUrl, overrides)).buildRequest(parsed(modelId, stream));
+  return JSON.parse(request.body as string) as Record<string, unknown>;
+}
+
+function passthroughBody(
+  providerConfig: OcxProviderConfig,
+  modelId: string,
+  rawBody: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const request = buildOpenAIChatPassthroughRequest(providerConfig, {
+    messages: [{ role: "user", content: "hello" }],
+    ...rawBody,
+  }, modelId, false, fastPolicyForModel(providerConfig, modelId, undefined, "chat"));
   return JSON.parse(request.body as string) as Record<string, unknown>;
 }
 
@@ -98,6 +116,91 @@ describe("OpenRouter configurable provider routing", () => {
     const requestBody = body("https://openrouter.ai/api/v1", "deepseek/deepseek-chat", deepSeekLock, true);
     expect(requestBody.provider).toEqual({ only: ["deepseek"], allow_fallbacks: false });
     expect(requestBody.stream_options).toEqual({ include_usage: true });
+  });
+
+  test("preserves exact model routing on native Chat passthrough requests", () => {
+    const requestBody = passthroughBody(provider("https://openrouter.ai/api/v1", {
+      openRouterRouting: { order: ["deepseek"], allowFallbacks: true },
+      modelOpenRouterRouting: {
+        "anthropic/claude-sonnet-5": { only: ["anthropic"], allowFallbacks: false },
+      },
+    }), "anthropic/claude-sonnet-5", {
+      provider: { only: ["caller-controlled"] },
+    });
+
+    expect(requestBody.provider).toEqual({
+      only: ["anthropic"], allow_fallbacks: false,
+    });
+  });
+
+  test("preserves provider-wide routing on native Chat passthrough requests", () => {
+    expect(passthroughBody(
+      provider("https://openrouter.ai/api/v1", deepSeekLock),
+      "deepseek/deepseek-chat",
+    ).provider).toEqual({ only: ["deepseek"], allow_fallbacks: false });
+  });
+
+  test("resolves routed aliases before applying native Chat model preferences", () => {
+    const nativeModelId = "anthropic/claude-sonnet-5";
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openrouter",
+      providers: {
+        openrouter: provider("https://openrouter.ai/api/v1", {
+          models: [nativeModelId],
+          openRouterRouting: { only: ["deepseek"] },
+          modelOpenRouterRouting: {
+            [nativeModelId]: { only: ["anthropic"], allowFallbacks: false },
+          },
+        }),
+      },
+    };
+    const route = routeModel(config, "openrouter/anthropic-claude-sonnet-5");
+    expect(route.modelId).toBe(nativeModelId);
+    expect(passthroughBody(route.provider, route.modelId).provider).toEqual({
+      only: ["anthropic"], allow_fallbacks: false,
+    });
+  });
+
+  test("does not forward a caller provider object to non-OpenRouter passthroughs", () => {
+    expect(passthroughBody(
+      provider("https://api.deepseek.com/v1"),
+      "deepseek-chat",
+      { provider: { only: ["caller-controlled"] } },
+    ).provider).toBeUndefined();
+  });
+
+  test("preserves provider routing after native Chat key rotation", () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-openrouter-routing-"));
+    process.env.OPENCODEX_HOME = home;
+    clearKeyCooldowns("openrouter");
+    const openrouter = provider("https://openrouter.ai/api/v1", {
+      authMode: "key",
+      apiKey: "key-one",
+      apiKeyPool: [{ id: "one", key: "key-one" }, { id: "two", key: "key-two" }],
+      openRouterRouting: { only: ["anthropic"], allowFallbacks: false },
+    });
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openrouter",
+      providers: { openrouter },
+    };
+    try {
+      const rotated = rotateProviderTransportOn429(config, "openrouter", openrouter, {
+        attemptedKey: "key-one",
+        now: 1_000_000,
+      });
+      expect(rotated?.apiKey).toBe("key-two");
+      expect(passthroughBody(rotated!, "anthropic/claude-sonnet-5").provider).toEqual({
+        only: ["anthropic"], allow_fallbacks: false,
+      });
+    } finally {
+      clearKeyCooldowns("openrouter");
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   });
 
   test.each([

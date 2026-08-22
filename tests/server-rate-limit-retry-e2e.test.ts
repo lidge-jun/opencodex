@@ -26,7 +26,16 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) removeTreeWithRetry(testDir);
+  // A failed removal must not skip the cooldown reset below, and must not fail a
+  // test that already asserted: on Windows a shutting-down server can hold a file
+  // in this tree past the retry budget.
+  if (testDir) {
+    try {
+      removeTreeWithRetry(testDir);
+    } catch {
+      // Left to the OS; the state that matters is reset below.
+    }
+  }
   clearKeyCooldowns();
 });
 

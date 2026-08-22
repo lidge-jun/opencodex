@@ -40,6 +40,18 @@ function randomUserAgent(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
 }
 
+function isCanonicalMimoFreeEndpoint(baseUrl: string): boolean {
+  try {
+    const actual = new URL(baseUrl.trim());
+    const expected = new URL(MIMO_CHAT_URL);
+    actual.pathname = actual.pathname.replace(/\/+$/, "") || "/";
+    expected.pathname = expected.pathname.replace(/\/+$/, "") || "/";
+    return actual.toString().replace(/\/$/, "") === expected.toString().replace(/\/$/, "");
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Anonymous per-install client id for the bootstrap `client` field. A random UUID
  * persisted under the config dir (OPENCODEX_HOME-aware) — deliberately NOT derived
@@ -194,6 +206,11 @@ export function injectMimoSystemMarker(body: unknown): unknown {
  * On 401/403, flushes the JWT cache and retries once via fetchResponse.
  */
 export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdapter {
+  if (!isCanonicalMimoFreeEndpoint(provider.baseUrl)) {
+    throw new Error(
+      "The mimo-free adapter only supports the canonical Xiaomi MiMo Free endpoint. Use openai-chat for a custom endpoint.",
+    );
+  }
   const base = createOpenAIChatAdapter(provider);
   // Per-adapter session-affinity id (random, per process instance).
   const sessionId = `ses_${Math.random().toString(36).slice(2, 26)}`;

@@ -3,8 +3,14 @@ import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterP
 import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
-import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { handleResponses, sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import {
+  encodeCompactionSummary,
+  OPAQUE_COMPACTION_NOTE,
+  SUMMARY_PREFIX,
+} from "../src/responses/compaction";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
+import type { OcxConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
@@ -153,6 +159,10 @@ describe("OpenAI Responses key-auth URL construction", () => {
       ["https://api.openai.example/v1/", "https://api.openai.example/v1/responses"],
       ["https://api.openai.example/v1/responses", "https://api.openai.example/v1/responses"],
       ["https://api.openai.example/v1/responses/", "https://api.openai.example/v1/responses"],
+      ["https://responses", "https://responses/v1/responses"],
+      ["https://v1", "https://v1/v1/responses"],
+      ["https://responses:8443/v1", "https://responses:8443/v1/responses"],
+      ["https://[2001:db8::1]:8443/v1", "https://[2001:db8::1]:8443/v1/responses"],
     ] as const) {
       expect(buildKeyAuthUrl(baseUrl)).toBe(expectedUrl);
     }
@@ -332,16 +342,44 @@ describe("OpenAI Responses passthrough sanitization", () => {
       }>;
     };
 
-    const namespace = body.tools.find(tool => tool.type === "namespace" && tool.name === "workspace");
-    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
-      "upfront_read",
-      "declared_deferred_read",
-      "deferred_read",
+    expect(body.tools.some(tool => tool.type === "namespace")).toBe(false);
+    expect(body.tools.filter(tool => tool.name?.startsWith("workspace__")).map(tool => tool.name)).toEqual([
+      "workspace__upfront_read",
+      "workspace__declared_deferred_read",
+      "workspace__deferred_read",
     ]);
-    expect(namespace?.tools?.find(tool => tool.name === "declared_deferred_read"))
+    expect(body.tools.find(tool => tool.name === "workspace__declared_deferred_read"))
       .not.toHaveProperty("defer_loading");
-    expect(namespace?.tools?.find(tool => tool.name === "deferred_read"))
+    expect(body.tools.find(tool => tool.name === "workspace__deferred_read"))
       .not.toHaveProperty("defer_loading");
+    expect(body.tools.find(tool => tool.name === "tool_search")).toMatchObject({
+      type: "function",
+      name: "tool_search",
+      description: "Search deferred tools",
+    });
+  });
+
+  test("noncanonical forward passthrough also lowers tool_search without caller credential relay", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "forward",
+      headers: { authorization: "Bearer provider-static" },
+    });
+    const request = adapter.buildRequest({
+      modelId: deferredToolBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: deferredToolBody,
+    }, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+    const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
+
+    expect(body.tools.find(tool => tool.name === "tool_search")).toMatchObject({
+      type: "function",
+      name: "tool_search",
+    });
+    expect(request.headers.authorization).toBe("Bearer provider-static");
   });
 
   test("canonical forward passthrough leaves tool-search loading to the native backend", () => {
@@ -387,12 +425,14 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     expect(body.tools).toBeUndefined();
     const additionalTools = body.input.find(item => item.type === "additional_tools")?.tools;
-    const namespace = additionalTools?.find(tool => tool.type === "namespace" && tool.name === "workspace");
-    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
-      "upfront_read",
-      "declared_deferred_read",
-      "deferred_read",
+    expect(additionalTools?.some(tool => tool.type === "namespace")).toBe(false);
+    expect(additionalTools?.filter(tool => tool.name?.startsWith("workspace__")).map(tool => tool.name)).toEqual([
+      "workspace__upfront_read",
+      "workspace__declared_deferred_read",
+      "workspace__deferred_read",
     ]);
+    expect(additionalTools?.find(tool => tool.name === "tool_search"))
+      .toMatchObject({ type: "function", name: "tool_search" });
   });
 
   test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
@@ -701,6 +741,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(storedBody.input.map(item => item.id)).toEqual(["msg_abc", "fc_xyz", "rs_123"]);
   });
 
+
   test("drops raw reasoning input content before native GPT passthrough", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
@@ -769,6 +810,159 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.input[3]).not.toHaveProperty("name");
   });
 
+  test("keeps a blob-bearing reasoning item but strips output-only status when the route is unchanged", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const reasoningItem = {
+      type: "reasoning",
+      id: "rs_same_backend",
+      status: "completed",
+      summary: [{ type: "summary_text", text: "summary" }],
+      encrypted_content: "backend-minted-blob",
+      content: [],
+    };
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        store: true,
+        input: [reasoningItem],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      id: "rs_same_backend",
+      summary: [{ type: "summary_text", text: "summary" }],
+      encrypted_content: "backend-minted-blob",
+      content: [],
+    });
+  });
+
+  test("keeps a native blob while blanking its raw reasoning content", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "reasoning",
+          status: "completed",
+          summary: [],
+          encrypted_content: "native-backend-blob",
+          content: [{ type: "reasoning_text", text: "raw routed reasoning" }],
+        }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      summary: [],
+      encrypted_content: "native-backend-blob",
+      content: [],
+    });
+  });
+
+  test("keeps encrypted reasoning content without a proven route switch", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "reasoning",
+          summary: [],
+          encrypted_content: "same-backend-blob",
+        }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      summary: [],
+      encrypted_content: "same-backend-blob",
+    });
+  });
+
+  test("strips encrypted reasoning content after a known route switch but keeps the item", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _stripReasoningEncryptedContent: true,
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [
+          {
+            type: "reasoning",
+            id: "rs_foreign_backend",
+            status: "completed",
+            summary: [{ type: "summary_text", text: "still useful" }],
+            encrypted_content: "foreign-backend-blob",
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "continue" }],
+          },
+        ],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input).toEqual([
+      {
+        type: "reasoning",
+        id: "rs_foreign_backend",
+        summary: [{ type: "summary_text", text: "still useful" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue" }],
+      },
+    ]);
+  });
+
+  test("strips status from a reasoning item that has no encrypted content", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "reasoning",
+          id: "rs_without_blob",
+          status: "completed",
+          summary: [{ type: "summary_text", text: "summary" }],
+        }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input[0]).toEqual({
+      type: "reasoning",
+      id: "rs_without_blob",
+      summary: [{ type: "summary_text", text: "summary" }],
+    });
+  });
+
   test("strips image_generation hosted tool for codex-spark passthrough", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
@@ -811,6 +1005,106 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.tools[0]).toMatchObject({ type: "image_generation" });
   });
 
+ test("drops ChatGPT's external_web_access hint but keeps routed web search", () => {
+   const adapter = createResponsesPassthroughAdapter({
+     adapter: "openai-responses",
+     baseUrl: "https://api.x.ai/v1",
+     authMode: "key" as const,
+     apiKey: "xai-test",
+      // The registry declares this denial for xAI; the strip is capability-driven, not
+      // hostname-driven (official OpenAI API-key traffic keeps the fields).
+      supportsOpenAiWebSearchToolFields: false,
+   });
+    const request = adapter.buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        input: [{
+          type: "additional_tools",
+          tools: [{ type: "web_search", external_web_access: true, search_context_size: "medium" }],
+        }],
+        tools: [{ type: "web_search", external_web_access: false, filters: { allowed_domains: ["example.com"] } }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      tools: Record<string, unknown>[];
+      input: Array<{ type: string; tools: Record<string, unknown>[] }>;
+    };
+
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      filters: { allowed_domains: ["example.com"] },
+    }]);
+    expect(body.input[0]?.tools).toEqual([{
+      type: "web_search",
+      search_context_size: "medium",
+    }]);
+  });
+
+  test("preserves external_web_access on the canonical OpenAI forward route", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [{ type: "web_search", external_web_access: true }],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { tools: Record<string, unknown>[] };
+
+    expect(body.tools).toEqual([{ type: "web_search", external_web_access: true }]);
+  });
+
+  // `activateDeferredTool` clears `defer_loading` only for tools a `tool_search_output` already
+  // loaded, so the first turn of a deferred catalog — and any child promoted out of a namespace
+  // group — otherwise carries the private field to a gateway that rejects unknown arguments.
+ test("drops Codex-private tool fields from routed declarations", () => {
+   const adapter = createResponsesPassthroughAdapter({
+     adapter: "openai-responses",
+     baseUrl: "https://api.x.ai/v1",
+     authMode: "key" as const,
+     apiKey: "xai-test",
+      supportsOpenAiWebSearchToolFields: false,
+   });
+    const request = adapter.buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        tools: [
+          { type: "web_search_preview", external_web_access: true },
+          {
+            type: "namespace",
+            name: "workspace",
+            tools: [{ type: "function", name: "read", defer_loading: true, parameters: {} }],
+          },
+        ],
+        input: [{
+          type: "additional_tools",
+          tools: [{ type: "function", name: "loose", defer_loading: true, parameters: {} }],
+        }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      tools: Record<string, unknown>[];
+      input: Array<{ tools: Record<string, unknown>[] }>;
+    };
+
+    expect(body.tools[0]).toEqual({ type: "web_search_preview" });
+    expect(body.tools[1]).toMatchObject({ type: "function", name: "workspace__read" });
+    expect(body.tools[1]).not.toHaveProperty("defer_loading");
+    expect(body.input[0].tools[0]).not.toHaveProperty("defer_loading");
+  });
+
   test("preserves prompt_cache_key in the raw Responses passthrough body", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
@@ -844,6 +1138,92 @@ describe("OpenAI Responses passthrough sanitization", () => {
     }, { headers: new Headers({ authorization: "Bearer token" }) });
     const body = JSON.parse(request.body) as { prompt_cache_retention?: string };
 
+    expect(body.prompt_cache_retention).toBe("24h");
+  });
+
+  /**
+   * Issue #2092: the ChatGPT backend 400s a gpt-5.6 request that still carries the retired
+   * `prompt_cache_retention`. The strip is deliberately narrow, and these cases pin the
+   * narrowness itself — a wider strip passes the first block and fails the second.
+   */
+  test.each(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "drops the retired prompt_cache_retention for %s without inventing replacement options",
+    modelId => {
+      const adapter = createResponsesPassthroughAdapter(provider);
+      const request = adapter.buildRequest({
+        modelId,
+        context: { messages: [] },
+        stream: true,
+        options: {},
+        _rawBody: { model: modelId, input: "hi", prompt_cache_retention: "24h" },
+      }, { headers: new Headers({ authorization: "Bearer token" }) });
+      const body = JSON.parse(request.body) as {
+        prompt_cache_retention?: string;
+        prompt_cache_options?: unknown;
+      };
+
+      expect(body.prompt_cache_retention).toBeUndefined();
+      // Translating "24h" into the replacement field would invent a caching decision the
+      // caller never made, so absence must stay absence.
+      expect(body.prompt_cache_options).toBeUndefined();
+    },
+  );
+
+  test("keeps caller-sent prompt_cache_options while dropping the retired retention", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: "hi",
+        prompt_cache_retention: "24h",
+        prompt_cache_options: { ttl: "30m" },
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as {
+      prompt_cache_retention?: string;
+      prompt_cache_options?: { ttl?: string };
+    };
+
+    expect(body.prompt_cache_retention).toBeUndefined();
+    expect(body.prompt_cache_options).toEqual({ ttl: "30m" });
+  });
+
+  test("a near-miss model id is not swept up by the gpt-5.6 family match", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.60",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "gpt-5.60", input: "hi", prompt_cache_retention: "24h" },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { prompt_cache_retention?: string };
+
+    // A bare startsWith("gpt-5.6") would strip here and silently change an unrelated model.
+    expect(body.prompt_cache_retention).toBe("24h");
+  });
+
+  test("a noncanonical forward gateway keeps the field even for gpt-5.6", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "forward" as const,
+    });
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "gpt-5.6-sol", input: "hi", prompt_cache_retention: "24h" },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as { prompt_cache_retention?: string };
+
+    // Only the canonical ChatGPT backend is known to reject it. Stripping everywhere would be
+    // a behavior change for deployments that still honor the field.
     expect(body.prompt_cache_retention).toBe("24h");
   });
 
@@ -1397,7 +1777,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     expect(JSON.parse(secondRequest.body)).toEqual(firstBody);
   });
 
-  test("keyed platform preserves unrelated and malformed namespaces", () => {
+  test("keyed platform flattens complete namespaces and drops ones it cannot express", () => {
     const adapter = createResponsesPassthroughAdapter(keyedProvider);
     const request = adapter.buildRequest({
       modelId: "gpt-5.6-sol",
@@ -1424,12 +1804,13 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       tool_choice: { type: string; name: string };
     };
 
+    // The empty `image_gen` group declares nothing, and relaying `type: "namespace"` is the shape a
+    // strict gateway rejects for the whole request.
     expect(body.tools).toEqual([
-      { type: "namespace", name: "image_gen", tools: [] },
       {
-        type: "namespace",
-        name: "web",
-        tools: [{ type: "function", name: "run", parameters: {} }],
+        type: "function",
+        name: "web__run",
+        parameters: { type: "object" },
       },
       { type: "image_generation" },
     ]);
@@ -1803,10 +2184,8 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     }, meta);
     const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
 
-    expect(body.tools).toEqual([
-      { type: "namespace", name: "image_gen", tools: [] },
-      { type: "image_generation" },
-    ]);
+    // The empty namespace group is lowered away; only the hosted tool reaches the wire.
+    expect(body.tools).toEqual([{ type: "image_generation" }]);
   });
 
   test("hosted-tool preference uses the exact model id", () => {
@@ -1830,10 +2209,8 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     }, meta);
     const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
 
-    expect(body.tools).toEqual([
-      { type: "namespace", name: "image_gen", tools: [] },
-      { type: "image_generation" },
-    ]);
+    // The empty namespace group is lowered away; only the hosted tool reaches the wire.
+    expect(body.tools).toEqual([{ type: "image_generation" }]);
   });
 
   test("hosted-tool preference honors an OpenAI virtual model's selected id", () => {
@@ -1978,6 +2355,248 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
   });
 });
 
+describe("routed namespace and custom-tool identity", () => {
+  const customNamespace = "custom_catalog";
+  const functionNamespace = "function_catalog";
+  const rawTools = [
+    {
+      type: "namespace",
+      name: customNamespace,
+      tools: [{
+        type: "custom",
+        name: "read",
+        description: "Read freeform input",
+        format: { type: "text" },
+      }],
+    },
+    {
+      type: "namespace",
+      name: functionNamespace,
+      tools: [{
+        type: "function",
+        name: "read",
+        description: "Read structured input",
+        parameters: { type: "object", properties: {} },
+      }],
+    },
+  ];
+  const customUpstreamItem = {
+    type: "function_call",
+    id: "fc_custom_read",
+    call_id: "call_custom_read",
+    name: `${customNamespace}__read`,
+    arguments: JSON.stringify({ input: "freeform payload" }),
+    status: "completed",
+  };
+  const functionUpstreamItem = {
+    type: "function_call",
+    id: "fc_function_read",
+    call_id: "call_function_read",
+    name: `${functionNamespace}__read`,
+    arguments: "{}",
+    status: "completed",
+  };
+  const config = {
+    port: 0,
+    defaultProvider: "fixture",
+    providers: {
+      fixture: {
+        adapter: "openai-responses",
+        baseUrl: "https://fixture.test/v1",
+        authMode: "key",
+        apiKey: "fixture-key",
+      },
+    },
+  } as OcxConfig;
+
+  const frame = (event: string, payload: Record<string, unknown>): string =>
+    `event: ${event}\ndata: ${JSON.stringify({ type: event, ...payload })}`;
+
+  test("round-trips same-named namespaced custom and function calls through JSON and SSE", async () => {
+    const adapter = createResponsesPassthroughAdapter(config.providers.fixture!);
+    const built = adapter.buildRequest({
+      modelId: "routed-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "routed-model", input: "read", tools: rawTools },
+    }, { headers: new Headers() });
+    const builtBody = JSON.parse(built.body) as { tools: Array<Record<string, unknown>> };
+
+    expect(builtBody.tools.map(tool => ({ type: tool.type, name: tool.name }))).toEqual([
+      { type: "function", name: `${customNamespace}__read` },
+      { type: "function", name: `${functionNamespace}__read` },
+    ]);
+    expect([...(built.convertedRoutedCustomToolNames ?? [])]).toEqual([
+      `${customNamespace}__read`,
+    ]);
+
+    const savedFetch = globalThis.fetch;
+    const outboundBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      const outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      outboundBodies.push(outbound);
+      if (outbound.stream === true) {
+        const upstream = [
+          frame("response.output_item.added", {
+            output_index: 0,
+            item: { ...customUpstreamItem, arguments: "", status: "in_progress" },
+          }),
+          frame("response.function_call_arguments.done", {
+            output_index: 0,
+            item_id: customUpstreamItem.id,
+            arguments: customUpstreamItem.arguments,
+          }),
+          frame("response.output_item.done", { output_index: 0, item: customUpstreamItem }),
+          frame("response.output_item.added", {
+            output_index: 1,
+            item: { ...functionUpstreamItem, arguments: "", status: "in_progress" },
+          }),
+          frame("response.function_call_arguments.done", {
+            output_index: 1,
+            item_id: functionUpstreamItem.id,
+            arguments: functionUpstreamItem.arguments,
+          }),
+          frame("response.output_item.done", { output_index: 1, item: functionUpstreamItem }),
+          frame("response.completed", {
+            response: {
+              id: "resp_stream",
+              status: "completed",
+              output: [customUpstreamItem, functionUpstreamItem],
+            },
+          }),
+          "data: [DONE]",
+        ].join("\n\n") + "\n\n";
+        return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({
+        id: "resp_json",
+        status: "completed",
+        output: [customUpstreamItem, functionUpstreamItem],
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const requestBody = (stream: boolean) => ({
+      model: "fixture/routed-model",
+      stream,
+      input: [{ role: "user", content: [{ type: "input_text", text: "read both" }] }],
+      tools: rawTools,
+    });
+
+    try {
+      const jsonResponse = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody(false)),
+      }), config, { model: "", provider: "" });
+      const json = await jsonResponse.json() as { output: Array<Record<string, unknown>> };
+      expect(json.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        namespace: customNamespace,
+        name: "read",
+        input: "freeform payload",
+      });
+      expect(json.output[0]).not.toHaveProperty("arguments");
+      expect(json.output[1]).toMatchObject({
+        type: "function_call",
+        namespace: functionNamespace,
+        name: "read",
+        arguments: "{}",
+      });
+
+      const sseResponse = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody(true)),
+      }), config, { model: "", provider: "" });
+      const clientSse = await sseResponse.text();
+      const payloads = clientSse
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data:") && line.slice(5).trim() !== "[DONE]")
+        .map(line => JSON.parse(line.slice(5).trim()) as Record<string, unknown>);
+      const completed = payloads.find(payload => payload.type === "response.completed") as {
+        response: { output: Array<Record<string, unknown>> };
+      } | undefined;
+      expect(completed?.response.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        namespace: customNamespace,
+        name: "read",
+        input: "freeform payload",
+      });
+      expect(completed?.response.output[1]).toMatchObject({
+        type: "function_call",
+        namespace: functionNamespace,
+        name: "read",
+        arguments: "{}",
+      });
+      expect(payloads.some(payload => payload.type === "response.custom_tool_call_input.done")).toBe(true);
+      expect(payloads.some(payload => payload.type === "response.function_call_arguments.done")).toBe(true);
+
+      for (const outbound of outboundBodies) {
+        const tools = outbound.tools as Array<Record<string, unknown>>;
+        expect(tools.map(tool => ({ type: tool.type, name: tool.name }))).toEqual([
+          { type: "function", name: `${customNamespace}__read` },
+          { type: "function", name: `${functionNamespace}__read` },
+        ]);
+      }
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("noncanonical forward lowers a namespaced custom tool and restores its response identity", async () => {
+    const forwardConfig = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://forward-gateway.example.test/v1",
+          authMode: "forward",
+        },
+      },
+    } as OcxConfig;
+    const savedFetch = globalThis.fetch;
+    let outbound: { tools?: Array<Record<string, unknown>> } | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      outbound = JSON.parse(String(init?.body)) as { tools?: Array<Record<string, unknown>> };
+      return Response.json({
+        id: "resp_forward_custom",
+        status: "completed",
+        output: [customUpstreamItem],
+      });
+    }) as typeof fetch;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/routed-model",
+          stream: false,
+          input: "read",
+          tools: [rawTools[0]],
+        }),
+      }), forwardConfig, { model: "", provider: "" });
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+
+      expect(outbound?.tools).toEqual([
+        expect.objectContaining({ type: "function", name: `${customNamespace}__read` }),
+      ]);
+      expect(outbound?.tools?.[0]).not.toHaveProperty("format");
+      expect(body.output[0]).toMatchObject({
+        type: "custom_tool_call",
+        namespace: customNamespace,
+        name: "read",
+        input: "freeform payload",
+      });
+      expect(body.output[0]).not.toHaveProperty("arguments");
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+});
+
 describe("OpenAI Responses forward-mode unsupported param stripping", () => {
   const meta = { headers: new Headers({ authorization: "Bearer token" }) };
   const rawBody = {
@@ -2044,6 +2663,126 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
   });
 });
 
+describe("replayed compaction blobs", () => {
+  type PassthroughProvider = Parameters<typeof createResponsesPassthroughAdapter>[0];
+
+  // Shaped like a blob minted by an OpenAI-operated backend: opaque, no `ocx1:` envelope.
+  const NATIVE_BLOB = "gAAAAAB-openai-minted-compaction-blob";
+  const routedProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "key",
+    apiKey: "xai-test",
+  };
+  const openaiKeyedProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    authMode: "key",
+    apiKey: "sk-test",
+  };
+  // Forward auth alone says nothing about the backend. Noncanonical providers receive no caller
+  // credentials, so this relay cannot be assumed to understand OpenAI's native blob.
+  const forwardRelayProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://relay.example/backend-api/codex",
+    authMode: "forward",
+  };
+  const optedInRelayProvider: PassthroughProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://openai-relay.example/v1",
+    authMode: "key",
+    apiKey: "relay-test",
+    decodesNativeCompactionBlobs: true,
+  };
+
+  function forwardedInput(
+    target: PassthroughProvider,
+    input: unknown[],
+    threadServingIdentityChanged = false,
+  ): Record<string, unknown>[] {
+    const request = createResponsesPassthroughAdapter(target).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input },
+      ...(threadServingIdentityChanged ? { _stripReasoningEncryptedContent: true } : {}),
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input;
+  }
+
+  // Forwarding a blob to a backend that did not mint it fails the turn, and because the item lives
+  // in the client transcript the failure repeats on every later turn — including the compaction turn
+  // — so the session cannot recover until its history is cleared.
+  test("degrades a foreign blob to a note on a destination that cannot decode it", () => {
+    for (const target of [routedProvider, forwardRelayProvider]) {
+      for (const type of ["compaction", "compaction_summary", "context_compaction"]) {
+        const forwarded = forwardedInput(target, [
+          { type, encrypted_content: NATIVE_BLOB },
+        ]);
+        expect(forwarded[0]).toEqual({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+        });
+        expect(JSON.stringify(forwarded)).not.toContain(NATIVE_BLOB);
+      }
+    }
+  });
+
+  test("forwards a foreign blob untouched to destinations known to decode it", () => {
+    const item = { type: "compaction", encrypted_content: NATIVE_BLOB };
+    for (const target of [provider, openaiKeyedProvider, optedInRelayProvider]) {
+      expect(forwardedInput(target, [item])[0]).toEqual(item);
+    }
+  });
+
+  test("a known serving-identity change overrides the native-blob destination gate", () => {
+    const before = { type: "message", role: "user", content: [{ type: "input_text", text: "before" }] };
+    const after = { type: "message", role: "user", content: [{ type: "input_text", text: "after" }] };
+
+    expect(forwardedInput(openaiKeyedProvider, [
+      before,
+      { type: "compaction", encrypted_content: NATIVE_BLOB },
+      after,
+    ], true)).toEqual([
+      before,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+      },
+      after,
+    ]);
+  });
+
+  // The proxy's own envelope is transparent base64, so no upstream can read it anywhere.
+  test("lowers proxy-minted ocx1 envelopes on every destination", () => {
+    const item = { type: "compaction", encrypted_content: encodeCompactionSummary("prior work") };
+    for (const target of [provider, openaiKeyedProvider, routedProvider]) {
+      for (const threadServingIdentityChanged of [false, true]) {
+        expect(forwardedInput(target, [item], threadServingIdentityChanged)[0]).toEqual({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\nprior work` }],
+        });
+      }
+    }
+  });
+
+  // A bare marker carries no blob, so there is nothing to mis-route.
+  test("leaves compaction items without encrypted_content alone", () => {
+    for (const target of [provider, routedProvider]) {
+      for (const type of ["compaction", "context_compaction"]) {
+        for (const threadServingIdentityChanged of [false, true]) {
+          const item = { type };
+          expect(forwardedInput(target, [item], threadServingIdentityChanged)[0]).toEqual(item);
+        }
+      }
+    }
+  });
+});
+
 describe("openaiResponsesUrl", () => {
   test("does not strip mid-path /v1 or a non-endpoint responses suffix", () => {
     expect(openaiResponsesUrl("https://proxy.example.com/v1/relay")).toBe(
@@ -2052,5 +2791,98 @@ describe("openaiResponsesUrl", () => {
     expect(openaiResponsesUrl("https://api.example.com/somev1")).toBe(
       "https://api.example.com/somev1/v1/responses",
     );
+  });
+});
+
+describe("reasoning input content channel", () => {
+  const routed = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "key" as const,
+    apiKey: "xai-test",
+  };
+
+  function forwarded(item: Record<string, unknown>): Record<string, unknown> {
+    const request = createResponsesPassthroughAdapter(routed).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input: [item] },
+    }, { headers: new Headers() });
+    return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+  }
+
+  // Codex serializes an absent reasoning content channel as `"content": null`. xAI rejects the item
+  // and blames the sibling blob (`Could not decode the compaction blob`), so this reads as an
+  // encrypted_content failure; dropping the null key is what actually fixes it. Verified against a
+  // captured failing request: removing only this key turned the 400 into a 200.
+  test("drops a null content channel while keeping the replayable blob", () => {
+    const out = forwarded({
+      type: "reasoning",
+      content: null,
+      summary: [{ type: "summary_text", text: "thinking" }],
+      encrypted_content: "upstream-issued-blob",
+    });
+    expect(out).not.toHaveProperty("content");
+    expect(out.encrypted_content).toBe("upstream-issued-blob");
+    expect(out.summary).toEqual([{ type: "summary_text", text: "thinking" }]);
+  });
+
+  // An OpenAI-operated backend binds the blob to the item's exact shape, so deleting a field there
+  // invalidates it: `The encrypted content ... could not be verified`. Caught in live traffic after
+  // an ungated first version of this fix shipped locally — the two backends want opposite things.
+  test("keeps a null content channel on OpenAI-operated destinations", () => {
+    const item = {
+      type: "reasoning",
+      content: null,
+      summary: [],
+      encrypted_content: "openai-issued-blob",
+    };
+    for (const target of [
+      { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
+      { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key" as const, apiKey: "sk-t" },
+      { adapter: "openai-responses", baseUrl: "https://api.openai.com", responsesPath: "/v1/responses", authMode: "key" as const, apiKey: "sk-t" },
+    ]) {
+      const request = createResponsesPassthroughAdapter(target).buildRequest({
+        modelId: "gpt-5.6-sol",
+        context: { messages: [] },
+        stream: true,
+        options: {},
+        _rawBody: { model: "gpt-5.6-sol", store: false, input: [item] },
+      }, { headers: new Headers({ authorization: "Bearer token" }) });
+      const out = (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+      expect(out).toHaveProperty("content");
+      expect(out.content).toBeNull();
+      expect(out.encrypted_content).toBe("openai-issued-blob");
+    }
+  });
+
+  // A noncanonical forward gateway does not receive the caller's credentials, so forward auth says
+  // nothing about which backend answers; it is routed and must get the strip.
+  test("strips a null content channel on a noncanonical forward relay", () => {
+    const request = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example/backend-api/codex",
+      authMode: "forward",
+    }).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", store: false, input: [{ type: "reasoning", content: null, encrypted_content: "b" }] },
+    }, { headers: new Headers() });
+    const out = (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
+    expect(out).not.toHaveProperty("content");
+  });
+
+  test("leaves an array content channel to the existing sanitizer", () => {
+    const out = forwarded({
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "raw" }],
+      encrypted_content: "upstream-issued-blob",
+    });
+    expect(out.content).toEqual([]);
+    expect(out.encrypted_content).toBe("upstream-issued-blob");
   });
 });

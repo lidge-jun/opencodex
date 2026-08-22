@@ -39,7 +39,7 @@ describe("loopback listener policy view", () => {
 
   test("the loopback view admits without a credential and names it loopback", () => {
     const policy = requestPolicyView(wildcardConfig, "127.0.0.1");
-    expect(resolveResponsesApiAuth(request(), policy)).toEqual({ kind: "loopback" });
+    expect(resolveResponsesApiAuth(request(), policy)).toEqual({ kind: "loopback", source: "loopback" });
   });
 
   test("the view carries no bind address other than the one it was given", () => {
@@ -56,7 +56,7 @@ describe("loopback listener policy view", () => {
     expect(resolveResponsesApiAuth(
       request("/v1/responses", { "x-opencodex-api-key": "ocx_data_realsecret" }),
       wildcardConfig,
-    )).toEqual({ kind: "configured", keyId: "k1" });
+    )).toEqual({ kind: "configured", keyId: "k1", source: "dedicated" });
   });
 
   test("both Anthropic routes finish CORS with the listener-effective policy", () => {
@@ -197,5 +197,6 @@ describe("injected Codex provider block", () => {
     const block = buildProviderTableBlock(10200, false, false, "0.0.0.0");
     expect(block).toContain('base_url = "http://127.0.0.1:10200/v1"');
     expect(block).not.toContain("env_http_headers");
+    expect(block).not.toContain("env_key");
   });
 });

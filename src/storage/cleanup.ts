@@ -1091,7 +1091,7 @@ function writeSatelliteBackup(
     throw new Error("test_fail_satellite_backup_replace");
   }
   try {
-    renameAtomicFile(tmp, dest);
+    renameAtomicFile(tmp, dest, undefined, "storage-cleanup");
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* */ }
     throw error;
@@ -2435,7 +2435,7 @@ function writeRestorePending(
     throw new Error("test_fail_pending_rename");
   }
   try {
-    renameSync(tmp, dest);
+    renameAtomicFile(tmp, dest, undefined, "storage-cleanup");
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* */ }
     throw error;

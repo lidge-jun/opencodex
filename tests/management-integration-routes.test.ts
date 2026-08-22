@@ -82,6 +82,7 @@ function baseConfig(): OcxConfig {
         liveModels: false,
         models: ["m1"],
         modelContextWindows: { m1: 128_000 },
+        modelReasoningEfforts: { m1: ["minimal", "low", "high"] },
       },
     },
   } as unknown as OcxConfig;
@@ -123,6 +124,12 @@ function installOmp(): string {
 
 function installDsh(): string {
   const spec = INTEGRATION_CLIENTS.dsh;
+  mkdirSync(spec.detectDir(routeEnv, home), { recursive: true });
+  return spec.configPath(routeEnv, home);
+}
+
+function installMcode(): string {
+  const spec = INTEGRATION_CLIENTS.mcode;
   mkdirSync(spec.detectDir(routeEnv, home), { recursive: true });
   return spec.configPath(routeEnv, home);
 }
@@ -319,6 +326,34 @@ describe("PUT /api/client-integrations/:clientId", () => {
     });
     expect(existsSync(hermesConfigPath())).toBe(false);
     expect(store.listOperations()).toHaveLength(0);
+  });
+
+  test("MCode apply and stale refresh write context and reasoning capabilities", async () => {
+    const configPath = installMcode();
+    expect((await put("mcode", true)).status).toBe(200);
+
+    const applied = Bun.YAML.parse(readFileSync(configPath, "utf8")) as {
+      custom_provider: { opencodex: { models: Record<string, unknown> } };
+    };
+    expect(applied.custom_provider.opencodex.models["a/m1"]).toEqual({
+      limit: { context: 128_000 },
+      thinking: { effortOptions: ["minimal", "low", "high"] },
+    });
+
+    config.providers.a!.modelContextWindows = { m1: 256_000 };
+    config.providers.a!.modelReasoningEfforts = { m1: ["low", "medium", "max"] };
+    const refreshed = await put("mcode", true);
+    expect(refreshed.status).toBe(200);
+    expect((await refreshed.json() as { changed: boolean }).changed).toBe(true);
+
+    const afterRefresh = Bun.YAML.parse(readFileSync(configPath, "utf8")) as {
+      custom_provider: { opencodex: { models: Record<string, unknown> } };
+    };
+    expect(afterRefresh.custom_provider.opencodex.models["a/m1"]).toEqual({
+      limit: { context: 256_000 },
+      thinking: { effortOptions: ["low", "medium", "max"] },
+    });
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["refresh", "apply"]);
   });
 });
 

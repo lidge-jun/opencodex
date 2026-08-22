@@ -13,6 +13,13 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 
+interface WebSearchModelOption {
+  value: string;
+  model: string;
+  backend: "openai" | "anthropic";
+  authSlot?: boolean;
+}
+
 const USAGE = `Usage:
   ocx agent [status] [--json]
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
@@ -20,7 +27,7 @@ const USAGE = `Usage:
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
-  ocx agent sidecar <status|web|vision> [--model <id|->] [--backend <openai|anthropic|->]
+  ocx agent sidecar <status|web|vision> [--list] [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -152,6 +159,29 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     return;
   }
   if (section !== "web" && section !== "vision") throw new CliUsageError("sidecar must be web, vision, or status", USAGE);
+  // --list must be consumed BEFORE rejectArgs sees it. It prints the server's
+  // candidate set — the exact list the GUI picker shows (#2188): the server
+  // computes it once and every surface consumes it, so the CLI cannot drift.
+  const wantsList = takeFlag(args, "--list");
+  if (wantsList) {
+    rejectArgs(args, USAGE);
+    const settings = await runtimeRequest("/api/sidecar-settings", {}, deps) as {
+      webSearchModels?: WebSearchModelOption[];
+      visionModels?: Array<{ value: string; backend?: string; baseline?: boolean }>;
+    };
+    if (section === "web") {
+      const options = settings.webSearchModels ?? [];
+      printData(options, wantsJson, options.length === 0
+        ? ["no runnable web-search sidecar models (log in to ChatGPT or Anthropic)"]
+        : options.map(option => `${option.value} [${option.backend}]${option.authSlot ? " (auth slot)" : ""}`));
+    } else {
+      const options = settings.visionModels ?? [];
+      printData(options, wantsJson, options.length === 0
+        ? ["no eligible vision describers"]
+        : options.map(option => `${option.value}${option.backend ? ` [${option.backend}]` : ""}${option.baseline ? " (baseline)" : ""}`));
+    }
+    return;
+  }
   const model = takeOption(args, "--model");
   const backend = takeOption(args, "--backend");
   const reasoning = takeOption(args, "--reasoning");
@@ -163,6 +193,19 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (reasoning !== undefined) settings.reasoning = reasoning;
   if (maxDescriptionsPerTurn !== undefined) settings.maxDescriptionsPerTurn = maxDescriptionsPerTurn;
   if (Object.keys(settings).length === 0) throw new CliUsageError("at least one sidecar option is required", USAGE);
+  if (section === "web" && model !== undefined && model !== "-") {
+    const offered = await runtimeRequest("/api/sidecar-settings", {}, deps) as {
+      webSearchModels?: WebSearchModelOption[];
+    };
+    const requestedBackend = backend === "-" ? "openai" : backend;
+    const option = offered.webSearchModels?.find(candidate =>
+      (candidate.value === model || candidate.model === model)
+      && (requestedBackend === undefined || candidate.backend === requestedBackend));
+    if (option) {
+      settings.model = option.model;
+      if (backend !== "-") settings.backend = option.backend;
+    }
+  }
   const body = section === "web" ? { webSearch: settings } : { vision: settings };
   const result = await runtimeRequest("/api/sidecar-settings", { method: "PUT", body: JSON.stringify(body) }, deps);
   printData(result, wantsJson, [`${section} sidecar settings updated.`]);

@@ -44,7 +44,22 @@ export const STORE_BUDGET_MS = 30_000;
  * assertion (durable spill is the product contract), so the wait is intrinsic; the
  * orphan-cleanup cap test measured ~34s on windows-latest against Bun's 5s default.
  */
-export const BULK_DURABLE_IO_BUDGET_MS = 90_000;
+export const BULK_DURABLE_IO_BUDGET_MS = bulkDurableIoBudgetMs();
+
+/**
+ * Windows needs a higher ceiling than the ~34s that sized this number, for the same
+ * reason `watchdogMs` carries a higher floor there: the leg runs four Bun pools on one
+ * runner, and every one of these writes is an individual fsync against a filesystem that
+ * is slower under that contention to begin with. The orphan-cleanup cap case ran 100.6s
+ * against the 90s budget on shard 4/4 (#2152) while doing exactly the work it claims —
+ * 521 durable writes — so the number was measuring runner contention, not a hang.
+ *
+ * 180s stays a bound rather than an absence of one, and it is gated on Windows so no
+ * other lane loses the shorter signal.
+ */
+function bulkDurableIoBudgetMs(): number {
+  return process.platform === "win32" ? 180_000 : 90_000;
+}
 
 /**
  * A deadline *inside* a test, for an await that would otherwise hang forever.

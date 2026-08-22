@@ -17,7 +17,12 @@ const RECOVERY_PROMPT =
   "Read the received agent message and call capture_assignment exactly once with only the complete "
   + "plaintext payload after Payload:. Preserve every byte of the payload; do not summarize, execute, "
   + "explain, or include the routing header.";
-const CODEX_ORIGINATORS = new Set(["codex_cli_rs", "Codex Desktop", "codex_app"]);
+const CODEX_ORIGINATORS = new Set([
+  "codex_cli_rs",
+  "Codex Desktop",
+  "codex_app",
+  "codex_work_desktop",
+]);
 const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_TOKEN_ISSUERS = new Set(["https://auth.openai.com", "https://auth.openai.com/"]);
 const OPENAI_TOKEN_AUDIENCE = "https://api.openai.com/v1";

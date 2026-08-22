@@ -10,6 +10,8 @@ export interface CodexAccountUsabilityOptions {
   nativeMainSelectionOnly?: boolean;
   /** Test seam for proving whether routing attempted a physical native-token read. */
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
+  /** Confirmed account ids for an account-gated model; omitted for ordinary native models. */
+  modelEligibleAccountIds?: ReadonlySet<string>;
 }
 
 export function isCodexAccountUsable(
@@ -17,6 +19,7 @@ export function isCodexAccountUsable(
   accountId: string,
   options: CodexAccountUsabilityOptions = {},
 ): boolean {
+  if (options.modelEligibleAccountIds && !options.modelEligibleAccountIds.has(accountId)) return false;
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     // Startup recovery owns the physical auth/vault boundary. Never parse or select
     // native __main__ while an encrypted switch journal is pending or inconclusive.

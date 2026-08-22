@@ -55,7 +55,7 @@ describe("syncGrokConfig", () => {
 
       const solBlock = content.slice(content.indexOf("[model.ocx-gpt-5-6-sol]"));
       expect(solBlock).toContain(`context_window = ${nativeOpenAiContextWindow("gpt-5.6-sol")}`);
-      expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(372_000);
+      expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(272_000);
 
       // Each native block carries a window exactly when the catalog knows one. gpt-5.4-mini has
       // none recorded, and inject.ts deliberately omits the line rather than writing a

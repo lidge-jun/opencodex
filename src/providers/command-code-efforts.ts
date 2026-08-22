@@ -9,13 +9,30 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
   },
-  "zai-org/glm-5.3": {
-    efforts: ["low", "high", "max"],
-    profileUrl: "https://commandcode.ai/models/glm-5-3",
+  // Keys must match the EXACT upstream /provider/v1/models ids (GLM ships as
+  // `zai-org/GLM-5.3`, not `zai-org/glm-5.3`). The table doubles as the router's
+  // known-ids decode source (via `knownModelIdsForProvider`), so a case mismatch
+  // makes the Codex-facing slug `commandcode/zai-org-GLM-5.3` pass through
+  // undecoded and upstream rejects it with `unsupported_model`.
+  "zai-org/GLM-5": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/glm-5",
   },
-  "zai-org/glm-5.2": {
+  "zai-org/GLM-5.1": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/glm-5-1",
+  },
+  "zai-org/GLM-5.2": {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-2",
+  },
+  "zai-org/GLM-5.2-Fast": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/glm-5-2-fast",
+  },
+  "zai-org/GLM-5.3": {
+    efforts: ["low", "high", "max"],
+    profileUrl: "https://commandcode.ai/models/glm-5-3",
   },
   // Muse Spark: CLI currently prints "has no adjustable reasoning effort" and
   // blocks --effort locally, but the upstream /alpha/generate endpoint accepts
@@ -53,8 +70,14 @@ function keyFor(modelId: string): string {
 
 export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
   const key = keyFor(modelId);
-  return refreshedEfforts.get(key)
-    ?? (Object.hasOwn(COMMAND_CODE_MODEL_REASONING_EFFORTS, key) ? COMMAND_CODE_MODEL_REASONING_EFFORTS[key] : undefined);
+  const refreshed = refreshedEfforts.get(key);
+  if (refreshed !== undefined) return refreshed;
+  // Case-insensitive: the table keys match the EXACT upstream ids (e.g. `zai-org/GLM-5.3`),
+  // but callers may pass either case.
+  for (const [id, efforts] of Object.entries(COMMAND_CODE_MODEL_REASONING_EFFORTS)) {
+    if (keyFor(id) === key) return efforts;
+  }
+  return undefined;
 }
 
 function parsedProfileEfforts(page: string): string[] | undefined {
@@ -82,9 +105,13 @@ export async function refreshCommandCodeReasoningEfforts(
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<readonly string[] | undefined> {
   const key = keyFor(modelId);
-  const profile = Object.hasOwn(COMMAND_CODE_MODEL_EFFORTS, key)
-    ? COMMAND_CODE_MODEL_EFFORTS[key as keyof typeof COMMAND_CODE_MODEL_EFFORTS]
-    : undefined;
+  let profile: { efforts: readonly string[]; profileUrl: string } | undefined;
+  for (const [id, row] of Object.entries(COMMAND_CODE_MODEL_EFFORTS)) {
+    if (keyFor(id) === key) {
+      profile = row;
+      break;
+    }
+  }
   if (!profile) return undefined;
   try {
     const response = await fetchFn(profile.profileUrl, {

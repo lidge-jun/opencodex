@@ -79,9 +79,11 @@ function canonicalConfigEncoding(value: unknown, ancestors = new Set<object>()):
   }
 
   if (ancestors.has(value)) throw new TypeError("Catalog config identity cannot encode a cyclic graph.");
-  if (Object.getOwnPropertySymbols(value).length > 0) {
-    throw new TypeError("Catalog config identity cannot encode symbol keys.");
-  }
+  // Symbol keys are process-local metadata (e.g. the user-cost-overlay
+  // preservation-owner tag) that JSON.stringify omits and no persist path
+  // writes. They must not change the durable config identity, so encoding
+  // proceeds over the enumerable string-keyed properties below (Object.keys
+  // already ignores symbols). Symbol VALUES are still refused above.
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {

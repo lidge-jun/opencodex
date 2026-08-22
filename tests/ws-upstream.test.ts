@@ -2,6 +2,7 @@ import { afterEach, describe, expect, jest, test } from "bun:test";
 import { providerFetch } from "../src/server/responses/fetch-helpers";
 import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
+import { isWin32EagerRewrite } from "../src/lib/bun-stream-caps";
 import {
   bunSupportsBoundedCodexWsRelay,
   codexWsUpstreamFetch as rawCodexWsUpstreamFetch,
@@ -16,6 +17,17 @@ import type { OcxConfig } from "../src/types";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 const BOUNDED_WS_RUNTIME = "1.4.0";
+
+// #864 keeps win32 rewrite traffic out of the tee()+JS-pull chain, so
+// `isWin32EagerRewrite(platform, needsClientRewrite)` sends it through the eager
+// single-reader relay instead. Since the annotations backfill became an
+// unconditional block rewrite (5a75e57f, `createResponsesFieldBackfillBlockRewrite()`),
+// `needsClientRewrite` is true for every Responses stream — so on win32 the eager
+// relay marker is set no matter which upstream transport was chosen. Cases below
+// that are about *not* taking the WebSocket path assert that directly through
+// `FakeWebSocket.instances`; they hold the marker to this rule rather than to a
+// constant that only held before the backfill landed.
+const EAGER_RELAY_FORCED_BY_PLATFORM = isWin32EagerRewrite(process.platform, true);
 
 function shouldUseCodexWsUpstream(url: string, init?: RequestInit): boolean {
   return rawShouldUseCodexWsUpstream(url, init, BOUNDED_WS_RUNTIME);
@@ -288,7 +300,7 @@ describe("handleResponses Codex WS relay selection", () => {
     });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(isEagerRelaySseResponse(response)).toBe(false);
+    expect(isEagerRelaySseResponse(response)).toBe(EAGER_RELAY_FORCED_BY_PLATFORM);
     expect(await response.text()).toContain("response.completed");
   });
 
@@ -303,7 +315,8 @@ describe("handleResponses Codex WS relay selection", () => {
       }
     });
 
-    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
+    const logCtx = { model: "", provider: "" };
+    const response = await handleResponses(request(), forwardConfig(), logCtx, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
 
@@ -311,6 +324,7 @@ describe("handleResponses Codex WS relay selection", () => {
     const text = await response.text();
     expect(text).toContain("event: response.failed");
     expect(text).toContain("data: [DONE]");
+    expect(logCtx.activeAttempt?.streamAborted).toBe(true);
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
@@ -328,10 +342,70 @@ describe("handleResponses Codex WS relay selection", () => {
       const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
 
       expect(FakeWebSocket.instances).toHaveLength(0);
-      expect(isEagerRelaySseResponse(response)).toBe(false);
+      expect(isEagerRelaySseResponse(response)).toBe(EAGER_RELAY_FORCED_BY_PLATFORM);
       expect(await response.text()).toContain("response.completed");
     },
   );
+
+  // The two cases above assert the marker against `EAGER_RELAY_FORCED_BY_PLATFORM`,
+  // which is only the right expectation while `needsClientRewrite` is genuinely
+  // `true`. Rather than assert that through the rewrite factory — which would stay
+  // green if `handleResponses` stopped registering it — this drives a real Responses
+  // stream through the handler and reads the rewrite's own effect off the client
+  // bytes. `createResponsesFieldBackfillBlockRewrite()` is the unconditional entry in
+  // `blockRewrites`, so observing its transformation is what proves
+  // `clientBlockRewrite !== undefined`, hence `needsClientRewrite === true`.
+  test("the registered rewrite chain transforms the client stream, so needsClientRewrite is true", async () => {
+    const upstreamEvent = {
+      type: "response.completed",
+      response: {
+        id: "r-backfill",
+        status: "completed",
+        // Deliberately spec-non-compliant: `annotations` is required on
+        // `output_text` and this upstream omits it. Only the backfill rewrite
+        // puts it back.
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "hi" }],
+        }],
+      },
+    };
+    globalThis.fetch = (async () => new Response(
+      `event: response.completed\ndata: ${JSON.stringify(upstreamEvent)}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch;
+
+    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
+    const text = await response.text();
+
+    const payload = text
+      .split("\n")
+      .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+      .map(line => JSON.parse(line.slice("data: ".length)))
+      .find(event => event.type === "response.completed");
+
+    expect(payload).toBeDefined();
+    // Absent on the wire, present to the client: the chain ran.
+    expect(payload.response.output[0].content[0]).toHaveProperty("annotations");
+    expect(payload.response.output[0].content[0].annotations).toEqual([]);
+
+    // And with the chain proven non-empty, the marker is exactly the win32 rule.
+    expect(isEagerRelaySseResponse(response)).toBe(EAGER_RELAY_FORCED_BY_PLATFORM);
+  });
+});
+
+describe("isWin32EagerRewrite", () => {
+  test("marks rewrite traffic on win32 only", () => {
+    // #864 is a win32-only Bun sink defect, so the rule must not widen to other
+    // platforms, and must not fire when there is nothing to rewrite.
+    expect(isWin32EagerRewrite("win32", true)).toBe(true);
+    expect(isWin32EagerRewrite("win32", false)).toBe(false);
+    expect(isWin32EagerRewrite("darwin", true)).toBe(false);
+    expect(isWin32EagerRewrite("linux", true)).toBe(false);
+
+    expect(EAGER_RELAY_FORCED_BY_PLATFORM).toBe(process.platform === "win32");
+  });
 });
 
 describe("codexWsUpstreamFetch", () => {

@@ -1,0 +1,66 @@
+{
+  "cutoff": "2026-08-13",
+  "repo": "lidge-jun/opencodex",
+  "open_issues": 70,
+  "open_prs": 26,
+  "bug_label_issues": 23,
+  "bug_fix_prs": 10,
+  "tier1_review_merge": [
+    1576,
+    1593,
+    1574,
+    1585,
+    1575,
+    1583
+  ],
+  "tier2_new_fixes": [
+    1599,
+    1589,
+    1573,
+    1527,
+    1302,
+    1582,
+    1562
+  ],
+  "tier3_needs_info_or_design": [
+    1419,
+    1483,
+    1580,
+    1587,
+    1524,
+    1049,
+    1024,
+    1296
+  ],
+  "duplicates": [
+    {
+      "issue": 1570,
+      "of": 1571
+    }
+  ],
+  "upstream_tracking": [
+    92,
+    417,
+    1388
+  ],
+  "false_positive_features": [
+    1572,
+    1217,
+    1091,
+    822,
+    540
+  ],
+  "evidence_paths": [
+    "devlog/_fin/260813_open_bug_issue_pr_triage/000_plan.md",
+    "devlog/_fin/260813_open_bug_issue_pr_triage/001_live_inventory.md",
+    "devlog/_fin/260813_open_bug_issue_pr_triage/002_disposition_matrix.md",
+    "devlog/_fin/260813_open_bug_issue_pr_triage/003_priority_ranking.md",
+    "devlog/_fin/260813_open_bug_issue_pr_triage/004_simple_korean_explainer.md",
+    ".tmp/bug-triage-20260813/issues-open.json",
+    ".tmp/bug-triage-20260813/prs-open.json"
+  ],
+  "tier0_external": [
+    "zhaorui-moonshot-cn-endpoint-cny-balance"
+  ],
+  "notes": "P0: Moonshot China baseUrl choice + CNY balance unit (not convert to USD)."
+}

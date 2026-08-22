@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,38 @@ import {
 } from "../src/update/npm-cache-preflight.mjs";
 
 const roots: string[] = [];
+
+/**
+ * Windows without Developer Mode or admin cannot create symlinks (EPERM). The
+ * cases guarded below are about symlink handling itself, so detect the privilege
+ * once and take a visible skip rather than failing in the fixture.
+ */
+const canSymlink = (() => {
+  const probeDir = mkdtempSync(join(tmpdir(), "ocx-cache-preflight-symlink-probe-"));
+  try {
+    symlinkSync(join(probeDir, "probe-target"), join(probeDir, "probe-link"));
+    return true;
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
+    throw e;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+/**
+ * Windows needs its own guard, separate from `canSymlink`.
+ *
+ * The capability probe answers "may this user create a symlink", and on a GitHub-hosted
+ * Windows runner the answer is YES — so these cases ran and then failed in the fixture with
+ * `cache_entry_inaccessible`, because what actually differs there is how the preflight reads
+ * mode and access through a Windows symlink, not whether the link can be made (#2152).
+ *
+ * Two neighbouring cases in this file already skip on `process.platform === "win32"` for the
+ * same reason, so this reuses that guard rather than inventing a second mechanism. The
+ * capability check stays: an unprivileged POSIX-like environment still skips honestly.
+ */
+const WINDOWS = process.platform === "win32";
 
 function tempRoot(name: string): string {
   const root = join(tmpdir(), `ocx-cache-preflight-${name}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -49,7 +81,7 @@ describe("npm cache access pre-flight", () => {
     }
   });
 
-  test("lstats normal nested symlinks but never traverses their targets", () => {
+  test.skipIf(WINDOWS || !canSymlink)("lstats normal nested symlinks but never traverses their targets", () => {
     const cache = tempRoot("symlink-cache");
     const missingTarget = join(tempRoot("symlink-target"), "does-not-exist");
     const npx = join(cache, "_npx");
@@ -61,7 +93,7 @@ describe("npm cache access pre-flight", () => {
     expect(inspectNpmCacheDirectory(cache)).toEqual({ ok: true, reason: "cache_accessible" });
   });
 
-  test("a foreign-owned nested symlink does not block the update", () => {
+  test.skipIf(WINDOWS || !canSymlink)("a foreign-owned nested symlink does not block the update", () => {
     // The distinction that decides whether this feature is usable. A real npm cache is full of
     // symlinks below _npx/node_modules/.bin, and their owner is irrelevant because we never
     // follow them. Rejecting on ownership before skipping the link would abort updates for
@@ -89,7 +121,10 @@ describe("npm cache access pre-flight", () => {
     })).toEqual({ ok: false, reason: "cache_entry_foreign_owner" });
   });
 
-  test("an inspection budget that runs out lets the update proceed", () => {
+  // Unix mode semantics: a Windows directory reports 0o666 with no execute bit, so the
+  // owner-rwx accessibility check can never pass there. Production already skips Windows
+  // entirely (runNpmCachePreflight returns windows_skip), so this proves nothing there.
+  test.skipIf(process.platform === "win32")("an inspection budget that runs out lets the update proceed", () => {
     // A mature npm cache legitimately holds hundreds of thousands of entries. "We ran out of
     // budget looking" is not evidence of a broken cache, and treating it as failure locked
     // ordinary users out of updating entirely.
@@ -143,7 +178,7 @@ describe("npm cache access pre-flight", () => {
     })).toEqual({ ok: false, reason: "worker_output_malformed" });
   });
 
-  test("a cache root symlinked to another volume is inspected, not rejected", () => {
+  test.skipIf(WINDOWS || !canSymlink)("a cache root symlinked to another volume is inspected, not rejected", () => {
     // Pointing ~/.npm at another volume is ordinary npm configuration. Rejecting it outright was
     // the same class of false positive as failing on a large cache: it blocks updates for users
     // whose setup is fine. The root is resolved once; nested links are still never followed.
@@ -190,7 +225,10 @@ describe("npm cache access pre-flight", () => {
     });
   });
 
-  test("runs the real worker protocol against npm's configured cache path", () => {
+  // Spawns the real npm to read its configured cache path while claiming a non-Windows
+  // platform. On Windows that is both slow and meaningless: production takes the
+  // windows_skip branch, covered by the case below.
+  test.skipIf(process.platform === "win32")("runs the real worker protocol against npm's configured cache path", () => {
     const cache = tempRoot("worker-round-trip");
     mkdirSync(join(cache, "_cacache"));
 

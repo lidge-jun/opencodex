@@ -329,7 +329,7 @@ describe("CL-06 routing compatibility", () => {
     const compat = getRoutingProfile(config, "compat")!;
     let resolves = 0;
     // Compatibility evidence is provider-supplied since the Lab/core boundary landed
-    // (devlog/_plan/260814_lab_core_decoupling): the core assembler no longer reaches Lab
+    // (devlog/_fin/260814_lab_core_decoupling): the core assembler no longer reaches Lab
     // itself, so the test installs the provider the activation path would install.
     const detach = setCompatibilityEvidenceProvider(labCompatibilityEvidenceProvider);
     const rows = assemblePolicyCandidateEvidence(config, compat, 123, {

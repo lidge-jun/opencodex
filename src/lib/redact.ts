@@ -1,6 +1,6 @@
 export const REDACTED_SECRET = "[REDACTED]";
 
-const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn)$/i;
+const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -33,7 +33,7 @@ const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-
 // Every letter position also accepts \u0001, the placeholder the fold emits for
 // an unresolved HTML named reference: `author&ii;zation` is the label with one
 // character we cannot name, and that is still the label.
-const CREDENTIAL_HEADER_LABEL_RAW = "x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
+const CREDENTIAL_HEADER_LABEL_RAW = "x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
 
 const CREDENTIAL_HEADER_LABEL = CREDENTIAL_HEADER_LABEL_RAW
   .replace(/(?<![\[\\])([A-Za-z])(?![\]\-])/g, "[$1\u0001]");
@@ -441,6 +441,17 @@ export function redactSecretString(value: string): string {
     redacted = redacted.replace(pattern, replacement);
   }
   return redacted;
+}
+
+/** Shared bounded representation for caller-controlled scalar metadata stored in logs. */
+export function sanitizeLogMetadataString(value: unknown, maxLength = 64): string | undefined {
+  if (typeof value !== "string" || !Number.isInteger(maxLength) || maxLength < 1) return undefined;
+  // Remove every control/line-separator code point that common terminals and log viewers
+  // can render as a record boundary before the value reaches a single-line log field.
+  const filtered = value.trim().replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "");
+  if (!filtered) return undefined;
+  const redacted = redactSecretString(filtered).trim();
+  return redacted ? redacted.slice(0, maxLength) : undefined;
 }
 
 export function redactSecrets(value: unknown): unknown {

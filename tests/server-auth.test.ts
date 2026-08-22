@@ -44,6 +44,9 @@ import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspect
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../src/lib/local-provider-reload-contract";
+import { resetCodexModelEntitlementCacheForTests } from "../src/codex/model-entitlements";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -141,6 +144,9 @@ afterEach(() => {
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
   clearAccountQuota();
+  resetCodexModelEntitlementCacheForTests();
+  resetDebugSettingsForTests();
+  resetDebugLogBufferForTests();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
@@ -161,6 +167,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    extraBody?: Record<string, unknown>;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -200,6 +207,7 @@ async function startPoolRetryHarness(
     reauthAccountIds?: string[];
     omitCredentialAccountIds?: string[];
     combos?: OcxConfig["combos"];
+    modelRosterByAccount?: Record<string, string[]>;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -208,6 +216,7 @@ async function startPoolRetryHarness(
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountQuota();
+  resetCodexModelEntitlementCacheForTests();
   clearRequestLogsForTests();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
@@ -223,6 +232,15 @@ async function startPoolRetryHarness(
     port: 0,
     async fetch(request) {
       const accountId = request.headers.get("chatgpt-account-id") ?? "missing";
+      if (new URL(request.url).pathname === "/models") {
+        return Response.json({
+          models: (options.modelRosterByAccount?.[accountId] ?? []).map(slug => ({
+            slug,
+            supported_in_api: true,
+            visibility: "list",
+          })),
+        });
+      }
       dispatches.push(accountId);
       return reply(accountId, request);
     },
@@ -296,13 +314,14 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      extraBody = {},
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
       },
-      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
+      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream, ...extraBody }),
       signal,
     }),
   };
@@ -520,6 +539,56 @@ describe("server local API auth", () => {
     const allowed = corsHeaders()["Access-Control-Allow-Headers"];
     expect(allowed).toContain("X-OpenCodex-API-Key");
     expect(allowed).toContain("ChatGPT-Account-Id");
+  });
+
+  test("CORS preflight echoes vendor SDK request headers only for an allowed origin (#1773)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    const loopbackOrigin = `http://127.0.0.1:${server.port}`;
+    const stainless = "x-stainless-lang, x-stainless-runtime, x-stainless-retry-count";
+    try {
+      // Every browser-SDK inbound route must answer the same preflight contract; a route that
+      // omits one Stainless header blocks the real request before it is ever sent.
+      for (const path of ["/v1/messages", "/v1/responses", "/v1/chat/completions"]) {
+        const res = await fetch(new URL(path, server.url), {
+          method: "OPTIONS",
+          headers: {
+            origin: loopbackOrigin,
+            "access-control-request-method": "POST",
+            "access-control-request-headers": `content-type, ${stainless}`,
+          },
+        });
+        expect(res.status).toBe(204);
+        const allowed = (res.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+        for (const header of stainless.split(",").map(h => h.trim())) {
+          expect(allowed).toContain(header);
+        }
+        // The static contract survives alongside the echoed headers, and content-type is not
+        // duplicated just because the caller also asked for it.
+        expect(allowed).toContain("x-opencodex-api-key");
+        expect(allowed.split(",").filter(h => h.trim() === "content-type")).toHaveLength(1);
+        expect(res.headers.get("vary")).toContain("Access-Control-Request-Headers");
+      }
+
+      // A rejected origin never reaches the echo: it is refused before any allow-list is built.
+      const rejected = await fetch(new URL("/v1/responses", server.url), {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://attacker.test",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "x-stainless-lang",
+        },
+      });
+      expect(rejected.status).toBe(403);
+      expect((rejected.headers.get("access-control-allow-headers") ?? "").toLowerCase())
+        .not.toContain("x-stainless-lang");
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {
@@ -2042,6 +2111,7 @@ describe("server local API auth", () => {
   });
 
   test("Activation A: allow-listed 400 retries once on another eligible pool account", async () => {
+    setDebugSettings({ debug: true });
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
       ? rejectionResponse(unsupportedModelBody())
       : Response.json({ id: "retry-success", status: "completed", output: [] }));
@@ -2053,6 +2123,200 @@ describe("server local API auth", () => {
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       expect(harness.config.activeCodexAccountId).toBe("pool-a");
+      const affinity = getDebugLogEntries()
+        .map(entry => entry.line)
+        .filter(line => line.startsWith("[ocx:codex:affinity] "))
+        .map(line => JSON.parse(line.slice("[ocx:codex:affinity] ".length)) as {
+          status: number;
+          authKind: string;
+          credentialSubstituted: boolean;
+        });
+      expect(affinity).toEqual([
+        expect.objectContaining({ status: 400, authKind: "pool", credentialSubstituted: true }),
+        expect.objectContaining({ status: 200, authKind: "pool", credentialSubstituted: true }),
+      ]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: account-gated model selection skips an unentitled active Pool account", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const harness = await startPoolRetryHarness(
+      accountId => Response.json({ id: accountId, status: "completed", output: [] }),
+      {
+        modelRosterByAccount: {
+          "acct-pool-a": ["gpt-5.6-sol"],
+          "acct-pool-b": ["gpt-5.6-sol", model],
+        },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("acct-pool-b");
+      expect(harness.dispatches).toEqual(["acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: Daybreak keeps its entitlement identity but uses the stable wire model", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let upstreamBody: Record<string, unknown> | undefined;
+    const harness = await startPoolRetryHarness(
+      async (_accountId, request) => {
+        upstreamBody = await request.json() as Record<string, unknown>;
+        return Response.json({ id: "canonical-wire-success", status: "completed", output: [] });
+      },
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({
+        model,
+        extraBody: { prompt_cache_retention: "24h" },
+      });
+      expect(response.status).toBe(200);
+      expect(upstreamBody?.model).toBe("gpt-5.6-sol");
+      expect(upstreamBody).not.toHaveProperty("prompt_cache_retention");
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: Daybreak compact uses the stable wire model without retention", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let upstreamBody: Record<string, unknown> | undefined;
+    let upstreamUrl = "";
+    const harness = await startPoolRetryHarness(
+      async (_accountId, request) => {
+        upstreamUrl = request.url;
+        upstreamBody = await request.json() as Record<string, unknown>;
+        return new Response([
+          'event: response.output_item.done',
+          'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","encrypted_content":"gAAAAAB-test-opaque"}}',
+          '',
+          'event: response.completed',
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+          '',
+          'data: [DONE]',
+          '',
+        ].join("\n"), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({
+        model,
+        path: "/v1/responses/compact",
+        extraBody: { prompt_cache_retention: "24h" },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        output: [{ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" }],
+      });
+      expect(upstreamUrl).toEndWith("/responses");
+      expect(upstreamBody?.model).toBe("gpt-5.6-sol");
+      expect(upstreamBody?.stream).toBe(true);
+      expect(upstreamBody).not.toHaveProperty("prompt_cache_retention");
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: a confirmed entitled account survives two transient unsupported-model 400s in place", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let attempts = 0;
+    const harness = await startPoolRetryHarness(
+      () => ++attempts <= 2
+        ? rejectionResponse(unsupportedModelBody(model))
+        : Response.json({ id: "same-account-success", status: "completed", output: [] }),
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("same-account-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a", "acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: an exact account-gated selector may retry only its confirmed account in place", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let attempts = 0;
+    const harness = await startPoolRetryHarness(
+      () => ++attempts <= 2
+        ? rejectionResponse(unsupportedModelBody(model))
+        : Response.json({ id: "same-exact-account-success", status: "completed", output: [] }),
+      {
+        accountMode: "direct",
+        activeAccountId: "pool-b",
+        accountNamespaces: { side: "pool-a" },
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({ model: `side/${model}`, callerBearer: false });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("same-exact-account-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a", "acct-pool-a"]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: repeated gated-model rejection remains bounded at eight total sends", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const body = unsupportedModelBody(model);
+    const harness = await startPoolRetryHarness(
+      () => rejectionResponse(body),
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(Array(8).fill("acct-pool-a"));
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: an account-gated model with no confirmed grant fails before upstream dispatch", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const harness = await startPoolRetryHarness(
+      () => Response.json({ id: "must-not-dispatch" }),
+      {
+        modelRosterByAccount: {
+          "acct-pool-a": ["gpt-5.6-sol"],
+          "acct-pool-b": ["gpt-5.6-sol"],
+        },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(401);
+      expect(await response.text()).toContain("No eligible Codex account supports this model");
+      expect(harness.dispatches).toEqual([]);
     } finally {
       await stopPoolRetryHarness(harness);
     }

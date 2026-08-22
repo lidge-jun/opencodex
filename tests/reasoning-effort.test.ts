@@ -487,6 +487,32 @@ describe("provider-specific reasoning effort mapping", () => {
     expect(body.tool_choice).toBe("required");
   });
 
+  test("OpenAI-compatible chat accepts a bare allowed_tools name for a unique namespace tool", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.umans.ai/v1",
+    };
+
+    const req = createOpenAIChatAdapter(provider).buildRequest({
+      modelId: "umans-kimi-k2.7",
+      context: {
+        messages: [{ role: "user", content: "run it", timestamp: 0 }],
+        tools: [{
+          namespace: "functions",
+          name: "exec",
+          description: "Run a command",
+          parameters: { type: "object", properties: { input: { type: "string" } }, required: ["input"] },
+        }],
+      },
+      stream: false,
+      options: { toolChoice: { allowedTools: ["exec"], mode: "required" } },
+    });
+    const body = JSON.parse(req.body as string) as { tools: Array<{ function: { name: string } }>; tool_choice: string };
+
+    expect(body.tools.map(t => t.function.name)).toEqual(["functions__exec"]);
+    expect(body.tool_choice).toBe("required");
+  });
+
   test("named namespaced tool_choice resolves to the chat wire name", async () => {
     const provider: OcxProviderConfig = {
       adapter: "openai-chat",
@@ -548,6 +574,34 @@ describe("provider-specific reasoning effort mapping", () => {
     const body = JSON.parse(req.body as string) as { tools: Array<{ name: string }>; tool_choice: { type: string } };
 
     expect(body.tools.map(t => t.name)).toEqual(["functions__exec_command"]);
+    expect(body.tool_choice).toEqual({ type: "any" });
+  });
+
+  test("Anthropic accepts a bare allowed_tools name for a unique namespace tool", async () => {
+    const provider: OcxProviderConfig = {
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+      apiKey: "test-key",
+    };
+
+    const req = await createAnthropicAdapter(provider).buildRequest({
+      modelId: "claude-sonnet",
+      context: {
+        messages: [{ role: "user", content: "run it", timestamp: 0 }],
+        tools: [{
+          namespace: "functions",
+          name: "exec",
+          description: "Run a command",
+          parameters: { type: "object", properties: { input: { type: "string" } }, required: ["input"] },
+          freeform: true,
+        }],
+      },
+      stream: false,
+      options: { toolChoice: { allowedTools: ["exec"], mode: "required" } },
+    });
+    const body = JSON.parse(req.body as string) as { tools: Array<{ name: string }>; tool_choice: { type: string } };
+
+    expect(body.tools.map(t => t.name)).toEqual(["functions__exec"]);
     expect(body.tool_choice).toEqual({ type: "any" });
   });
 

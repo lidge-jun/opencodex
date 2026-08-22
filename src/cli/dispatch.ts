@@ -171,8 +171,14 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   doctor: async deps => {
+    const doctorArgs = deps.args.slice(1);
     const { runDoctor } = await import("./doctor");
-    await runDoctor(deps.args.slice(1));
+    await runDoctor(doctorArgs);
+    if (!doctorArgs.includes("--fix-codex-runtime")) {
+      console.log("");
+      const { printCodexLogGuardDoctor } = await import("./codex-log-guard-doctor");
+      printCodexLogGuardDoctor();
+    }
     return 0;
   },
   debug: async deps => {
@@ -198,10 +204,21 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   sync: async deps => {
     const restartCodex = deps.args.slice(1).includes("--restart-codex");
-    const synced = await syncModelsToCodex((await deps.findLiveProxy())?.port);
+    const live = await deps.findLiveProxy();
+    const synced = await syncModelsToCodex(
+      live?.port,
+      undefined,
+      undefined,
+      undefined,
+      { catalogEvenWhenNotInjected: true },
+    );
     let code = 0;
     if (synced.status === "skipped") {
       console.log("Codex integration is OFF; sync skipped and no Codex files changed.");
+    } else if (synced.status === "catalog-only") {
+      // Explicit sync with the integration OFF still refreshes the catalog/cache
+      // for side profiles that consume the proxy without injection.
+      console.log(synced.message ?? "Codex integration is OFF; catalog refreshed, Codex config untouched.");
     } else if (!synced.ok) {
       code = 1;
       console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
@@ -213,6 +230,28 @@ const commandRunners: Record<string, CommandRunner> = {
     if (synced.catalogWritten || synced.cacheSynced) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     }
+    // `ocx sync` is a direct CLI path; it does not call the management
+    // `/api/sync` route. Refresh the already-connected MCode block here too,
+    // after Codex has published the catalog that supplies its capabilities.
+    if (synced.status !== "refused" && live) {
+      try {
+        const config = deps.loadConfig();
+        const { refreshOwnedIntegration } = await import("../integrations/owned-refresh");
+        const result = await refreshOwnedIntegration({
+          clientId: "mcode",
+          models: async () => {
+            const { loadExportModels } = await import("../server/management/model-rows");
+            return loadExportModels(config);
+          },
+          config,
+          port: live.port,
+        });
+        if (result?.changed) console.log("MCode integration refreshed from the current catalog.");
+        else if (result?.reason) console.warn(`MCode integration was not refreshed: ${result.reason}`);
+      } catch (error) {
+        console.warn(`MCode integration was not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     return code;
   },
   v2: async deps => {
@@ -221,19 +260,18 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   "sync-cache": async deps => {
     const restartCodex = deps.args.slice(1).includes("--restart-codex");
-    if (!shouldSyncCodexOnStart(deps.loadConfig())) {
-      console.log("Codex integration is OFF; cache sync skipped and no Codex files changed.");
-      return 0;
-    }
     const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
     const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
     const { getCodexHome } = await import("../codex/paths");
     const owningCodexHome = getCodexHome();
+    const desiredDisabled = !shouldSyncCodexOnStart(deps.loadConfig());
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermit(permit, owningCodexHome));
+      invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
     // Only warn/restart when models_cache was actually rewritten from a readable catalog.
     if (invalidated.kind === "completed" && invalidated.value) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    } else if (desiredDisabled) {
+      console.log("Codex integration is OFF; cache sync skipped (no catalog or cache write).");
     }
     return 0;
   },
@@ -487,6 +525,18 @@ const commandRunners: Record<string, CommandRunner> = {
   opencode: async deps => {
     const { cmdOpencode } = await import("./opencode");
     return await cmdOpencode(deps.args.slice(1));
+  },
+  mcode: async deps => {
+    const { cmdMcode } = await import("./minimax");
+    return await cmdMcode(deps.args.slice(1));
+  },
+  mmx: async deps => {
+    const { cmdMmx } = await import("./minimax");
+    return await cmdMmx(deps.args.slice(1));
+  },
+  zcode: async deps => {
+    const { handleZcodeCommand } = await import("./integrations");
+    return await handleZcodeCommand(deps.args.slice(1));
   },
   help: async () => {
     printUsage();

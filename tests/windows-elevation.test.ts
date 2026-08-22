@@ -11,6 +11,7 @@ import {
   isWindowsAccessDenied,
   isWindowsAccessDeniedError,
   isWindowsSchtasksCreateAccessDenied,
+  resolveTrustedWindowsIcaclsExe,
   resolveTrustedWindowsPowerShellExe,
   resolveTrustedWindowsSchtasksExe,
   schtasksOperationFromArgs,
@@ -215,12 +216,14 @@ describe("windows elevation helpers", () => {
     const trustedSystem32 = join(trustedRoot, "System32");
     mkdirSync(join(trustedSystem32, "WindowsPowerShell", "v1.0"), { recursive: true });
     writeFileSync(join(trustedSystem32, "schtasks.exe"), "");
+    writeFileSync(join(trustedSystem32, "icacls.exe"), "");
     writeFileSync(join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe"), "");
 
     const evilRoot = mkdtempSync(join(tmpdir(), "ocx-evil-sys-"));
     const evilSystem32 = join(evilRoot, "System32");
     mkdirSync(join(evilSystem32, "WindowsPowerShell", "v1.0"), { recursive: true });
     writeFileSync(join(evilSystem32, "schtasks.exe"), "evil");
+    writeFileSync(join(evilSystem32, "icacls.exe"), "evil");
     writeFileSync(join(evilSystem32, "WindowsPowerShell", "v1.0", "powershell.exe"), "evil");
 
     const previousSystemRoot = process.env.SystemRoot;
@@ -233,10 +236,13 @@ describe("windows elevation helpers", () => {
 
       const powershell = resolveTrustedWindowsPowerShellExe();
       const schtasks = resolveTrustedWindowsSchtasksExe();
+      const icacls = resolveTrustedWindowsIcaclsExe();
       expect(powershell.toLowerCase().includes("ocx-evil-sys")).toBe(false);
       expect(schtasks.toLowerCase().includes("ocx-evil-sys")).toBe(false);
+      expect(icacls.toLowerCase().includes("ocx-evil-sys")).toBe(false);
       expect(powershell.toLowerCase()).toContain(trustedSystem32.toLowerCase());
       expect(schtasks.toLowerCase()).toContain(trustedSystem32.toLowerCase());
+      expect(icacls.toLowerCase()).toContain(trustedSystem32.toLowerCase());
 
       // Containment must reject an existing executable outside the trusted system directory
       // (not merely a missing-file failure).

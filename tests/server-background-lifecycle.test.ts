@@ -34,6 +34,7 @@ import {
   liveStorageWorkerCount,
 } from "../src/storage/worker-lifecycle";
 import type { OcxConfig } from "../src/types";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { managementFetch } from "./helpers/management-auth";
 import {
   installIsolatedCodexHome,
@@ -302,7 +303,10 @@ describe("server background lifecycle", () => {
     } finally {
       probe.restore();
     }
-  });
+    // Two real servers, a policy job driven to idle, and both shutdowns: that whole
+    // sequence is the assertion that one server's stop leaves the other's
+    // process-wide work alone, and it measured 5.4s against Bun's 5s default.
+  }, SERVER_BUDGET_MS);
 
   test("a newer bind failure preserves the older server's process-wide work", async () => {
     saveConfig(baseConfig());

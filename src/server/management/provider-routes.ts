@@ -14,8 +14,10 @@ import {
   normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  requestPacingConfigError,
   readConfigAdmissionSnapshot,
   saveConfigPreservingClaudeCode,
+  upstreamHttpVersionConfigError,
   withConfigMutationLockSync,
 } from "../../config";
 import {
@@ -31,6 +33,7 @@ import { replaceProviderAccountSet } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
+import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -44,6 +47,7 @@ import {
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
+import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -71,12 +75,17 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { providerServiceTierConfigError } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
   LOCAL_PROVIDER_RELOAD_PATH,
 } from "../../lib/local-provider-reload-contract";
 import { refreshUserCostOverlays } from "../../usage/user-cost-overlays";
+import {
+  XAI_RESPONSES_OPT_IN_MODELS,
+  xaiResponsesOptInState,
+} from "../../providers/xai-responses-opt-in";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -177,6 +186,47 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "xaiResponsesOptIn")) {
+    if (name !== "xai") return { error: "xaiResponsesOptIn is valid only for provider xai" };
+    if (typeof rawBody.xaiResponsesOptIn !== "boolean") {
+      return { error: "xaiResponsesOptIn must be a boolean" };
+    }
+    const modelAdapters = { ...(next.modelAdapters ?? {}) };
+    for (const model of XAI_RESPONSES_OPT_IN_MODELS) {
+      if (rawBody.xaiResponsesOptIn) modelAdapters[model] = "openai-responses";
+      else delete modelAdapters[model];
+    }
+    if (Object.keys(modelAdapters).length > 0) next.modelAdapters = modelAdapters;
+    else delete next.modelAdapters;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "requestPacing")) {
+    const value = rawBody.requestPacing;
+    if (value === null) {
+      delete next.requestPacing;
+    } else {
+      if (!isPlainRecord(value)) return { error: "requestPacing must be a plain object or null" };
+      const pacingError = requestPacingConfigError(value);
+      if (pacingError) return { error: pacingError };
+      // `requestPacingConfigError` is the runtime narrowing boundary above; keep the
+      // assertion explicit because a generic plain record cannot express `enabled`.
+      next.requestPacing = structuredClone(value) as unknown as OcxProviderConfig["requestPacing"];
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "upstreamHttpVersion")) {
+    const value = rawBody.upstreamHttpVersion;
+    if (value === null || value === "") {
+      delete next.upstreamHttpVersion;
+    } else {
+      const versionError = upstreamHttpVersionConfigError(value);
+      if (versionError) return { error: versionError };
+      // `upstreamHttpVersionConfigError` is the shared write boundary; the assertion is
+      // explicit because the incoming value is an unknown JSON scalar.
+      next.upstreamHttpVersion = value as OcxProviderConfig["upstreamHttpVersion"];
+    }
+    touched = true;
+  }
   // The Models page edits the catalog hints in place; keep them on the existing
   // provider mutation path so validation, cache invalidation, and convergence stay unified (#1073).
   if (Object.hasOwn(rawBody, "contextWindow")) {
@@ -213,6 +263,29 @@ function applyProviderPatchFields(
       }
       if (Object.keys(windows).length > 0) next.modelContextWindows = windows;
       else delete next.modelContextWindows;
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelSupportsServiceTier")) {
+    const value = rawBody.modelSupportsServiceTier;
+    if (value === null) {
+      delete next.modelSupportsServiceTier;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelSupportsServiceTier must be a plain object or null" };
+      const capabilities: Record<string, boolean> = { ...(next.modelSupportsServiceTier ?? {}) };
+      for (const [model, supported] of Object.entries(value)) {
+        if (!model.trim()) return { error: "modelSupportsServiceTier keys must be nonblank model ids" };
+        if (supported === null) {
+          delete capabilities[model];
+          continue;
+        }
+        if (typeof supported !== "boolean") {
+          return { error: "modelSupportsServiceTier values must be booleans or null" };
+        }
+        capabilities[model] = supported;
+      }
+      if (Object.keys(capabilities).length > 0) next.modelSupportsServiceTier = capabilities;
+      else delete next.modelSupportsServiceTier;
     }
     touched = true;
   }
@@ -304,6 +377,22 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
   }
 
+  if (url.pathname === "/api/provider-request-pacing" && req.method === "GET") {
+    const name = url.searchParams.get("name")?.trim();
+    if (name) {
+      if (!isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+        return jsonResponse({ error: "unknown provider" }, 404);
+      }
+      return jsonResponse(providerRequestPacingStatus(name, config.providers[name]!));
+    }
+    return jsonResponse(Object.fromEntries(
+      Object.entries(config.providers).map(([providerName, provider]) => [
+        providerName,
+        providerRequestPacingStatus(providerName, provider),
+      ]),
+    ));
+  }
+
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
@@ -312,14 +401,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
+      requestPacing: p.requestPacing,
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
+      upstreamHttpVersion: p.upstreamHttpVersion,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
+      ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
   }
@@ -405,7 +498,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const providerError = providerManagementConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
+    const serviceTierError = providerServiceTierConfigError(name, body.provider);
+    if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
+    // PATCH already clears on null; POST persisted the body as submitted, so a `null` here
+    // reached disk and the next loadConfig() refused it. Canonicalize to absent, which is what
+    // "clear" means everywhere else.
+    if (prov && prov.upstreamHttpVersion === null) delete prov.upstreamHttpVersion;
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
     }
@@ -437,6 +536,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
+    const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -453,6 +553,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
     // through PATCH with an explicit null (#1409).
     const existing = config.providers[name];
+    if (!submittedRequestPacing && existing?.requestPacing) {
+      prov.requestPacing = structuredClone(existing.requestPacing);
+    }
     if (!submittedContextWindow && existing?.contextWindow !== undefined) {
       prov.contextWindow = existing.contextWindow;
     }
@@ -548,9 +651,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if ("error" in applied) return jsonResponse({ error: applied.error }, 400);
     const next = applied.next;
 
-    if (applied.editorTouched) {
+    const pacingOnly = keys.every(key => key === "requestPacing");
+    if (applied.editorTouched && !pacingOnly) {
       const providerError = providerManagementConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
+      const serviceTierError = providerServiceTierConfigError(name, next);
+      if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
       const resolvedError = await providerDestinationResolvedError(name, next);
       if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
     } else if (applied.enablingOpenAi) {
@@ -575,10 +681,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         replayError = replay.error;
         return;
       }
-      if (replay.editorTouched) {
+      if (replay.editorTouched && !pacingOnly) {
         const syncError = providerManagementConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;
+          return;
+        }
+        const serviceTierError = providerServiceTierConfigError(name, replay.next);
+        if (serviceTierError) {
+          replayError = serviceTierError;
           return;
         }
       } else if (replay.enablingOpenAi && !isCanonicalOpenAiForwardProvider(replay.next)) {
@@ -592,16 +703,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
-    if (applied.editorTouched) {
+    if (applied.editorTouched && !pacingOnly) {
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
     }
-    const catalogRefresh = await convergeCodexCatalog();
+    const catalogRefresh = pacingOnly ? null : await convergeCodexCatalog();
     return jsonResponse({
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+      ...(name === "xai"
+        ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
+        : {}),
       catalogRefresh,
     });
   }
@@ -640,6 +754,27 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const apiKey = snapshot?.accessToken ?? await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
+    }
+    if (prov.adapter === "cursor") {
+      const started = Date.now();
+      const live = await fetchCursorUsableModels({
+        apiKey: apiKey ?? "",
+        baseUrl: prov.baseUrl,
+      });
+      const latencyMs = Date.now() - started;
+      if (!live.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: `cursor discovery ${live.error}${live.detail ? `: ${live.detail}` : ""}`,
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        latencyMs,
+        models: live.models.length,
+        message: `Connected. ${live.models.length} models.`,
+      });
     }
     const project = prov.project ?? snapshot?.projectId;
     if (antigravity && !project) {

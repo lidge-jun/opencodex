@@ -18,7 +18,7 @@
  * depending on the temp root. Convergence takes the write lock; this module only
  * records intent through the config coordinator.
  *
- * Design record: devlog/_plan/260803_codex_desktop_toggle/030_desired_state.md.
+ * Design record: devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md.
  */
 import { loadConfig, mutatePersistedConfig } from "../config";
 import type { OcxClientIntegrationsConfig, OcxConfig } from "../types";

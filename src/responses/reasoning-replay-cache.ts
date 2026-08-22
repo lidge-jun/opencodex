@@ -19,7 +19,7 @@
  * long-lived proxy cannot grow without limit.
  */
 
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type {
   OcxProviderConfig,
   OcxReasoningReplayIdentity,
@@ -52,8 +52,16 @@ interface CacheEntry {
   at: number;
 }
 
+interface ServingIdentityEntry {
+  identity: string;
+  bytes: number;
+  at: number;
+}
+
 const entries = new Map<string, CacheEntry>();
+const servingIdentities = new Map<string, ServingIdentityEntry>();
 let totalBytes = 0;
+let servingIdentityTotalBytes = 0;
 let clockForTests: (() => number) | null = null;
 
 const now = (): number => clockForTests?.() ?? Date.now();
@@ -62,26 +70,134 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
-  const identity = scope?.current;
+type ReasoningReplayIdentityTuple = readonly [string, string, string, string, string];
+
+function tupleForIdentity(
+  identity: Readonly<OcxReasoningReplayIdentity> | undefined,
+): ReasoningReplayIdentityTuple | undefined {
   if (
-    !nonEmpty(callId)
-    || !nonEmpty(scope?.clientThreadId)
-    || !nonEmpty(identity?.providerName)
+    !nonEmpty(identity?.providerName)
     || !nonEmpty(identity?.providerDestinationIdentity)
     || !nonEmpty(identity?.adapterName)
     || !nonEmpty(identity?.modelId)
     || !nonEmpty(identity?.credentialIdentity)
   ) return undefined;
-  return JSON.stringify([
-    scope.clientThreadId,
+  return [
     identity.providerName,
     identity.providerDestinationIdentity,
     identity.adapterName,
     identity.modelId,
     identity.credentialIdentity,
+  ];
+}
+
+function tupleForServingIdentity(
+  identity: Readonly<OcxReasoningReplayIdentity> | undefined,
+): ReasoningReplayIdentityTuple | undefined {
+  if (
+    !nonEmpty(identity?.providerName)
+    || !nonEmpty(identity?.providerDestinationDurableIdentity)
+    || !nonEmpty(identity?.adapterName)
+    || !nonEmpty(identity?.modelId)
+    || !nonEmpty(identity?.credentialDurableIdentity)
+  ) return undefined;
+  return [
+    identity.providerName,
+    identity.providerDestinationDurableIdentity,
+    identity.adapterName,
+    identity.modelId,
+    identity.credentialDurableIdentity,
+  ];
+}
+
+function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
+  const identity = tupleForIdentity(scope?.current);
+  if (!nonEmpty(callId) || !nonEmpty(scope?.clientThreadId) || !identity) return undefined;
+  return JSON.stringify([
+    scope.clientThreadId,
+    ...identity,
     callId,
   ]);
+}
+
+function deleteServingIdentity(threadId: string): void {
+  const entry = servingIdentities.get(threadId);
+  if (!entry) return;
+  servingIdentities.delete(threadId);
+  servingIdentityTotalBytes -= entry.bytes;
+}
+
+function sweepExpiredServingIdentities(at: number): void {
+  for (const [threadId, entry] of servingIdentities) {
+    if (at - entry.at >= TTL_MS) deleteServingIdentity(threadId);
+  }
+}
+
+function servingIdentityFor(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): { threadId: string; identity: string } | undefined {
+  const threadId = scope?.clientThreadId;
+  const identityTuple = tupleForServingIdentity(scope?.current);
+  if (!nonEmpty(threadId) || !identityTuple) return undefined;
+  return { threadId, identity: JSON.stringify(identityTuple) };
+}
+
+/**
+ * Compare this request's route with the last successfully serving route for its client thread.
+ * A live mismatch means replayed opaque reasoning was minted by another backend and must not be
+ * forwarded to this one. Comparison deliberately does not refresh or replace the recorded route:
+ * a failed candidate request did not serve the thread.
+ *
+ * Serving provenance uses restart-stable destination and credential dimensions so token
+ * generations and other volatile credential material cannot create false route changes. Missing
+ * durable identity, expired, or evicted state is deliberately unknown rather than a mismatch.
+ * This store is process-local, so a backend switch spanning a proxy restart is not detected.
+ */
+export function reasoningReplayServingIdentityChanged(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): boolean {
+  const current = servingIdentityFor(scope);
+  if (!current) return false;
+  const at = now();
+  sweepExpiredServingIdentities(at);
+  const previous = servingIdentities.get(current.threadId);
+  return previous !== undefined && previous.identity !== current.identity;
+}
+
+/** Record the route only after it has successfully served the client thread. */
+export function commitReasoningReplayServingIdentity(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): void {
+  const current = servingIdentityFor(scope);
+  if (!current) return;
+  const at = now();
+  sweepExpiredServingIdentities(at);
+  const previous = servingIdentities.get(current.threadId);
+  const { threadId, identity } = current;
+  const bytes = Buffer.byteLength(JSON.stringify([threadId, identity]), "utf8");
+  if (bytes > MAX_TOTAL_BYTES) {
+    deleteServingIdentity(threadId);
+    return;
+  }
+
+  if (previous) deleteServingIdentity(threadId);
+  servingIdentities.set(threadId, { identity, bytes, at });
+  servingIdentityTotalBytes += bytes;
+  while (
+    (servingIdentityTotalBytes > MAX_TOTAL_BYTES || servingIdentities.size > MAX_ENTRIES)
+    && servingIdentities.size > 1
+  ) {
+    let oldestThreadId: string | undefined;
+    let oldestAt = Infinity;
+    for (const [candidateThreadId, entry] of servingIdentities) {
+      if (entry.at < oldestAt) {
+        oldestAt = entry.at;
+        oldestThreadId = candidateThreadId;
+      }
+    }
+    if (oldestThreadId === undefined) break;
+    deleteServingIdentity(oldestThreadId);
+  }
 }
 
 function processLocalIdentity(domain: string, material: string): string {
@@ -106,6 +222,51 @@ export function reasoningReplayDestinationIdentity(baseUrl: string | undefined):
   if (!nonEmpty(baseUrl)) return undefined;
   const canonical = baseUrl.trim().replace(/\/+$/, "");
   return `destination:${processLocalIdentity("destination", canonical)}`;
+}
+
+/**
+ * The same destination identity, but stable across restarts.
+ *
+ * The process-local form above is keyed by `randomBytes(32)` minted at module load, which
+ * is correct for an in-memory cache and fatal for a durable one: every key would change on
+ * restart and the store would silently stop matching anything. A plain digest of the same
+ * canonical URL is equally non-reversible for this purpose — the input is a configured
+ * endpoint, not a secret — and needs no persisted salt or new on-disk state.
+ */
+export function durableReplayDestinationIdentity(baseUrl: string | undefined): string | undefined {
+  if (!nonEmpty(baseUrl)) return undefined;
+  const canonical = baseUrl.trim().replace(/\/+$/, "");
+  return `destination:${createHash("sha256").update("destination\0").update(canonical).digest("hex")}`;
+}
+
+/**
+ * Restart-stable credential identity for the DURABLE thought-signature store (#1926).
+ *
+ * Unlike the destination, credential material may be secret (an API key), so a plain
+ * unsalted digest would turn the store file into an offline verifier for candidate keys.
+ * The identity is therefore an HMAC under a random salt persisted NEXT TO the store: the
+ * salt is not a secret escrow (it holds no credential material) but it makes every digest
+ * useless outside this installation. Full 256-bit output — no truncation.
+ *
+ * OAuth accounts use the persisted account-slot id (not the rotating token/generation):
+ * relinking a slot to a different upstream account keeps the id, but the upstream then
+ * validates signatures against the new credential and rejects stale ones — the same
+ * fail-closed backstop the destination identity relies on. Credential-scoped header
+ * overrides participate so two provider entries sharing one key but different
+ * authorization headers stay distinct, mirroring the process-local identity.
+ */
+export function durableReplayCredentialIdentity(
+  kind: "key" | "oauth" | "codex",
+  material: string | undefined,
+  headers: Record<string, string> | undefined,
+  salt: Buffer | undefined,
+): string | undefined {
+  if (!nonEmpty(material) || !salt || salt.length < 16) return undefined;
+  const overrides = credentialHeaderOverrides(headers);
+  return `credential:${createHmac("sha256", salt)
+    .update(`credential\0${kind}\0`)
+    .update(JSON.stringify([material, overrides]))
+    .digest("hex")}`;
 }
 
 /** Produce a non-reversible process-local identity for credential material. */
@@ -258,6 +419,8 @@ export function peekReasoningForCall(
 /** Test-only: reset the cache and optionally pin the clock. */
 export function clearReasoningReplayCacheForTests(clock?: (() => number) | null): void {
   entries.clear();
+  servingIdentities.clear();
   totalBytes = 0;
+  servingIdentityTotalBytes = 0;
   clockForTests = clock ?? null;
 }

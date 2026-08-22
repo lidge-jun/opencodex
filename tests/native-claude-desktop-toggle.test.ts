@@ -123,6 +123,64 @@ test("OFF on a missing or empty library is an idempotent no-op with no footprint
   expect(existsSync(join(empty, "_meta.json"))).toBe(false);
 });
 
+test("OFF removes an owned drifted gateway even without a saved fingerprint", async () => {
+  mkdirSync(library);
+  const id = "drifted-owned";
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, `${id}.json`), JSON.stringify({
+    inferenceProvider: "gateway",
+    inferenceCredentialKind: "static",
+    inferenceGatewayBaseUrl: "http://127.0.0.1:10100",
+    inferenceGatewayApiKey: "not-a-secret",
+  }));
+
+  const result = await toggle(false);
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({ ok: true, changed: true, desiredEnabled: false, state: "absent" });
+  expect(existsSync(join(library, `${id}.json`))).toBe(false);
+  expect(persistedIntent()).toBe(false);
+
+  const status = await dispatch("/api/claude-desktop/status");
+  const body = await status!.json() as { desiredEnabled: boolean; applied: boolean; stale: boolean; observedKind: string };
+  expect(body).toMatchObject({ desiredEnabled: false, applied: false, stale: false });
+  expect(body.observedKind).not.toBe("gateway_drifted");
+  expect(body.observedKind).not.toBe("gateway_ours");
+});
+
+test("status reports leftover owned drift as not stale when the durable switch is OFF", async () => {
+  mkdirSync(library);
+  const id = "drifted-owned";
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({ appliedId: id, entries: [{ id, name: "opencodex" }] }));
+  writeFileSync(join(library, `${id}.json`), JSON.stringify({
+    inferenceProvider: "gateway",
+    inferenceCredentialKind: "static",
+    inferenceGatewayBaseUrl: "http://127.0.0.1:10100",
+    inferenceGatewayApiKey: "not-a-secret",
+  }));
+
+  // Persist OFF without the native teardown path, so the leftover gateway stays selected.
+  expect(setIntegrationEnabled("claude-desktop", false).ok).toBe(true);
+  expect(persistedIntent()).toBe(false);
+  expect(existsSync(join(library, `${id}.json`))).toBe(true);
+
+  const status = await dispatch("/api/claude-desktop/status");
+  const body = await status!.json() as {
+    desiredEnabled: boolean;
+    applied: boolean;
+    stale: boolean;
+    drift: boolean;
+    driftReason: string | null;
+    observedKind: string;
+  };
+  expect(body.observedKind).toBe("gateway_drifted");
+  expect(body).toMatchObject({
+    desiredEnabled: false,
+    stale: false,
+    drift: true,
+    driftReason: "desired_off_gateway_selected",
+  });
+});
+
 test("post-commit unsafe and incomplete refusals disclose desired OFF without contents", async () => {
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
   writeFileSync(join(root, "metadata-marker"), "");

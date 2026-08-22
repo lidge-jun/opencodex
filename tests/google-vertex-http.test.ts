@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AdapterRequest } from "../src/adapters/base";
-import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "../src/adapters/google-http";
+import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../src/adapters/google-http";
 import { safeVertexHttpErrorMessage, retryableGoogleStatus } from "../src/adapters/google-errors";
 
 const realFetch = globalThis.fetch;
@@ -171,16 +171,16 @@ describe("vertex retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  test("raw quota errors keep bounded retry counts without body peeking", async () => {
+  test("raw mode does NOT retry a quota-exhausted 429 and preserves raw response", async () => {
     const raw = vertexError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for billing");
     const mock = mockFetch([
-      new Response(raw, { status: 429, headers: { "Retry-After": "0" } }),
-      new Response(raw, { status: 429, headers: { "Retry-After": "0" } }),
-      new Response(raw, { status: 429, headers: { "Retry-After": "0", "x-final": "yes" } }),
+      new Response(raw, { status: 429, headers: { "Retry-After": "0", "x-raw-quota": "1" } }),
+      new Response("ok", { status: 200 }),
     ]);
     const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000, returnRawErrors: true });
-    expect(mock.calls).toHaveLength(3);
-    expect(res.headers.get("x-final")).toBe("yes");
+    expect(mock.calls).toHaveLength(1);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("x-raw-quota")).toBe("1");
     expect(await res.text()).toBe(raw);
   });
 
@@ -211,6 +211,69 @@ describe("vertex retry fetch", () => {
     const p = fetchVertexWithRetry(request, { timeoutMs: 5_000, abortSignal: controller.signal });
     controller.abort();
     await expect(p).rejects.toBeDefined();
+  });
+
+  test("direct AI Studio retries a transient 503 then returns the successful response", async () => {
+    const mock = mockFetch([
+      new Response(vertexError(503, "UNAVAILABLE", "This model is currently experiencing high demand."), { status: 503, headers: { "Retry-After": "0" } }),
+      new Response("ok", { status: 200 }),
+    ]);
+    const res = await fetchDirectGeminiWithRetry(request, { timeoutMs: 5_000 });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("direct AI Studio keeps the raw final error body and does not replay repaired 400s", async () => {
+    const raw = vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid");
+    const mock = mockFetch([
+      new Response(raw, { status: 400, headers: { "x-provider-error": "raw" } }),
+      new Response("ok", { status: 200 }),
+    ]);
+    const res = await fetchDirectGeminiWithRetry(request, { timeoutMs: 5_000 });
+    expect(res.status).toBe(400);
+    expect(res.headers.get("x-provider-error")).toBe("raw");
+    expect(await res.text()).toBe(raw);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("direct AI Studio does NOT retry a quota-exhausted 429 (single attempt, raw body returned)", async () => {
+    const raw = vertexError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'Generate Content API requests'");
+    const mock = mockFetch([
+      new Response(raw, { status: 429, headers: { "Retry-After": "0", "x-direct-raw": "quota" } }),
+      new Response("ok", { status: 200 }),
+    ]);
+    const res = await fetchDirectGeminiWithRetry(request, { timeoutMs: 5_000 });
+    expect(mock.calls).toHaveLength(1);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("x-direct-raw")).toBe("quota");
+    expect(await res.text()).toBe(raw);
+  });
+
+  test("direct AI Studio retries transient rate-limit 429s (bounded, raw body on exhaustion)", async () => {
+    const raw = vertexError(429, "RESOURCE_EXHAUSTED", "rate limit, try again");
+    const mock = mockFetch([
+      new Response(raw, { status: 429, headers: { "Retry-After": "0" } }),
+      new Response(raw, { status: 429, headers: { "Retry-After": "0" } }),
+      new Response(raw, { status: 429, headers: { "Retry-After": "0", "x-final": "yes" } }),
+    ]);
+    const res = await fetchDirectGeminiWithRetry(request, { timeoutMs: 5_000 });
+    expect(mock.calls).toHaveLength(3);
+    expect(res.headers.get("x-final")).toBe("yes");
+    expect(await res.text()).toBe(raw);
+  });
+
+  test("fetchGoogleWithRetry routes physical attempts through ctx.executor when provided", async () => {
+    const executorCalls: RequestInit[] = [];
+    const customExecutor: typeof fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      executorCalls.push(init ?? {});
+      return new Response("executor-ok", { status: 200 });
+    }) as typeof fetch;
+
+    const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000, executor: customExecutor });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("executor-ok");
+    expect(executorCalls).toHaveLength(1);
   });
 });
 
@@ -249,12 +312,15 @@ describe("safeVertexHttpErrorMessage classification + redaction", () => {
 });
 
 describe("adapter fetchResponse wiring", () => {
-  test("vertex adapter exposes fetchResponse; ai-studio does not", async () => {
+  test("vertex and antigravity adapters expose fetchResponse; ai-studio direct delegates to canonical server transport", async () => {
     const { createGoogleAdapter } = await import("../src/adapters/google");
     const vertex = createGoogleAdapter({ adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex" } as never);
     const aistudio = createGoogleAdapter({ adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "k" } as never);
+    const antigravity = createGoogleAdapter({ adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", googleMode: "cloud-code-assist" } as never);
     expect(typeof vertex.fetchResponse).toBe("function");
     expect(typeof vertex.formatErrorBody).toBe("function");
+    expect(typeof antigravity.fetchResponse).toBe("function");
+    expect(typeof antigravity.formatErrorBody).toBe("function");
     expect(aistudio.fetchResponse).toBeUndefined();
     expect(aistudio.formatErrorBody).toBeUndefined();
   });

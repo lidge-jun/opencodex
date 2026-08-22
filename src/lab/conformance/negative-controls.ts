@@ -50,11 +50,15 @@ export const NEGATIVE_CONTROL_FIXTURES: Array<{
   },
   {
     id: "negative.tool-result-order",
-    defect: "invalid tool-result ordering",
+    defect: "invalid tool-result correlation after chat-history repair",
     mutate: (c) => ({
       ...c,
       id: "negative.tool-result-order",
-      assertions: [{ id: "result", operator: "tool_result_correlates", selector: "/upstream/requests", expected: { call: "/client/response/toolCalls/0/id", result: "/upstream/requests/1/json/messages/1/tool_call_id" }, required: true }],
+      // Chat history hardening closes the unmatched call with a synthetic result, then
+      // re-emits the orphan result behind a synthetic assistant call. Inspect the actual
+      // supplied result at the end of that repaired pair rather than the synthetic close,
+      // otherwise the negative control accidentally validates the repair and passes.
+      assertions: [{ id: "result", operator: "tool_result_correlates", selector: "/upstream/requests", expected: { call: "/client/response/toolCalls/0/id", result: "/upstream/requests/1/json/messages/3/tool_call_id" }, required: true }],
       fixture: {
         ...c.fixture,
         bytesUtf8: JSON.stringify({

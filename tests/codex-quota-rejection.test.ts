@@ -12,6 +12,60 @@ function jsonPayload(status: number, payload: Record<string, unknown>): Response
 }
 
 describe("Codex pre-stream quota rejection classification", () => {
+  test("a 403 naming a workspace denial carries structured denial evidence (#1789)", async () => {
+    // The credential is valid; the account simply cannot reach this workspace. Without this
+    // evidence routing quarantines the account for reauth, which cannot fix a workspace grant.
+    const nested = await classifyCodexPreStreamRejection(jsonRejection(403, {
+      code: "codex_workspace_access_denied",
+      message: "workspace access denied",
+    }));
+    expect(nested).toMatchObject({ kind: "permission-error", denial: "workspace" });
+
+    const topLevel = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      code: "workspace_access_denied",
+    }));
+    expect(topLevel).toMatchObject({ kind: "permission-error", denial: "workspace" });
+
+    const detail = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: {
+        code: "codex_workspace_access_denied",
+        message: "workspace access denied",
+      },
+    }));
+    expect(detail).toMatchObject({ kind: "permission-error", denial: "workspace" });
+
+    const entitlement = await classifyCodexPreStreamRejection(jsonRejection(403, {
+      code: "codex_entitlement_missing",
+    }));
+    expect(entitlement).toMatchObject({ kind: "permission-error", denial: "entitlement" });
+
+    const detailEntitlement = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: { code: "entitlement_missing" },
+    }));
+    expect(detailEntitlement).toMatchObject({ kind: "permission-error", denial: "entitlement" });
+  });
+
+  test("a 403 without denial evidence stays an ordinary permission error (#1789)", async () => {
+    // Fail safe: status alone must never downgrade a credential failure, or a genuinely
+    // revoked credential would stop prompting for reauthentication.
+    const unknownCode = await classifyCodexPreStreamRejection(jsonRejection(403, {
+      code: "something_else",
+    }));
+    expect(unknownCode.denial).toBeUndefined();
+
+    const noBody = await classifyCodexPreStreamRejection(new Response(null, { status: 403 }));
+    expect(noBody).toMatchObject({ kind: "permission-error" });
+    expect(noBody.denial).toBeUndefined();
+
+    const malformed = await classifyCodexPreStreamRejection(new Response("{not json", { status: 403 }));
+    expect(malformed.denial).toBeUndefined();
+
+    const invalidDetail = await classifyCodexPreStreamRejection(jsonPayload(403, {
+      detail: { code: 403 },
+    }));
+    expect(invalidDetail.denial).toBeUndefined();
+  });
+
   test.each([
     [402, true],
     [429, true],

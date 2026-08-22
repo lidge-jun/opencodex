@@ -327,11 +327,67 @@ describe("routing profiles (RI-04)", () => {
     ]);
     expect(result.selectedIndex).toBe(0);
     // RI-06/07/08: unknown health/quota/cost under the default "penalize"
-    // policy folds penalized floors into the score.
+    // policy folds penalized floors into the score. #1837: an unmeasured
+    // candidate takes the NEUTRAL latency score, so both tie and declaration
+    // order still decides -- which is correct when nothing distinguishes them.
     expect(result.trace.candidates[0]!.score).toMatchObject({
-      total: 0.685,
-      components: { configuredPriority: 1, health: 0.3, quota: 0.3, cost: 0.3 },
+      components: { configuredPriority: 1, health: 0.3, quota: 0.3, cost: 0.3, latency: 0.5 },
     });
+  });
+
+  test("dry-run evaluator: optimize.latency actually prefers the faster candidate (#1837)", () => {
+    // The knob was normalized into the weight sum but never spent, so whatever was
+    // allocated to latency silently became configuredPriority -- i.e. declaration order.
+    // A latency-weighted profile must be able to pick a LATER-declared faster candidate.
+    const config = baseConfig({
+      routingProfiles: { fastest: {
+        candidates: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+        optimize: { latency: 1, health: 0, cost: 0, quota: 0 },
+      } },
+    });
+    const result = evaluatePolicyProfile(config, "fastest", {}, [
+      { provider: "a", model: "m1", health: { sampleCount: 10, successRate: 1, recentLatencyMs: 50_000 } },
+      { provider: "b", model: "m2", health: { sampleCount: 10, successRate: 1, recentLatencyMs: 1_000 } },
+    ]);
+
+    expect(result.selectedIndex).toBe(1);
+    expect(result.trace.candidates[1]!.score!.components.latency)
+      .toBeGreaterThan(result.trace.candidates[0]!.score!.components.latency!);
+  });
+
+  test("dry-run evaluator: an unmeasured candidate is not punished below a slow one (#1837)", () => {
+    // Scoring an unknown p50 as 0 would make selection depend on which candidate happened
+    // to be exercised first, reintroducing the order-dependence by another name.
+    const config = baseConfig({
+      routingProfiles: { fastest: {
+        candidates: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+        optimize: { latency: 1, health: 0, cost: 0, quota: 0 },
+      } },
+    });
+    const result = evaluatePolicyProfile(config, "fastest", {}, [
+      { provider: "a", model: "m1", health: { sampleCount: 10, successRate: 1, recentLatencyMs: 55_000 } },
+      { provider: "b", model: "m2" },
+    ]);
+
+    expect(result.trace.candidates[1]!.score!.components.latency)
+      .toBeGreaterThan(result.trace.candidates[0]!.score!.components.latency!);
+  });
+
+  test("dry-run evaluator: latency:0 leaves declaration-order behavior unchanged (#1837)", () => {
+    // Existing profiles that never set the knob must not change behavior.
+    const config = baseConfig({
+      routingProfiles: { ordered: {
+        candidates: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+        optimize: { latency: 0, health: 0, cost: 0, quota: 1 },
+      } },
+    });
+    const result = evaluatePolicyProfile(config, "ordered", {}, [
+      { provider: "a", model: "m1", health: { sampleCount: 10, successRate: 1, recentLatencyMs: 50_000 } },
+      { provider: "b", model: "m2", health: { sampleCount: 10, successRate: 1, recentLatencyMs: 1_000 } },
+    ]);
+
+    expect(result.selectedIndex).toBe(0);
+    expect(result.trace.candidates[0]!.score!.components.latency).toBeUndefined();
   });
 
   test("API lists profiles and dry-runs deterministically", async () => {

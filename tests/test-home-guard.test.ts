@@ -10,7 +10,7 @@
  * Incident: devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,24 @@ function sentinelHome(): { realHome: string; opencodexHome: string } {
 }
 
 describe("real-home write guard", () => {
+
+/**
+ * Windows without Developer Mode or admin cannot create symlinks (EPERM). The
+ * escape cases below need a real link to prove the guard resolves through one, so
+ * detect the privilege once and take a visible skip rather than failing in setup.
+ */
+const canSymlink = (() => {
+  const probeDir = mkdtempSync(join(tmpdir(), "ocx-home-guard-symlink-probe-"));
+  try {
+    symlinkSync(join(probeDir, "probe-target"), join(probeDir, "probe-link"));
+    return true;
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
+    throw e;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
   test("armed + the protected home: all three writers throw", () => {
     const { realHome, opencodexHome } = sentinelHome();
     const probe = runProbe(`
@@ -93,7 +111,7 @@ describe("real-home write guard", () => {
     expect(() => readFileSync(join(opencodexHome, "codex-accounts.json"))).toThrow();
   });
 
-  test("armed + a symlink escaping a temp home into the protected home: refused", () => {
+  test.skipIf(!canSymlink)("armed + a symlink escaping a temp home into the protected home: refused", () => {
     // Atomic writes resolve their destination through symlinks, so a temp home whose
     // config.json points into the protected home would otherwise pass the caller's
     // dir-level check and then write the real file anyway.
@@ -132,7 +150,7 @@ describe("real-home write guard", () => {
     expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")).port).toBe(10100);
   });
 
-  test("armed + a first write beneath a symlinked PARENT escaping into the protected home: refused", () => {
+  test.skipIf(!canSymlink)("armed + a first write beneath a symlinked PARENT escaping into the protected home: refused", () => {
     // The file does not exist yet, so resolveWriteTarget returns the literal
     // path and target === path; the guard must resolve the parent directory
     // instead of skipping (review: symlinked config dir + absent destination).
@@ -195,7 +213,7 @@ describe("real-home write guard", () => {
     expect(probe.stdout).not.toContain("ocx-decoy-home-");
   });
 
-  test("a symlink pointing at the protected home is rejected", () => {
+  test.skipIf(!canSymlink)("a symlink pointing at the protected home is rejected", () => {
     const { realHome, opencodexHome } = sentinelHome();
     const linkDir = mkdtempSync(join(tmpdir(), "ocx-symlink-"));
     const link = join(linkDir, "looks-like-temp");

@@ -110,6 +110,9 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     log.log(v2StatusLine(isEnabled()));
     const cfg = loadConfig();
     log.log(multiAgentModeLine(cfg.multiAgentMode ?? "default"));
+    log.log(cfg.keepNativeChatGptOnV1 === true
+      ? "keep_native_chatgpt_on_v1: ON — ChatGPT-native rows stay v1 when mode is v2"
+      : "keep_native_chatgpt_on_v1: OFF");
     const threads = getLogicalMaxThreads();
     log.log(`max_threads: ${threads ?? "(unset — codex default)"}`);
     const v2Active = isEnabled();
@@ -204,8 +207,38 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     log.log("Applies to NEW sessions; running sessions keep their pinned multi-agent version.");
     return 0;
   }
+  if (verb === "keep-native-v1") {
+    const flag = (args[1] ?? "").trim().toLowerCase();
+    if (flag !== "on" && flag !== "off") {
+      log.error("v2 keep-native-v1: expected on|off");
+      return 1;
+    }
+    const cfg = loadConfig();
+    const next = flag === "on";
+    const already = cfg.keepNativeChatGptOnV1 === true === next;
+    if (next) cfg.keepNativeChatGptOnV1 = true;
+    else delete cfg.keepNativeChatGptOnV1;
+    saveConfig(cfg);
+    try {
+      const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
+      await sync(findPort ? await findPort() : undefined);
+    } catch (err) {
+      log.error(`catalog resync failed: ${err instanceof Error ? err.message : String(err)} — run 'ocx sync' manually.`);
+      return 1;
+    }
+    if (already) {
+      log.log(next
+        ? "keep_native_chatgpt_on_v1 already ON — catalog re-synced."
+        : "keep_native_chatgpt_on_v1 already OFF — catalog re-synced.");
+      return 0;
+    }
+    log.log(next
+      ? "keep_native_chatgpt_on_v1: ON — ChatGPT-native rows stay v1 when mode is v2 (new sessions)."
+      : "keep_native_chatgpt_on_v1: OFF — ChatGPT-native rows follow v1/base/v2 (new sessions).");
+    return 0;
+  }
   if (verb !== "on" && verb !== "off") {
-    log.error(`v2: unknown verb '${verb}' (expected status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>)`);
+    log.error(`v2: unknown verb '${verb}' (expected status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>)`);
     return 1;
   }
 

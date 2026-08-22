@@ -67,6 +67,8 @@ describe("provider registry parity", () => {
       "qwen3.7-max",
     ]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
+    expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).toEqual(["mimo-v2.5-pro"]);
+    expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).not.toContain("mimo-v2.5");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"]).toMatchObject({
       modelContextWindows: { "kimi-k3": 262_144 },
       modelInputModalities: { "kimi-k3": ["text", "image"] },
@@ -80,6 +82,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noTopPModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].openaiChatEofTolerance).toBe(true);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
@@ -360,7 +363,11 @@ describe("provider registry parity", () => {
       .filter(entry => entry.modelSuffixBracketStrip)
       .map(entry => entry.id);
     expect(zai?.modelContextWindows).toEqual({ "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
+    expect(zai?.modelDefaultReasoningEfforts).toEqual({ "glm-5.3": "max", "glm-5.3[1m]": "max" });
+    expect(zai?.modelMaxOutputTokens).toEqual({ "glm-5.3": 131_072, "glm-5.3[1m]": 131_072 });
     expect(providerConfigSeed(zai!).modelSuffixBracketStrip).toBe(true);
+    expect(providerConfigSeed(zai!).modelDefaultReasoningEfforts?.["glm-5.3"]).toBe("max");
+    expect(deriveKeyLoginMap().zai.modelMaxOutputTokens?.["glm-5.3[1m]"]).toBe(131_072);
     // `zhipu-bigmodel-coding` opts in for the same reason `zai` does: it serves the same
     // bracketed GLM ids, and that vendor's OpenAI path returns 400 code 1211 for them.
     expect(optedInProviders).toEqual(["kimi", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
@@ -375,7 +382,18 @@ describe("provider registry parity", () => {
         },
       },
     };
+    const routed53 = routeModel(config, "zai/glm-5.3");
+    expect(routed53.provider.modelDefaultReasoningEfforts?.["glm-5.3"]).toBe("max");
+    expect(routed53.provider.modelMaxOutputTokens?.["glm-5.3"]).toBe(131_072);
     expect(routeModel(config, "zai/glm-5.2[1m]").provider.modelSuffixBracketStrip).toBe(true);
+
+    const glm53Model = applyProviderConfigHints("zai", providerConfigSeed(zai!), {
+      provider: "zai",
+      id: "glm-5.3",
+    });
+    const glm53Entry = buildCatalogEntries(nativeTemplate(), [], [glm53Model])
+      .find(entry => entry.slug === "zai/glm-5.3");
+    expect(glm53Entry?.default_reasoning_level).toBe("max");
   });
 
   test("Anthropic API-key provider mirrors the OAuth entry's models on the key flow", () => {
@@ -546,7 +564,10 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
+    // Registry order. Both OAuth entries (anthropic, google-antigravity) are gated by
+    // providerSecureTransportConfigError; the rest are key/local providers that never send a
+    // subscription bearer to the override.
+    expect(optedIn.map(entry => entry.id)).toEqual(["anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }

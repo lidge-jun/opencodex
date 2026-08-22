@@ -32,7 +32,7 @@ test("buildClaudeDesktopState gives native rows their real context window", asyn
     const sol = state.models.find(m => m.route === "native/gpt-5.6-sol");
     expect(sol).toBeDefined();
     expect(sol!.contextWindow).toBe(nativeOpenAiContextWindow("gpt-5.6-sol"));
-    expect(sol!.contextWindow).toBe(372_000);
+    expect(sol!.contextWindow).toBe(272_000);
 
     // Every native row that the catalog knows a window for must carry it.
     for (const slug of visibleNativeSlugs(config)) {
@@ -55,5 +55,5 @@ test("the desktop-3p writer resolves the same native window as the DTO", () => {
   // capability is not lost between the dashboard and the written config.
   const sol = models.find(m => m.labelOverride.toLowerCase().includes("sol"));
   expect(sol).toBeDefined();
-  expect(expected).toBe(372_000);
+  expect(expected).toBe(272_000);
 });

@@ -3,7 +3,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { opendir } from "node:fs/promises";
 import type { AdapterEvent, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxUsage } from "../types";
-import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice, toolChoiceAliases } from "../types";
+import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -157,10 +157,11 @@ function visibleTools(parsed: OcxParsedRequest): OcxTool[] {
   const tools = parsed.context.tools ?? [];
   if (isAllowedToolChoice(choice)) {
     const allowed = new Set(choice.allowedTools);
-    return tools.filter(tool => toolAllowedByChoice(tool, allowed));
+    return tools.filter(tool => toolAllowedByChoice(tool, allowed, tools));
   }
   if (choice && typeof choice !== "string") {
-    return tools.filter(tool => toolChoiceAliases(tool).includes(choice.name));
+    const selected = resolveToolChoiceWireName(tools, choice.name);
+    return tools.filter(tool => namespacedToolName(tool.namespace, tool.name) === selected);
   }
   return tools;
 }
@@ -553,6 +554,23 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             sawFinish = true;
             const usageValue = event.totalUsage ?? event.usage;
             const stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
+            // The AI SDK's `error` finish reason means the generation failed upstream, not that it
+            // stopped. Reporting it as a `done` left the bridge to infer failure from a stop-reason
+            // string, which either read as a clean completion or (once classified) mislabelled an
+            // upstream error as a content filter and rejected it from the replay cache for the
+            // wrong reason.
+            if (stopReason === "error") {
+              // Keep the usage: a failed turn still consumed tokens, and dropping it makes the
+              // turn look free in accounting and reports zeros to the client.
+              yield {
+                type: "error",
+                message: "Command Code upstream ended the turn with finishReason \"error\"",
+                status: 502,
+                errorType: "upstream_error",
+                usage: usage(usageValue),
+              };
+              break;
+            }
             yield { type: "done", usage: usage(usageValue), stopReason };
             break;
           }

@@ -134,9 +134,12 @@ describe("Cursor native exec sandbox policy", () => {
     expect(deniedText).toContain("exec_command");
     expect(deniedText).toContain("mcp_opencodex-responses_*");
     expect(deniedText).toContain("cat");
+    expect(deniedText).toContain("Get-Content");
+    expect(deniedText).toContain("Get-ChildItem");
+    expect(deniedText).toContain("Select-String");
     expect(deniedText).toContain("apply_patch");
-    expect(deniedText).toContain("silently call");
-    expect(deniedText).toContain("Do not tell the user");
+    expect(deniedText).not.toContain("silently call");
+    expect(deniedText).not.toContain("Do not tell the user");
     expect(deniedText).not.toContain("disabled by OpenCodex policy");
     expect(deniedText).not.toContain("sandbox denial");
     expect(deniedText).not.toContain(content);
@@ -146,11 +149,11 @@ describe("Cursor native exec sandbox policy", () => {
       value: create(ShellArgsSchema, { command: "printf SHOULD_NOT_RUN", workingDirectory: dir, hardTimeout: 2000 }),
     }), { unsafeAllowNativeLocalExec }))[0]);
     const deniedShellText = stringify(deniedShell);
-    expect(deniedShellText).toContain("silently call");
+    expect(deniedShellText).not.toContain("silently call");
     expect(deniedShellText).toContain("shell_command");
     expect(deniedShellText).toContain("exec_command");
     expect(deniedShellText).toContain("mcp_opencodex-responses_*");
-    expect(deniedShellText).toContain("Do not tell the user");
+    expect(deniedShellText).not.toContain("Do not tell the user");
     expect(deniedShellText).not.toContain("with the same command");
     expect(deniedShellText).toContain("at most one corrected bridge attempt");
     expect(deniedShellText).toContain("if ($?)");
@@ -178,7 +181,8 @@ describe("Cursor native exec sandbox policy", () => {
     }))[0]);
     expect(fetchCalled).toBe(false);
     const deniedFetchText = stringify(deniedFetch);
-    expect(deniedFetchText).toContain("silently call");
+    expect(deniedFetchText).not.toContain("silently call");
+    expect(deniedFetchText).not.toContain("Do not tell the user");
     expect(deniedFetchText).toContain("shell_command");
     expect(deniedFetchText).toContain("curl");
     expect(deniedFetchText).toContain("wget");

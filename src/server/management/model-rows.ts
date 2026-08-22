@@ -62,6 +62,7 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
           metadataSlug: slug,
           disabled: disabled.has(`${selector}/${slug}`) || disabled.has(slug),
           contextWindow: undefined,
+          maxInputTokens: undefined,
         })))
     : [];
   const native: ManagementModelRow[] = [...nativeRows, ...accountNativeRows].map(row => {
@@ -77,6 +78,10 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
       ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
       inputModalities: nativeInputModalities(row.slug),
       ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+      // The input ceiling is a separate number from the window for GPT-5.6 (922k under
+      // 1.05M). Dropping it here made /api/models describe a native row as if the whole
+      // window were usable as input, which is the claim the measurement disproved.
+      ...(row.maxInputTokens !== undefined ? { maxInputTokens: row.maxInputTokens } : {}),
     };
   });
   const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {
@@ -91,6 +96,14 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
       displayName: cm.displayName,
       ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
+      // Stored override, not the inherited ladder: the edit dialog must show what the user
+      // set (including an explicit empty "no reasoning" ladder), not what the provider row
+      // happens to advertise today.
+      ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
+      // The stored default rides along so a client reloading /api/models can restore the
+      // full edit state; the GUI has no default-effort control today, but dropping it here
+      // would make any future PUT-based edit lose it silently.
+      ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
     };
   });
   const publicModels = uniqueCatalogModelsForPublicList(models);

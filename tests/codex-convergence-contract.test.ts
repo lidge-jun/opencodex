@@ -317,11 +317,59 @@ test("the total lazy adapter preserves a persisted-success route when factory co
     disabled: ["gpt-5.6-sol"],
     catalogRefresh: {
       status: "failed",
-      reason: "disk",
+      // #1784: an escaping factory error is an internal fault, not a disk failure.
+      // Reporting "disk" told the operator to check storage for a programming bug.
+      reason: "internal",
       phase: "gather",
       partialWrite: false,
+      cause: { kind: "unknown" },
     },
   });
+});
+
+test("a malformed convergence request is reported as request-invalid, not disk (#1784)", async () => {
+  const live = config();
+  const request = new ManagementRequest("http://localhost/api/disabled-models", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ models: ["gpt-5.6-sol"] }),
+  });
+  const response = await handleManagementAPI(request, new URL(request.url), live, {
+    saveConfigPreservingClaudeCode: () => {},
+    createManagementConvergeCodex: () => { throw new TypeError("scope must be an object"); },
+  });
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    catalogRefresh: {
+      status: "failed",
+      reason: "request-invalid",
+      cause: { kind: "invalid-request" },
+    },
+  });
+});
+
+test("a failure cause never carries message text, paths or identifiers (#1784)", async () => {
+  const live = config();
+  const request = new ManagementRequest("http://localhost/api/disabled-models", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ models: ["gpt-5.6-sol"] }),
+  });
+  const secret = "sk-ant-api03-" + "A".repeat(40);
+  const response = await handleManagementAPI(request, new URL(request.url), live, {
+    saveConfigPreservingClaudeCode: () => {},
+    createManagementConvergeCodex: () => {
+      const homePath = ["", "Users", "someone", ".codex", "config.toml"].join("/");
+      throw new Error(`failed writing ${homePath} for ${secret}`);
+    },
+  });
+
+  const body = JSON.stringify(await response?.json());
+  // The cause is rebuilt from closed vocabularies, so none of this can ride out.
+  expect(body).not.toContain(secret);
+  expect(body).not.toContain(["", "Users", "someone"].join("/"));
+  expect(body).not.toContain("failed writing");
 });
 
 test("the route inventory contains exactly the specified 7 + 6 + 2 + 2 convergence calls", () => {

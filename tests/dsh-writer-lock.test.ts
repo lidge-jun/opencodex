@@ -167,7 +167,11 @@ describe("DSH coordinated mutations", () => {
     const seams = immediateLock(() => { acquisitions += 1; });
     expect((await applyIntegrationCoordinated(writeInput(), { lockSeams: seams })).ok).toBe(true);
     const configPath = INTEGRATION_CLIENTS.dsh.configPath({}, home);
-    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    // The file must exist either way; only the POSIX bits are platform-specific,
+    // because Windows synthesizes mode from the read-only attribute and reports 0o666
+    // no matter what the writer requested.
+    expect(existsSync(configPath)).toBe(true);
+    if (process.platform !== "win32") expect(statSync(configPath).mode & 0o777).toBe(0o600);
     const second = await applyIntegrationCoordinated(writeInput(), { lockSeams: seams });
     expect(second).toMatchObject({ ok: true, changed: false, state: "current" });
     expect(acquisitions).toBe(2);

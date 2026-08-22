@@ -373,6 +373,20 @@ export function healthEvidenceForCandidate(input: HealthEvidenceInput): RouteHea
 }
 
 /**
+ * Deterministic latency score in [0,1] from the recorded p50, shared by the health
+ * composite and the standalone `optimize.latency` term so the two cannot drift apart.
+ *
+ * An unmeasured candidate scores the NEUTRAL midpoint, not 0. Punishing it into last
+ * place would make selection depend on which candidate happened to be exercised first,
+ * which is the order-dependence this scoring exists to remove.
+ */
+export function latencyScoreFromEvidence(evidence: RouteHealthEvidence | undefined): number {
+  const p50 = evidence?.recentLatencyMs;
+  if (p50 === undefined) return 0.5;
+  return Math.max(0, Math.min(1, 1 - p50 / HEALTH_SCORE_CONSTANTS.LATENCY_TARGET_MS));
+}
+
+/**
  * Deterministic health score in [0,1]. Returns null when evidence is unknown
  * (no samples) so callers can apply the profile's unknownEvidence policy.
  * A live hard cooldown scores 0 (authoritative).
@@ -383,15 +397,12 @@ export function healthScore(evidence: RouteHealthEvidence | undefined, now = Dat
   if (!evidence.sampleCount || evidence.sampleCount < 1) return null;
   const successRate = evidence.successRate ?? 0;
   const incompleteRate = evidence.incompleteStreamRate ?? 0;
-  const p50 = evidence.recentLatencyMs;
-  const latencyScore = p50 === undefined
-    ? 0.5
-    : Math.max(0, Math.min(1, 1 - p50 / HEALTH_SCORE_CONSTANTS.LATENCY_TARGET_MS));
+  const latency = latencyScoreFromEvidence(evidence);
   const consecutive = evidence.failures ?? 0;
   const recoveryScore = 1 - Math.min(1, consecutive / 5);
   const composite = HEALTH_SCORE_CONSTANTS.SUCCESS_WEIGHT * successRate
     + HEALTH_SCORE_CONSTANTS.INCOMPLETE_WEIGHT * (1 - incompleteRate)
-    + HEALTH_SCORE_CONSTANTS.LATENCY_WEIGHT * latencyScore
+    + HEALTH_SCORE_CONSTANTS.LATENCY_WEIGHT * latency
     + HEALTH_SCORE_CONSTANTS.RECOVERY_WEIGHT * recoveryScore;
   const confidence = Math.min(1, evidence.sampleCount / HEALTH_SCORE_CONSTANTS.MIN_CONFIDENCE_SAMPLES);
   const softAvoid = evidence.softAvoidUntilMs !== undefined && evidence.softAvoidUntilMs > now

@@ -336,15 +336,15 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(shellWrite!.data).not.toContain("DISABLE_COMPACT");
   });
 
-  test("auto-context default lever: AUTO_COMPACT_WINDOW 350000 injected, tracked, conditionally exported (devlog 020)", async () => {
+  test("auto-context default lever: AUTO_COMPACT_WINDOW 829800 injected, tracked, conditionally exported (devlog 020)", async () => {
     const writes = capturedWrites();
     expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
-    expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_AUTO_COMPACT_WINDOW 350000");
+    expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_AUTO_COMPACT_WINDOW 829800");
     const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
     expect(JSON.parse(trackingWrite!.data).injectedKeys).toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
-    expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_AUTO_COMPACT_WINDOW+x}" ] && export CLAUDE_CODE_AUTO_COMPACT_WINDOW='350000'`);
+    expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_AUTO_COMPACT_WINDOW+x}" ] && export CLAUDE_CODE_AUTO_COMPACT_WINDOW='829800'`);
   });
 
   test("auto-context: user-preset launchctl value is respected and untracked (audit 021 #2)", async () => {

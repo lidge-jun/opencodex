@@ -1,7 +1,7 @@
 import { discoverScenarios, loadCaseAuthority } from "./manifest";
 import { runScenario } from "./executor";
-import { buildNegativeControls } from "./negative-controls";
-import type { ScenarioRunResult } from "./types";
+import { baseCaseForNegativeControl, buildNegativeControls } from "./negative-controls";
+import type { CaseRecord, ScenarioRunResult } from "./types";
 import { CL01_SUITES } from "./types";
 
 export interface ConformanceRunSummary {
@@ -19,6 +19,8 @@ export interface NegativeControlRunSummary extends ConformanceRunSummary {
   rejected: number;
 }
 
+type ScenarioRunner = (caseRecord: CaseRecord) => Promise<ScenarioRunResult>;
+
 export async function runConformanceSuite(
   suites: readonly string[] = CL01_SUITES,
 ): Promise<ConformanceRunSummary> {
@@ -33,15 +35,24 @@ export async function runConformanceSuite(
   return { total: results.length, passed, failed: results.length - passed, results };
 }
 
-export async function runNegativeControls(): Promise<NegativeControlRunSummary> {
+export async function runNegativeControls(
+  execute: ScenarioRunner = runScenario,
+): Promise<NegativeControlRunSummary> {
   const authority = loadCaseAuthority();
   const scenarios = buildNegativeControls(discoverScenarios(authority));
   if (scenarios.length === 0) throw new Error("harness_failure: no negative controls discovered");
   const results: ScenarioRunResult[] = [];
   for (const scenario of scenarios) {
-    results.push(await runScenario(scenario));
+    const baseCase = baseCaseForNegativeControl(scenario.id, authority.cases);
+    const executionScenario = baseCase ? { ...scenario, id: baseCase.id } : scenario;
+    const result = await execute(executionScenario);
+    results.push({ ...result, scenarioId: scenario.id });
   }
-  const rejected = results.filter((r) => !r.passed).length;
+  const rejected = results.filter((r) => (
+    !r.passed
+    && r.classification === "protocol_failure"
+    && r.secondaryCode === "deterministic_assertion"
+  )).length;
   return {
     total: results.length,
     passed: rejected,

@@ -1,4 +1,5 @@
 import { isValidModelDiscoveryModelId, MODEL_DISCOVERY_MAX_MODELS } from "./model-discovery-limits";
+import { isModelCacheGenerationCurrent } from "../codex/model-cache";
 
 // Google Antigravity (Cloud Code Assist) bundled model list.
 //
@@ -71,9 +72,16 @@ const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.en
 }, {});
 
 const ANTIGRAVITY_DISCOVERY_EFFORTS = ["low", "medium", "high"] as const;
+type AntigravityDiscoveryEffort = typeof ANTIGRAVITY_DISCOVERY_EFFORTS[number];
+type AntigravityEffortWireModelIds = Partial<Record<AntigravityDiscoveryEffort, string>>;
+
+function isAntigravityDiscoveryEffort(value: string): value is AntigravityDiscoveryEffort {
+  return (ANTIGRAVITY_DISCOVERY_EFFORTS as readonly string[]).includes(value);
+}
 
 function pickerModelIdForDiscoveredWireId(
   wireId: string,
+  info: Record<string, unknown>,
   available: ReadonlyMap<string, Record<string, unknown>>,
 ): string {
   const explicitPickerId = Object.hasOwn(ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID, wireId)
@@ -102,7 +110,33 @@ function pickerModelIdForDiscoveredWireId(
       return baseId;
     }
   }
+
+  // Display labels are a LAST resort, never a first one. CCA labels a tier row
+  // "Gemini 3.7 Flash (High)", which slugs to `gemini-3.7-flash-high` — a per-tier
+  // picker row that re-splits exactly the ladder the collapse rules above just
+  // joined, and that carries no effort ladder of its own. Consulting the label
+  // first (the #1897 regression) turned every collapsed base model back into three
+  // suffix rows and stripped reasoning-effort control from the picker.
+  //
+  // The label still earns its keep where nothing else can speak: an id Google has
+  // renamed on the wire while keeping a stable public name.
+  const displayModelId = antigravityDisplayModelId(info.displayName, wireId);
+  if (displayModelId && !collapsesIntoKnownPickerModel(displayModelId)) return displayModelId;
+
   return wireId;
+}
+
+/**
+ * Whether a display-derived id is really a tier of a picker-visible base model.
+ *
+ * `gemini-3.7-flash-high` looks like a model id and is not one: it is the "high"
+ * rung of `gemini-3.7-flash`, whose ladder lives in ANTIGRAVITY_MODEL_EFFORTS.
+ * Publishing it as its own row is what breaks effort selection.
+ */
+function collapsesIntoKnownPickerModel(candidateId: string): boolean {
+  const effortMatch = /^(.*)-(low|medium|high)$/.exec(candidateId);
+  const baseId = effortMatch?.[1];
+  return baseId !== undefined && isKnownAntigravityPickerModelId(baseId);
 }
 
 // ── Effort ladders per collapsed base model ──
@@ -122,6 +156,25 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
     high: "gemini-pro-agent",
   },
 };
+
+function completeDiscoveredEffortWireModelIds(
+  pickerId: string,
+  available: ReadonlyMap<string, Record<string, unknown>>,
+): AntigravityEffortWireModelIds | undefined {
+  const explicitEffortMap = ANTIGRAVITY_EFFORT_WIRE_MAP[pickerId];
+  if (explicitEffortMap && Object.values(explicitEffortMap).every(wireId => available.has(wireId))) {
+    return { ...explicitEffortMap };
+  }
+
+  if (!isKnownAntigravityPickerModelId(pickerId)) return undefined;
+  const suffixEffortMap: AntigravityEffortWireModelIds = {};
+  for (const effort of ANTIGRAVITY_DISCOVERY_EFFORTS) {
+    const wireId = `${pickerId}-${effort}`;
+    if (!available.has(wireId)) return undefined;
+    suffixEffortMap[effort] = wireId;
+  }
+  return suffixEffortMap;
+}
 
 // ── Default effort per Gemini base model ──
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
@@ -240,6 +293,10 @@ export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
 
 export interface AntigravityAvailableModel {
   id: string;
+  /** CCA model id used by the agent envelope when `id` comes from display metadata. */
+  wireModelId: string;
+  /** Complete effort-to-wire mapping retained for collapsed discovered tier sets. */
+  effortWireModelIds?: AntigravityEffortWireModelIds;
   contextWindow?: number;
   inputModalities?: string[];
 }
@@ -252,6 +309,133 @@ function antigravityRecord(value: unknown): Record<string, unknown> | undefined 
 
 function antigravityPositiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+interface DiscoveredWireModelMapping {
+  readonly models: ReadonlyMap<string, string>;
+  readonly effortModels: ReadonlyMap<string, AntigravityEffortWireModelIds>;
+  readonly generation?: { provider: string; cacheGeneration: string };
+}
+
+const discoveredWireModelsByBaseUrl = new Map<string, DiscoveredWireModelMapping>();
+
+/**
+ * Strip trailing slashes without a backtracking regex.
+ *
+ * `/\/+$/` is polynomial-ReDoS on attacker-influenceable input (CodeQL js/polynomial-redos):
+ * a long run of slashes makes the engine retry every suffix. The base URL comes from provider
+ * config, which is not hostile in the ordinary case — but "not hostile today" is a property of
+ * the caller, not of this function, and a linear scan costs nothing.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
+function antigravityBaseUrlKey(baseUrl: string | undefined): string | undefined {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) return undefined;
+  const trimmed = stripTrailingSlashes(baseUrl.trim());
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    url.search = "";
+    return stripTrailingSlashes(url.toString()).toLowerCase();
+  } catch {
+    return trimmed.toLowerCase();
+  }
+}
+
+/** Remember the wire ids returned by one live CCA discovery for request routing. */
+export function registerAntigravityDiscoveredWireModels(
+  baseUrl: string | undefined,
+  models: readonly AntigravityAvailableModel[],
+  generation?: { provider: string; cacheGeneration: string },
+): void {
+  const key = antigravityBaseUrlKey(baseUrl);
+  if (!key) return;
+  const wireModels = new Map<string, string>();
+  const effortModels = new Map<string, AntigravityEffortWireModelIds>();
+  for (const model of models) {
+    wireModels.set(model.id, model.wireModelId);
+    if (model.effortWireModelIds) effortModels.set(model.id, { ...model.effortWireModelIds });
+  }
+  discoveredWireModelsByBaseUrl.set(key, {
+    models: wireModels,
+    effortModels,
+    ...(generation ? { generation } : {}),
+  });
+}
+
+function discoveredAntigravityMapping(
+  baseUrl: string | undefined,
+): DiscoveredWireModelMapping | undefined {
+  const key = antigravityBaseUrlKey(baseUrl);
+  if (!key) return undefined;
+  const mapping = discoveredWireModelsByBaseUrl.get(key);
+  if (!mapping) return undefined;
+  if (mapping.generation
+    && !isModelCacheGenerationCurrent(mapping.generation.provider, mapping.generation.cacheGeneration)) {
+    discoveredWireModelsByBaseUrl.delete(key);
+    return undefined;
+  }
+  return mapping;
+}
+
+function discoveredAntigravityWireModelId(
+  modelId: string,
+  baseUrl: string | undefined,
+): string | undefined {
+  return discoveredAntigravityMapping(baseUrl)?.models.get(modelId);
+}
+
+function discoveredAntigravityEffortWireModelId(
+  modelId: string,
+  effort: string | undefined,
+  baseUrl: string | undefined,
+): string | undefined {
+  const effortMap = discoveredAntigravityMapping(baseUrl)?.effortModels.get(modelId);
+  if (!effortMap) return undefined;
+
+  const requestedEffort = effort ? resolveAntigravityThinkingLevel(effort) : undefined;
+  if (requestedEffort && isAntigravityDiscoveryEffort(requestedEffort) && effortMap[requestedEffort]) {
+    return effortMap[requestedEffort];
+  }
+
+  const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]
+    ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
+  if (defaultEffort && isAntigravityDiscoveryEffort(defaultEffort) && effortMap[defaultEffort]) {
+    return effortMap[defaultEffort];
+  }
+  return Object.values(effortMap)[0];
+}
+
+/**
+ * Convert the CCA display label used by `agy` into its public model selector.
+ *
+ * The wire id is authoritative for requests, while the label is authoritative for the
+ * user-facing selector when Google has renamed or re-tiered a model. Keep both instead
+ * of maintaining a provider-specific list of known model names.
+ */
+function antigravityDisplayModelId(displayName: unknown, wireId: string): string | undefined {
+  if (typeof displayName !== "string") return undefined;
+  const label = displayName.trim();
+  if (!label || label.length > 512) return undefined;
+  const slug = (replaceDots: boolean): string => label
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(replaceDots ? /\./g : /\s+/g, replaceDots ? "-" : " ")
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const preserved = slug(false);
+  const compact = slug(true);
+  if (!isValidModelDiscoveryModelId(preserved) && !isValidModelDiscoveryModelId(compact)) return undefined;
+  if (preserved === wireId || compact === wireId
+    || preserved === `${wireId}-thinking` || compact === `${wireId}-thinking`) {
+    return wireId;
+  }
+  return isValidModelDiscoveryModelId(preserved) ? preserved : compact;
 }
 
 /**
@@ -288,10 +472,13 @@ export function parseAntigravityAvailableModels(
       }
     }
   }
-  // This model is exposed by Antigravity's agent chat surface even though it is grouped under
-  // image generation in the discovery response.
+  // This model is exposed by Antigravity's agent chat surface even though the discovery
+  // response groups it under image generation, so it never appears in agentModelSorts.
   if (Array.isArray(body.imageGenerationModelIds)
-    && body.imageGenerationModelIds.includes("gemini-3.1-flash-image")) {
+    && body.imageGenerationModelIds.includes("gemini-3.1-flash-image")
+    && Object.hasOwn(models, "gemini-3.1-flash-image")
+    && antigravityRecord(models["gemini-3.1-flash-image"])
+    && !ids.includes("gemini-3.1-flash-image")) {
     if (ids.length >= limit) return null;
     ids.push("gemini-3.1-flash-image");
   }
@@ -305,6 +492,12 @@ export function parseAntigravityAvailableModels(
         || !Object.hasOwn(models, id)
         || !antigravityRecord(models[id])
         || ids.length >= limit) return null;
+      const baseId = id.endsWith("-tiered") ? id.slice(0, -"-tiered".length) : id;
+      if (ids.some(agentId =>
+        agentId === id
+        || agentId === baseId
+        || ANTIGRAVITY_DISCOVERY_EFFORTS.some(effort => agentId === `${baseId}-${effort}`)
+      )) continue;
       ids.push(id);
     }
   }
@@ -313,8 +506,12 @@ export function parseAntigravityAvailableModels(
   for (const wireId of ids) {
     const info = antigravityRecord(models[wireId]);
     if (!info || available.has(wireId)) continue;
-    // Legacy compatibility aliases are deliberately routed to newer wire ids for saved
-    // selections. They are not safe as independently discovered picker rows.
+    // Compatibility aliases are deliberately routed to NEWER wire ids for saved
+    // selections. CCA keeps serving retired generations (3.5/3.6 Flash tiers) in its
+    // agent list long after they stop being the model anyone should pick, so admitting
+    // them as independently discovered rows republishes exactly the dead tiers the
+    // alias map exists to retire. Routing for a saved id still works — it resolves
+    // through ANTIGRAVITY_MODEL_ALIASES — it just no longer gets its own picker row.
     const alias = Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, wireId)
       ? ANTIGRAVITY_MODEL_ALIASES[wireId]
       : undefined;
@@ -325,19 +522,34 @@ export function parseAntigravityAvailableModels(
   const out: AntigravityAvailableModel[] = [];
   const seen = new Set<string>();
   for (const [wireId, info] of available) {
-    const id = pickerModelIdForDiscoveredWireId(wireId, available);
+    const id = pickerModelIdForDiscoveredWireId(wireId, info, available);
     if (seen.has(id)) continue;
     seen.add(id);
+    const effortWireModelIds = completeDiscoveredEffortWireModelIds(id, available);
     out.push({
       id,
+      wireModelId: wireId,
+      ...(effortWireModelIds ? { effortWireModelIds } : {}),
       ...(antigravityPositiveInteger(info.maxTokens) ? { contextWindow: antigravityPositiveInteger(info.maxTokens) } : {}),
-      inputModalities: info.supportsImages === true ? ["text", "image"] : ["text"],
+      // Tri-state, deliberately not a ternary: `true` asserts image support,
+      // `false` asserts against it, and ABSENT is unknown. Collapsing absent into
+      // `["text"]` let routing read it as a confident `image: false` (#1796). The
+      // strict catalog still receives its `["text"]` compatibility default
+      // downstream via ensureStrictCatalogFields; only the routing-evidence
+      // channel stays honest about what was never asserted.
+      ...(info.supportsImages === true
+        ? { inputModalities: ["text", "image"] as string[] }
+        : info.supportsImages === false
+          ? { inputModalities: ["text"] as string[] }
+          : {}),
     });
   }
   return out;
 }
 
-export function resolveAntigravityWireModelId(modelId: string): string {
+export function resolveAntigravityWireModelId(modelId: string, baseUrl?: string): string {
+  const discovered = discoveredAntigravityWireModelId(modelId, baseUrl);
+  if (discovered) return discovered;
   return Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, modelId)
     ? ANTIGRAVITY_MODEL_ALIASES[modelId]
     : modelId;
@@ -370,7 +582,33 @@ export function retiredAntigravityFlashTier(modelId: string): string | undefined
 export function resolveAntigravityEffortWireModel(
   modelId: string,
   effort?: string,
+  baseUrl?: string,
 ): { wireModelId: string; thinkingLevel?: string } {
+  const discoveredEffortWireModelId = discoveredAntigravityEffortWireModelId(modelId, effort, baseUrl);
+  if (discoveredEffortWireModelId) return { wireModelId: discoveredEffortWireModelId };
+
+  // A collapsed picker row reports ONE representative wire id (whichever tier CCA
+  // listed first), so live discovery cannot describe a ladder — it can only name a
+  // single rung. Letting it answer for a base model we already have a ladder for
+  // collapses every effort onto that one rung: `gemini-3.1-pro` low and high both
+  // became `gemini-pro-agent`, and `gemini-3.7-flash` sent thinkingLevel=low against
+  // the `-high` wire id, a request that contradicts itself. Rules 1b/2/3 below own
+  // these models; discovery answers only for ids no rule knows.
+  const hasOwnEffortLadder = Object.hasOwn(ANTIGRAVITY_THINKING_LEVEL_MODELS, modelId)
+    || Object.hasOwn(ANTIGRAVITY_EFFORT_WIRE_MAP, modelId);
+  const discoveredWireModelId = hasOwnEffortLadder
+    ? undefined
+    : discoveredAntigravityWireModelId(modelId, baseUrl);
+  if (discoveredWireModelId && (discoveredWireModelId !== modelId || isAntigravitySuffixModelId(modelId))) {
+    const defaultLevel = ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
+    return {
+      wireModelId: discoveredWireModelId,
+      ...(defaultLevel
+        ? { thinkingLevel: effort ? resolveAntigravityThinkingLevel(effort) ?? defaultLevel : defaultLevel }
+        : {}),
+    };
+  }
+
   // Rule 0: retired Flash id — Google has taken the wire id offline, so route to the
   // current generation and carry the tier the retired id encoded. This runs BEFORE the
   // suffix check because those ids are aliases, and rule 1 would drop the tier.
@@ -384,7 +622,7 @@ export function resolveAntigravityEffortWireModel(
 
   // Rule 1: suffix/compat alias — suffix IS the effort.
   if (isAntigravitySuffixModelId(modelId)) {
-    return { wireModelId: resolveAntigravityWireModelId(modelId) };
+    return { wireModelId: resolveAntigravityWireModelId(modelId, baseUrl) };
   }
 
   // Rule 1b: single-wire-id Gemini model whose tiers ride on thinkingLevel. Without
@@ -414,7 +652,7 @@ export function resolveAntigravityEffortWireModel(
   }
 
   // Rule 5: everything else.
-  return { wireModelId: resolveAntigravityWireModelId(modelId) };
+  return { wireModelId: resolveAntigravityWireModelId(modelId, baseUrl) };
 }
 
 

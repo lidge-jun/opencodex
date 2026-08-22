@@ -23,6 +23,77 @@ export interface CodexPreStreamRejection {
   alternateRetryEligible: boolean;
   resetCreditEligible: boolean;
   semanticCode?: CodexResetEligibleExhaustionCode;
+  /**
+   * Structured denial evidence for a 403. Present only when the upstream body names a
+   * workspace/entitlement denial, which proves the CREDENTIAL is valid and the account
+   * simply lacks access here (#1789). Status alone can never set this.
+   */
+  denial?: "workspace" | "entitlement";
+}
+
+/**
+ * Upstream codes that identify a WORKSPACE denial rather than a bad credential.
+ *
+ * #1789: a K12 account whose credential validates and whose WHAM usage returns 200 still
+ * gets 403 `codex_workspace_access_denied` on a routed prompt. Treating that as a credential
+ * failure tells the user to re-authenticate a credential that is already valid, and the loop
+ * repeats forever.
+ */
+const WORKSPACE_DENIAL_CODES: ReadonlySet<string> = new Set([
+  "codex_workspace_access_denied",
+  "workspace_access_denied",
+]);
+
+const ENTITLEMENT_DENIAL_CODES: ReadonlySet<string> = new Set([
+  "codex_entitlement_missing",
+  "entitlement_missing",
+]);
+
+/** Read a structured denial code out of a 403 body. Fails closed to undefined. */
+async function denialFromResponse(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<"workspace" | "entitlement" | undefined> {
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true });
+    if (!body.displaySafe || body.truncated || !body.text.trim()) return undefined;
+    if (isUnsafeJsonDocument(body.text)) return undefined;
+    const payload = JSON.parse(body.text) as unknown;
+    const code = structuredDenialCode(payload);
+    if (code === undefined) return undefined;
+    if (WORKSPACE_DENIAL_CODES.has(code)) return "workspace";
+    if (ENTITLEMENT_DENIAL_CODES.has(code)) return "entitlement";
+    return undefined;
+  } catch {
+    // Same fail-closed rule as the exhaustion classifier: an unreadable body must not
+    // downgrade a credential failure into a workspace one.
+    return undefined;
+  }
+}
+
+function ownStringField(container: Record<string, unknown>, field: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(container, field);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
+}
+
+/** Own-property `code` lookup at the top level or under `error` / `detail`. No coercion or accessors. */
+function structuredDenialCode(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  const direct = ownStringField(record, "code");
+  if (direct !== undefined) return direct;
+
+  for (const field of ["error", "detail"] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, field);
+    if (!descriptor || !("value" in descriptor)) continue;
+    const nested = descriptor.value;
+    if (nested === null || typeof nested !== "object" || Array.isArray(nested)) continue;
+    const code = ownStringField(nested as Record<string, unknown>, "code");
+    if (code !== undefined) return code;
+  }
+  return undefined;
 }
 
 const RESET_ELIGIBLE_CODES: ReadonlySet<string> = new Set(RESET_ELIGIBLE_CODE_VALUES);
@@ -205,7 +276,10 @@ export async function classifyCodexPreStreamRejection(
 ): Promise<CodexPreStreamRejection> {
   const status = response.status;
   if (status === 401) return rejection(status, "authentication-error");
-  if (status === 403) return rejection(status, "permission-error");
+  if (status === 403) {
+    const denial = await denialFromResponse(response, options.signal);
+    return { ...rejection(status, "permission-error"), ...(denial ? { denial } : {}) };
+  }
   if (TRANSIENT_SERVER_STATUSES.has(status)) return rejection(status, "transient-server-error");
   if (status !== 429 && status !== 402) return rejection(status, "other");
 

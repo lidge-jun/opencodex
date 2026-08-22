@@ -91,6 +91,18 @@ describe("Claude Desktop 3P models", () => {
     ]);
   });
 
+  test("an openai context cap reaches the Desktop writer, not just the dashboard", () => {
+    // gpt-5.4 is the authoritative 1M native, so it earns supports1m. Capping the provider
+    // at 272k has to take that away here too, or the written Desktop config promises a
+    // window the proxy will not serve (#854's effective-window contract).
+    const uncapped = generateDesktop3pModels(["gpt-5.4"], []);
+    expect(uncapped[0]).toMatchObject({ supports1m: true, prefer1m: true });
+
+    const capped = generateDesktop3pModels(["gpt-5.4"], [], undefined, 272_000);
+    expect(capped[0]!.supports1m).toBeUndefined();
+    expect(capped[0]!.prefer1m).toBeUndefined();
+  });
+
   test("passes Anthropic Claude model ids through without encoding", () => {
     const models = generateDesktop3pModels([], [
       { provider: "anthropic", id: "claude-opus-4-6" },
@@ -168,7 +180,10 @@ describe("Claude Desktop 3P models", () => {
       "claude-opus-4-6",
       desktop3pAlias("cursor", "gpt-5.6-luna"),
     ]);
-    // supports1m ONLY where an authoritative contextWindow >= 1M was provided.
+    // supports1m ONLY where an authoritative contextWindow >= 1M was provided. The routed
+    // cursor row declares 1M explicitly; the native gpt-5.6-sol row advertises 922,000 (a cap
+    // under its measured ceiling) so it must NOT claim the capability, and claude-opus-4-6
+    // was given no window at all.
     const byName = new Map(reparsed.inferenceModels.map((m: { name: string }) => [m.name, m]));
     expect((byName.get(desktop3pAlias("cursor", "gpt-5.6-luna")) as { supports1m?: boolean }).supports1m).toBe(true);
     expect((byName.get("claude-opus-4-8-ncb") as { supports1m?: boolean }).supports1m).toBeUndefined();

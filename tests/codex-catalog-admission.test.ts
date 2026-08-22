@@ -184,6 +184,25 @@ test("binds opaque config identity to the exact reference, generation, and snaps
   expect(mutated.generation).toEqual(first.generation);
 });
 
+test("ignores process-local symbol tags when binding the config snapshot identity", () => {
+  saveConfig(config());
+  const plainIdentity = captureCatalogAdmissionSnapshot(config(20200)).configIdentity;
+
+  const tagged = config(20200);
+  Object.defineProperty(tagged, Symbol("opencodex.user-cost-overlay-preservation-owner"), {
+    value: { refs: 1, config: tagged, ownedProviders: Object.keys(tagged.providers ?? {}) },
+    enumerable: true,
+    configurable: true,
+  });
+  const taggedIdentity = captureCatalogAdmissionSnapshot(tagged).configIdentity;
+
+  // The tag is process-local metadata: JSON.stringify omits it and no persist
+  // path writes it, so it must not change the durable snapshot identity. The
+  // reference identity stays per-object, matching the untagged contract.
+  expect(taggedIdentity.snapshotIdentity).toBe(plainIdentity.snapshotIdentity);
+  expect(taggedIdentity.referenceIdentity).not.toBe(plainIdentity.referenceIdentity);
+});
+
 test("rejects missing home, required, and conditional evidence keys structurally", () => {
   expect(STRUCTURALLY_INVALID_EVIDENCE_ASSIGNABILITY).toEqual([false, false, false]);
 });

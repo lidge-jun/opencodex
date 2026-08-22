@@ -3,10 +3,33 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
+
+/**
+ * A child environment with the shim's recursion-guard state stripped.
+ *
+ * Every one of these tests reasons about a shim invocation starting from depth 0, but a developer
+ * whose shell was itself launched through an installed Codex shim exports
+ * `OCX_SHIM_ACTIVE_DEPTH=1` — so the guard fires a level early and the test measures whatever
+ * ancestry the machine happened to have. CI has no shimmed ancestor, which is what let that bleed
+ * hide: green there, red on a real developer's machine.
+ *
+ * The re-entry tests are the subtle case. They assert `status === 126`, so an inherited +1 offset
+ * leaves them passing for entirely the wrong reason. Sanitizing centrally is what makes their
+ * green mean what it says.
+ *
+ * Mirrors `probeUnixShimInstall`, which already clears the same three before spawning its probe.
+ */
+function shimChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+  delete env.OCX_SHIM_ACTIVE_PID;
+  delete env.OCX_SHIM_ACTIVE_DEPTH;
+  delete env.OCX_SHIM_PROBE_ACTIVE;
+  return env;
+}
 const skipStabilityWait = () => {};
 const python3Path = process.platform === "win32"
   ? ""
@@ -288,8 +311,7 @@ exit 64
       chmodSync(misePath, 0o755);
       chmodSync(realCodexPath, 0o755);
       chmodSync(shimPath, 0o755);
-      const env = { ...process.env, PATH: prependPath(dir, process.env.PATH), OCX_SHIM_BYPASS: "1" };
-      delete env.OCX_SHIM_ACTIVE_PID;
+      const env = shimChildEnv({ PATH: prependPath(dir, process.env.PATH) ?? "", OCX_SHIM_BYPASS: "1" });
 
       const result = spawnSync(shimPath, ["--help"], {
         encoding: "utf8",
@@ -826,6 +848,101 @@ wait "$child"
     }
   });
 
+  test("Unix fresh install rolls an unprobeable original back into place", () => {
+    if (process.platform === "win32") return;
+
+    // #1625. An empty launcher is a legitimate thing for a user to own, and
+    // stableShimPathProbe deliberately returns null at zero bytes because it
+    // answers "does this look like a healthy shim". Recording the backup with
+    // that probe therefore left movedOriginalFingerprint unset, and rollback —
+    // which requires a matching fingerprint before it will restore — refused,
+    // stranding the launcher at codex.opencodex-real. Identity is metadata, not
+    // content, so the fingerprint must not depend on the file having bytes.
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-unprobeable-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-unprobeable-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const backupPath = `${codexPath}.opencodex-real`;
+    try {
+      process.env.PATH = prependPath(binDir, oldPath);
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, "", "utf8");
+      chmodSync(codexPath, 0o755);
+      setCodexShimFreshWriteHookForTests(() => {
+        throw new Error("synthetic unprobeable-original rollback");
+      });
+
+      expect(() => installCodexShim()).toThrow("synthetic unprobeable-original rollback");
+
+      // The launcher is back where the user had it, still empty and executable,
+      // and no backup residue is left behind.
+      expect(existsSync(codexPath)).toBe(true);
+      expect(readFileSync(codexPath, "utf8")).toBe("");
+      expect(lstatSync(codexPath).mode & 0o777).toBe(0o755);
+      expect(existsSync(backupPath)).toBe(false);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      setCodexShimFreshWriteHookForTests(null);
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("Unix rollback restore refuses to replace a launcher published in the restore window", () => {
+    if (process.platform === "win32") return;
+
+    // #1625 follow-up. sourceOccupied is sampled before the backup fingerprint
+    // check, so a concurrent installer can still publish a launcher at the
+    // original path afterwards. renameSync would silently delete it; the restore
+    // uses link()+unlink(), which fails EEXIST instead. Only a hook inside that
+    // window can reach this: publishing any earlier makes sourceOccupied true and
+    // skips the restore branch entirely.
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-restore-window-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-restore-window-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const backupPath = `${codexPath}.opencodex-real`;
+    const original = successfulLauncher("restore-window-original");
+    const intruder = successfulLauncher("restore-window-concurrent-installer");
+    try {
+      process.env.PATH = prependPath(binDir, oldPath);
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(codexPath, 0o755);
+      setCodexShimFreshWriteHookForTests(() => {
+        throw new Error("synthetic restore-window failure");
+      });
+      setCodexShimRollbackRestoreHookForTests(() => {
+        writeFileSync(codexPath, intruder, "utf8");
+        chmodSync(codexPath, 0o755);
+      });
+
+      expect(() => installCodexShim()).toThrow();
+
+      // The competing launcher is untouched and the user's original is still
+      // recoverable from the backup instead of having been overwritten.
+      expect(readFileSync(codexPath, "utf8")).toBe(intruder);
+      expect(existsSync(backupPath)).toBe(true);
+      expect(readFileSync(backupPath, "utf8")).toBe(original);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      setCodexShimFreshWriteHookForTests(null);
+      setCodexShimRollbackRestoreHookForTests(null);
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("Unix fresh install preserves a concurrent wrapper replacement after a successful probe", () => {
     if (process.platform === "win32") return;
 
@@ -947,8 +1064,7 @@ printf '%s\\n' child-codex
       chmodSync(bunPath, 0o755);
       chmodSync(realCodexPath, 0o755);
       chmodSync(shimPath, 0o755);
-      const env = { ...process.env, OCX_SHIM_BYPASS: "1" };
-      delete env.OCX_SHIM_ACTIVE_PID;
+      const env = shimChildEnv({ OCX_SHIM_BYPASS: "1" });
 
       const result = spawnSync(shimPath, ["--help"], {
         encoding: "utf8",

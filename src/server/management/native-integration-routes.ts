@@ -18,7 +18,9 @@
  * 011 (Claude Code), 012 (Grok).
  */
 import { loadConfig, readRuntimePort, saveConfigPreservingClaudeCode } from "../../config";
-import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeOpenAiContextWindow, visibleNativeSlugs } from "../../codex/catalog";
+import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, visibleNativeSlugs } from "../../codex/catalog";
+import { providerContextCap } from "../../providers/context-cap";
+import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import { injectGrokConfig, stripGrokConfig, type GrokInjectModel } from "../../grok/inject";
 import { inspectGrokConfig } from "../../grok/inspect";
@@ -506,7 +508,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
         // Native slugs carry their context window: without it Grok falls back
         // to its own 200k default and understates a 372k model.
         ...visibleNativeSlugs(config).map(id => {
-          const contextWindow = nativeOpenAiContextWindow(id);
+          const contextWindow = nativeOpenAiContextWindow(id, nativeContextLimits(config));
           return { id, ...(contextWindow !== undefined ? { contextWindow } : {}) };
         }),
         ...routed.map(m => ({
@@ -661,6 +663,7 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
         latest.apiKeys?.[0]?.key,
         "static",
         latest.claudeCode?.desktopProfile,
+        nativeContextLimits(latest),
       );
       if (!result.written) return postCommitRefusal(500, "claude-desktop", "write_failed", "Claude Desktop apply failed.", { desiredEnabled: latestDesiredEnabled });
       return jsonResponse({

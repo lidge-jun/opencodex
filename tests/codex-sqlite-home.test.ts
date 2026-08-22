@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 import { resolveCodexHistoryJobTarget } from "../src/codex/history-job";
 import { historyBackupPathFor } from "../src/codex/history-provider";
-import { resolveCodexSqliteHome, resolveCodexStateDbPath } from "../src/codex/paths";
+import { resolveCodexLogsDbPath, resolveCodexSqliteHome, resolveCodexStateDbPath } from "../src/codex/paths";
 
 const originalCodexHome = process.env.CODEX_HOME;
 const originalSqliteHome = process.env.CODEX_SQLITE_HOME;
@@ -82,8 +82,14 @@ describe("Codex SQLite home resolution", () => {
       cwd: () => "/work/project",
       readConfig: () => "",
     };
-    expect(resolveCodexSqliteHome(deps)).toBe("/work/sqlite");
-    expect(resolveCodexStateDbPath(deps)).toBe("/work/sqlite/state_5.sqlite");
+    // Spelled through `resolve`/`join` like every other case in this file: the
+    // assertion is that a relative setting is anchored to the cwd, not that the
+    // result is POSIX-shaped. Hardcoding "/work/sqlite" made this the one case
+    // that failed on Windows, where the same resolution yields "C:\\work\\sqlite".
+    const expectedHome = resolve("/work/sqlite");
+    expect(resolveCodexSqliteHome(deps)).toBe(expectedHome);
+    expect(resolveCodexStateDbPath(deps)).toBe(join(expectedHome, "state_5.sqlite"));
+    expect(resolveCodexLogsDbPath(deps)).toBe(join(expectedHome, "logs_2.sqlite"));
   });
 
   test("history jobs resolve the selected database and backup identity at call time", () => {

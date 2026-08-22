@@ -742,6 +742,8 @@ describe("routed Responses custom-tool compatibility", () => {
       tools: Array<Record<string, unknown>>;
       toolChoice?: unknown;
       metadata?: unknown;
+      /** The upstream call names a tool this request never declared at all (#1700). */
+      undeclared?: boolean;
     }> = [
       {
         name: "streaming none",
@@ -770,6 +772,7 @@ describe("routed Responses custom-tool compatibility", () => {
         stream: false,
         tools: [ordinaryTool],
         metadata: { nested: { type: "custom", name: "exec" } },
+        undeclared: true,
       },
     ];
 
@@ -823,6 +826,14 @@ describe("routed Responses custom-tool compatibility", () => {
           expect(clientSse).toContain("response.function_call_arguments.done");
           expect(clientSse).not.toContain("custom_tool_call");
           expect(clientSse).not.toContain("ctc_exec");
+        } else if (policyCase.undeclared) {
+          // #1700: this request's catalog holds only `ordinary` — a metadata blob that merely
+          // looks like a tool declaration declares nothing — so a call to `exec` is refused
+          // instead of relayed. The restore contract still holds either way: it never became
+          // a custom_tool_call.
+          expect(response.status).toBe(502);
+          const body = await response.json() as { error: { message: string } };
+          expect(body.error.message).toContain('undeclared client tool "exec"');
         } else {
           const body = await response.json() as { output: Array<Record<string, unknown>> };
           expect(body.output[0]).toEqual(upstreamItem);

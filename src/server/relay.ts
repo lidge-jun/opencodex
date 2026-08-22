@@ -366,6 +366,7 @@ export function trackSseForRequestLog(
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let terminalReported = false;
+  let cancelled = false;
 
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported) return;
@@ -385,8 +386,10 @@ export function trackSseForRequestLog(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          inspector.finish();
-          if (!terminalReported) reportTerminal("incomplete");
+          if (!cancelled) {
+            inspector.finish();
+            if (!terminalReported) reportTerminal("incomplete");
+          }
           inspector.dispose();
           controller.close();
           return;
@@ -394,12 +397,19 @@ export function trackSseForRequestLog(
         inspector.feed(value);
         controller.enqueue(value);
       } catch (err) {
-        if (!terminalReported) reportTerminal("incomplete");
+        // The upstream read rejected: the 200 body died mid-flight. Client
+        // cancellation is the caller's separate 499 path, so a cancel-drained
+        // pending read (cancelled=true) must not carry the truncation marker.
+        if (!cancelled && !terminalReported && logCtx?.activeAttempt) {
+          logCtx.activeAttempt.streamAborted = true;
+        }
+        if (!cancelled && !terminalReported) reportTerminal("incomplete");
         inspector.dispose();
         try { controller.error(err); } catch { /* already torn down */ }
       }
     },
     cancel(reason) {
+      cancelled = true;
       inspector.dispose();
       onCancel();
       reader.cancel(reason).catch(() => {});
@@ -593,6 +603,13 @@ export type SseInspectorHandlers = {
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
+  /**
+   * Every parsed SSE payload, delivered BEFORE any onCompletedResponse derived from that same
+   * payload. A caller that must decide on the whole turn -- not just its terminal snapshot --
+   * needs to see the incremental events, because a stream can announce an item and then close
+   * with an empty `output`.
+   */
+  onParsedPayload?: (payload: unknown) => void;
   onFirstOutput?: () => void;
   /**
    * Provider-scoped compatibility: persist the completed snapshot under the
@@ -776,6 +793,11 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     if (!reported && handlers.logCtx) {
       inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);
     }
+    // Before any terminal handling: a consumer deciding on the whole turn must observe this
+    // payload even when the terminal snapshot that follows no longer mentions it.
+    if (handlers.onParsedPayload && parsed !== undefined) {
+      try { handlers.onParsedPayload(parsed); } catch { /* inspection must never throw into the pump */ }
+    }
     reportFirstOutput.parsed(parsed);
     const status = terminalStatusFromParsed(parsed);
     if (status) sawTerminal = true;
@@ -943,6 +965,8 @@ export type InspectionConsumerOptions = {
   now?: () => number;
   /** Forward provider-scoped response-id pinning to the owned inspector. */
   pinCompletedResponseIdToFirstSeen?: boolean;
+  /** Observe every parsed SSE payload on the inspection side; see SseInspectorHandlers. */
+  onParsedPayload?: (payload: unknown) => void;
   /** Test seam for proving both public consumers dispose their owned inspector. */
   inspectorFactory?: (handlers: SseInspectorHandlers) => SseInspector;
 };
@@ -1098,6 +1122,7 @@ export function consumeForInspection(
     onTerminal,
     logCtx,
     onCompletedResponse,
+    onParsedPayload: options?.onParsedPayload,
     onFirstOutput,
     pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
   });
@@ -1122,6 +1147,10 @@ export function consumeForInspection(
         if (logCtx) {
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
+          // A truncated 200 body must not meter as a success the client never
+          // received; the router's equivalent turn carries 502 + streamAborted
+          // (codex-router #139).
+          if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         }
         onTerminal("failed", 502);
       }
@@ -1144,6 +1173,7 @@ export function consumeForResponseLogMetadata(
   const inspector = (options?.inspectorFactory ?? createSseInspector)({
     logCtx,
     onCompletedResponse,
+    onParsedPayload: options?.onParsedPayload,
     onFirstOutput,
     pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
   });

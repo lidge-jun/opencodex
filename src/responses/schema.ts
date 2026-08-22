@@ -64,6 +64,12 @@ const functionCallItemSchema = z.object({
   name: z.string().min(1),
   namespace: z.string().optional(),
   arguments: z.string().optional(),
+  // Provider-opaque metadata that must survive the round trip verbatim (issue #1735). The shape
+  // is bounded on purpose: only the one nested key we round-trip is modeled, so an unexpected
+  // payload cannot ride through as arbitrary passthrough state.
+  extra_content: z.object({
+    google: z.object({ thought_signature: z.string().optional() }).optional(),
+  }).optional(),
 });
 const functionCallOutputItemSchema = z.object({
   type: z.literal("function_call_output"),

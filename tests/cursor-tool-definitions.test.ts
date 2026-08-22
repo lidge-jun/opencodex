@@ -9,6 +9,8 @@ import {
   buildCursorToolGuidanceSystemNote,
   CURSOR_EXEC_COMMAND_INPUT_SCHEMA,
   cursorRequestAdvertisesApplyPatch,
+  cursorRequestUsesCodeMode,
+  isCursorCodeModeExecTool,
   cursorToolArgNormalizeSchema,
   cursorToolInputSchema,
   cursorToolWireName,
@@ -155,8 +157,11 @@ describe("Cursor tool definitions", () => {
       },
     } as OcxTool);
     expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
-    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "exec_command", execSchema)).toBeUndefined();
-    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "", command: "echo hi" }), "exec_command", execSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "", command: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "exec", command: "shell" }), "exec_command", execSchema)).toBe("exec");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({}), "exec_command", execSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: " ", command: "\t" }), "exec_command", execSchema)).toBeUndefined();
 
     const shellSchema = cursorToolArgNormalizeSchema({
       name: "shell_command",
@@ -168,7 +173,11 @@ describe("Cursor tool definitions", () => {
       },
     } as OcxTool);
     expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
-    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "shell_command", shellSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "", cmd: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "exec", command: "shell" }), "shell_command", shellSchema)).toBe("shell");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({}), "shell_command", shellSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: " ", command: "\t" }), "shell_command", shellSchema)).toBeUndefined();
   });
 
   test("does not alias namespaced exec_command tools", () => {
@@ -325,7 +334,11 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("current tool catalog as ground truth");
     expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Glob`, `Bash`, `LS`");
     expect(note).toContain("not an external MCP server tool");
-    expect(note).toContain("Never tell the user that shell or read access is blocked");
+    expect(note).toContain("Prefer the Codex shell bridge over Cursor-native Shell/Read");
+    expect(note).toContain("continue with the listed catalog tool `exec_command`");
+    expect(note).not.toContain("such as `shell_command` / `exec_command`");
+    expect(note).not.toContain("Never tell the user");
+    expect(note).not.toContain("silently call");
     expect(note).toContain("prefer one response containing multiple tool calls");
     expect(note).toContain("Use MCP only for explicit discovery/resource tasks");
     expect(note).toContain("not generic tool-count demos");
@@ -340,7 +353,10 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("`shell_command`");
     expect(note).toContain("`shell_command` and `exec_command` are aliases of the same bridge");
     expect(note).toContain("mcp_opencodex-responses_shell_command");
-    expect(note).toContain("Never tell the user that shell or read access is blocked");
+    expect(note).toContain("Prefer the Codex shell bridge over Cursor-native Shell/Read");
+    expect(note).toContain("continue with the listed catalog tool `shell_command`");
+    expect(note).not.toContain("Never tell the user");
+    expect(note).not.toContain("silently call");
   });
 
   test("adds host-shell-neutral PowerShell and one-retry-stop guidance (#604)", () => {
@@ -394,6 +410,25 @@ describe("Cursor tool definitions", () => {
     expect(note).not.toContain("`Read`, `Grep`, `Glob`, `Bash`, `LS`");
   });
 
+  test("treats GJC lowercase read/find/bash as covering neighboring-agent names (#1992)", () => {
+    const tools: OcxTool[] = [
+      { name: "exec_command", description: "Run", parameters: {} },
+      { name: "read", description: "Read a file", parameters: {} },
+      { name: "find", description: "Find files", parameters: {} },
+      { name: "bash", description: "Run a command", parameters: {} },
+    ];
+
+    const note = buildCursorToolGuidanceSystemNote(tools);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("available tool names are exactly `exec_command`, `read`, `find`, `bash`");
+    expect(note).toContain("This turn does not expose neighboring-agent tool names `Grep`, `LS`");
+    expect(note).not.toContain("`Read`");
+    expect(note).not.toContain("`Glob`");
+    expect(note).not.toContain("`Bash`");
+  });
+
   test("omits Cursor tool guidance when no tools are advertised", () => {
     const tools: OcxTool[] = [
       { name: "read_file", namespace: "mcp__fs", description: "Read", parameters: {} },
@@ -409,5 +444,92 @@ describe("Cursor tool definitions", () => {
 
     expect(allowedNote).toContain("`mcp__fs__write_file`");
     expect(allowedNote).not.toContain("`mcp__fs__read_file`");
+  });
+});
+
+describe("Cursor code mode tool guidance", () => {
+  const codeModeExec = (): OcxTool => ({
+    name: "exec",
+    description: "Run JavaScript code to orchestrate tool calls. Nested tools are available on the global `tools` object.",
+    parameters: {},
+    freeform: true,
+  });
+
+  test("detects code mode only when freeform exec has no bare shell bridge", () => {
+    expect(cursorRequestUsesCodeMode([codeModeExec()])).toBe(true);
+    expect(isCursorCodeModeExecTool(codeModeExec())).toBe(true);
+
+    // A non-freeform `exec` is not code mode.
+    expect(cursorRequestUsesCodeMode([{ name: "exec", description: "Run", parameters: {} }])).toBe(false);
+    // A bare shell bridge alongside it means the flat-catalog guidance still applies.
+    expect(cursorRequestUsesCodeMode([codeModeExec(), { name: "exec_command", description: "Run", parameters: {} }])).toBe(false);
+    expect(cursorRequestUsesCodeMode([{ name: "exec_command", description: "Run", parameters: {} }])).toBe(false);
+    expect(cursorRequestUsesCodeMode(undefined)).toBe(false);
+    // Tool choice that hides exec also hides code mode.
+    expect(cursorRequestUsesCodeMode([codeModeExec(), { name: "read_file", namespace: "mcp__fs", description: "R", parameters: {} }], { name: "read_file" })).toBe(false);
+  });
+
+  test("teaches the nested-helper contract instead of a top-level shell bridge", () => {
+    const note = buildCursorToolGuidanceSystemNote([codeModeExec()]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("is Codex code mode");
+    expect(note).toContain("V8 isolate");
+    expect(note).toContain("await tools.<name>(...)");
+    expect(note).toContain("await tools.exec_command({cmd: " + "\"" + "ls" + "\"" + "})");
+    expect(note).toContain("text(...)");
+    expect(note).toContain("There is no `require`");
+    expect(note).toContain("isolate global `ALL_TOOLS`");
+    expect(note).toContain("not `tools.ALL_TOOLS`");
+    expect(note).toContain("absence from the top-level catalog");
+
+    // The flat-catalog shell-bridge guidance must NOT appear: naming a top-level
+    // `exec_command` in code mode sends the model after a tool that does not exist.
+    expect(note).not.toContain("is the Codex Responses shell bridge for this turn");
+    expect(note).not.toContain("mcp_opencodex-responses_shell_command");
+    expect(note).not.toContain("For file read/search/listing, use");
+  });
+
+  test("does not forbid a separately listed apply_patch in code mode", () => {
+    const note = buildCursorToolGuidanceSystemNote([
+      codeModeExec(),
+      { name: "apply_patch", description: "Apply a patch", parameters: {}, freeform: true },
+    ]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("is Codex code mode");
+    expect(note).toContain("remains callable at the top level as usual");
+    expect(note).toContain("`apply_patch`");
+    expect(note).not.toContain("do not call `exec_command`, `shell_command`, or `apply_patch` at the top level here");
+    expect(note).toContain("do not call `exec_command` or `shell_command` at the top level here");
+  });
+
+  test("keeps other visible top-level tools callable in code mode", () => {
+    // Code mode is about how `exec` works, not a claim that the rest of the catalog is nested.
+    // A turn can advertise freeform `exec` alongside ordinary top-level tools, and describing
+    // those as non-top-level would make the model refuse tools it can actually call.
+    const note = buildCursorToolGuidanceSystemNote([
+      codeModeExec(),
+      { name: "mcp__fs__read_file", description: "Read a file", parameters: {} },
+    ]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("is Codex code mode");
+    expect(note).toContain("remains callable at the top level as usual");
+    expect(note).toContain("mcp__fs__read_file");
+    expect(note).not.toContain("they are not separate top-level tools");
+  });
+
+  test("keeps flat-catalog shell-bridge guidance when a bare bridge is advertised", () => {
+    const note = buildCursorToolGuidanceSystemNote([{ name: "exec_command", description: "Run", parameters: {} }]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("is the Codex Responses shell bridge for this turn");
+    expect(note).not.toContain("is Codex code mode");
+    expect(note).not.toContain("V8 isolate");
   });
 });

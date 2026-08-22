@@ -25,6 +25,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { providerCodexAccountMode } from "../providers/registry";
+import { sanitizeCodexReasoningEfforts } from "../reasoning-effort";
 import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
@@ -190,6 +191,27 @@ function ompProfileName(env: OpencodeLaunchEnv): string | undefined {
     throw new ClientPathError(`Invalid OMP profile "${raw}"`);
   }
   return profile;
+}
+
+/**
+ * Pi resolves its agent directory from `PI_CODING_AGENT_DIR`, falling back to
+ * `~/.pi/agent`. `ompAgentDir` below already reads that variable — OMP is a Pi
+ * derivative — so Pi's own resolver honoring it is what makes the two agree
+ * rather than a new claim about Pi's contract.
+ *
+ * A relative override is refused for the same reason MCode's and ZCode's are: a
+ * background proxy and a foreground client can have different working
+ * directories, and would otherwise disagree about which file is named.
+ */
+export function piAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.PI_CODING_AGENT_DIR?.trim();
+  if (override) return absoluteClientPath(override, home, "PI_CODING_AGENT_DIR");
+  return join(home, ".pi", "agent");
+}
+
+/** Pi's canonical custom-provider catalog. */
+export function piConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(piAgentDir(env, home), "models.json");
 }
 
 /** Resolve the global Oh My Pi agent directory using OMP's own env precedence. */
@@ -400,6 +422,59 @@ export function dshConfigPath(env: OpencodeLaunchEnv = process.env, home: string
 }
 
 /**
+ * MiniMax Code stores runtime state under `MINIMAX_DATA_DIR`, then the legacy
+ * `MAVIS_DATA_DIR`, and finally `~/.minimax`. Relative overrides are refused
+ * because a background proxy and a foreground client can have different CWDs.
+ */
+export function mcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const primary = env.MINIMAX_DATA_DIR?.trim();
+  if (primary) return absoluteClientPath(primary, home, "MINIMAX_DATA_DIR");
+  const legacy = env.MAVIS_DATA_DIR?.trim();
+  if (legacy) return absoluteClientPath(legacy, home, "MAVIS_DATA_DIR");
+  return join(home, ".minimax");
+}
+
+export function mcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(mcodeHomeDir(env, home), "config.yaml");
+}
+
+/**
+ * ZCode (Z.ai's desktop client) keeps everything under `~/.zcode`; custom
+ * providers live in `v2/config.json`. `ZCODE_DATA_DIR` mirrors the other
+ * clients' override convention; relative overrides are refused for the same
+ * reason as MCode's.
+ */
+export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.ZCODE_DATA_DIR?.trim();
+  if (override) return absoluteClientPath(override, home, "ZCODE_DATA_DIR");
+  return join(home, ".zcode");
+}
+
+export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+/**
+ * Prime Agent resolves its agent directory from `PRIME_AGENT_CODING_AGENT_DIR`
+ * — the brand-derived spelling of the `PI_CODING_AGENT_DIR` that `ompAgentDir`
+ * already honors, because the agent builds that variable name from its own
+ * `piConfig.name` — and otherwise falls back to `~/.prime/agent`. Relative
+ * overrides are refused for the same reason as MCode's and ZCode's: a
+ * background proxy and a foreground client can have different working
+ * directories.
+ */
+export function primeAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.PRIME_AGENT_CODING_AGENT_DIR?.trim();
+  if (override) return absoluteClientPath(override, home, "PRIME_AGENT_CODING_AGENT_DIR");
+  return join(home, ".prime", "agent");
+}
+
+/** Prime Agent's canonical custom-provider catalog. */
+export function primeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(primeAgentDir(env, home), "models.json");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -438,7 +513,10 @@ export type ExportClientId =
   | "openclaw"
   | "kimi"
   | "gajae"
-  | "dsh";
+  | "dsh"
+  | "mcode"
+  | "zcode"
+  | "prime";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -664,6 +742,15 @@ export interface PiModelEntry {
   input: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** Advertised when the catalog row carries a non-empty effort ladder. */
+  reasoning?: true;
+  /**
+   * Constrains pi's own level scale (minimal..max) to the declared ladder: members map to
+   * themselves, everything else is hidden (`null`). Without it pi would offer levels the
+   * ladder does not contain — harmless for provider-config ladders (the proxy clamps those
+   * at the wire) but a real 400 risk for custom-row ladders, which are advertisement-only.
+   */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 export interface PiProviderBlock {
@@ -832,20 +919,82 @@ export interface DshGeneratedConfig {
   };
 }
 
+export interface McodeProviderBlock {
+  name: "OpenCodex";
+  kind: "custom";
+  enabled: true;
+  api: "anthropic-messages";
+  options: {
+    apiKey: string;
+    baseURL: string;
+    authMode: "api-key";
+  };
+  models: Record<string, McodeModelEntry>;
+}
+
+export interface McodeModelEntry {
+  /** MCode uses this value for context accounting and compaction. */
+  limit?: { context: number };
+  /** MCode exposes these exact levels in `/model` and sends the selected effort. */
+  thinking?: { effortOptions: string[] };
+}
+
+export interface McodeGeneratedConfig {
+  custom_provider: Record<string, McodeProviderBlock>;
+}
+
+/**
+ * ZCode's `~/.zcode/v2/config.json` provider entry (observed schema, validated
+ * live against ZCode 3.7.7 / 3.8.1). `kind: "openai-compatible"` selects the
+ * OpenAI Chat Completions protocol, which the proxy serves at `/v1/chat/completions`.
+ * `apiKeyRequired` keeps ZCode's UI from prompting for a key it does not need on
+ * loopback; the serialized key is always the non-secret loopback placeholder.
+ */
+export interface ZcodeModelEntry {
+  name?: string;
+  limit?: { context: number; output?: number };
+  modalities: { input: string[]; output: string[] };
+}
+
+export interface ZcodeProviderBlock {
+  name: "OpenCodex";
+  kind: "openai-compatible";
+  enabled: true;
+  source: "custom";
+  options: {
+    apiKey: string;
+    baseURL: string;
+    apiKeyRequired: true;
+  };
+  models: Record<string, ZcodeModelEntry>;
+}
+
+export interface ZcodeGeneratedConfig {
+  provider: Record<string, ZcodeProviderBlock>;
+}
+
 /**
  * Pi's `~/.pi/agent/models.json` shape. `models` is an ARRAY (identity lives in `id`),
  * unlike OpenCode's keyed object.
  *
- * Two fields are deliberately absent. `cost` requires all four price fields and we have
- * no price data at all, so emitting zeros would assert every routed model is free.
- * `reasoning` is a boolean in Pi while our catalog carries an effort list — mapping one
- * to the other would be a guess.
+ * Two fields were deliberately absent once. `cost` still is: it requires all four price
+ * fields and we have no price data at all, so emitting zeros would assert every routed
+ * model is free. `reasoning` used to be omitted because Pi's boolean and the catalog's
+ * effort ladder did not obviously map — but a NON-EMPTY ladder is the catalog's own
+ * statement that the model accepts reasoning parameters (adapters honor `reasoning_effort`),
+ * and an empty or absent ladder is the statement that it does not. Emitting `reasoning:
+ * true` exactly for rows with a ladder is therefore not a guess; it is what makes Pi's
+ * effort control appear for routed models at all. The export also emits a `thinkingLevelMap`
+ * that hides every pi level outside the declared ladder, so pi never offers (and sends) an
+ * effort the ladder does not contain — custom-row ladders are catalog advertisement only
+ * and get no wire clamp, so this map is what keeps pi honest for those. Users who need a
+ * different mapping can still hand-tune `thinkingLevelMap` afterwards.
  *
  * Pi's input enum IS verified: its documented model configuration accepts only
  * `text` and `image`, and a validation failure yields an EMPTY model config
  * rather than dropping the offending entry — one bad value costs every routed
- * model. The rest of this contract (omitting `cost` and `reasoning`) is still
- * ours rather than a claim about Pi's acceptance.
+ * model. The rest of this contract (omitting `cost`) is still ours rather than
+ * a claim about Pi's acceptance.
  */
 function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
@@ -862,6 +1011,21 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
       name: exportModelLabel(model),
       input,
     };
+    if (Array.isArray(model.reasoningEfforts) && model.reasoningEfforts.length > 0) {
+      entry.reasoning = true;
+      const efforts = model.reasoningEfforts;
+      entry.thinkingLevelMap = {
+        // pi's off level maps to the declared `none` sentinel (the proxy omits the
+        // reasoning parameter for it); hidden when the ladder does not declare none.
+        off: efforts.includes("none") ? "none" : null,
+        minimal: efforts.includes("minimal") ? "minimal" : null,
+        low: efforts.includes("low") ? "low" : null,
+        medium: efforts.includes("medium") ? "medium" : null,
+        high: efforts.includes("high") ? "high" : null,
+        xhigh: efforts.includes("xhigh") ? "xhigh" : null,
+        max: efforts.includes("max") ? "max" : efforts.includes("ultra") ? "ultra" : null,
+      };
+    }
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
@@ -1116,6 +1280,96 @@ function buildDshClientConfig(ctx: ExportContext): DshGeneratedConfig {
 }
 
 /**
+ * MiniMax Code's `provider add` command persists custom providers under
+ * `custom_provider.<id>`. Its current model schema reads `limit.context` for
+ * context accounting and `thinking.effortOptions` for the `/model` effort
+ * control. Do not emit the removed `thinking.effort` / `defaultEffort` fields:
+ * MCode 0.1.6 migrates those into options and keeps the selected effort in the
+ * session. Do not emit `defaultModel` either: connecting a client must not
+ * silently replace the user's current model selection.
+ */
+function buildMcodeClientConfig(ctx: ExportContext): McodeGeneratedConfig {
+  const models: Record<string, McodeModelEntry> = {};
+  for (const model of normalizeExportModels(ctx.models)) {
+    const entry: McodeModelEntry = {};
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) entry.limit = { context };
+    // `none` is an internal Codex catalog sentinel, not an MCode effort. MCode
+    // forwards every option as `output_config.effort` while keeping adaptive
+    // thinking enabled, and the Anthropic ingress deliberately accepts only
+    // minimal..ultra. Advertising `none` would therefore create a selectable
+    // value that cannot disable reasoning and is not forwarded as an effort.
+    const efforts = sanitizeCodexReasoningEfforts(model.reasoningEfforts)
+      ?.filter(effort => effort !== "none");
+    if (efforts && efforts.length > 0) entry.thinking = { effortOptions: efforts };
+    models[model.namespaced] = entry;
+  }
+  return {
+    custom_provider: {
+      [OPENCODE_PROVIDER_ID]: {
+        name: "OpenCodex",
+        kind: "custom",
+        enabled: true,
+        api: "anthropic-messages",
+        options: {
+          apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, ""),
+          authMode: "api-key",
+        },
+        models,
+      },
+    },
+  };
+}
+
+/**
+ * ZCode dials the OpenAI Chat Completions surface (`openai-compatible`), which
+ * appends `/chat/completions` to `baseURL`. We supply `baseURL` with the `/v1`
+ * suffix so requests land on `/v1/chat/completions`. Model ids are the proxy's canonical
+ * `provider/id` selectors, which `/v1/chat/completions` resolves directly. Context
+ * limits follow the authoritative-window rule: a model without one ships
+ * without `limit` rather than guessing. Modalities are ZCode's observed
+ * `text`-floor vocabulary; image-capable rows advertise image input.
+ */
+function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig {
+  const models: Record<string, ZcodeModelEntry> = {};
+  for (const model of normalizeExportModels(ctx.models)) {
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    if (input === null) continue;
+    const entry: ZcodeModelEntry = {
+      name: exportModelLabel(model),
+      modalities: { input, output: ["text"] },
+    };
+    // `limit.context` follows the authoritative-window rule. `output` is
+    // deliberately absent: ZCode's schema makes it optional and we have no
+    // authoritative output budget to assert (reviewer finding: an emitted
+    // stand-in would be a guessed capability, exactly what "no metadata is
+    // guessed" forbids).
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) {
+      entry.limit = { context };
+    }
+    models[model.namespaced] = entry;
+  }
+  return {
+    provider: {
+      [OPENCODE_PROVIDER_ID]: {
+        name: "OpenCodex",
+        kind: "openai-compatible",
+        enabled: true,
+        source: "custom",
+        options: {
+          apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, "") + "/v1",
+          apiKeyRequired: true,
+        },
+        models,
+      },
+    },
+  };
+}
+
+/**
  * Per-client model counts, read back off the SERIALIZED document rather than
  * recomputed from the input rows: `modelsWithoutLimits` drives a GUI line about
  * the bytes the user actually receives, so a parallel reimplementation of the
@@ -1162,6 +1416,16 @@ function summarizeGajae(document: unknown): { modelCount: number; modelsWithoutL
 function summarizeDsh(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = (document as DshGeneratedConfig | undefined)?.["llm-pi-ai"]?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
+function summarizeMcode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = Object.values((document as McodeGeneratedConfig | undefined)?.custom_provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => !model.limit).length };
+}
+
+function summarizeZcode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = Object.values((document as ZcodeGeneratedConfig | undefined)?.provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => !model.limit).length };
 }
 
 /** One fragment at `path`, built from this client's own document. */
@@ -1220,6 +1484,34 @@ function buildDshContribution(ctx: ExportContext): ManagedContribution {
   return singleFragment("dsh", ["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID], doc["llm-pi-ai"].providers[OPENCODE_PROVIDER_ID]);
 }
 
+function buildMcodeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildMcodeClientConfig(ctx);
+  return singleFragment("mcode", ["custom_provider", OPENCODE_PROVIDER_ID], doc.custom_provider[OPENCODE_PROVIDER_ID]);
+}
+
+function buildZcodeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildZcodeClientConfig(ctx);
+  return singleFragment("zcode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
+}
+
+/**
+ * Prime Agent (PrimeIntellect) is the pi coding agent shipped under a different
+ * brand rather than a lookalike: its package declares a `piConfig` block, and
+ * the agent derives its config directory (`.prime/agent`) and env prefix from
+ * that block alone. `models.json` is therefore the SAME contract Pi reads, so
+ * this client reuses Pi's builder and summarizer verbatim. Restating the shape
+ * here would create a second copy of one fact, which is exactly how the
+ * "anything that is not OpenCode must be Pi" summarizer bug happened.
+ *
+ * The one thing that could still differ is the path we own, and it does not:
+ * Prime keeps our entries under the same `providers.<id>` key. So the only new
+ * code is stamping the right client id on the ownership record.
+ */
+function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildPiClientConfig(ctx);
+  return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   opencode: {
     id: "opencode",
@@ -1237,7 +1529,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   pi: {
     id: "pi",
     filename: "pi-models.json",
-    destination: () => join(homedir(), ".pi", "agent", "models.json"),
+    destination: env => piConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
     build: buildPiClientConfig,
@@ -1327,6 +1619,50 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     format: "yaml",
     summarize: summarizeDsh,
     buildContribution: buildDshContribution,
+    loopbackOnly: true,
+  },
+  mcode: {
+    id: "mcode",
+    filename: "mcode-config.yaml",
+    destination: env => mcodeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "MiniMax Code reads a non-secret placeholder from config.yaml; loopback needs no key.",
+    build: buildMcodeClientConfig,
+    format: "yaml",
+    summarize: summarizeMcode,
+    buildContribution: buildMcodeContribution,
+    // MCode persists this credential and exposes no dedicated proxy-admission
+    // header field, so real keys are never serialized and remote binds refuse.
+    loopbackOnly: true,
+  },
+  zcode: {
+    id: "zcode",
+    filename: "config.json",
+    destination: env => zcodeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "ZCode reads a non-secret placeholder from v2/config.json; loopback needs no key.",
+    build: buildZcodeClientConfig,
+    format: "json",
+    summarize: summarizeZcode,
+    buildContribution: buildZcodeContribution,
+    // ZCode persists the credential in its own file and has no dedicated
+    // proxy-admission header field, so real keys are never serialized and
+    // remote binds refuse — same reasoning as MCode.
+    loopbackOnly: true,
+  },
+  prime: {
+    id: "prime",
+    filename: "prime-models.json",
+    destination: env => primeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Prime Agent reads a non-secret placeholder from models.json; loopback needs no key.",
+    build: buildPiClientConfig,
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: buildPrimeContribution,
+    // Prime's provider block does accept `headers`, so a dedicated admission
+    // header has somewhere to live, but remote credential wiring is deferred
+    // from this initial loopback-only integration — same stance as OMP's.
     loopbackOnly: true,
   },
 };

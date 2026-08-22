@@ -8,12 +8,25 @@
 export class ChatCompletionsRequestError extends Error {}
 
 type Rec = Record<string, unknown>;
+type ChatCompletionsRoutingBody = Rec & { model: string; messages: unknown[] };
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+/** Validate only the fields needed before Chat routing, without projecting the body. */
+export function assertChatCompletionsRoutingBody(raw: unknown): asserts raw is ChatCompletionsRoutingBody {
+  if (!isRec(raw)) throw new ChatCompletionsRequestError("request body must be a JSON object");
+  if (typeof raw.model !== "string" || raw.model.length === 0) {
+    throw new ChatCompletionsRequestError("model is required");
+  }
+  if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
+    throw new ChatCompletionsRequestError("messages must be a non-empty array");
+  }
+}
+
 const OUTPUT_CONFIG_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+const OUTPUT_CONFIG_SUMMARIES = new Set(["auto", "concise", "detailed", "none"]);
 
 function contentToText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -86,17 +99,8 @@ function pushSystemText(parts: string[], content: unknown): void {
   if (text) parts.push(text);
 }
 
-function toolCallsToItems(toolCalls: unknown, input: Rec[]): void {
+function toolCallsToItems(toolCalls: unknown, input: Rec[], knownNameByCallId: Map<string, string>): void {
   if (!Array.isArray(toolCalls)) return;
-  // Recover names from earlier function_call items in the same transcript when a client
-  // re-sends tool_calls with only id/arguments (replace-style merge lost function.name).
-  const knownNameByCallId = new Map<string, string>();
-  for (const item of input) {
-    if (!isRec(item) || item.type !== "function_call") continue;
-    if (typeof item.call_id === "string" && typeof item.name === "string" && item.name.length > 0) {
-      knownNameByCallId.set(item.call_id, item.name);
-    }
-  }
   for (const raw of toolCalls) {
     if (!isRec(raw)) continue;
     const fn = isRec(raw.function) ? raw.function : null;
@@ -206,20 +210,33 @@ function resolveReasoningEffort(raw: Rec): string | undefined {
 }
 
 /**
+ * Chat Completions clients (Grok Build, Copilot, OpenAI-compatible SDKs) expect
+ * `delta.reasoning_content` whenever the model thinks. The internal Responses
+ * parser hides thinking unless `reasoning.summary` is set and is not `"none"`.
+ * Map the common Chat Completions knobs onto that field. When the client only
+ * sent an effort, default the summary to `"auto"` so traces are not swallowed.
+ */
+function resolveReasoningSummary(raw: Rec): string | undefined {
+  if (isRec(raw.reasoning) && typeof raw.reasoning.summary === "string" && OUTPUT_CONFIG_SUMMARIES.has(raw.reasoning.summary)) {
+    return raw.reasoning.summary;
+  }
+  if (raw.include_reasoning === false) return "none";
+  if (raw.include_reasoning === true) return "auto";
+  return undefined;
+}
+
+/**
  * Translate an OpenAI Chat Completions request body into a /v1/responses request body.
  * Throws ChatCompletionsRequestError (-> 400) on malformed input.
  */
 export function chatCompletionsToResponsesBody(raw: unknown): Rec {
-  if (!isRec(raw)) throw new ChatCompletionsRequestError("request body must be a JSON object");
-  if (typeof raw.model !== "string" || raw.model.length === 0) {
-    throw new ChatCompletionsRequestError("model is required");
-  }
-  if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
-    throw new ChatCompletionsRequestError("messages must be a non-empty array");
-  }
+  assertChatCompletionsRoutingBody(raw);
 
   const systemParts: string[] = [];
   const input: Rec[] = [];
+  // Recover replace-style tool calls incrementally instead of rebuilding the
+  // call-id index from the entire translated transcript for every message.
+  const knownNameByCallId = new Map<string, string>();
 
   for (const msg of raw.messages) {
     if (!isRec(msg)) continue;
@@ -237,7 +254,7 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
       case "assistant": {
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
-        if (msg.tool_calls !== undefined) toolCallsToItems(msg.tool_calls, input);
+        if (msg.tool_calls !== undefined) toolCallsToItems(msg.tool_calls, input, knownNameByCallId);
         break;
       }
       case "tool": {
@@ -282,11 +299,18 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   if (raw.stop !== undefined) body.stop = raw.stop;
   if (typeof raw.user === "string") body.user = raw.user;
   if (typeof raw.parallel_tool_calls === "boolean") body.parallel_tool_calls = raw.parallel_tool_calls;
+  if (typeof raw.service_tier === "string") body.service_tier = raw.service_tier;
   if (typeof raw.prompt_cache_key === "string") body.prompt_cache_key = raw.prompt_cache_key;
   if (raw.metadata !== undefined) body.metadata = raw.metadata;
 
   const effort = resolveReasoningEffort(raw);
-  if (effort) body.reasoning = { effort };
+  const summary = resolveReasoningSummary(raw);
+  if (effort || summary !== undefined) {
+    body.reasoning = {
+      ...(effort ? { effort } : {}),
+      summary: summary ?? "auto",
+    };
+  }
 
   const text = responseFormatToText(raw.response_format);
   if (text) body.text = text;

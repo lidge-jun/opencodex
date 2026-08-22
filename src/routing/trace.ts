@@ -2,7 +2,7 @@
  * Route decision trace: bounded, versioned, privacy-safe evidence of WHY a
  * provider/model/account was selected for a request (RI-01).
  *
- * Contract rules (devlog/_plan/260804_router_intelligence/000_master_plan.md):
+ * Contract rules (devlog/_fin/260804_router_intelligence/000_master_plan.md):
  * - One trace per routing decision; fallback EXECUTION attempts stay in the
  *   usage entry's existing `attempts[]` array, never in this trace.
  * - Never persists prompts, message bodies, tool payloads, credentials,

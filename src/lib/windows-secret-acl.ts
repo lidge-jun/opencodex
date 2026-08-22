@@ -31,6 +31,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
+import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
 import {
   resolveCurrentWindowsPrincipal,
   resolveCurrentWindowsPrincipalAsync,
@@ -273,22 +274,55 @@ export interface IcaclsResult {
 type IcaclsRunner = (args: string[], timeoutMs: number) => IcaclsResult;
 type AsyncIcaclsRunner = (args: string[], timeoutMs: number) => Promise<IcaclsResult>;
 
+function resolveIcaclsExecutable(): string {
+  // Same authority as schtasks/powershell: never take icacls from PATH.
+  // A bun-shim or stripped PATH makes `icacls.exe` throw ENOENT, which used to
+  // surface as "filesystem may not support per-user NTFS ACLs".
+  return resolveTrustedWindowsIcaclsExe();
+}
+
+function spawnFailedResult(): IcaclsResult {
+  return { success: false, exitCode: null, timedOut: false, stdout: "" };
+}
+
+/**
+ * Spawn icacls asynchronously, or return null when the executable cannot be
+ * launched. The pipe/ignore stdio literals stay inferred here so `stdout` keeps
+ * its `ReadableStream` type instead of widening to the generic default.
+ */
+function trySpawnIcacls(args: string[]) {
+  try {
+    return Bun.spawn([resolveIcaclsExecutable(), ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+      windowsHide: true,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
   // Bun.spawnSync with windowsHide: Node execFileSync has hung under the GUI/proxy even
   // with windowsHide, and console-subsystem tools flash a visible window otherwise.
-  const result = Bun.spawnSync(["icacls.exe", ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-  return {
-    success: result.success,
-    exitCode: result.exitCode,
-    timedOut: result.exitedDueToTimeout ?? false,
-    stdout: result.stdout ? result.stdout.toString() : "",
-  };
+  try {
+    const result = Bun.spawnSync([resolveIcaclsExecutable(), ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+      timeout: timeoutMs,
+      windowsHide: true,
+    });
+    return {
+      success: result.success,
+      exitCode: result.exitCode,
+      timedOut: result.exitedDueToTimeout ?? false,
+      stdout: result.stdout ? result.stdout.toString() : "",
+    };
+  } catch {
+    return spawnFailedResult();
+  }
 }
 
 /**
@@ -297,12 +331,8 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
  * we still await process exit before classifying so settlement is confirmed.
  */
 async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
-  const proc = Bun.spawn(["icacls.exe", ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    windowsHide: true,
-  });
+  const proc = trySpawnIcacls(args);
+  if (!proc) return spawnFailedResult();
   let timedOutByUs = false;
   const timer = setTimeout(() => {
     timedOutByUs = true;

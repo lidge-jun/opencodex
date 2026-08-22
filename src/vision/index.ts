@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import type { OcxConfig, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent } from "../types";
 import { modelInList } from "../types";
+import { modelRecordValue } from "../reasoning-effort";
 import type { VisionReasoningEffort } from "../reasoning-effort";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
 import { normalizeVisionReasoningForModel } from "./reasoning";
 import type { CodexAuthContext } from "../codex/auth-context";
-import { getAccountSet } from "../oauth/store";
+import { resolveSidecarAuth } from "../sidecar/auth";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
@@ -18,6 +19,22 @@ import {
 } from "./timeout-bounds";
 
 export { describeImage } from "./describe";
+
+/**
+ * True when the model is explicitly known to be text-only — either listed in
+ * `noVisionModels` or declared with `modelInputModalities` that exclude "image".
+ * Returns false for unknown models (no evidence either way) so they fall through
+ * to native image passthrough, which is the safe default for an unclassified model.
+ */
+export function isModelTextOnly(
+  provider: OcxProviderConfig,
+  modelId: string,
+): boolean {
+  if (modelInList(provider.noVisionModels, modelId)) return true;
+  const modalities = modelRecordValue(provider.modelInputModalities, modelId);
+  if (Array.isArray(modalities) && modalities.length > 0 && !modalities.includes("image")) return true;
+  return false;
+}
 export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-describe";
 export {
   BASELINE_VISION_MODELS,
@@ -198,15 +215,14 @@ export interface AnthropicVisionProvider {
   provider: OcxProviderConfig;
 }
 
-/** First enabled Anthropic OAuth provider whose active stored account is not marked for reauth. */
+/**
+ * First enabled Anthropic OAuth provider whose active stored account is not marked for reauth.
+ * Delegates to the shared sidecar auth module (#2188) — same predicate as web-search.
+ */
 export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionProvider | undefined {
-  for (const [providerName, provider] of Object.entries(config.providers)) {
-    if (provider.disabled === true || provider.adapter !== "anthropic" || provider.authMode !== "oauth") continue;
-    const accountSet = getAccountSet(providerName);
-    const active = accountSet?.accounts.find(account => account.id === accountSet.activeAccountId);
-    if (active && active.needsReauth !== true) return { providerName, provider };
-  }
-  return undefined;
+  const auth = resolveSidecarAuth(config);
+  if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
 }
 
 export function resolveVisionBackend(
@@ -245,10 +261,10 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
 export function shouldResolveOpenAiVisionSidecar(
   config: OcxConfig,
   provider: OcxProviderConfig,
-  modelId: string,
-  parsed: OcxParsedRequest,
+ modelId: string,
+ parsed: OcxParsedRequest,
 ): boolean {
-  if (!modelInList(provider.noVisionModels, modelId) || !messagesHaveImage(parsed)) return false;
+  if (!isModelTextOnly(provider, modelId) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
   return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
@@ -275,7 +291,7 @@ export function planVisionSidecar(
   parsed: OcxParsedRequest,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): VisionPlan | undefined {
-  if (!modelInList(provider.noVisionModels, modelId)) return undefined;
+  if (!isModelTextOnly(provider, modelId)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;

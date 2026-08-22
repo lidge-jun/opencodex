@@ -12,7 +12,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
+import { getProviderRegistryEntry, providerCodexAccountMode } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
@@ -38,6 +38,7 @@ import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexMod
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import {
+  ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -45,6 +46,8 @@ import {
   isNativeOpenAiCapabilityAliasModel,
   nativeOpenAiCapabilitySourceSlug,
 } from "./native-models";
+import { cachedAvailableAccountGatedNativeModels } from "../model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   NATIVE_DAYBREAK_BLUE_MODEL,
@@ -99,16 +102,64 @@ export function isUnsupportedOpenAiNativeSlug(slug: string): boolean {
   return /^(?:gpt|codex)-/.test(slug);
 }
 
-export const NATIVE_GPT56_CONTEXT_WINDOW = 372_000;
+/**
+ * Advertised context for the Codex-login native GPT-5.6 family.
+ *
+ * This is an OPERATING CAP, not the hard ceiling — the same shape upstream uses. The live
+ * catalog reports `context_window: 272000` against a `max_context_window: 872000` for these
+ * slugs, and gpt-5.4 runs 272,000 against 1,000,000: the advertised window is always well
+ * inside what the model can take.
+ *
+ * The hard ceiling here was measured on 2026-08-17 against a real Codex-login account:
+ * `POST /backend-api/codex/responses` admitted 921,508 input tokens and refused 922,013 with
+ * `error.code: context_length_exceeded` on sol, terra and luna alike.
+ *
+ * Codex spends `context_window * effective_context_window_percent`, which defaults to 95%
+ * (codex-rs `openai_models.rs` / `turn_context.rs`). So this value yields a 875,900-token
+ * budget and leaves ~46k of headroom under the measured ceiling. An earlier release shipped
+ * 1,050,000 here, which spent 997,500 — past what the upstream accepts.
+ *
+ * Do NOT back-solve this from the ceiling (970,000 would land the budget at 921,500, inside
+ * the 1,840-token gap between the last success and the first refusal). The 95% is a safety
+ * margin to keep, not a discount to cancel out.
+ *
+ * Evidence: devlog/_plan/260817_native_gpt56_1m_context/001_measurement_evidence.md
+ * and 014_final_922k_with_margin.md.
+ */
+export const NATIVE_GPT56_CONTEXT_WINDOW = 272_000;
 
-export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: number; maxContextWindow?: number }> = {
+/**
+ * Hard ceiling: the largest input the native GPT-5.6 family actually accepts (measured).
+ *
+ * Equal to the advertised window above rather than below it, because that window is already
+ * capped under this ceiling. The clamp stays because routed and API-key rows carry the same
+ * family at a 1,050,000 window, where 90% (945,000) WOULD overshoot this limit.
+ */
+export const NATIVE_GPT56_MAX_INPUT_TOKENS = 922_000;
+
+/** User-facing 1M opt-in: the largest window the native 5.6 family may advertise. */
+export const NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW = NATIVE_GPT56_MAX_INPUT_TOKENS;
+
+const NATIVE_GPT56_FAMILY = new Set<string>([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  NATIVE_DAYBREAK_BLUE_MODEL,
+]);
+
+export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: number; maxContextWindow?: number; maxInputTokens?: number }> = {
   "gpt-5.5": { contextWindow: 272_000, maxContextWindow: 272_000 },
   "gpt-5.4": { contextWindow: 1_000_000, maxContextWindow: 1_000_000 },
   "gpt-5.3-codex-spark": { contextWindow: 100_000, maxContextWindow: 100_000 },
-  "gpt-5.6-sol": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
-  "gpt-5.6-terra": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
-  "gpt-5.6-luna": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
-  [NATIVE_DAYBREAK_BLUE_MODEL]: { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
+  "gpt-5.6-sol": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
+  "gpt-5.6-terra": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
+  "gpt-5.6-luna": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
+  // Daybreak Blue borrows Sol's capability metadata and rides the same family contract.
+  // Unlike sol/terra/luna its window was NOT measured here: this account cannot reach it
+  // (`400 "The 'gpt-daybreak-blue-latest' model is not supported when using Codex with a
+  // ChatGPT account."`), so the promotion rests on a report from an account that has
+  // access rather than on a probe. Treat it as the weaker evidence of the four.
+  [NATIVE_DAYBREAK_BLUE_MODEL]: { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
 };
 
 const PINNED_UPSTREAM_MODELS: Map<string, RawEntry> = new Map(
@@ -132,12 +183,98 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
   }),
 );
 
-export function nativeOpenAiContextWindow(slug: string, contextCap?: number): number | undefined {
+/**
+ * The user-owned levers that set a native window, carried together.
+ *
+ * For the GPT-5.6 family these may raise the Codex 272k default up to the measured
+ * 922k ceiling. Other native slugs still only ever lower.
+ *
+ * This travels as an ARGUMENT rather than module state on purpose. `grok/sync.ts` runs in
+ * the `ocx ensure` parent process, outside the server, so an injected global would never
+ * reach it — that failure is recorded in
+ * devlog/_plan/260817_native_gpt56_1m_context/006_root_cause_replan.md. Every call site
+ * already holds a config or a cap, so passing one more field costs nothing.
+ *
+ * A bare number is still accepted for the many call sites that only know the cap.
+ */
+export interface NativeContextLimits {
+  /** `providerContextCaps.openai` */
+  readonly cap?: number;
+  /** `providers.openai.contextWindow` — a floor-wide user override. */
+  readonly providerWindow?: number;
+  /** `providers.openai.modelContextWindows` — per-model, wins over `providerWindow`. */
+  readonly modelWindows?: Readonly<Record<string, number>>;
+}
+
+export type NativeContextLimitsInput = NativeContextLimits | number | undefined;
+
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function asLimits(input: NativeContextLimitsInput): NativeContextLimits {
+  if (input === undefined) return {};
+  return typeof input === "number" ? { cap: input } : input;
+}
+
+/** Read both levers out of a config once, for call sites that hold one. */
+export function nativeContextLimits(
+  config: Pick<OcxConfig, "providers" | "providerContextCaps">,
+): NativeContextLimits {
+  const provider = config.providers?.[OPENAI_CODEX_PROVIDER_ID];
+  const modelWindows: Record<string, number> = {};
+  for (const [slug, value] of Object.entries(provider?.modelContextWindows ?? {})) {
+    const window = positiveInt(value);
+    if (window !== undefined) modelWindows[slug] = window;
+  }
+  return {
+    ...(positiveInt(providerContextCap(config, OPENAI_CODEX_PROVIDER_ID)) !== undefined
+      ? { cap: providerContextCap(config, OPENAI_CODEX_PROVIDER_ID) }
+      : {}),
+    ...(positiveInt(provider?.contextWindow) !== undefined ? { providerWindow: provider!.contextWindow } : {}),
+    ...(Object.keys(modelWindows).length > 0 ? { modelWindows } : {}),
+  };
+}
+
+/** Apply the user levers to an authoritative value. */
+function narrowToLimits(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
+  if (raw === undefined) return undefined;
+  const limits = asLimits(input);
+  const overlay = positiveInt(limits.modelWindows?.[slug]) ?? positiveInt(limits.providerWindow);
+  const cap = positiveInt(limits.cap);
+  if (NATIVE_GPT56_FAMILY.has(slug)) {
+    const ceiling = NATIVE_GPT56_MAX_INPUT_TOKENS;
+    const chosen = overlay ?? cap ?? raw;
+    const window = Math.min(chosen, ceiling);
+    return overlay !== undefined && cap !== undefined ? Math.min(window, cap) : window;
+  }
+  const narrowed = overlay === undefined ? raw : Math.min(raw, overlay);
+  // 922k is the GPT-5.6 1M opt-in, not a request to shrink gpt-5.4's 1M window.
+  if (cap === NATIVE_GPT56_MAX_INPUT_TOKENS) return narrowed;
+  return applyProviderContextCap(narrowed, cap) ?? narrowed;
+}
+
+export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLimitsInput): number | undefined {
   const raw = NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.contextWindow
     ?? (typeof PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.context_window === "number"
       ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
       : undefined);
-  return applyProviderContextCap(raw, contextCap) ?? raw;
+  return narrowToLimits(raw, slug, limits);
+}
+
+/**
+ * Largest input a native slug accepts, or undefined when no separate limit is known
+ * (the caller then falls back to the context window).
+ *
+ * A provider context cap lowers this too: a capped 272k window must not keep advertising a
+ * 922k input ceiling, or the cap would be cosmetic on every input-side surface.
+ */
+export function nativeOpenAiMaxInputTokens(slug: string, limits?: NativeContextLimitsInput): number | undefined {
+  const raw = NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.maxInputTokens;
+  if (raw === undefined) return undefined;
+  const window = nativeOpenAiContextWindow(slug, limits);
+  const narrowed = narrowToLimits(raw, slug, limits) ?? raw;
+  return window === undefined ? narrowed : Math.min(narrowed, window);
 }
 
 export function nativeInputModalities(slug: string): string[] {
@@ -250,13 +387,28 @@ export function desktopVisibleNativeSlugs(
   ]);
 }
 
-export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
+export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps" | "providers">): Array<{ slug: string; disabled: boolean; contextWindow?: number; maxInputTokens?: number }> {
   const disabled = disabledNativeSlugs(config);
   const shadowed = configuredNativeAliasSlugs(config);
-  const openaiContextCap = providerContextCap(config, OPENAI_CODEX_PROVIDER_ID);
-  return NATIVE_OPENAI_MODELS.filter(slug => !shadowed.has(slug)).map(slug => {
-    const contextWindow = nativeOpenAiContextWindow(slug, openaiContextCap);
-    return { slug, disabled: disabled.has(slug), ...(contextWindow !== undefined ? { contextWindow } : {}) };
+  // Both user levers, not just the cap: a per-model window set from the dashboard has to show
+  // up on the row the dashboard itself renders.
+  const limits = nativeContextLimits(config);
+  const bareEligibleAccountIds = providerCodexAccountMode(
+    OPENAI_CODEX_PROVIDER_ID,
+    config.providers?.[OPENAI_CODEX_PROVIDER_ID],
+  ) === "direct" ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined;
+  const availableGated = cachedAvailableAccountGatedNativeModels(Date.now(), bareEligibleAccountIds);
+  return NATIVE_OPENAI_MODELS
+    .filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableGated.has(slug))
+    .filter(slug => !shadowed.has(slug)).map(slug => {
+    const contextWindow = nativeOpenAiContextWindow(slug, limits);
+    const maxInputTokens = nativeOpenAiMaxInputTokens(slug, limits);
+    return {
+      slug,
+      disabled: disabled.has(slug),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
+    };
   });
 }
 
@@ -333,7 +485,11 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
 
 export function nativeOpenAiSlugs(): string[] {
   const live = catalogNativeSlugs();
-  return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+  const availableGated = cachedAvailableAccountGatedNativeModels();
+  const candidates = live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+  return candidates.filter(slug => (
+    !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableGated.has(slug)
+  ));
 }
 
 const ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX = /^(?:gpt-|o1-|o3-|o4-)/;

@@ -17,7 +17,7 @@ import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
-import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -292,10 +292,61 @@ export class UnsupportedOAuthProviderError extends Error {
 }
 
 export class OAuthLoginRequiredError extends Error {
+  readonly provider: string;
+
   constructor(provider: string) {
     super(`Not logged in to ${provider}. Run: ocx login ${provider}`);
     this.name = "OAuthLoginRequiredError";
+    this.provider = provider;
   }
+}
+
+export class OAuthProviderPublicationError extends Error {
+  constructor() {
+    super("OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.");
+    this.name = "OAuthProviderPublicationError";
+  }
+}
+
+export class OAuthReauthIdentityMismatchError extends Error {
+  constructor() {
+    super("Signed-in account does not match the selected account. Sign in with the same account.");
+    this.name = "OAuthReauthIdentityMismatchError";
+  }
+}
+
+export class OAuthReauthIdentityUnverifiedError extends Error {
+  constructor() {
+    super("Could not verify signed-in account identity for reauth.");
+    this.name = "OAuthReauthIdentityUnverifiedError";
+  }
+}
+
+class OAuthLoginSupersededError extends Error {
+  constructor() {
+    super("OAuth login was superseded before credential persistence");
+    this.name = "OAuthLoginSupersededError";
+  }
+}
+
+/** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
+export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
+  if (error instanceof OAuthMutationBusyError) {
+    return error.message === "OAuth mutation queue wait timed out"
+      ? "OAuth mutation queue wait timed out"
+      : "OAuth mutation queue is busy";
+  }
+  if (
+    (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
+    || error instanceof OAuthProviderPublicationError
+    // Reauth identity outcomes carry fixed, account-free remediation text. Dropping them to the
+    // generic message hides WHICH failure the user must fix (sign in with the selected account).
+    || error instanceof OAuthReauthIdentityMismatchError
+    || error instanceof OAuthReauthIdentityUnverifiedError
+    || error instanceof OAuthTokenRefreshBusyError
+    || error instanceof OAuthTokenRefreshStaleError
+  ) return error.message;
+  return "OAuth authentication failed. Check the OpenCodex account status and retry.";
 }
 
 function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
@@ -784,7 +835,16 @@ export function buildModelsRequest(
     undefined,
     copilotApiBaseUrl,
   );
-  const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
+  // Model discovery is an upstream request like any other, so it carries the same registry
+  // static headers the inference path does. Without this a provider is identified correctly
+  // when it answers a completion but anonymously when it lists its own models, which is the
+  // kind of split fingerprint an upstream rate limiter reads as two different clients.
+  const registryStaticHeaders = providerMatchesRegistryTransport(providerName, effectiveProvider)
+    ? getProviderRegistryEntry(providerName)?.staticHeaders
+    : undefined;
+  const headers: Record<string, string> = {
+    ...(mergeRegistryStaticHeaders(registryStaticHeaders, effectiveProvider.headers) ?? {}),
+  };
   const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
     providerName,
     prov,
@@ -1052,6 +1112,7 @@ interface RunLoginDeps {
   settleKiroLoginTransaction?: typeof settleKiroLoginTransaction;
   removeAccount?: typeof removeAccount;
   setActiveAccount?: typeof setActiveAccount;
+  assertCurrentOwner?: () => void;
 }
 
 /** Roll back only accounts created by this forced login, preserving concurrent refreshes of others. */
@@ -1101,6 +1162,7 @@ export async function runLogin(
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
   const settleKiroTransaction = deps.settleKiroLoginTransaction ?? settleKiroLoginTransaction;
   try {
+    deps.assertCurrentOwner?.();
     // Validate the provider row before credential persistence. A namespace claimed during the
     // credential write is handled again below before the latest row is re-upserted.
     if (provider !== "chatgpt") {
@@ -1111,7 +1173,7 @@ export async function runLogin(
       const existing = getAccountCredential(provider, opts.reauthAccountId);
       if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
       if (!existing.accountId && !existing.email) {
-        throw new Error("Could not verify signed-in account identity for reauth.");
+        throw new OAuthReauthIdentityUnverifiedError();
       }
       const identityMatches = existing.accountId && cred.accountId
         ? existing.accountId === cred.accountId
@@ -1119,12 +1181,15 @@ export async function runLogin(
           ? existing.email.toLowerCase() === cred.email.toLowerCase()
           : false;
       if (!identityMatches) {
-        throw new Error("Signed-in account does not match the selected account. Sign in with the same account.");
+        throw new OAuthReauthIdentityMismatchError();
       }
-      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred);
+      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred, {
+        assertBeforePersist: deps.assertCurrentOwner,
+      });
     } else {
       await (deps.saveCredential ?? saveCredential)(provider, cred, {
         preserveIdentityless: opts?.forceLogin === true,
+        assertBeforePersist: deps.assertCurrentOwner,
       });
     }
     if (provider !== "chatgpt") {
@@ -1136,10 +1201,7 @@ export async function runLogin(
         provider,
       );
       if (lateCollision) {
-        throw new Error(
-          `${lateCollision}. The credential for "${provider}" was saved, but the provider entry was not written. `
-          + "Rename the account selector, then re-run the login.",
-        );
+        throw new OAuthProviderPublicationError();
       }
       upsertOAuthProvider(latestConfig, provider);
       saveLatestConfig(latestConfig);
@@ -1194,6 +1256,7 @@ export async function runLogin(
  */
 const loginState = new Map<string, { error?: string; done: boolean }>();
 const loginAbort = new Map<string, AbortController>();
+const kiroLoginSettling = new Set<string>();
 
 /** Pending paste for a login in progress: either a waiter or a stashed early submission. */
 interface ManualCodeSlot {
@@ -1362,13 +1425,14 @@ export async function startLoginFlow(
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const existing = loginState.get(provider);
-  if (existing && !existing.done) {
+  if ((existing && !existing.done) || (provider === "kiro" && kiroLoginSettling.has(provider))) {
     throw new Error(`A login for ${provider} is already in progress`);
   }
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: false });
   const abort = new AbortController();
   loginAbort.set(provider, abort);
+  if (provider === "kiro") kiroLoginSettling.add(provider);
   return new Promise((resolve, reject) => {
     let urlResolved = false;
     const ctrl: OAuthController = {
@@ -1381,7 +1445,16 @@ export async function startLoginFlow(
       onManualCodeInput: (expectedState?: string) => waitForManualLoginCode(provider, abort.signal, expectedState),
       signal: abort.signal,
     };
+    const abandonIfNotOwner = (error?: unknown): boolean => {
+      if (loginAbort.get(provider) === abort) return false;
+      if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
+      return true;
+    };
     const settle = async (error?: unknown): Promise<void> => {
+      // Cancellation deletes this controller and records its own terminal result. A late provider
+      // rejection (or an older flow settling after a replacement starts) must not overwrite that
+      // state or delete the replacement flow's controller/manual-code slot.
+      if (abandonIfNotOwner(error)) return;
       let finalError = error;
       try {
         await lifecycle?.onSettled?.();
@@ -1390,6 +1463,7 @@ export async function startLoginFlow(
         // runtime config. For an already-failed login, keep the original recovery error.
         if (finalError === undefined) finalError = settleError;
       }
+      if (abandonIfNotOwner(finalError)) return;
       if (finalError === undefined) {
         loginAbort.delete(provider);
         clearManualCodeSlot(provider);
@@ -1403,22 +1477,28 @@ export async function startLoginFlow(
       const e = finalError;
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = publicOAuthAuthenticationErrorMessage(e);
       loginState.set(provider, { done: true, error: msg });
       if (!urlResolved) reject(e);
     };
     // Background: runLogin persists the credential + provider entry to disk. The lifecycle hook
     // lets a long-lived server config adopt that settled state before clients observe done=true.
-    void runLogin(provider, ctrl, opts).then(
+    const assertCurrentOwner = (): void => {
+      if (loginAbort.get(provider) !== abort) throw new OAuthLoginSupersededError();
+    };
+    void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
       () => settle(),
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
+      if (abandonIfNotOwner(e)) return;
       loginAbort.delete(provider);
       clearManualCodeSlot(provider);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = publicOAuthAuthenticationErrorMessage(e);
       loginState.set(provider, { done: true, error: msg });
       if (!urlResolved) reject(e);
+    }).finally(() => {
+      if (provider === "kiro") kiroLoginSettling.delete(provider);
     });
   });
 }

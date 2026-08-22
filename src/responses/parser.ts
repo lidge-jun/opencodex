@@ -9,17 +9,36 @@ import type {
   OcxThinkingContent,
   OcxTool,
   OcxToolCall,
+  OcxReasoningReplayScopeRef,
 } from "../types";
-import { namespacedToolName } from "../types";
+import { namespacedToolName, toolChoiceCandidates } from "../types";
 import { responsesRequestSchema } from "./schema";
-import { compactionItemToText } from "./compaction";
+import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
+import { lookupReplayThoughtSignature } from "./thought-signature-replay";
+import { compactionItemToText, isCompactionItemType } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
+import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Wrap a remembered proxy-side signature as provider metadata for a replayed tool call.
+ *
+ * The scope is REQUIRED for a hit. `parseRequest` runs before the route and account are
+ * chosen, so a caller that has not yet bound a replay scope gets nothing rather than a
+ * signature belonging to some other thread that happened to reuse the same `call_id`.
+ */
+function replayThoughtSignatureMetadata(
+  callId: string,
+  scope: OcxReasoningReplayScopeRef | undefined,
+): { google: { thoughtSignature: string } } | undefined {
+  const signature = lookupReplayThoughtSignature(callId, scope);
+  return signature ? { google: { thoughtSignature: signature } } : undefined;
 }
 
 type InputBlock =
@@ -151,43 +170,53 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
     if (namespace) tool.namespace = namespace;
     out.push(tool);
   };
+  const pushCustom = (t: Record<string, unknown>, namespace?: string) => {
+    // Freeform custom tools are lowered to a single string `input` because chat models cannot
+    // emit Responses grammar payloads directly. Keep tool-specific input guidance scoped to the
+    // tool that owns it: leaking apply_patch syntax into `exec` or another freeform tool teaches
+    // routed models that the nested helper name is itself a callable top-level tool.
+    const inputDescription = t.name === "apply_patch"
+      ? "Raw tool input. For apply_patch, begin exactly with `*** Begin Patch` (no trailing `***`), then use its standard patch envelope."
+      : "Raw freeform input for this tool.";
+    const tool: OcxTool = {
+      name: t.name as string,
+      description: (t.description as string) ?? "",
+      parameters: { type: "object", properties: { input: { type: "string", description: inputDescription } }, required: ["input"] },
+      freeform: true,
+    };
+    if (namespace) tool.namespace = namespace;
+    out.push(tool);
+  };
   for (const t of tools) {
     if (!isObj(t)) continue;
+    if (t.type === "function" && isObj(t.function) && typeof t.function.name === "string" && t.function.name.length > 0) {
+      pushFn(t.function as Record<string, unknown>);
+      continue;
+    }
     if (t.type === "function" && typeof t.name === "string") {
       pushFn(t);
     } else if (t.type === "namespace" && Array.isArray(t.tools)) {
-      // MCP tools arrive grouped under a namespace tool; flatten the inner function tools so
-      // chat-completions models receive them (round-trip restores the namespace in the bridge).
-      const ns = typeof t.name === "string" ? t.name : undefined;
+      // Codex 0.147 groups its ordinary client tools under the reserved `functions` namespace,
+      // including freeform custom tools such as code-mode `exec`. Those children are still
+      // top-level Responses tools, so flatten them without a namespace. Other namespace groups
+      // are MCP-style and keep their namespace for round-trip routing.
+      const builtinFunctions = t.name === "functions";
+      const ns = typeof t.name === "string" && !builtinFunctions ? t.name : undefined;
       for (const inner of t.tools as unknown[]) {
         if (isObj(inner) && inner.type === "function" && typeof inner.name === "string") pushFn(inner, ns);
+        else if (isObj(inner) && inner.type === "custom" && typeof inner.name === "string") pushCustom(inner, ns);
       }
     }
     else if (t.type === "custom" && typeof t.name === "string") {
-      // Freeform custom tool (e.g. apply_patch). Chat models can't emit a lark grammar, so expose a
-      // function with a single string `input` carrying the raw tool body; the bridge relays the model's
-      // call back as a custom_tool_call (Codex's freeform handler rejects a function_call → fatal abort).
-      out.push({
-        name: t.name,
-        description: (t.description as string) ?? "",
-        parameters: { type: "object", properties: { input: { type: "string", description: "Raw tool input. For apply_patch, begin exactly with `*** Begin Patch` (no trailing `***`), then use its standard patch envelope." } }, required: ["input"] },
-        freeform: true,
-      });
+      pushCustom(t);
     }
     else if (t.type === "tool_search") {
       // Client-executed tool discovery — the gateway to deferred tools (subagents, extra MCP tools).
       // Expose as a function so chat models can call it; the bridge relays it as a tool_search_call.
       out.push({
         name: "tool_search",
-        description: (t.description as string) ?? "Search for additional tools to load for the next turn.",
-        parameters: (isObj(t.parameters) ? t.parameters : {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "Search query for tools to load." },
-            limit: { type: "number", description: "Maximum number of tools to return." },
-          },
-          required: ["query"],
-        }) as Record<string, unknown>,
+        description: toolSearchDescription(t),
+        parameters: normalizeParameters(toolSearchParameters(t)),
         toolSearch: true,
       });
     }
@@ -293,7 +322,40 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-export function parseRequest(body: unknown): OcxParsedRequest {
+/**
+ * Namespace a custom tool was declared under, by its bare name.
+ *
+ * A `custom_tool_call` echoed back by the client carries only the bare name — the bridge
+ * emits `{"type":"custom_tool_call","name":"exec"}` even when the tool was declared as
+ * `mcp__functions__exec`. Without this lookup the namespace is lost on the return trip,
+ * and the adapters replay history through `namespacedToolName(namespace, name)`, which
+ * then produces a bare `exec` the provider may not have. Ordinary `function_call` items
+ * do not need this: they carry `namespace` on the wire.
+ */
+function customToolNamespaces(tools: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!Array.isArray(tools)) return out;
+  for (const spec of tools) {
+    if (!isObj(spec) || spec.type !== "namespace" || !Array.isArray(spec.tools)) continue;
+    const namespace = typeof spec.name === "string" ? spec.name : undefined;
+    // Codex 0.147 groups ordinary client tools under the reserved `functions` namespace and
+    // buildTools deliberately flattens those without a namespace. Mirror that here, or the
+    // reconstruction would invent a namespace the request never advertised.
+    if (!namespace || namespace === "functions") continue;
+    for (const inner of spec.tools) {
+      if (!isObj(inner) || inner.type !== "custom" || typeof inner.name !== "string") continue;
+      // Ambiguous bare names are already rejected upstream, so first declaration wins.
+      if (!out.has(inner.name)) out.set(inner.name, namespace);
+    }
+  }
+  return out;
+}
+
+export function parseRequest(
+  body: unknown,
+  parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef },
+): OcxParsedRequest {
+  const replayCacheScope = parseOptions?.replayCacheScope;
   const replayedInputPrefixLength = previousResponseReplayPrefixLength(body);
   const parsed = responsesRequestSchema.safeParse(body);
   if (!parsed.success) {
@@ -302,6 +364,9 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   const data = parsed.data;
   const now = Date.now();
   const messages: OcxMessage[] = [];
+  // Built before the item loop: a custom_tool_call echoed back in `input` needs the
+  // namespace from the request's own tool catalog to survive the round trip.
+  const customToolNamespacesByName = customToolNamespaces(data.tools);
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
@@ -369,7 +434,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         continue;
       }
 
-      if (effectiveType === "compaction" || effectiveType === "compaction_summary" || effectiveType === "context_compaction") {
+      if (isCompactionItemType(effectiveType)) {
         // A stored summary from a previous compaction. Decode our ocx1 envelope into plain text so
         // the routed model keeps the compacted context; real OpenAI-encrypted blobs degrade to a note.
         // `context_compaction` (encrypted_content optional) is codex-rs's local-compaction marker;
@@ -498,7 +563,7 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "function_call") {
-        const call = item as { id?: string; call_id: string; name: string; arguments?: string; namespace?: string };
+        const call = item as { id?: string; call_id: string; name: string; arguments?: string; namespace?: string; extra_content?: unknown };
         // Tolerate empty/non-JSON arguments (e.g. a no-arg tool call serialized as "") instead of
         // throwing — a single poisoned history item would otherwise 400 every subsequent turn.
         let args: Record<string, unknown> = {};
@@ -519,16 +584,32 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           type: "toolCall", id: call.call_id, name: call.name, arguments: args,
           ...(call.namespace ? { namespace: call.namespace } : {}),
         };
+        // Provider-opaque metadata (e.g. a Gemini thought signature) travels with the call so a
+        // history-replayed or previous_response_id turn rebuilds the same signed part instead of
+        // depending on the same-process replay cache (issue #1735). Real clients do not echo
+        // extra_content on replay, so fall back to the proxy-side store keyed by call_id.
+        const providerMetadata = providerMetadataFromResponsesFunctionCall(call)
+          ?? (typeof call.call_id === "string"
+            ? replayThoughtSignatureMetadata(call.call_id, replayCacheScope)
+            : undefined);
+        if (providerMetadata) toolCall.providerMetadata = providerMetadata;
         assistantHolderWithReasoning().content.push(toolCall);
         continue;
       }
 
       if (effectiveType === "custom_tool_call") {
         const call = item as { id?: string; call_id: string; name: string; input: string };
+        const remembered = typeof call.call_id === "string" ? replayThoughtSignatureMetadata(call.call_id, replayCacheScope) : undefined;
+        // Reconstruct the namespace the request declared this tool under. The wire item
+        // carries only the bare name, so without this the round trip loses it and adapters
+        // replay the call as an unnamespaced tool the provider may not expose.
+        const customNamespace = customToolNamespacesByName.get(call.name);
         const toolCall: OcxToolCall = {
           type: "toolCall", id: call.call_id, name: call.name,
           arguments: { input: call.input ?? "" },
           customWireName: call.name,
+          ...(customNamespace ? { namespace: customNamespace } : {}),
+          ...(remembered ? { providerMetadata: remembered } : {}),
         };
         assistantHolderWithReasoning().content.push(toolCall);
         continue;
@@ -541,9 +622,11 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         const callId = call.call_id ?? call.id;
         if (callId) {
           const command = Array.isArray(call.action?.command) ? call.action.command : [];
+          const remembered = replayThoughtSignatureMetadata(callId, replayCacheScope);
           assistantHolderWithReasoning().content.push({
             type: "toolCall", id: callId, name: "shell",
             arguments: command.length > 0 ? { command } : {},
+            ...(remembered ? { providerMetadata: remembered } : {}),
           });
         }
         continue;
@@ -562,9 +645,11 @@ export function parseRequest(body: unknown): OcxParsedRequest {
         // history stays complete (otherwise the model re-issues tool_search forever).
         const call = item as { id?: string; call_id?: string; arguments?: unknown };
         const callId = call.call_id ?? call.id ?? "";
+        const remembered = callId ? replayThoughtSignatureMetadata(callId, replayCacheScope) : undefined;
         assistantHolderWithReasoning().content.push({
           type: "toolCall", id: callId, name: "tool_search",
           arguments: isObj(call.arguments) ? call.arguments : {},
+          ...(remembered ? { providerMetadata: remembered } : {}),
         });
         continue;
       }
@@ -637,6 +722,15 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   const declaredTools = buildTools(data.tools as unknown[] | undefined) ?? [];
   const loadedTools = buildTools(loadedToolSpecs) ?? [];
   const loadedToolNames = new Set(loadedTools.map(t => namespacedToolName(t.namespace, t.name)));
+  const wireOwners = new Map<string, OcxTool>();
+  for (const tool of [...declaredTools, ...loadedTools]) {
+    const wireName = namespacedToolName(tool.namespace, tool.name);
+    const previous = wireOwners.get(wireName);
+    if (previous && (previous.namespace !== tool.namespace || previous.name !== tool.name || previous.freeform !== tool.freeform || previous.toolSearch !== tool.toolSearch)) {
+      throw new Error(`ambiguous tool catalog: multiple logical tools map to wire name ${wireName}`);
+    }
+    wireOwners.set(wireName, tool);
+  }
   const seenTools = new Set<string>();
   const mergedTools = [...declaredTools, ...loadedTools]
     .filter(t => {
@@ -662,6 +756,14 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
   }
   const tc = mapToolChoice(data.tool_choice);
+  if (tc && typeof tc === "object") {
+    const selectors = "allowedTools" in tc ? tc.allowedTools : [tc.name];
+    for (const selector of selectors) {
+      if (toolChoiceCandidates(mergedTools, selector).length > 1) {
+        throw new Error(`ambiguous tool_choice name: ${selector}`);
+      }
+    }
+  }
   if (tc !== undefined) options.toolChoice = tc;
   if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   // Upstream codex-rs converts "ultra" to "max" at the inference boundary (core/src/client.rs

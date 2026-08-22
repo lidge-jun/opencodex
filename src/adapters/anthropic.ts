@@ -1,4 +1,5 @@
 import type { IncomingMeta, ProviderAdapter } from "./base";
+import { createToolCallIdAllocator, type ToolCallIdAllocator } from "./tool-call-id";
 import { debugDroppedFrame } from "../lib/debug";
 import type {
   AdapterEvent,
@@ -19,6 +20,7 @@ import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
+import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
@@ -558,7 +560,7 @@ function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: 
   return { toWire: (name) => name, fromWire: (name) => name };
 }
 
-function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknown> {
+function toAnthropicToolResult(msg: OcxToolResultMessage, wireCallId: string): Record<string, unknown> {
   // Anthropic tool_result accepts a string OR content blocks — render images natively
   // (e.g. Codex view_image output) instead of dropping them.
   let content: string | unknown[];
@@ -573,10 +575,15 @@ function toAnthropicToolResult(msg: OcxToolResultMessage): Record<string, unknow
   }
   return {
     type: "tool_result",
-    tool_use_id: msg.toolCallId,
+    tool_use_id: wireCallId,
     content,
     ...(msg.isError ? { is_error: true } : {}),
   };
+}
+
+function unrepresentableToolCallText(tc: OcxToolCall, wireName: string): string {
+  const args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
+  return `[tool_use without a usable id: ${wireName}]\n${args}`;
 }
 
 function orphanToolResultText(msg: OcxToolResultMessage): string {
@@ -587,10 +594,80 @@ function orphanToolResultText(msg: OcxToolResultMessage): string {
   return `[tool_result without adjacent tool_use: ${label}]\n${content}`;
 }
 
+/**
+ * AgentRouter answers 400 `content-blocked` when the first user message is not in English
+ * (#2074), while the same request in English returns 200. The gateway is inspecting the opening
+ * user content, so an Anthropic `system` string cannot reach it — the framing has to sit in the
+ * first user turn.
+ */
+const AGENTROUTER_LANGUAGE_PREAMBLE =
+  "[Instruction: Process the user request below and respond in the appropriate language.]";
+
+/**
+ * Exact host match, not a substring.
+ *
+ * A `hostname.includes("agentrouter")` test also matches `notagentrouter.example` and
+ * `agentrouter.org.attacker.example`, which would let an unrelated destination silently
+ * receive an injected instruction block. A prompt mutation keyed on a provider's identity
+ * must be keyed on that identity exactly.
+ */
+function isAgentRouterEndpoint(baseUrl: string): boolean {
+  try {
+    const { hostname } = new URL(baseUrl);
+    return hostname === "agentrouter.org" || hostname.endsWith(".agentrouter.org");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prepend the framing as its OWN text block instead of splicing it into the user's string.
+ *
+ * The distinction matters: rewriting `content` to `${marker}\n\n${original}` edits what the
+ * user wrote, and every downstream consumer — logs, retries, an upstream that echoes the turn —
+ * then sees a sentence the user never typed as if they had. A separate leading block carries the
+ * same signal to the filter while the original text survives byte-for-byte.
+ *
+ * Only the first user turn is framed, because only the first is what the gateway rejects.
+ */
+function applyAgentRouterLanguageFraming(messages: unknown[]): void {
+  const firstUser = messages.find(
+    (m): m is { role: string; content: unknown } =>
+      typeof m === "object" && m !== null && (m as { role?: unknown }).role === "user",
+  );
+  if (!firstUser) return;
+  const preamble = { type: "text", text: AGENTROUTER_LANGUAGE_PREAMBLE };
+  if (typeof firstUser.content === "string") {
+    firstUser.content = firstUser.content === ""
+      ? [preamble]
+      : [preamble, { type: "text", text: firstUser.content }];
+    return;
+  }
+  if (!Array.isArray(firstUser.content)) return;
+  // Idempotence is keyed on the LEADING block being exactly the marker. A substring test would
+  // let a user who quotes the marker later in their own prompt suppress the framing entirely.
+  const [head] = firstUser.content as { type?: unknown; text?: unknown }[];
+  if (head?.type === "text" && head.text === AGENTROUTER_LANGUAGE_PREAMBLE) return;
+  (firstUser.content as unknown[]).unshift(preamble);
+}
+
 function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
 ): { system: string | undefined; messages: unknown[] } {
+  // One allocator for the whole request: a tool_result must resolve to the SAME wire id its
+  // call got, and two distinct raw ids must never collapse into one. Conforming ids are claimed
+  // first so a rewritten id can never squat on an id another call legitimately owns.
+  const callIds = createToolCallIdAllocator();
+  for (const message of parsed.context.messages) {
+    if (message.role === "assistant") {
+      for (const part of (message as OcxAssistantMessage).content) {
+        if (part.type === "toolCall") callIds.reserve((part as OcxToolCall).id);
+      }
+    } else if (message.role === "toolResult") {
+      callIds.reserve((message as OcxToolResultMessage).toolCallId);
+    }
+  }
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(
     parsed.context.tools,
     parsed.options.toolChoice,
@@ -642,8 +719,17 @@ function messagesToAnthropicFormat(
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
             const flatName = namespacedToolName(tc.namespace, tc.name);
-            toolUseIds.push(tc.id);
-            toolUses.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
+            // Normalized here, and identically for the matching tool_result above, so a history
+            // replayed from another provider path keeps its call/result pairing (#1767).
+            // No raw fallback: restoring an empty/unusable id puts a value on the wire Anthropic
+            // rejects. An unrepresentable call becomes text instead, and its result follows it there.
+            const wireCallId = callIds.allocate(tc.id);
+            if (wireCallId === undefined) {
+              preface.push({ type: "text", text: unrepresentableToolCallText(tc, toolNames.toWire(flatName)) });
+              continue;
+            }
+            toolUseIds.push(wireCallId);
+            toolUses.push({ type: "tool_use", id: wireCallId, name: toolNames.toWire(flatName), input: tc.arguments });
           }
         }
         // Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
@@ -659,9 +745,13 @@ function messagesToAnthropicFormat(
           let j = i + 1;
           while (j < parsed.context.messages.length && parsed.context.messages[j].role === "toolResult") {
             const tr = parsed.context.messages[j] as OcxToolResultMessage;
-            if (requiredIds.has(tr.toolCallId) && !seen.has(tr.toolCallId)) {
-              resultBlocks.push(toAnthropicToolResult(tr));
-              seen.add(tr.toolCallId);
+            // Match on the WIRE id. requiredIds holds normalized ids, so comparing the raw result id
+            // made every rewritten pair lose its result to orphan text and gain a synthetic
+            // missing-result block. lookup() never mints an id: a result with no call stays orphan.
+            const wireResultId = callIds.lookup(tr.toolCallId);
+            if (wireResultId !== undefined && requiredIds.has(wireResultId) && !seen.has(wireResultId)) {
+              resultBlocks.push(toAnthropicToolResult(tr, wireResultId));
+              seen.add(wireResultId);
             } else {
               orphanBlocks.push({ type: "text", text: orphanToolResultText(tr) });
             }
@@ -710,7 +800,7 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
     ? new Set(parsed.options.toolChoice.allowedTools)
     : undefined;
   const tools = allowed
-    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed))
+    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed, parsed.context.tools))
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   const converted = tools.map(t => ({
@@ -721,35 +811,8 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
   return converted;
 }
 
-// Codex multi-agent v2 stamps a Responses-only `encrypted: true` marker on
-// collaboration tool schemas (openai/codex 5f4d06ef; issue #85). It is an
-// annotation for the ChatGPT backend only. Anthropic input_schema is strict
-// JSON Schema; strip the marker defensively everywhere it can appear as a
-// schema keyword, while preserving properties literally named "encrypted".
-const ENCRYPTED_MARKER_NAME_BAG_KEYS = new Set(["properties", "patternProperties", "$defs", "definitions"]);
-const ENCRYPTED_MARKER_LITERAL_VALUE_KEYS = new Set(["const", "default", "enum", "examples"]);
-
-function stripEncryptedMarker(node: unknown, inNameBag = false): unknown {
-  if (Array.isArray(node)) return node.map(item => stripEncryptedMarker(item));
-  if (!node || typeof node !== "object") return node;
-
-  const out: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-    if (inNameBag) {
-      out[key] = stripEncryptedMarker(value);
-    } else if (key !== "encrypted") {
-      out[key] = ENCRYPTED_MARKER_LITERAL_VALUE_KEYS.has(key)
-        ? value
-        : stripEncryptedMarker(value, ENCRYPTED_MARKER_NAME_BAG_KEYS.has(key));
-    }
-  }
-
-  return out;
-}
-
 function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
-  const stripped = stripEncryptedMarker(schema);
+  const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
     ? stripped as Record<string, unknown>
     : {};
@@ -827,6 +890,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      // Before image normalization, so the framing block is present for every downstream pass.
+      if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
       // (anthropic-image-normalize.ts); the guard below remains the deterministic backstop.
       // imageTierBias > 0 = upstream-413 tightened retry (030): start every image one tier lower.
@@ -983,6 +1048,18 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
         emittedDone = true;
+        // An `error` stop reason is a failed generation, not a stop. Forwarding it as `done`
+        // lets the turn report success and install replacement history on a compaction turn.
+        if (pendingStopReason === "error") {
+          yield {
+            type: "error",
+            message: "upstream ended the turn with stop_reason \"error\"",
+            status: 502,
+            errorType: "upstream_error",
+            usage: usageFromAnthropic(pendingUsage),
+          };
+          return;
+        }
         yield {
           type: "done",
           usage: usageFromAnthropic(pendingUsage),
@@ -1137,6 +1214,21 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (!emittedDone) {
         // Fail closed on transport EOF. Compatible providers may omit message_stop after message_delta.stop_reason.
         if (pendingStopReason !== undefined) {
+          // Same rule as emitDone: an `error` stop reason is a failed generation, not a stop.
+          // This branch bypasses emitDone entirely (it exists for providers that close after
+          // message_delta without message_stop), so the check has to be repeated here or the
+          // EOF route silently reports success.
+          if (pendingStopReason === "error") {
+            emittedDone = true;
+            yield {
+              type: "error",
+              message: "upstream ended the turn with stop_reason \"error\"",
+              status: 502,
+              errorType: "upstream_error",
+              usage: usageFromAnthropic(pendingUsage),
+            };
+            return;
+          }
           const stopReason = pendingStopReason === "max_tokens"
             ? "max_tokens"
             : pendingStopReason === "refusal" || pendingStopReason === "content_filter"
@@ -1204,6 +1296,21 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
       const usage = json.usage as Record<string, number> | undefined;
       const stopReason = typeof json.stop_reason === "string" ? json.stop_reason : undefined;
+      // An Anthropic-compatible upstream can forward an `error` stop reason verbatim. As a
+      // `done` it reads as a clean completion, so the turn reports success and — on a compaction
+      // turn — installs its partial summary as replacement history (#422). Usage is preserved:
+      // a failed turn still consumed tokens.
+      if (stopReason === "error") {
+        events.push({
+          type: "error",
+          message: "upstream ended the turn with stop_reason \"error\"",
+          status: 502,
+          errorType: "upstream_error",
+          usage: usageFromAnthropic(usage),
+        });
+        retainTranslatedEventBatch(events, budget);
+        return events;
+      }
       events.push({
         type: "done",
         usage: usageFromAnthropic(usage),

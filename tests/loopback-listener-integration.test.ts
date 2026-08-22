@@ -22,6 +22,7 @@ import {
   setEphemeralPortAllocatorForTests,
 } from "../src/server/ports";
 import type { OcxConfig } from "../src/types";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -148,7 +149,10 @@ describe("unauthenticated loopback listener", () => {
     } finally {
       await server.stop(true);
     }
-  });
+    // A real proxy plus a real listener, and the refusal is only proven by letting the
+    // connection attempt reach its own 2s socket timeout. Together those exceed Bun's
+    // 5s default on a loaded Windows box, where the test measured 5.04s.
+  }, SERVER_BUDGET_MS);
 
   test("serves only the four allowlisted routes, using each route's real method", async () => {
     const loopbackPort = await freePort();
@@ -611,6 +615,7 @@ describe("Codex injection targets the loopback listener", () => {
       expect(written).toContain("http://127.0.0.1:10200/v1");
       expect(written).not.toContain("http://127.0.0.1:10100/v1");
       expect(written).not.toContain("env_http_headers");
+      expect(written).not.toContain("env_key");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

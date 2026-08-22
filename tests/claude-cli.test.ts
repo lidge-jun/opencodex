@@ -96,8 +96,10 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBeUndefined();
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
     expect(env.DISABLE_COMPACT).toBeUndefined();
-    // Auto-context IS on by default (devlog 020): compact window injected at 350k.
-    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("350000");
+    // Auto-context IS on by default (devlog 020). The window now matches the auto-compaction
+    // limit the Codex catalog ships for the same native rows (829,800 under a 922,000 window),
+    // so one model does not compact at two different points depending on the client.
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
   });
 
   test("opt-in levers: alwaysEnableEffort=1, maxContextTokens injects the official pair", () => {
@@ -165,14 +167,21 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_MODEL).toBe("cursor/gpt-5.6-luna");
   });
 
-  test("auto-context: 372k slot gets [1m] + compact window rides along (devlog 020)", () => {
-    const windows = { "mock/big": 372_000, "mock/small": 128_000 };
+  test("auto-context: a slot wide enough for the compact window gets [1m], and the window rides along (devlog 020)", () => {
+    // The fixture has to clear the default compact window (829,800) — marking a model that
+    // cannot host it is the #854 defect the predicate exists to prevent.
+    const windows = { "mock/big": 900_000, "mock/small": 128_000 };
     const env = buildClaudeEnv(cfg({
       claudeCode: { model: "mock/big", smallFastModel: "mock/small" },
     }), 10100, {}, windows);
     expect(env.ANTHROPIC_MODEL).toBe("mock/big[1m]");
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("mock/small"); // below floor, unmarked
-    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("350000");
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+    // And a real native row at 922,000 clears it too — that is the model this default tracks.
+    const native = buildClaudeEnv(cfg({
+      claudeCode: { model: "gpt-5.6-sol" },
+    }), 10100, {}, { "gpt-5.6-sol": 922_000 });
+    expect(native.ANTHROPIC_MODEL).toBe("gpt-5.6-sol[1m]");
   });
 
   test("auto-context: custom window moves both the env and the marking threshold", () => {

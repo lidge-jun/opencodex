@@ -19,6 +19,7 @@ import {
   getLoginStatus,
   isPublicOAuthProvider,
   listOAuthProviders,
+  publicOAuthAuthenticationErrorMessage,
   startLoginFlow,
   submitManualLoginCode,
 } from "../../oauth";
@@ -175,7 +176,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       return jsonResponse({ url: authUrl, instructions, deviceCode });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
-      return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 409);
+      const message = err instanceof Error ? err.message : String(err);
+      const duplicateLoginMessage = `A login for ${provider} is already in progress`;
+      return jsonResponse({
+        error: message === duplicateLoginMessage
+          ? duplicateLoginMessage
+          : publicOAuthAuthenticationErrorMessage(err),
+      }, 409);
     }
   }
 
@@ -208,7 +215,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    return jsonResponse(getLoginStatus(provider));
+    const status = getLoginStatus(provider);
+    return jsonResponse(status);
   }
 
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {

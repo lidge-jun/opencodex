@@ -6,7 +6,9 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   decodeRoutedModelId,
+  decodeRoutedModelIdOrThrow,
   encodeRoutedModelId,
+  encodedModelIdCollides,
   routedSlug,
   slugEquals,
   slugEquivalenceKey,
@@ -14,7 +16,7 @@ import {
 } from "../src/providers/slug-codec";
 import { knownModelIdsForProvider, routeModel } from "../src/router";
 import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
-import { clearModelCache } from "../src/codex/model-cache";
+import { clearModelCache, setCached } from "../src/codex/model-cache";
 import { getModelMetadata } from "../src/generated/model-metadata";
 import type { RawEntry } from "../src/codex/catalog";
 import type { OcxConfig } from "../src/types";
@@ -75,6 +77,17 @@ describe("slug-codec primitives", () => {
     // Both `x/y/z` and `x/y-z` encode to `x-y-z`; no native `x-y-z` exists.
     const known = ["x/y/z", "x/y-z"];
     expect(decodeRoutedModelId("x-y-z", known)).toBe("x-y-z");
+  });
+
+  test("encodedModelIdCollides detects native vs slash custom collisions", () => {
+    expect(encodedModelIdCollides("openai/gpt-5.5", ["openai-gpt-5.5"])).toBe(true);
+    expect(encodedModelIdCollides("a/b-c", ["a-b/c"])).toBe(true);
+    expect(encodedModelIdCollides("openai/gpt-5.5", ["openai/gpt-5.5", "other"])).toBe(false);
+  });
+
+  test("decodeRoutedModelIdOrThrow decodes a single-use generator", () => {
+    function* ids() { yield "openai/gpt-5.5"; }
+    expect(decodeRoutedModelIdOrThrow("openai-gpt-5.5", ids())).toBe("openai/gpt-5.5");
   });
 
   test("slugEquals / slugsEquivalent tolerate raw and encoded mixes", () => {
@@ -165,6 +178,83 @@ describe("routeModel decode (proxy layer)", () => {
     const ids = knownModelIdsForProvider("zenmux", zenmuxConfig().providers.zenmux!);
     expect(ids).toContain("moonshotai/kimi-k3-free");
     expect(ids).toContain("moonshotai/kimi-k3");
+  });
+
+  test("knownModelIdsForProvider unions customModels for that provider", () => {
+    const config = zenmuxConfig();
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+      { id: "c2", provider: "other", modelId: "should-not-appear" },
+    ];
+    const ids = knownModelIdsForProvider("zenmux", config.providers.zenmux!, config);
+    expect(ids).toContain("openai/gpt-5.5");
+    expect(ids).not.toContain("should-not-appear");
+  });
+
+  test("knownModelIdsForProvider unions defaultModel", () => {
+    const config = zenmuxConfig();
+    config.providers.zenmux!.defaultModel = "openai-gpt-5.5";
+    const ids = knownModelIdsForProvider("zenmux", config.providers.zenmux!, config);
+    expect(ids).toContain("openai-gpt-5.5");
+  });
+
+  test("routeModel decodes encoded custom slash id back to native id", () => {
+    const config = zenmuxConfig();
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+    ];
+    const route = routeModel(config, "zenmux/openai-gpt-5.5");
+    expect(route.providerName).toBe("zenmux");
+    expect(route.modelId).toBe("openai/gpt-5.5");
+  });
+
+  test("routeModel prefers native hyphen id over colliding custom slash id", () => {
+    const config = zenmuxConfig();
+    config.providers.zenmux!.models = ["openai-gpt-5.5"];
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+    ];
+    expect(() => routeModel(config, "zenmux/openai-gpt-5.5")).toThrow(/ambiguous/);
+  });
+
+  test("routeModel refuses to guess between a/b-c and a-b/c", () => {
+    const config = zenmuxConfig();
+    config.providers.zenmux!.models = ["a-b/c"];
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "a/b-c" },
+    ];
+    expect(() => routeModel(config, "zenmux/a-b-c")).toThrow(/ambiguous/);
+  });
+
+  test("routeModel fails when a later live cache collides with an admitted custom slash id", () => {
+    const config = zenmuxConfig();
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+    ];
+    const admitted = routeModel(config, "zenmux/openai-gpt-5.5");
+    expect(admitted.modelId).toBe("openai/gpt-5.5");
+    setCached("zenmux", [{ provider: "zenmux", id: "openai-gpt-5.5" }]);
+    expect(() => routeModel(config, "zenmux/openai-gpt-5.5")).toThrow(/ambiguous/);
+  });
+
+  test("commandcode API-key preset decodes its native slash ids from the registry effort table", () => {
+    // Regression: the `commandcode` (API-key) registry entry must share the official
+    // reasoning-facts table with the OAuth `command-code` entry. Without it the router's
+    // known-ids source misses `deepseek/deepseek-v4-pro` / `zai-org/GLM-5.3`, so the
+    // Codex-facing slugs (`commandcode/deepseek-deepseek-v4-pro`) pass through unchanged
+    // and upstream rejects them with `unsupported_model`.
+    const prov = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+      authMode: "key" as const,
+      models: ["deepseek/deepseek-v4-flash"],
+      liveModels: true,
+    };
+    const ids = knownModelIdsForProvider("commandcode", prov);
+    expect(ids).toContain("deepseek/deepseek-v4-pro");
+    expect(ids).toContain("zai-org/GLM-5.3");
+    expect(decodeRoutedModelId("deepseek-deepseek-v4-pro", ids)).toBe("deepseek/deepseek-v4-pro");
+    expect(decodeRoutedModelId("zai-org-GLM-5.3", ids)).toBe("zai-org/GLM-5.3");
   });
 });
 

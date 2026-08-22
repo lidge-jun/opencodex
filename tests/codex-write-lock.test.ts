@@ -99,7 +99,8 @@ describe("canonical home identity", () => {
    */
   test("symlinked, trailing-slash and relative spellings share one lock id", () => {
     const link = join(root, "linked-home");
-    symlinkSync(codexHome, link);
+    if (process.platform === "win32") symlinkSync(codexHome, link, "junction");
+    else symlinkSync(codexHome, link);
 
     const direct = canonicalizeCodexHome(codexHome);
     const viaLink = canonicalizeCodexHome(link);

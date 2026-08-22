@@ -240,7 +240,7 @@ function preflight(input: IntegrationWriteInput) {
   return { failed: undefined, store, io, clientId, spec, exportSpec, configPath, before, parsed, contribution, record, classified } as const;
 }
 
-export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
+function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: boolean): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
   const { store, io, clientId, spec, exportSpec, configPath, before, parsed, contribution, record, classified } = pre;
@@ -270,6 +270,21 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
       classified.reason === "blocked-container"
         ? `${configPath} holds a value where opencodex would have to write a section, so applying would replace it`
         : `${configPath} cannot be changed safely`);
+  }
+  /*
+   * An implicit catalog sync is refresh-only. Keeping this decision inside the
+   * writer's one preflight closes the read-then-apply race where a user could
+   * remove the managed block after a caller classified it as stale and a
+   * normal apply would silently recreate it.
+   */
+  if (classified.state === "absent" && !allowAbsent) {
+    return {
+      ok: true,
+      changed: false,
+      state: "absent",
+      clientId,
+      message: "managed block is absent; refresh did not reconnect it",
+    };
   }
   if (classified.state === "current") {
     return { ok: true, changed: false, state: "current", clientId, message: "already applied" };
@@ -350,6 +365,15 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
     entry,
     snapshotPath: snapshotAbsPath(store, entry),
   });
+}
+
+export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
+  return applyOrRefreshIntegration(input, true);
+}
+
+/** Refresh an owned stale block, but never create or reconnect an absent one. */
+export function refreshIntegration(input: IntegrationWriteInput): WriteOutcome {
+  return applyOrRefreshIntegration(input, false);
 }
 
 export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
@@ -625,6 +649,13 @@ export function applyIntegrationCoordinated(
   options?: CoordinatedIntegrationOptions,
 ): Promise<WriteOutcome> {
   return coordinatedWrite(input, applyIntegration, options);
+}
+
+export function refreshIntegrationCoordinated(
+  input: IntegrationWriteInput,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  return coordinatedWrite(input, refreshIntegration, options);
 }
 
 export function disableIntegrationCoordinated(

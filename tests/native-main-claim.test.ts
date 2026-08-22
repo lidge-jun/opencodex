@@ -176,11 +176,16 @@ describe("the default hardener is actually reached from a claim", () => {
     mkdirSync(join(context.codexHome), { recursive: true });
     writeFileSync(path, "");
     chmodSync(path, 0o644);
-    expect(statSync(path).mode & 0o777).toBe(0o644);
+    // Windows synthesizes mode from the read-only attribute and answers 0o666
+    // whatever chmod requested, so the narrowing cannot be observed through stat
+    // there. The permissive precondition and the narrowed result are both POSIX
+    // claims; the call itself still runs on every platform.
+    const posixModes = process.platform !== "win32";
+    if (posixModes) expect(statSync(path).mode & 0o777).toBe(0o644);
 
     // No hardenPath override: this is the production default.
     await withNativeMainSharedClaim(context, async () => undefined);
 
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    if (posixModes) expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });

@@ -8,7 +8,7 @@ import { CL03_LIVE_SUITES, SYNTHETIC_MARKER } from "../conformance/types";
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const AUTHORITY_FILE = "024_live_v1_cases.json";
 const RUNTIME_AUTHORITY = join(MODULE_DIR, "..", "conformance", "fixtures", "live-v1-cases.json");
-const REPO_AUTHORITY = join(MODULE_DIR, "..", "..", "..", "devlog", "_plan", "260807_compatibility_lab", AUTHORITY_FILE);
+const REPO_AUTHORITY = join(MODULE_DIR, "..", "..", "..", "devlog", "_fin", "260807_compatibility_lab", AUTHORITY_FILE);
 
 function readAuthority(path: string): CaseAuthority { return JSON.parse(readFileSync(path, "utf8")) as CaseAuthority; }
 

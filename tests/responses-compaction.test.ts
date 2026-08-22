@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import { CODEX_FORWARD_BASE_URL } from "../src/providers/openai-tiers";
 import { parseRequest } from "../src/responses/parser";
 import {
   COMPACT_PROMPT,
@@ -178,10 +179,19 @@ describe("forward-path ocx1 compaction scrub", () => {
     authMode: "forward" as const,
   };
 
-  function forwardedBody(rawBody: Record<string, unknown>): { input: Array<Record<string, unknown>> } {
-    const adapter = createResponsesPassthroughAdapter(provider as never);
+  function forwardedBody(
+    rawBody: Record<string, unknown>,
+    target = provider,
+    threadServingIdentityChanged = false,
+  ): { input: Array<Record<string, unknown>> } {
+    const adapter = createResponsesPassthroughAdapter(target as never);
     const request = adapter.buildRequest({
-      modelId: "gpt-5.5", context: { messages: [] }, stream: true, options: {}, _rawBody: rawBody,
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+      ...(threadServingIdentityChanged ? { _stripReasoningEncryptedContent: true } : {}),
     }, { headers: new Headers() });
     return JSON.parse(request.body as string) as { input: Array<Record<string, unknown>> };
   }
@@ -218,9 +228,44 @@ describe("forward-path ocx1 compaction scrub", () => {
     const body = forwardedBody({
       model: "gpt-5.5",
       input: [{ type: "compaction", encrypted_content: "gAAAAA-real-openai-blob" }],
-    });
+    }, { ...provider, baseUrl: CODEX_FORWARD_BASE_URL });
     expect(body.input[0].type).toBe("compaction");
     expect(body.input[0].encrypted_content).toBe("gAAAAA-real-openai-blob");
+  });
+
+  test("known serving-identity changes degrade native blobs before OpenAI forwarding", () => {
+    const before = { type: "message", role: "user", content: [{ type: "input_text", text: "before" }] };
+    const after = { type: "message", role: "user", content: [{ type: "input_text", text: "after" }] };
+    const body = forwardedBody({
+      model: "gpt-5.5",
+      input: [
+        before,
+        { type: "compaction", encrypted_content: "xai-native-compaction-blob" },
+        after,
+      ],
+    }, { ...provider, baseUrl: CODEX_FORWARD_BASE_URL }, true);
+
+    expect(body.input).toEqual([
+      before,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+      },
+      after,
+    ]);
+  });
+
+  test("noncanonical forward providers degrade OpenAI-encrypted compaction items", () => {
+    const body = forwardedBody({
+      model: "gpt-5.5",
+      input: [{ type: "compaction", encrypted_content: "gAAAAA-real-openai-blob" }],
+    }, provider);
+    expect(body.input[0]).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
+    });
   });
 });
 

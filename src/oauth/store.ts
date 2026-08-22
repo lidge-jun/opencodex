@@ -465,10 +465,11 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const result = await fn(store);
+    options?.assertBeforePersist?.();
     persist(store);
     return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
@@ -491,7 +492,7 @@ export function getCredential(provider: string): OAuthCredentials | null {
 export async function saveCredential(
   provider: string,
   cred: OAuthCredentials,
-  opts: { preserveIdentityless?: boolean } = {},
+  opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
 ): Promise<void> {
   const safe = normalizeCredential(cred);
   if (!safe) return;
@@ -542,7 +543,7 @@ export async function saveCredential(
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
     }
-  }, [provider, safe]);
+  }, [provider, safe], { assertBeforePersist: opts.assertBeforePersist });
 }
 
 /**
@@ -632,7 +633,12 @@ export function getAccountCredential(provider: string, accountId: string): OAuth
 }
 
 /** Persist a refreshed credential for a SPECIFIC account without touching activeAccountId. */
-export async function saveAccountCredential(provider: string, accountId: string, cred: OAuthCredentials): Promise<void> {
+export async function saveAccountCredential(
+  provider: string,
+  accountId: string,
+  cred: OAuthCredentials,
+  opts: { assertBeforePersist?: () => void } = {},
+): Promise<void> {
   const safe = normalizeCredential(cred);
   if (!safe) return;
   await mutateStore(store => {
@@ -640,7 +646,7 @@ export async function saveAccountCredential(provider: string, accountId: string,
     if (!account) return;
     account.credential = safe;
     delete account.needsReauth;
-  }, [provider, accountId, safe]);
+  }, [provider, accountId, safe], { assertBeforePersist: opts.assertBeforePersist });
 }
 
 export async function setActiveAccount(provider: string, accountId: string): Promise<boolean> {

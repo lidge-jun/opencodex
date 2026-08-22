@@ -215,6 +215,7 @@ export async function fetchWithAttemptDeadline(
   timeoutMs: number,
   abortSignal?: AbortSignal,
   preferIdentityEncoding = false,
+  executor: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<Response> {
   const attemptTimeout = clearableDeadline(timeoutMs, abortSignal);
   const headers = new Headers(init.headers);
@@ -222,7 +223,7 @@ export async function fetchWithAttemptDeadline(
     headers.set("accept-encoding", "identity");
   }
   try {
-    return await fetch(url, {
+    return await executor(url, {
       ...init,
       headers,
       signal: attemptTimeout.signal,

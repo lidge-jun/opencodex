@@ -14,8 +14,9 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxProviderOpaqueToolCallMetadata, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
@@ -93,6 +94,11 @@ interface ImageCall {
   id: string;
   name: string;
   args: string;
+  /**
+   * Provider-opaque metadata from the originating part (issue #1735). Stored PER CALL: a
+   * signature belongs to one specific part, so parallel calls must not share one value.
+   */
+  providerMetadata?: OcxProviderOpaqueToolCallMetadata;
 }
 
 /**
@@ -109,13 +115,13 @@ function scanEventsForImageCall(events: AdapterEvent[], toolNames: Set<string>):
   const calls: ImageCall[] = [];
   const passthrough: AdapterEvent[] = [];
   let hasRealToolCall = false;
-  let pending: { name: string; id: string; argsBuf: string; events: AdapterEvent[] } | null = null;
+  let pending: { name: string; id: string; argsBuf: string; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
   const flushPending = (): void => {
     if (!pending) return;
     if (toolNames.has(pending.name)) {
       // Unterminated image call still carries buffered args — fulfill so malformed JSON
       // becomes a normal tool_result error instead of silently vanishing.
-      calls.push({ id: pending.id, name: pending.name, args: pending.argsBuf });
+      calls.push({ id: pending.id, name: pending.name, args: pending.argsBuf, providerMetadata: pending.providerMetadata });
     } else {
       passthrough.push(...pending.events);
       hasRealToolCall = true;
@@ -125,14 +131,14 @@ function scanEventsForImageCall(events: AdapterEvent[], toolNames: Set<string>):
   for (const e of events) {
     if (e.type === "tool_call_start") {
       flushPending();
-      pending = { name: e.name, id: e.id, argsBuf: "", events: [e] };
+      pending = { name: e.name, id: e.id, argsBuf: "", events: [e], providerMetadata: e.providerMetadata };
     } else if (e.type === "tool_call_delta" && pending) {
       pending.argsBuf += e.arguments;
       pending.events.push(e);
     } else if (e.type === "tool_call_end" && pending) {
       pending.events.push(e);
       if (toolNames.has(pending.name)) {
-        calls.push({ id: pending.id, name: pending.name, args: pending.argsBuf });
+        calls.push({ id: pending.id, name: pending.name, args: pending.argsBuf, providerMetadata: pending.providerMetadata });
       } else {
         passthrough.push(...pending.events);
         hasRealToolCall = true;
@@ -247,6 +253,8 @@ export interface ImageBridgeDeps {
   stallTimeoutSec?: number;
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
+  /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
+  waitForRequestSlot?: (signal?: AbortSignal) => Promise<void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
@@ -380,6 +388,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     // expose buildRequest/fetchResponse/parseStream to the bridge, so collect their events through
     // an AdapterEventQueue and wrap them in a pseudo-response whose parseStream replays them.
     if (adapter.runTurn) {
+      await deps.waitForRequestSlot?.(signal);
       const queue = createAdapterEventQueue({
         onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
       });
@@ -457,6 +466,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
 
     let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    const paceThenResetHeaderDeadline = async (): Promise<void> => {
+      headerDeadline.clear();
+      await deps.waitForRequestSlot?.(signal);
+      headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    };
     try {
       /**
        * Build and fetch one image-bridge iteration on the given adapter, under the iteration
@@ -487,16 +501,19 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
+            await paceThenResetHeaderDeadline();
             deps.onAttemptSend?.(recovery);
             response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
+              executor: fetchImpl,
             });
           } else {
             response = await fetchWithResetRetry(
-              (retryRecovery) => {
+              async (retryRecovery) => {
+                await paceThenResetHeaderDeadline();
                 // Record every helper-driven send (the callback runs for the first attempt and
                 // each connection-reset replay); preserve the caller's recovery kind
                 // (rate-limit-429 / key-429) when the retry layer supplies none.
@@ -659,13 +676,20 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
   }
 
-  const toolNsMap = new Map<string, { namespace: string; name: string }>();
+  const toolNsMap = new Map<string, { namespace: string; name: string; freeform?: true }>();
   const freeform = new Set<string>();
   const toolSearch = new Set<string>();
-  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
-  for (const t of parsed.context.tools ?? []) {
+  const requestedTools = parsed.context.tools ?? [];
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, requestedTools);
+  for (const t of requestedTools) {
     if (!toolAllowed(t)) continue;
-    if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
+    if (t.namespace) {
+      toolNsMap.set(namespacedToolName(t.namespace, t.name), {
+        namespace: t.namespace,
+        name: t.name,
+        ...(t.freeform ? { freeform: true } : {}),
+      });
+    }
     if (t.freeform) freeform.add(t.name);
     if (t.toolSearch) toolSearch.add(t.name);
   }
@@ -861,6 +885,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 id: call.id,
                 name: call.name,
                 arguments: args,
+                // Clone per call: parallel media calls each keep their own signature.
+                ...(cloneProviderOpaqueToolCallMetadata(call.providerMetadata)
+                  ? { providerMetadata: cloneProviderOpaqueToolCallMetadata(call.providerMetadata) }
+                  : {}),
               })),
             ],
             timestamp: now,

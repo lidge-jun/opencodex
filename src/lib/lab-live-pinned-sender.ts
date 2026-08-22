@@ -19,22 +19,33 @@ export function createLabAuthorizedPinnedSender(
       headers,
       maxBytes: limits.maxOutputBytes,
       connectTimeoutMs: limits.connectTimeoutMs,
-      idleTimeoutMs: Math.min(limits.firstByteTimeoutMs, limits.inactivityTimeoutMs),
+      firstByteTimeoutMs: limits.firstByteTimeoutMs,
+      inactivityTimeoutMs: limits.inactivityTimeoutMs,
       rejectUnauthorized: true,
       context: "Lab provider response",
     };
     let response: Response;
+    let body: string;
     try {
       response = request.method === "POST"
         ? await pinnedHttpPost(url, pinned, request.body ?? "", signal, options)
         : await pinnedHttpGet(url, pinned, signal, options);
+      body = await response.text();
     } catch (error) {
-      if (error instanceof PinnedHttpError && error.code === "connect_timeout") {
-        throw new TransportError("connect_timeout", "pinned provider connection timed out");
+      if (error instanceof PinnedHttpError) {
+        switch (error.code) {
+          case "connect_timeout":
+            throw new TransportError("connect_timeout", "pinned provider connection timed out");
+          case "first_byte_timeout":
+            throw new TransportError("first_byte_timeout", "pinned provider first byte timed out");
+          case "inactivity_timeout":
+            throw new TransportError("inactivity_timeout", "pinned provider response stalled");
+          case "output_byte_limit":
+            throw new TransportError("output_byte_limit", "pinned provider response exceeded byte budget");
+        }
       }
       throw error;
     }
-    const body = await response.text();
     const responseHeaders: Record<string, string> = {};
     for (const headerName of LAB_RESPONSE_HEADER_ALLOWLIST) {
       const value = response.headers.get(headerName);

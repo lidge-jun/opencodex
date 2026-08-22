@@ -9,7 +9,7 @@ import type {
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRequestedModelParameter, CursorRunRequest } from "./types";
-import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
+import { cursorCheckpointModelAffinityId, cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorEffortSuffix, cursorRequestWireModelIdWithEffort } from "./effort-map";
 import {
   cursorMcpToolEncodedSize,
@@ -25,6 +25,12 @@ import {
   isCursorWaitTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
+import {
+  getCursorCheckpoint,
+  getCursorCheckpointForPrefix,
+  type CursorCheckpointInvalidationReason,
+  type CursorCheckpointSnapshot,
+} from "./checkpoint-store";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -205,7 +211,15 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "thinking":
       return part.thinking;
     case "image":
-      return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
+      // User-message images are still flattened here: this path builds the plain-text prompt, and
+      // the schema slot that could carry them (UserMessage.selectedContext.selectedImages) is not
+      // populated by this adapter. The tool-result ENCODER does build real McpImageContent
+      // (see protobuf-request.ts), so the old "unsupported by Cursor adapter" wording is no
+      // longer true of the encoder — but note that nothing reaches Cursor today either way:
+      // every Cursor model is in noVisionModels (providers/registry.ts), so the vision sidecar
+      // describes or strips images before this adapter runs. Kept the same length to avoid
+      // shifting any byte-budgeted prompt path.
+      return `[image omitted from this Cursor text prompt: ${part.detail ?? "auto"}]`;
     case "toolCall":
       // Cursor does not accept OpenAI Responses assistant tool-call parts as native history here.
       // Rendering them as visible "[tool_call]" text leaks synthetic protocol markers back into
@@ -277,22 +291,118 @@ export function resolveCursorConversationId(
   options: CreateCursorRequestOptions = {},
 ): string {
   if (options.forceFreshConversation === true) return generatedCursorConversationId();
-  // Helper/shadow/compaction turns must not append into the parent's Cursor conversation,
-  // even when previous_response_id restored the parent's remembered id.
   if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
   if (parsed._cursorConversationId) return parsed._cursorConversationId;
   const threadId = parsed._clientThreadId?.trim();
   if (threadId) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
     if (recovered) return recovered;
-    return cursorConversationIdFromClientThread(threadId, parsed._cursorIdentityScope);
+    return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
   }
   return generatedCursorConversationId();
+}
+
+function updateFramed(hash: ReturnType<typeof createHash>, value: string): void {
+  const bytes = Buffer.from(value, "utf8");
+  const length = Buffer.allocUnsafe(4);
+  length.writeUInt32BE(bytes.byteLength);
+  hash.update(length);
+  hash.update(bytes);
+}
+
+export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
+  const hash = createHash("sha256").update("ocx:cursor:sys:");
+  for (const line of parsed.context.systemPrompt ?? []) updateFramed(hash, line);
+  for (const message of parsed.context.messages) {
+    if (message.role !== "developer") continue;
+    updateFramed(hash, contentToText(message.content));
+  }
+  return hash.digest("hex");
+}
+
+export function cursorCoveredPrefixDigest(parsed: OcxParsedRequest, coveredMessageCount: number): string {
+  const hash = createHash("sha256").update("ocx:cursor:prefix:");
+  updateFramed(hash, cursorInstructionDigest(parsed));
+  for (const message of parsed.context.messages.slice(0, coveredMessageCount)) {
+    updateFramed(hash, message.role);
+    updateFramed(hash, contentToText(message.content));
+  }
+  return hash.digest("hex");
 }
 
 export interface CreateCursorRequestOptions {
   /** Force a brand-new Cursor conversation id even when remembered state exists. */
   forceFreshConversation?: boolean;
+}
+
+function lookupPrefixSnapshot(
+  parsed: OcxParsedRequest,
+  request: CursorRunRequest,
+  identityScope: string,
+): CursorCheckpointSnapshot | undefined {
+  const systemDigest = cursorInstructionDigest(parsed);
+  const modelId = cursorCheckpointModelAffinityId(request.modelId);
+  for (let covered = parsed.context.messages.length; covered >= 1; covered--) {
+    const snapshot = getCursorCheckpointForPrefix({
+      prefixDigest: cursorCoveredPrefixDigest(parsed, covered),
+      systemDigest,
+      coveredMessageCount: covered,
+      identityScope,
+      modelId,
+    });
+    if (snapshot) return snapshot;
+  }
+  return undefined;
+}
+
+function lineageMismatch(
+  parsed: OcxParsedRequest,
+  snapshot: CursorCheckpointSnapshot,
+): CursorCheckpointInvalidationReason | undefined {
+  const covered = snapshot.coveredMessageCount;
+  if (covered === undefined || covered < 0 || covered > parsed.context.messages.length) {
+    return "lineage_mismatch";
+  }
+  if (!snapshot.prefixDigest || !snapshot.systemDigest) return "lineage_mismatch";
+  if (snapshot.systemDigest !== cursorInstructionDigest(parsed)) return "lineage_mismatch";
+  if (snapshot.prefixDigest !== cursorCoveredPrefixDigest(parsed, covered)) return "lineage_mismatch";
+  const lastRole = parsed.context.messages.at(-1)?.role;
+  if (lastRole === "toolResult" && covered >= parsed.context.messages.length) return "trailing_tool_result";
+  return undefined;
+}
+
+function resolveCursorCheckpoint(
+  parsed: OcxParsedRequest,
+  request: CursorRunRequest,
+  options: CreateCursorRequestOptions,
+): { snapshot: CursorCheckpointSnapshot } | { reason: CursorCheckpointInvalidationReason } {
+  if (options.forceFreshConversation === true) return { reason: "force_fresh" };
+  if (parsed._compactionRequest === true || parsed._contextCompactionBoundary === true) return { reason: "compaction" };
+  const isolated = parsed._cursorIsolateConversation === true;
+  const cursorState = parsed._providerContinuation?.cursor;
+  const ref = isolated ? undefined : cursorState?.checkpointRef;
+  const identityScope = parsed._cursorIdentityScope?.trim() || "local";
+  let snapshot: CursorCheckpointSnapshot | undefined;
+  if (ref) {
+    snapshot = getCursorCheckpoint(ref);
+    if (!snapshot) return { reason: "expired" };
+  } else {
+    snapshot = lookupPrefixSnapshot(parsed, request, identityScope);
+    if (!snapshot) return { reason: "missing_ref" };
+  }
+  if (!isolated && snapshot.conversationId !== request.conversationId && ref) {
+    return { reason: "conversation_changed" };
+  }
+  if (snapshot.identityScope !== identityScope) return { reason: "identity_changed" };
+  if (cursorCheckpointModelAffinityId(snapshot.modelId) !== cursorCheckpointModelAffinityId(request.modelId)) {
+    return { reason: "model_changed" };
+  }
+  if (parsed.context.messages.at(-1)?.role !== "toolResult" && cursorState?.checkpointUsable === false) {
+    return { reason: "trailing_tool_result" };
+  }
+  const lineage = lineageMismatch(parsed, snapshot);
+  if (lineage) return { reason: lineage };
+  return { snapshot };
 }
 
 export function createCursorRequest(
@@ -307,7 +417,7 @@ export function createCursorRequest(
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
   const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning);
-  return {
+  const request: CursorRunRequest = {
     modelId: model.modelId,
     ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
@@ -321,4 +431,16 @@ export function createCursorRequest(
     ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };
+  const resolved = resolveCursorCheckpoint(parsed, request, options);
+  if ("reason" in resolved) {
+    request.continuationMode = "full-replay";
+    request.checkpointInvalidationReason = resolved.reason;
+    return request;
+  }
+  request.checkpointBytes = resolved.snapshot.checkpointBytes;
+  request.continuationMode = "checkpoint";
+  if (parsed.context.messages.at(-1)?.role === "toolResult" && resolved.snapshot.coveredMessageCount !== undefined) {
+    request.checkpointSuffixStart = resolved.snapshot.coveredMessageCount;
+  }
+  return request;
 }

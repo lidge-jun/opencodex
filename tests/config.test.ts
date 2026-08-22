@@ -36,6 +36,25 @@ import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/win
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
 let testDir = "";
 
+/**
+ * Windows without Developer Mode or admin cannot create a file symlink (EPERM).
+ * Detect once so the dotfiles cases below report a visible skip there rather than
+ * a spurious failure in the fixture, before the writer under test is ever called.
+ * Mirrors the probe in codex-service-manager-probe and claude-agents-inject.
+ */
+const canSymlink = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-config-symlink-probe-"));
+  try {
+    symlinkSync(join(dir, "probe-target"), join(dir, "probe-link"));
+    return true;
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
+    throw e;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-config-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -93,6 +112,44 @@ function writeAccountNamespaceConfig(
 }
 
 describe("opencodex config defaults", () => {
+  test("malformed classifier config is normalized at load, even with subagentEffort absent (#1697)", () => {
+    // normalizePersistedClaudeCode used to be reached only through a subagentEffort short-circuit,
+    // so a config whose ONLY defect was elsewhere in claudeCode was never normalized. These
+    // fixtures deliberately omit subagentEffort, which is what the old path skipped on.
+    writeConfig({
+      port: 10100,
+      providers: { p1: { adapter: "openai-chat", baseUrl: "https://p1.example/v1" } },
+      claudeCode: { classifierFallbacks: "RelayC/claude-opus-5", classifierModel: "   " },
+    });
+    const loaded = loadConfig() as Record<string, any>;
+    expect(loaded.claudeCode?.classifierFallbacks).toBeUndefined();
+    expect(loaded.claudeCode?.classifierModel).toBeUndefined();
+    expect(loaded.providers.p1).toBeDefined();
+  });
+
+  test("classifier fallback entries are filtered rather than trusted (#1697)", () => {
+    writeConfig({
+      port: 10100,
+      providers: { p1: { adapter: "openai-chat", baseUrl: "https://p1.example/v1" } },
+      claudeCode: { classifierFallbacks: [1, "  RelayC/claude-opus-5  ", "", null] },
+    });
+    const loaded = loadConfig() as Record<string, any>;
+    expect(loaded.claudeCode?.classifierFallbacks).toEqual(["RelayC/claude-opus-5"]);
+  });
+
+  test("empty-completion retry is an explicit top-level opt-in", () => {
+    const defaults = getDefaultConfig();
+    expect(defaults.emptyCompletionRetry).toBe(false);
+    expect(validateConfigCandidate({ ...defaults, emptyCompletionRetry: true })).toMatchObject({
+      ok: true,
+      config: { emptyCompletionRetry: true },
+    });
+    expect(validateConfigCandidate({ ...defaults, emptyCompletionRetry: "true" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("emptyCompletionRetry"),
+    });
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);
@@ -322,6 +379,44 @@ describe("opencodex config defaults", () => {
       apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
     });
     expect(backupNames()).toEqual([]);
+  });
+
+  test("an inherited FastWire conflict warns without wiping persisted providers or keys", () => {
+    writeConfig({
+      port: 12345,
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          fastWire: null,
+        },
+      },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const loaded = loadConfig();
+      const diagnostics = readConfigDiagnostics();
+
+      expect(loaded).toMatchObject({
+        port: 12345,
+        defaultProvider: "openai-apikey",
+        providers: { "openai-apikey": { fastWire: null } },
+        apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
+      });
+      expect(diagnostics).toMatchObject({
+        source: "file",
+        error: null,
+        warnings: [expect.stringContaining("fastWire=null overrides service-tier capability")],
+      });
+      expect(backupNames()).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("persisted providers and API keys were preserved"));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("a non-string experimentalRealtimeWsBaseUrl degrades to unset without wiping config", () => {
@@ -706,6 +801,34 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("accepts both codexToolMode values and rejects a misspelled one (#2106)", () => {
+    for (const codexToolMode of ["code_mode_only", "shell"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", codexToolMode },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().config.providers.custom.codexToolMode).toBe(codexToolMode);
+      expect(readConfigDiagnostics().error).toBeNull();
+    }
+
+    // The regression this guards: `providerConfigSchema` ends in `.passthrough()`, so an
+    // undeclared key survives verbatim. Before the enum was declared, "shel" was accepted,
+    // persisted, and then silently resolved to the `code_mode_only` default — the operator
+    // asked for shell mode, got code mode, and was told nothing.
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", codexToolMode: "shel" },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("codexToolMode");
+  });
+
   test("accepts the exact responsesItemIdRepair shape and rejects the old nested placeholderIds proposal", () => {
     writeConfig({
       port: 12345,
@@ -774,6 +897,38 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().source).toBe("fallback");
     expect(readConfigDiagnostics().error).toContain("responsesSnapshotRepair");
+  });
+
+  test("direct Gemini wire rename opt-out is a boolean and round-trips", () => {
+    const base = {
+      port: 12345,
+      providers: {
+        google: {
+          adapter: "google",
+          baseUrl: "https://generativelanguage.googleapis.com",
+        },
+      },
+      defaultProvider: "google",
+    };
+    writeConfig({
+      ...base,
+      providers: {
+        google: { ...base.providers.google, directGeminiWireRenames: false },
+      },
+    });
+    const config = loadConfig();
+    expect(config.providers.google.directGeminiWireRenames).toBe(false);
+    saveConfig(config);
+    expect(loadConfig().providers.google.directGeminiWireRenames).toBe(false);
+
+    writeConfig({
+      ...base,
+      providers: {
+        google: { ...base.providers.google, directGeminiWireRenames: "false" },
+      },
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("directGeminiWireRenames");
   });
 
   test("accepts a relative responsesPath", () => {
@@ -1567,6 +1722,201 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  describe("one bad entry in an independent section does not discard the config (#1785)", () => {
+    /** Two usable providers, a disabled one, prices, and a profile worth keeping. */
+    function configWith(extra: Record<string, unknown>): void {
+      writeConfig({
+        port: 10100,
+        providers: {
+          TR:    { adapter: "openai-chat", baseUrl: "https://tr.example/v1", disabled: true },
+          keep1: { adapter: "openai-chat", baseUrl: "https://keep1.example/v1" },
+          keep2: { adapter: "openai-chat", baseUrl: "https://keep2.example/v1" },
+        },
+        modelCosts: { "keep1/m": { input: 1, output: 2 } },
+        ...extra,
+      });
+    }
+
+    test("a candidate naming a disabled provider drops only its profile", () => {
+      configWith({
+        routingProfiles: {
+          good: { candidates: [{ provider: "keep1", model: "m" }] },
+          bad:  { candidates: [{ provider: "TR", model: "moonshotai/kimi-k3" }] },
+        },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const loaded = loadConfig() as Record<string, any>;
+
+        // The reported symptom was 11 providers on disk and 1 served.
+        expect(Object.keys(loaded.providers)).toEqual(expect.arrayContaining(["TR", "keep1", "keep2"]));
+        expect(loaded.modelCosts).toHaveProperty("keep1/m");
+        expect(Object.keys(loaded.routingProfiles)).toEqual(["good"]);
+
+        // Naming both the profile and why, so the operator can act on it.
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("routingProfiles.bad"));
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("is disabled"));
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test("salvaging is not a fallback, so no invalid-* backup piles up", () => {
+      // The reporter accumulated 10 of these before noticing anything was wrong;
+      // a backup on every load is the signal that the config was discarded.
+      configWith({ routingProfiles: { bad: { candidates: [{ provider: "TR", model: "m" }] } } });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        loadConfig();
+        expect(backupNames()).toEqual([]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+
+    test("diagnostics keep the operator's config instead of reporting defaults", () => {
+      // The salvage in loadConfig was not enough on its own. readConfigDiagnostics returned
+      // getDefaultConfig(), and a config command writing that result back would have persisted
+      // built-in defaults over the operator's providers, keys and prices.
+      //
+      // The failure is still REPORTED -- source stays "fallback" and error keeps the schema
+      // message, which is what provider reload, catalog sync, cost reconcile and codex admission
+      // gate on. Only the config payload changes.
+      configWith({
+        routingProfiles: {
+          good: { candidates: [{ provider: "keep1", model: "m" }] },
+          bad:  { candidates: [{ provider: "TR", model: "moonshotai/kimi-k3" }] },
+        },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const diagnostics = readConfigDiagnostics();
+
+        // Still invalid, and still says why.
+        expect(diagnostics.source).toBe("fallback");
+        expect(diagnostics.error).toContain("is disabled");
+
+        // But the payload is the operator's config, not the factory defaults.
+        const config = diagnostics.config as Record<string, any>;
+        expect(Object.keys(config.providers)).toEqual(expect.arrayContaining(["TR", "keep1", "keep2"]));
+        expect(config.modelCosts).toHaveProperty("keep1/m");
+        expect(Object.keys(config.routingProfiles ?? {})).toEqual(["good"]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test("salvage repeats when dropping one entry exposes a new failure", () => {
+      // Sections are not independent of each other: a profile alias is validated against the
+      // combo map, so removing an invalid combo can surface a NEW failure in a profile that
+      // was fine while that combo existed. A single-pass salvage saw that second failure and
+      // discarded the whole config -- the outcome this exists to stop.
+      configWith({
+        combos: {
+          badCombo: { members: [{ provider: "nope-not-configured", model: "m" }] },
+        },
+        routingProfiles: {
+          alsoBad: { candidates: [{ provider: "TR", model: "m" }] },
+          good:    { candidates: [{ provider: "keep2", model: "m" }] },
+        },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const loaded = loadConfig() as Record<string, any>;
+
+        // Everything unrelated survives, and both bad entries are gone.
+        expect(Object.keys(loaded.providers)).toEqual(expect.arrayContaining(["TR", "keep1", "keep2"]));
+        expect(loaded.modelCosts).toHaveProperty("keep1/m");
+        expect(Object.keys(loaded.combos ?? {})).not.toContain("badCombo");
+        expect(Object.keys(loaded.routingProfiles ?? {})).toEqual(["good"]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test("a token-shaped entry id is not echoed into the warning", () => {
+      // Entry ids are operator-chosen and can be pasted secrets. The warning names the
+      // section so the operator knows where to look, but nothing dynamic goes out raw.
+      const tokenId = "sk-ant-api03-" + "A".repeat(40);
+      configWith({
+        routingProfiles: {
+          [tokenId]: { candidates: [{ provider: "TR", model: "m" }] },
+        },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        loadConfig();
+        const logged = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+        expect(logged).toContain("routingProfiles.");
+        expect(logged).not.toContain(tokenId);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+    test("combos are salvaged the same way", () => {
+      configWith({
+        combos: {
+          good: { members: [{ provider: "keep1", model: "m" }] },
+          bad:  { members: [{ provider: "nope-not-configured", model: "m" }] },
+        },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const loaded = loadConfig() as Record<string, any>;
+        expect(Object.keys(loaded.providers)).toEqual(expect.arrayContaining(["keep1", "keep2"]));
+        expect(Object.keys(loaded.combos ?? {})).not.toContain("bad");
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test("every bad profile is dropped, not just the first", () => {
+      configWith({
+        routingProfiles: {
+          bad1: { candidates: [{ provider: "TR", model: "m" }] },
+          good: { candidates: [{ provider: "keep1", model: "m" }] },
+          bad2: { candidates: [{ provider: "also-not-configured", model: "m" }] },
+        },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(Object.keys((loadConfig() as Record<string, any>).routingProfiles)).toEqual(["good"]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test("a failure outside those sections still falls back, unchanged", () => {
+      // The salvage path must not become a way to load configs that are broken
+      // somewhere it cannot reason about.
+      writeConfig({
+        port: 10100,
+        providers: {
+          custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", headers: { Authorization: "Bearer secret" } },
+        },
+        routingProfiles: { bad: { candidates: [{ provider: "nope", model: "m" }] } },
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(loadConfig()).toEqual(getDefaultConfig());
+        expect(backupNames()).toHaveLength(1);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test("a malformed container is not an entry, so it is not salvaged", () => {
+      configWith({ routingProfiles: [] });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(loadConfig()).toEqual(getDefaultConfig());
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
+
   test("provider names reject namespace-breaking and reserved object keys", () => {
     expect(isValidProviderName("openrouter")).toBe(true);
     expect(isValidProviderName("ollama-cloud")).toBe(true);
@@ -2267,7 +2617,7 @@ describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
 });
 
 describe("config.ts – atomic writes preserve symlinked destinations", () => {
-  test("a symlinked destination survives the write and the real file receives it", () => {
+  test.skipIf(!canSymlink)("a symlinked destination survives the write and the real file receives it", () => {
     // Dotfiles shape: ~/.codex/config.toml -> ~/dotfiles/.codex/config.toml
     const repoDir = join(testDir, "dotfiles");
     mkdirSync(repoDir, { recursive: true });
@@ -2284,7 +2634,7 @@ describe("config.ts – atomic writes preserve symlinked destinations", () => {
     expect(readFileSync(link, "utf8")).toBe("rewritten");
   });
 
-  test("no temp file is left beside the link or its target", () => {
+  test.skipIf(!canSymlink)("no temp file is left beside the link or its target", () => {
     const repoDir = join(testDir, "dotfiles-clean");
     mkdirSync(repoDir, { recursive: true });
     const realFile = join(repoDir, "config.toml");
@@ -2316,7 +2666,7 @@ describe("config.ts – atomic writes preserve symlinked destinations", () => {
     expect(readFileSync(destination, "utf8")).toBe("fresh");
   });
 
-  test("a dangling symlink is preserved and the write is refused", () => {
+  test.skipIf(!canSymlink)("a dangling symlink is preserved and the write is refused", () => {
     const link = join(testDir, "dangling.toml");
     symlinkSync(join(testDir, "gone", "config.toml"), link);
 
@@ -2329,7 +2679,7 @@ describe("config.ts – atomic writes preserve symlinked destinations", () => {
 });
 
 describe("config.ts – async atomic writes preserve symlinked destinations", () => {
-  test("a symlinked destination survives the write and the real file receives it", async () => {
+  test.skipIf(!canSymlink)("a symlinked destination survives the write and the real file receives it", async () => {
     const repoDir = join(testDir, "dotfiles-async");
     mkdirSync(repoDir, { recursive: true });
     const realFile = join(repoDir, "config.toml");
@@ -2345,7 +2695,7 @@ describe("config.ts – async atomic writes preserve symlinked destinations", ()
     expect(readFileSync(link, "utf8")).toBe("rewritten");
   });
 
-  test("no temp file is left beside the link or its target", async () => {
+  test.skipIf(!canSymlink)("no temp file is left beside the link or its target", async () => {
     const repoDir = join(testDir, "dotfiles-async-clean");
     mkdirSync(repoDir, { recursive: true });
     const realFile = join(repoDir, "config.toml");
@@ -2368,7 +2718,7 @@ describe("config.ts – async atomic writes preserve symlinked destinations", ()
     expect(readFileSync(destination, "utf8")).toBe("second");
   });
 
-  test("a dangling symlink is preserved and the write is refused", async () => {
+  test.skipIf(!canSymlink)("a dangling symlink is preserved and the write is refused", async () => {
     const link = join(testDir, "dangling-async.toml");
     symlinkSync(join(testDir, "gone-async", "config.toml"), link);
 

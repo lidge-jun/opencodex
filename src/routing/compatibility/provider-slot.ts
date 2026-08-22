@@ -11,7 +11,7 @@
  * compatibility-gated routing profiles never register one, so the core evidence assembler
  * never reaches the Lab module graph.
  *
- * See devlog/_plan/260814_lab_core_decoupling/030_router_and_startup_activation.md
+ * See devlog/_fin/260814_lab_core_decoupling/030_router_and_startup_activation.md
  */
 import type { OcxConfig } from "../../types";
 import type { NormalizedRoutingProfile } from "../profile";

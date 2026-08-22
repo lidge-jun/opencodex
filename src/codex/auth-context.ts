@@ -11,8 +11,9 @@ import { isCodexAccountPaused } from "./account-pause";
 import { ConfigMutationLockError } from "../config";
 import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
-import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
-import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken, isMainAccountTokenLive } from "./main-account";
+import { isNativeMainTrafficBlocked, nativeMainStartupGateSnapshot } from "./native-profile-startup";
+import type { NativeMainStartupBlockReason } from "./native-profile-startup";
 import {
   codexQuotaScopeForModel,
   getCodexQuotaHealthSnapshot,
@@ -23,6 +24,13 @@ import {
   pickAlternateCodexAccount,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
+import {
+  entitledCodexAccountIdsForModel,
+  isDirectCallerEntitledToCodexModel,
+  resolveCodexModelEntitlements,
+  type CodexModelEntitlementSnapshot,
+} from "./model-entitlements";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse } from "../bridge";
@@ -116,10 +124,61 @@ export const CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE =
   "OpenCodex local native-main profile maintenance is active; retry this request";
 
 export class CodexMainProfileDrainingError extends Error {
+  /**
+   * Which startup-gate state fenced this request, when one did. Undefined means the
+   * fence came from somewhere other than the startup gate — the turn-drain claim race
+   * throws this same error while the gate reads `ready`, and inventing a reason there
+   * would point the next report at a gate that never closed.
+   *
+   * Captured here rather than at the throw sites because this is the last moment it is
+   * both in scope and still true: every catch site has already lost it, and re-reading
+   * the gate later can observe a recovery that completed in between (#2108).
+   */
+  readonly reason?: NativeMainStartupBlockReason;
+
   constructor() {
     super(CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
     this.name = "CodexMainProfileDrainingError";
+    const gate = nativeMainStartupGateSnapshot();
+    if (gate.status !== "blocked") return;
+    this.reason = gate.reason;
+    reportNativeMainFenceReason(gate.reason);
   }
+}
+
+/**
+ * #2108: a reboot could leave this fence closed until `ocx restart`, and the report was
+ * unactionable because the settled reason was never written anywhere. It cannot ride the
+ * message (claude-messages.ts matches that string exactly to keep the fence a 503 rather
+ * than an Anthropic 529) and it cannot ride a header (/api/logs reads only error.message
+ * from the body, and the Claude surface rebuilds its response headers from scratch), so
+ * stdout is the one surface that covers every path this fence fires on.
+ *
+ * Deduped per distinct reason: the original report shows three 503s in eleven seconds and
+ * a real client retries harder than that, so a per-request line would bury the signal.
+ * Only the reason is emitted; the snapshot's homeId is derived from a profile directory.
+ */
+const reportedFenceReasons = new Set<NativeMainStartupBlockReason>();
+
+function reportNativeMainFenceReason(reason: NativeMainStartupBlockReason): void {
+  if (reportedFenceReasons.has(reason)) return;
+  reportedFenceReasons.add(reason);
+  console.warn(
+    `native-main admission is fenced (reason: ${reason}); native model requests return 503 until it clears`,
+  );
+}
+
+/**
+ * Test-only reset for the dedup set above.
+ *
+ * The dedup is process-lifetime module state, so it is order-sensitive across test files
+ * sharing one Bun process: whichever file constructs this error first consumes the one-shot
+ * warn, and a later file asserting on it would see nothing and pass vacuously. Any test that
+ * asserts on the warn must call this first — an `afterEach` in the asserting file is not
+ * enough on its own, because the consuming file may not be the asserting one.
+ */
+export function __resetNativeMainFenceReasonLog(): void {
+  reportedFenceReasons.clear();
 }
 
 export function codexMainProfileDrainingResponse(): Response {
@@ -237,6 +296,14 @@ export interface ResolveCodexAuthContextOptions {
   isMainAccountTokenLive?: () => boolean;
   getMainAccountToken?: typeof getMainAccountToken;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
+  /** Test seam for account-gated native model discovery. */
+  resolveCodexModelEntitlements?: (
+    config: Pick<OcxConfig, "codexAccounts">,
+  ) => Promise<CodexModelEntitlementSnapshot>;
+  /** Direct requests admitted with a proxy bearer substitute the stored native-main credential. */
+  substituteMainCredentialForDirect?: boolean;
+  /** Test seam for a Direct request's own forwarded ChatGPT credential. */
+  isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -260,8 +327,28 @@ export async function resolveCodexAuthContext(
   // selected stored credential even while the canonical OpenAI provider is globally Direct.
   if (mode === "direct" && fixedAccountId === undefined) {
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
+    if (options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)) {
+      const entitled = options.substituteMainCredentialForDirect
+        ? entitledCodexAccountIdsForModel(
+            await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config),
+            options.modelId,
+          )?.has(MAIN_CODEX_ACCOUNT_ID) === true
+        : await (options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel)(
+            headers,
+            options.modelId,
+          );
+      if (!entitled) {
+        throw new CodexPoolAuthenticationError("The selected ChatGPT account does not support this model");
+      }
+    }
     return { kind: "main", accountId: null };
   }
+  const entitlementSnapshot = options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
+    ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config)
+    : undefined;
+  const modelEligibleAccountIds = entitlementSnapshot
+    ? entitledCodexAccountIdsForModel(entitlementSnapshot, options.modelId)
+    : undefined;
   // Retained startup recovery makes the physical main identity ineligible. Routing
   // can still preserve service by selecting a healthy configured pool account.
   const nativeMainTrafficBlocked = isNativeMainTrafficBlocked();
@@ -273,6 +360,7 @@ export async function resolveCodexAuthContext(
     nativeMainSelectionOnly: !nativeMainTrafficBlocked
       && selectionAdmission?.mainProfileDraining === true,
     isMainAccountTokenLive: options.isMainAccountTokenLive,
+    modelEligibleAccountIds,
   };
   let accountId: string;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
@@ -302,7 +390,11 @@ export async function resolveCodexAuthContext(
     const selected = resolution.status === "selected" ? resolution.accountId : null;
     if (!selected) {
       if (fixedAccountId !== undefined) {
-        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+        throw new CodexPoolAuthenticationError(
+          modelEligibleAccountIds && !modelEligibleAccountIds.has(fixedAccountId)
+            ? "Selected Codex account does not support this model"
+            : "Selected Codex account is unavailable",
+        );
       }
       // Recovery deliberately makes physical main ineligible. If no healthy
       // pool route is configured and main is the intended route, report the
@@ -312,7 +404,9 @@ export async function resolveCodexAuthContext(
       if (nativeMainTrafficBlocked && !options.excludeAccountId) {
         throw new CodexMainProfileDrainingError();
       }
-      throw new CodexPoolAuthenticationError();
+      throw new CodexPoolAuthenticationError(
+        modelEligibleAccountIds ? "No eligible Codex account supports this model" : undefined,
+      );
     }
     accountId = selected;
     if (accountId === MAIN_CODEX_ACCOUNT_ID && nativeMainTrafficBlocked) {
@@ -324,6 +418,17 @@ export async function resolveCodexAuthContext(
       && !selectionAdmission.claimMainProfile()
     ) {
       throw new CodexMainProfileDrainingError();
+    }
+    // Some legacy Pool fallbacks preserve a configured active account even when it is not
+    // currently selectable, so token/cooldown code can produce the historical actionable error.
+    // Model entitlement is different: sending the request would spend a turn on an account whose
+    // authenticated roster already denied the model. Reassert this boundary after every selector.
+    if (modelEligibleAccountIds && !modelEligibleAccountIds.has(accountId)) {
+      throw new CodexPoolAuthenticationError(
+        fixedAccountId !== undefined
+          ? "Selected Codex account does not support this model"
+          : "No eligible Codex account supports this model",
+      );
     }
     if (fixedAccountId !== undefined) {
       if (isCodexAccountPaused(config, accountId)) {
@@ -451,7 +556,32 @@ export function applyCodexAuthContextToProvider(
   };
 }
 
-export function headersForCodexAuthContext(headers: Headers, ctx: CodexAuthContext): Headers {
+export class CodexMainSubstitutionUnavailableError extends Error {
+  constructor() {
+    super("No usable Codex main credential to substitute for an admission bearer");
+    this.name = "CodexMainSubstitutionUnavailableError";
+  }
+}
+
+/**
+ * Build the upstream auth headers for one Codex turn.
+ *
+ * The two credential domains meet here, and only here:
+ *
+ * - `pool` / `main-pool` always OVERWRITE with the stored account credential. Whatever the
+ *   caller sent is irrelevant to what we send upstream.
+ * - `main` with an admission-bearer caller (#1686) must substitute the stored main credential.
+ *   The caller proved admission with one of OUR secrets, which must never leave the process, so
+ *   the only two acceptable outcomes are replaced-with-stored-main or fail-before-any-IO.
+ *   Silently forwarding would be the leak validateForwardAdmissionCredential exists to prevent.
+ * - `main` with a dedicated-header caller keeps the existing intentional passthrough: the bearer
+ *   there is the user's own ChatGPT credential, not ours.
+ */
+export function materializeCodexUpstreamAuth(
+  headers: Headers,
+  ctx: CodexAuthContext,
+  options: { substituteMainCredential?: boolean } = {},
+): Headers {
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
@@ -460,8 +590,24 @@ export function headersForCodexAuthContext(headers: Headers, ctx: CodexAuthConte
   if (ctx.kind === "pool" || ctx.kind === "main-pool") {
     selected.set("authorization", `Bearer ${ctx.accessToken}`);
     selected.set("chatgpt-account-id", ctx.chatgptAccountId);
+    return selected;
+  }
+  if (ctx.kind === "main" && options.substituteMainCredential === true) {
+    const stored = getMainAccountToken();
+    // Fail BEFORE any upstream I/O. Falling through here would send the admission secret.
+    if (!stored?.accessToken || !isMainAccountTokenLive()) {
+      throw new CodexMainSubstitutionUnavailableError();
+    }
+    selected.set("authorization", `Bearer ${stored.accessToken}`);
+    if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
+    return selected;
   }
   return selected;
+}
+
+/** @deprecated Prefer materializeCodexUpstreamAuth; kept for call sites without admission context. */
+export function headersForCodexAuthContext(headers: Headers, ctx: CodexAuthContext): Headers {
+  return materializeCodexUpstreamAuth(headers, ctx);
 }
 
 export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: OcxConfig): boolean {

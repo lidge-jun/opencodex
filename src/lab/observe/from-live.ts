@@ -5,7 +5,7 @@ import { LAB_EVENT_SCHEMA_VERSION, LAB_PRODUCER, LAB_PRODUCER_VERSION, OBSERVATI
 import { fixtureDigest, scenarioManifestDigest, subjectIdForSubject, suiteManifestDigest } from "../digest";
 import type { FailureRecordV1, ObservationEvent } from "../events/types";
 import { assignEventId } from "../events/validate";
-import { appendLabEvent } from "../ledger/store";
+import { withLedgerMutation } from "../ledger/store";
 import { ensureLabDirs } from "../paths";
 import type { CaseAuthority, CaseRecord } from "../conformance/types";
 import { trustedLiveResultRetryable } from "../live/executor";
@@ -106,6 +106,12 @@ export function observationFromLiveResult(result: LiveScenarioRunResult, caseRec
 
 export function persistLiveResult(result: LiveScenarioRunResult, caseRecord: CaseRecord, authority: CaseAuthority, opts: PersistLiveOptions = {}): PersistedLiveObservation {
   const paths = ensureLabDirs(opts.configDir); const ownsStore = !opts.artifactStore; const store = opts.artifactStore ?? createArtifactStore(paths.artifactsDir);
-  try { const { event } = observationFromLiveResult(result, caseRecord, authority, { ...opts, artifactStore: store }); appendLabEvent(paths.ledgerPath, event); return { event, ledgerPath: paths.ledgerPath }; }
+  try {
+    return withLedgerMutation(paths.ledgerPath, (ledger) => {
+      const { event } = observationFromLiveResult(result, caseRecord, authority, { ...opts, artifactStore: store });
+      ledger.append(event);
+      return { event, ledgerPath: paths.ledgerPath };
+    });
+  }
   finally { if (ownsStore) store.close(); }
 }

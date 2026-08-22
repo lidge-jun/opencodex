@@ -66,6 +66,7 @@ function normalizedCombo(
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: "medium",
+    imageInput: "auto",
     alias: null,
     nativeAlias: false,
     displayName: null,
@@ -154,6 +155,18 @@ describe("live model provenance (#448 custom-model misclassification)", () => {
 });
 
 describe("combo catalog capability intersection", () => {
+
+  test("imageInput disabled strips image even when every member supports it", () => {
+    const visionMembers = [
+      { provider: "a", id: "m1", contextWindow: 128_000, maxInputTokens: 100_000, inputModalities: ["text", "image"], reasoningEfforts: ["low"] },
+      { provider: "b", id: "m2", contextWindow: 128_000, maxInputTokens: 100_000, inputModalities: ["text", "image"], reasoningEfforts: ["low"] },
+    ];
+    expect(deriveComboCatalogModel("text-only", normalizedCombo({ imageInput: "disabled" }), visionMembers))
+      .toEqual(expect.objectContaining({ inputModalities: ["text"] }));
+    expect(deriveComboCatalogModel("vision", normalizedCombo({ imageInput: "auto" }), visionMembers))
+      .toEqual(expect.objectContaining({ inputModalities: expect.arrayContaining(["text", "image"]) }));
+  });
+
   const memberA = {
     provider: "a",
     id: "m1",
@@ -1081,8 +1094,8 @@ describe("combo catalog capability intersection", () => {
     expect(rows.find(row => row.provider === "combo" && row.id === "nova-sol")).toMatchObject({
       alias: "gpt-5.6-sol",
       nativeAlias: true,
-      contextWindow: 372_000,
-      maxInputTokens: 372_000,
+      contextWindow: 272_000,
+      maxInputTokens: 272_000,
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       defaultReasoningEffort: "low",
@@ -1258,7 +1271,7 @@ describe("combo catalog capability intersection", () => {
     const rows = await gatherRoutedModels(config);
     const comboRow = rows.find(r => r.provider === "combo" && r.id === "auto");
     expect(comboRow).toBeDefined();
-    expect(comboRow!.contextWindow).toBe(372_000);
+    expect(comboRow!.contextWindow).toBe(272_000);
     expect(comboRow!.inputModalities).toEqual(["text", "image"]);
     // Reasoning efforts should be the intersection of the two members.
     expect(comboRow!.reasoningEfforts).toContain("low");
@@ -1428,7 +1441,7 @@ describe("combo catalog capability intersection", () => {
       maxInputTokens: 128_000,
       inputModalities: ["text"],
     });
-    // Provider contextCap below the 128k fallback clamps the synthesized window.
+    // Provider contextCap below the 128k fallback fills the unknown window.
     expect(resolveComboCatalogMember(
       { provider: "a", model: "ghost" },
       new Map(),
@@ -1440,9 +1453,8 @@ describe("combo catalog capability intersection", () => {
       contextWindow: 64_000,
       maxInputTokens: 64_000,
       contextCap: 64_000,
-      contextCapped: true,
     });
-    // Cap above the fallback leaves 128k (no artificial raise, no capped flag).
+    // Cap above the empty discovery window fills that window. This is not a clamp.
     const aboveCap = resolveComboCatalogMember(
       { provider: "a", model: "ghost" },
       new Map(),
@@ -1450,10 +1462,10 @@ describe("combo catalog capability intersection", () => {
       200_000,
     );
     expect(aboveCap).toMatchObject({
-      contextWindow: 128_000,
-      maxInputTokens: 128_000,
+      contextWindow: 200_000,
+      maxInputTokens: 200_000,
+      contextCap: 200_000,
     });
-    // Cap may be recorded for bookkeeping (contextCapped: false) but must not claim a clamp.
     expect(aboveCap?.contextCapped).toBeFalsy();
     // No provider entry and no discovery row — cannot invent a member.
     expect(resolveComboCatalogMember(
@@ -1704,8 +1716,10 @@ describe("Google Gemini catalog metadata", () => {
     const entry = buildCatalogEntries(nativeTemplate(), [], models)
       .find(row => row.slug === "google/gemini-3.6-flash");
 
+    // The registry ladder declares minimal for Gemini 3.6 Flash; it now flows through
+    // (previously sanitize silently dropped it) plus the mock top rungs for subagent spawns.
     expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
-      .toEqual(["low", "medium", "high", "max", "ultra"]);
+      .toEqual(["minimal", "low", "medium", "high", "max", "ultra"]);
     expect(entry?.input_modalities).toEqual(["text", "image"]);
     expect(entry?.context_window).toBe(1_048_576);
   });
@@ -1872,6 +1886,243 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
       expect(row?.display_name).toBe("Renamed Model");
       expect(row?.slug).toBe("custom-provider/renamed-model");
       expect(row?.opencodex_catalog_kind).toBe(CODEX_CUSTOM_MODEL_CATALOG_KIND);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("custom-provider");
+    }
+  });
+
+  test("a customModel reasoning ladder overrides the inherited provider ladder end-to-end", async () => {
+    clearModelCache("custom-provider");
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "custom-provider",
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["baseline-model", "renamed-model"],
+            // The provider row for the same slug advertises low/high; the custom row must win.
+            modelReasoningEfforts: { "baseline-model": ["low", "high"], "renamed-model": ["low", "high"] },
+          },
+        },
+        customModels: [
+          {
+            id: "cm-1",
+            provider: "custom-provider",
+            modelId: "renamed-model",
+            displayName: "Renamed Model",
+            reasoningEfforts: ["medium", "max"],
+            defaultReasoningEffort: "max",
+            addedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      expect(fetchCalls).toBe(0);
+      const custom = models.find(m => m.provider === "custom-provider" && m.id === "renamed-model");
+      // The explicit ladder rides on the row itself, not on the replaced provider row.
+      expect(custom?.reasoningEfforts).toEqual(["medium", "max"]);
+      expect(custom?.defaultReasoningEffort).toBe("max");
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(e => e.slug === "custom-provider/renamed-model");
+      const levels = (row?.supported_reasoning_levels ?? []).map((l: { effort: string }) => l.effort);
+      // The sync appends the mock top rungs (max/ultra) for subagent spawn compatibility;
+      // the declared medium/max survive verbatim, the inherited low/high does not.
+      expect(levels).toEqual(["medium", "max", "ultra"]);
+      expect(row?.default_reasoning_level).toBe("max");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("custom-provider");
+    }
+  });
+
+  test("an explicit empty customModel ladder hides the effort control despite an inherited one", async () => {
+    clearModelCache("custom-provider");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "custom-provider",
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["renamed-model"],
+            modelReasoningEfforts: { "renamed-model": ["low", "high"] },
+          },
+        },
+        customModels: [
+          {
+            id: "cm-1",
+            provider: "custom-provider",
+            modelId: "renamed-model",
+            reasoningEfforts: [],
+            addedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      const custom = models.find(m => m.provider === "custom-provider" && m.id === "renamed-model");
+      expect(custom?.reasoningEfforts).toEqual([]);
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(e => e.slug === "custom-provider/renamed-model");
+      expect(row?.supported_reasoning_levels).toEqual([]);
+      expect(row).not.toHaveProperty("default_reasoning_level");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("custom-provider");
+    }
+  });
+
+  test("a none-only custom ladder advertises no synthetic top rungs", async () => {
+    clearModelCache("custom-provider");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "custom-provider",
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["renamed-model"],
+          },
+        },
+        customModels: [
+          {
+            id: "cm-1",
+            provider: "custom-provider",
+            modelId: "renamed-model",
+            reasoningEfforts: ["none"],
+            addedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      const custom = models.find(m => m.provider === "custom-provider" && m.id === "renamed-model");
+      expect(custom?.reasoningEfforts).toEqual(["none"]);
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(e => e.slug === "custom-provider/renamed-model");
+      const levels = (row?.supported_reasoning_levels ?? []).map((l: { effort: string }) => l.effort);
+      // No reasoning-capable rung -> the mock max/ultra repair must not fire.
+      expect(levels).toEqual(["none"]);
+      expect(row?.default_reasoning_level).toBe("none");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("custom-provider");
+    }
+  });
+
+  test("a mixed none+low custom ladder keeps none first and gets the mock top rungs", async () => {
+    clearModelCache("custom-provider");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "custom-provider",
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["renamed-model"],
+          },
+        },
+        customModels: [
+          {
+            id: "cm-1",
+            provider: "custom-provider",
+            modelId: "renamed-model",
+            reasoningEfforts: ["none", "low"],
+            addedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(e => e.slug === "custom-provider/renamed-model");
+      const levels = (row?.supported_reasoning_levels ?? []).map((l: { effort: string }) => l.effort);
+      expect(levels).toEqual(["none", "low", "max", "ultra"]);
+      // `none` is declared but real rungs exist: the implicit default must be low, not none.
+      expect(row?.default_reasoning_level).toBe("low");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("custom-provider");
+    }
+  });
+
+  test("an inherited provider default does not ride onto a custom ladder that excludes it", async () => {
+    clearModelCache("custom-provider");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "custom-provider",
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["renamed-model"],
+            // The provider row advertises low/high with a high default; the custom ladder
+            // drops high, so the merged row must not keep advertising high as default.
+            modelReasoningEfforts: { "renamed-model": ["low", "high"] },
+            modelDefaultReasoningEfforts: { "renamed-model": "high" },
+          },
+        },
+        customModels: [
+          {
+            id: "cm-1",
+            provider: "custom-provider",
+            modelId: "renamed-model",
+            reasoningEfforts: ["low"],
+            addedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      const custom = models.find(m => m.provider === "custom-provider" && m.id === "renamed-model");
+      expect(custom?.reasoningEfforts).toEqual(["low"]);
+      expect(custom?.defaultReasoningEffort).toBeUndefined();
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(e => e.slug === "custom-provider/renamed-model");
+      const levels = (row?.supported_reasoning_levels ?? []).map((l: { effort: string }) => l.effort);
+      expect(levels).toEqual(["low", "max", "ultra"]);
+      // No high in the ladder, so the fallback default is medium? low is the first rung —
+      // applyReasoningLevels picks medium when present, else high, else the first entry.
+      expect(row?.default_reasoning_level).toBe("low");
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("custom-provider");
@@ -2274,6 +2525,28 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.base_instructions).toContain("claude-sonnet-4-6");
     expect(routed?.default_reasoning_level).toBe("medium");
   });
+
+  test("buildCatalogEntries restores Fast metadata only for an explicit routed capability", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "verified-relay", id: "gpt-5.6-sol", supportsServiceTier: true },
+      { provider: "unverified-relay", id: "gpt-5.6-sol" },
+      { provider: "blocked-relay", id: "gpt-5.6-sol", supportsServiceTier: false },
+    ]);
+    const verified = entries.find(e => e.slug === "verified-relay/gpt-5.6-sol");
+    const unverified = entries.find(e => e.slug === "unverified-relay/gpt-5.6-sol");
+    const blocked = entries.find(e => e.slug === "blocked-relay/gpt-5.6-sol");
+
+    expect(verified?.service_tiers).toEqual([{
+      id: "priority",
+      name: "Fast",
+      description: "1.5x speed, increased usage",
+    }]);
+    expect(verified?.additional_speed_tiers).toEqual(["fast"]);
+    expect(unverified).not.toHaveProperty("service_tiers");
+    expect(unverified).not.toHaveProperty("additional_speed_tiers");
+    expect(blocked).not.toHaveProperty("service_tiers");
+    expect(blocked).not.toHaveProperty("additional_speed_tiers");
+  });
   test("buildCatalogEntries advertises parallel tool calls only for Cursor routed models", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "cursor", id: "composer-2.5", owned_by: "cursor" },
@@ -2345,9 +2618,9 @@ describe("Codex catalog routed normalization", () => {
     expect((gpt56?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
       "low", "medium", "high", "xhigh", "max", "ultra",
     ]);
-    expect(gpt56?.context_window).toBe(372_000);
-    expect(gpt56?.max_context_window).toBe(372_000);
-    expect(gpt56?.auto_compact_token_limit).toBe(334_800);
+    expect(gpt56?.context_window).toBe(272_000);
+    expect(gpt56?.max_context_window).toBe(272_000);
+    expect(gpt56?.auto_compact_token_limit).toBe(244_800);
     expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
       "low", "medium", "high", "xhigh", "max", "ultra",
     ]);
@@ -2389,7 +2662,7 @@ describe("Codex catalog routed normalization", () => {
       expect(e).not.toHaveProperty("minimal_client_version");
       expect(e).not.toHaveProperty("prefer_websockets");
       expect(e).not.toHaveProperty("supports_websockets");
-      expect(e?.context_window).toBe(372_000);
+      expect(e?.context_window).toBe(272_000);
       expect(e?.tool_mode).toBe("code_mode_only");
       expect(e?.use_responses_lite).toBe(true);
     }
@@ -2434,9 +2707,9 @@ describe("Codex catalog routed normalization", () => {
       ...template,
       slug: "gpt-5.6-sol",
       display_name: "GPT-5.6-Sol",
-      context_window: 372_000,
-      max_context_window: 372_000,
-      auto_compact_token_limit: 334_800,
+      context_window: 922_000,
+      max_context_window: 922_000,
+      auto_compact_token_limit: 829_800,
       supported_reasoning_levels: [
         { effort: "low", description: "l" }, { effort: "high", description: "h" },
         { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
@@ -2511,18 +2784,24 @@ describe("Codex catalog routed normalization", () => {
   });
 
   test("nativeOpenAiContextWindow applies the openai cap as a ceiling only when provided", () => {
-    expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(372_000);
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(272_000);
     expect(nativeOpenAiContextWindow("gpt-5.6-sol", 272_000)).toBe(272_000);
-    // A cap above the native value is a ceiling, not a floor.
-    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(372_000);
+    // A 500k cap raises the 272k default; a 2M cap clamps to the measured 922k ceiling.
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(500_000);
+    // A cap ABOVE the native value is a ceiling, not a floor.
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 2_000_000)).toBe(922_000);
     // Non-5.6 natives are capped the same way.
     expect(nativeOpenAiContextWindow("gpt-5.4", 272_000)).toBe(272_000);
   });
 
-  test("account-scoped Daybreak Blue inherits Sol capabilities without expanding the bare allowlist", () => {
+  // Owner decision (devlog 260816_.../011 §4-bis): Daybreak Blue is now a GLOBALLY
+  // allowlisted native, so a bare row IS expected. It still inherits Sol's capability
+  // shape, and the overlap between NATIVE_OPENAI_MODELS and
+  // NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS must not duplicate any row.
+  test("Daybreak Blue inherits Sol capabilities and ships one bare row plus one row per selector", () => {
     expect(NATIVE_DAYBREAK_BLUE_MODEL).toBe("gpt-daybreak-blue-latest");
     expect(nativeOpenAiCapabilitySourceSlug(NATIVE_DAYBREAK_BLUE_MODEL)).toBe("gpt-5.6-sol");
-    expect(nativeOpenAiContextWindow(NATIVE_DAYBREAK_BLUE_MODEL)).toBe(372_000);
+    expect(nativeOpenAiContextWindow(NATIVE_DAYBREAK_BLUE_MODEL)).toBe(272_000);
     expect(nativeInputModalities(NATIVE_DAYBREAK_BLUE_MODEL)).toEqual(["text", "image"]);
     expect(nativeReasoningEfforts(NATIVE_DAYBREAK_BLUE_MODEL))
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -2532,6 +2811,9 @@ describe("Codex catalog routed normalization", () => {
     expect(source).toMatchObject({
       slug: NATIVE_DAYBREAK_BLUE_MODEL,
       display_name: "Daybreak Blue",
+      // The pinned snapshot stays a verbatim copy of what upstream shipped; the live
+      // contract (1,050,000 / 922,000) is carried by NATIVE_OPENAI_CONTEXT_OVERRIDES and
+      // applied on top by applyNativeOpenAiContextOverride, so the raw entry still reads 372k.
       context_window: 372_000,
       max_context_window: 372_000,
       comp_hash: "3000",
@@ -2547,6 +2829,7 @@ describe("Codex catalog routed normalization", () => {
     expect((source?.model_messages as { instructions_template?: string })?.instructions_template)
       .toContain("powered by the gpt-daybreak-blue-latest");
 
+    // NATIVE_OPENAI_MODELS already contains the slug; passing it again would double it.
     const projected = buildCatalogEntries(
       nativeTemplate(),
       NATIVE_OPENAI_MODELS,
@@ -2559,13 +2842,13 @@ describe("Codex catalog routed normalization", () => {
       new Set(),
       new Set(),
       undefined,
-      [...NATIVE_OPENAI_MODELS, NATIVE_DAYBREAK_BLUE_MODEL],
-      new Map([["main", [...NATIVE_OPENAI_MODELS, NATIVE_DAYBREAK_BLUE_MODEL]]]),
+      [...NATIVE_OPENAI_MODELS],
+      new Map([["main", [...NATIVE_OPENAI_MODELS]]]),
     );
     const daybreak = projected.find(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`);
     const sol = projected.find(entry => entry.slug === "gpt-5.6-sol");
     expect(daybreak).toBeDefined();
-    expect(daybreak?.auto_compact_token_limit).toBe(334_800);
+    expect(daybreak?.auto_compact_token_limit).toBe(244_800);
     expect(daybreak).toMatchObject({
       context_window: sol?.context_window,
       max_context_window: sol?.max_context_window,
@@ -2575,7 +2858,11 @@ describe("Codex catalog routed normalization", () => {
       supports_parallel_tool_calls: sol?.supports_parallel_tool_calls,
       input_modalities: sol?.input_modalities,
     });
-    expect(projected.some(entry => entry.slug === NATIVE_DAYBREAK_BLUE_MODEL)).toBe(false);
+    // The bare row now exists (owner decision) and appears exactly once, proving the
+    // two-list overlap does not duplicate it.
+    expect(projected.filter(entry => entry.slug === NATIVE_DAYBREAK_BLUE_MODEL)).toHaveLength(1);
+    expect(projected.filter(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`)).toHaveLength(1);
+    // The separately billed API-key alias must still never appear on the Codex surface.
     expect(projected.some(entry => entry.slug === "daybreak-blue-latest")).toBe(false);
   });
 
@@ -2600,7 +2887,7 @@ describe("Codex catalog routed normalization", () => {
         modelId: NATIVE_DAYBREAK_BLUE_MODEL,
         // An API-sized user value may lower neither the installed Codex native contract nor
         // accidentally collapse this row into the separately billed API-key surface.
-        contextWindow: 1_050_000,
+        contextWindow: 922_000,
       }],
     };
 
@@ -2612,7 +2899,7 @@ describe("Codex catalog routed normalization", () => {
       displayName: "Daybreak Blue",
       catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
       codexForwardNativeCapabilityAlias: true,
-      contextWindow: 372_000,
+      contextWindow: 922_000,
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       defaultReasoningEffort: "low",
@@ -2624,9 +2911,9 @@ describe("Codex catalog routed normalization", () => {
     expect(daybreak).toMatchObject({
       slug: `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`,
       display_name: "Daybreak Blue",
-      context_window: 372_000,
-      max_context_window: 372_000,
-      auto_compact_token_limit: 334_800,
+      context_window: 922_000,
+      max_context_window: 922_000,
+      auto_compact_token_limit: 829_800,
       comp_hash: "3000",
       tool_mode: "code_mode_only",
       use_responses_lite: true,
@@ -2674,6 +2961,48 @@ describe("Codex catalog routed normalization", () => {
     // rejection is proven by the native-only fields above and below.
     expect(row?.supports_search_tool).toBe(true);
     expect(row?.multi_agent_version).toBeUndefined();
+  });
+
+  test("an explicit empty custom ladder beats the native-alias ladder on a forward row", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "pool",
+        },
+      },
+      codexAccountPickerEnabled: false,
+      codexAccountNamespaces: { main: "@main" },
+      customModels: [{
+        id: "daybreak-no-reasoning",
+        provider: "openai",
+        modelId: NATIVE_DAYBREAK_BLUE_MODEL,
+        // Explicit "no reasoning": the alias's native ladder (low..ultra, default low) must
+        // not overwrite it — otherwise the catalog would advertise reasoning the user
+        // explicitly disabled for this row.
+        reasoningEfforts: [],
+      }],
+    });
+    const model = models.find(row => row.provider === "openai" && row.id === NATIVE_DAYBREAK_BLUE_MODEL);
+    expect(model).toMatchObject({
+      codexForwardNativeCapabilityAlias: true,
+      reasoningEfforts: [],
+    });
+    expect(model?.defaultReasoningEffort).toBeUndefined();
+
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const daybreak = entries.find(entry => entry.slug === `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`);
+      expect(daybreak?.supported_reasoning_levels).toEqual([]);
+      expect(daybreak).not.toHaveProperty("default_reasoning_level");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("catalog sync upgrades fallback-quality gpt-5.6 entries but preserves genuine ones", () => {
@@ -3969,12 +4298,14 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
-  test("a provider context cap never invents routed capacity (#992)", () => {
+  test("a provider context cap fills an unknown routed window (#992)", () => {
     const entries = buildCatalogEntries({ context_window: 372_000 }, [], [
-      { provider: "relay", id: "relay-model", contextCap: 950_000 },
+      { provider: "relay", id: "relay-model", contextCap: 350_000 },
     ]);
     const routed = entries.find(e => e.slug === "relay/relay-model");
-    expect(routed?.context_window).toBe(128_000);
+    expect(routed?.context_window).toBe(350_000);
+    expect(routed?.max_context_window).toBe(350_000);
+    expect(routed?.auto_compact_token_limit).toBe(315_000);
   });
 
   test("known routed metadata still restores the exact context window (#992)", () => {
@@ -4422,6 +4753,37 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
+  test("an id-only model with an enabled context cap uses that cap as the window", async () => {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ data: [{ id: "gpt-5.6-terra" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "sub2api",
+      providerContextCaps: { sub2api: 350_000 },
+      providers: {
+        sub2api: {
+          adapter: "openai-chat",
+          baseUrl: "https://sub2api.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+    });
+    const routed = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(e => e.slug === "sub2api/gpt-5.6-terra");
+
+    expect(models.find(m => m.id === "gpt-5.6-terra")).toMatchObject({
+      contextWindow: 350_000,
+      contextCap: 350_000,
+      contextCapped: false,
+    });
+    expect(routed?.context_window).toBe(350_000);
+    expect(routed?.max_context_window).toBe(350_000);
+    expect(routed?.auto_compact_token_limit).toBe(315_000);
+  });
+
   test("upstream metadata smaller than the configured window wins (#1073)", async () => {
     globalThis.fetch = (async () => new Response(
       JSON.stringify({ data: [{ id: "gpt-5.6-luna", context_length: 64_000 }] }),
@@ -4550,7 +4912,7 @@ describe("Codex catalog routed normalization", () => {
     });
   });
 
-  test("provider context-cap toggle lowers only known windows above 350k", async () => {
+  test("provider context-cap toggle lowers known windows above 350k and fills unknown ones", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       data: [
         { id: "wide-model", metadata: { limits: { max_context_length: 500_000 } } },
@@ -4583,13 +4945,13 @@ describe("Codex catalog routed normalization", () => {
       contextCapped: false,
     });
     expect(models.find(m => m.id === "unknown-model")).toMatchObject({
+      contextWindow: 350_000,
       contextCap: 350_000,
       contextCapped: false,
     });
-    expect(models.find(m => m.id === "unknown-model")?.contextWindow).toBeUndefined();
   });
 
-  test("provider context-cap toggle does not invent context for static no-metadata models", async () => {
+  test("provider context-cap toggle fills static no-metadata models", async () => {
     let fetchCalls = 0;
     globalThis.fetch = (() => {
       fetchCalls += 1;
@@ -4613,10 +4975,10 @@ describe("Codex catalog routed normalization", () => {
 
     expect(fetchCalls).toBe(0);
     expect(models.find(m => m.id === "static-no-context")).toMatchObject({
+      contextWindow: 350_000,
       contextCap: 350_000,
       contextCapped: false,
     });
-    expect(models.find(m => m.id === "static-no-context")?.contextWindow).toBeUndefined();
   });
 
   test("provider context-window caps apply to stale cached metadata", async () => {

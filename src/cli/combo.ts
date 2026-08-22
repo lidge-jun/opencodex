@@ -91,6 +91,9 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
   if (nativeAlias) combo.nativeAlias = true;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
+  const current = await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", {}, deps);
+  const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));
+  if (existing?.imageInput === "disabled") combo.imageInput = "disabled";
   const result = await runtimeRequest("/api/combos", {
     method: "PUT",
     body: JSON.stringify({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),

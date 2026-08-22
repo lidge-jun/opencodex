@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { anthropicToolCallId, MAX_TOOL_CALL_ID_LENGTH } from "../src/adapters/tool-call-id";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
@@ -435,6 +436,126 @@ describe("openai-chat tool history repair", () => {
 });
 
 describe("anthropic tool result history repair", () => {
+  /** Build one Anthropic request from a call/result history and return its parsed body. */
+  async function replay(messages: any[]): Promise<{ messages: Array<{ role: string; content: any }> }> {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const request = await adapter.buildRequest({
+      modelId: "claude-sonnet",
+      context: { messages },
+      stream: true,
+      options: {},
+    });
+    return JSON.parse(request.body);
+  }
+
+  function callThenResult(callId: string, resultId = callId): any[] {
+    return [
+      { role: "user", content: "start", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: callId, name: "read_file", arguments: {} }],
+        model: "claude-sonnet",
+        timestamp: 0,
+      },
+      { role: "toolResult", toolCallId: resultId, toolName: "read_file", content: "ok", isError: false, timestamp: 0 },
+      { role: "user", content: "continue", timestamp: 0 },
+    ];
+  }
+
+  test("a rewritten call id keeps its result paired (#1767)", async () => {
+    // requiredIds holds NORMALIZED ids. Matching the raw result id against them meant every
+    // rewritten pair lost its real result to orphan text and gained a synthetic missing-result.
+    const body = await replay(callThenResult("call:a"));
+
+    const toolUse = (body.messages[1].content as any[]).find(b => b.type === "tool_use");
+    expect(toolUse).toBeDefined();
+    const results = body.messages[2].content as any[];
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ type: "tool_result", tool_use_id: toolUse.id, content: "ok" });
+    expect(JSON.stringify(results)).not.toContain("missing tool_result");
+    expect(JSON.stringify(results)).not.toContain("tool_result without adjacent tool_use");
+  });
+
+  test("an empty id never reaches the wire", async () => {
+    // `anthropicToolCallId("")` returns undefined, but the old `?? rawId` fallback restored the
+    // empty string -- an id Anthropic rejects. The call becomes text instead.
+    const body = await replay(callThenResult(""));
+
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('"id":""');
+    expect(serialized).not.toContain('"tool_use_id":""');
+    expect(serialized).toContain("tool_use without a usable id");
+  });
+
+  test("a rewritten id does not collide with a conforming id that already looks like it", async () => {
+    // The stateless transform is not injective: `call:a` normalizes to `call_a_<hash>`, and a raw
+    // id already equal to that value passes through untouched. Two sources, one wire id.
+    const normalized = anthropicToolCallId("call:a")!;
+    expect(normalized).not.toBe("call:a");
+
+    const body = await replay([
+      { role: "user", content: "start", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call:a", name: "first", arguments: {} },
+          { type: "toolCall", id: normalized, name: "second", arguments: {} },
+        ],
+        model: "claude-sonnet",
+        timestamp: 0,
+      },
+      { role: "toolResult", toolCallId: "call:a", toolName: "first", content: "one", isError: false, timestamp: 0 },
+      { role: "toolResult", toolCallId: normalized, toolName: "second", content: "two", isError: false, timestamp: 0 },
+      { role: "user", content: "continue", timestamp: 0 },
+    ]);
+
+    const uses = (body.messages[1].content as any[]).filter(b => b.type === "tool_use");
+    expect(uses).toHaveLength(2);
+    expect(uses[0].id).not.toBe(uses[1].id);
+
+    // Each result pairs with its own call, and nothing is orphaned.
+    const results = (body.messages[2].content as any[]).filter(b => b.type === "tool_result");
+    expect(results.map(r => r.tool_use_id).sort()).toEqual(uses.map(u => u.id).sort());
+    expect(JSON.stringify(results)).not.toContain("missing tool_result");
+  });
+
+  test("a result with no matching call does not mint a tool_use identity", async () => {
+    const body = await replay(callThenResult("call_1", "call_other"));
+
+    const uses = (body.messages[1].content as any[]).filter(b => b.type === "tool_use");
+    expect(uses).toHaveLength(1);
+    expect(uses[0].id).toBe("call_1");
+
+    // The unmatched result stays text; the real call gets the synthetic missing-result block.
+    const followUp = JSON.stringify(body.messages[2].content);
+    expect(followUp).toContain("tool_result without adjacent tool_use");
+    expect(followUp).toContain("missing tool_result");
+  });
+
+  test("an over-length id is rewritten to fit, not passed through", async () => {
+    // Character-valid but too long: Anthropic rejects it, so `isConformingToolCallId` has to
+    // include the length bound or reserve() would hand it back verbatim.
+    const longId = "c".repeat(MAX_TOOL_CALL_ID_LENGTH + 20);
+    const body = await replay(callThenResult(longId));
+
+    const toolUse = (body.messages[1].content as any[]).find(b => b.type === "tool_use");
+    expect(toolUse.id.length).toBeLessThanOrEqual(MAX_TOOL_CALL_ID_LENGTH);
+    expect(toolUse.id).not.toBe(longId);
+
+    const results = (body.messages[2].content as any[]).filter(b => b.type === "tool_result");
+    expect(results).toHaveLength(1);
+    expect(results[0].tool_use_id).toBe(toolUse.id);
+  });
+
+  test("already-conforming pairs pass through byte-identical", async () => {
+    const body = await replay(callThenResult("call_ok_1"));
+
+    const toolUse = (body.messages[1].content as any[]).find(b => b.type === "tool_use");
+    expect(toolUse.id).toBe("call_ok_1");
+    const results = (body.messages[2].content as any[]).filter(b => b.type === "tool_result");
+    expect(results[0].tool_use_id).toBe("call_ok_1");
+  });
+
   test("merges adjacent tool results after multiple tool uses into one user message", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
     const request = await adapter.buildRequest({

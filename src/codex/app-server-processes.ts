@@ -7,10 +7,13 @@
  * Never match broad `*codex*` patterns that hit unrelated tools such as
  * `hermes-codex-bridge-mcp`.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync, type ExecFileException } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isProcessAlive, waitForExit } from "../lib/process-control";
-import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
+import {
+  resolveTrustedWindowsPowerShellExe,
+  resolveTrustedWindowsTaskkillExe,
+} from "../lib/windows-elevation";
 import { readCodexCatalogPath } from "./catalog/parsing";
 
 export const STALE_CODEX_APP_SERVER_HINT =
@@ -72,6 +75,7 @@ export interface CodexAppServerProcess {
 export interface ProcessSnapshot {
   pid: number;
   commandLine: string;
+  executable?: string;
   uid?: number;
   owner?: string;
   startedAtMs?: number;
@@ -83,10 +87,39 @@ export interface CodexAppServerProcessIo {
   listSnapshots?: () => ProcessSnapshot[];
   isAlive?: (pid: number) => boolean;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
+  /** Windows termination seam: drives the taskkill branch without a real exec. */
+  execFile?: (file: string, args: readonly string[]) => void;
+  /**
+   * Signal seam for the Unix branch and the taskkill fallback. Without it,
+   * injecting `kill` bypasses defaultKillCodexAppServer entirely, so the
+   * fallback could never be observed.
+   */
+  processKill?: (pid: number, signal: NodeJS.Signals) => void;
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   now?: () => number;
   readStartMs?: (pid: number) => number | null;
+  /** Async process-list seam used by the request-path Windows collector. */
+  listSnapshotsAsync?: () => Promise<ProcessSnapshot[]>;
+  /** Async batch start-time seam used by the request-path Windows collector. */
+  readStartMsBatchAsync?: (pids: readonly number[]) => Promise<Map<number, number | null>>;
   catalogMtimeMs?: () => number | null;
+}
+
+function execFileTextAsync(
+  file: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, [...args], {
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      windowsHide: true,
+    }, (error: ExecFileException | null, stdout: string) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
 }
 
 /** Split a process command line into argv-like tokens (handles simple quotes). */
@@ -212,13 +245,20 @@ export function codexAppServerProcessIdentity(proc: Pick<CodexAppServerProcess, 
 }
 
 /** True when the command line is a Codex app-server (or code-mode host) worth restarting. */
-export function isCodexAppServerCommandLine(commandLine: string): boolean {
-  const tokens = tokenizeCommandLine(commandLine.trim());
+export function isCodexAppServerCommandLine(commandLine: string, executable?: string): boolean {
+  const trimmed = commandLine.trim();
+  let tokens = tokenizeCommandLine(trimmed);
+  if (executable) {
+    if (isCodeModeHostToken(executable)) return true;
+    if (isCodexExecutableToken(executable)) {
+      let remainder = trimmed;
+      if (remainder.startsWith(executable)) remainder = remainder.slice(executable.length).trimStart();
+      else if (remainder.startsWith(`"${executable}"`)) remainder = remainder.slice(executable.length + 2).trimStart();
+      tokens = [executable, ...tokenizeCommandLine(remainder)];
+    }
+  }
   if (tokens.length === 0) return false;
   if (isCodeModeHostProcess(tokens)) return true;
-
-  // Require Codex as argv0 so later-argument occurrences stay unmatched
-  // (e.g. `node worker.js codex app-server`).
   if (!isCodexExecutableToken(tokens[0]!)) return false;
 
   let i = 1;
@@ -228,7 +268,6 @@ export function isCodexAppServerCommandLine(commandLine: string): boolean {
       i = advancePastCodexGlobalOption(tokens, i);
       continue;
     }
-    // First non-option after globals is the Codex subcommand.
     return token.toLowerCase() === "app-server";
   }
   return false;
@@ -254,12 +293,13 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
       const status = readFileSync(`/proc/${pid}/status`, "utf8");
       const processUid = parseUnixProcStatusUid(status);
       if (uid !== undefined && processUid !== undefined && processUid !== uid) continue;
-      const commandLine = readFileSync(`/proc/${pid}/cmdline`)
+      const argv = readFileSync(`/proc/${pid}/cmdline`)
         .toString("utf8")
-        .replace(/\0/g, " ")
-        .trim();
+        .split("\0")
+        .filter(Boolean);
+      const commandLine = argv.join(" ").trim();
       if (!commandLine) continue;
-      out.push({ pid, commandLine, uid: processUid });
+      out.push({ pid, commandLine, executable: argv[0], uid: processUid });
     } catch {
       /* process exited mid-scan */
     }
@@ -269,20 +309,29 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
 
 function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
-  // Top-level exec failure propagates: callers decide their own safe default
-  // (restart flow → treat as none; staleness check → unknown, never "fresh").
-  const output = uid !== undefined
+  const commandOutput = uid !== undefined
     ? execFileSync("/bin/ps", ["-u", String(uid), "-o", "pid=,command="], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
+      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
     })
     : execFileSync("/bin/ps", ["-axo", "pid=,uid=,command="], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
+      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
     });
-  for (const raw of output.split(/\r?\n/)) {
+  const executableOutput = uid !== undefined
+    ? execFileSync("/bin/ps", ["-u", String(uid), "-o", "pid=,comm="], {
+      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
+    })
+    : execFileSync("/bin/ps", ["-axo", "pid=,comm="], {
+      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
+    });
+  const executableByPid = new Map<number, string>();
+  for (const raw of executableOutput.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(raw);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const executable = match[2]?.trim() ?? "";
+    if (Number.isSafeInteger(pid) && pid > 0 && executable) executableByPid.set(pid, executable);
+  }
+  for (const raw of commandOutput.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
     if (uid !== undefined) {
@@ -290,8 +339,8 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
       if (!match) continue;
       const pid = Number(match[1]);
       const commandLine = match[2]?.trim() ?? "";
-      if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) continue;
-      out.push({ pid, commandLine, uid });
+      if (!Number.isSafeInteger(pid) || pid <= 0 || !commandLine) continue;
+      out.push({ pid, commandLine, executable: executableByPid.get(pid), uid });
       continue;
     }
     const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(line);
@@ -299,8 +348,11 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
     const pid = Number(match[1]);
     const processUid = Number(match[2]);
     const commandLine = match[3]?.trim() ?? "";
-    if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine) continue;
-    out.push({ pid, commandLine, uid: Number.isSafeInteger(processUid) ? processUid : undefined });
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !commandLine) continue;
+    out.push({
+      pid, commandLine, executable: executableByPid.get(pid),
+      uid: Number.isSafeInteger(processUid) ? processUid : undefined,
+    });
   }
   return out;
 }
@@ -317,8 +369,34 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
  * Exported for the Windows integration regression that exercises the real
  * PowerShell enumeration.
  */
-export function listWindowsSnapshots(): ProcessSnapshot[] {
+/**
+ * Turn one PowerShell enumeration's stdout into snapshots.
+ *
+ * Split out from the spawn so the failure contract is testable off-Windows: the
+ * sentinel path is the difference between "no Codex process is running" and "we could
+ * not read the process list", and only one of those is safe to act on.
+ */
+export function parseWindowsSnapshotOutput(output: string): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    // A candidate whose owner could not be verified — or a top-level query that
+    // failed outright — makes the whole enumeration incomplete. The staleness
+    // collector must not read the partial result as "nothing running".
+    if (line.trim() === "__OCX_ENUM_INCOMPLETE__") throw new Error("windows_enum_incomplete");
+    const tab = line.indexOf("\t");
+    if (tab <= 0) continue;
+    const tab2 = line.indexOf("\t", tab + 1);
+    if (tab2 <= tab) continue;
+    const pid = Number(line.slice(0, tab));
+    const commandLine = line.slice(tab + 1, tab2).trim();
+    const owner = line.slice(tab2 + 1).trim();
+    if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine || !owner) continue;
+    out.push({ pid, commandLine, owner });
+  }
+  return out;
+}
+
+function windowsSnapshotPowerShellCommand(): string {
   // Newlines keep -Command as a real script (space-joined statements need ';').
   // Double-quoted format string so `t expands to a real tab.
   // Codex candidates only: basename token codex / codex.exe / codex.cmd /
@@ -327,10 +405,18 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   // path with "opencodex".
   const basenameMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source);
   const codeModeMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.source);
-  const psCommand = [
+  return [
     "$ErrorActionPreference='SilentlyContinue'",
     "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
-    "Get-CimInstance Win32_Process | Where-Object {",
+    // -ErrorAction Stop plus the outer try is what makes a TOP-LEVEL query failure
+    // observable. Under SilentlyContinue alone, a failing Get-CimInstance emits nothing
+    // and the enumeration is indistinguishable from "no Codex process is running" —
+    // the parse loop finds no rows, no sentinel is produced, and the staleness collector
+    // reports not_running for a machine whose process list it never actually read.
+    // The per-process catch below cannot cover this: it only runs once the pipeline has
+    // objects to iterate.
+    "try {",
+    "Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {",
     "  -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and (",
     `    $_.CommandLine -match ${basenameMatch} -or`,
     `    $_.CommandLine -match ${codeModeMatch}`,
@@ -345,31 +431,32 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     "    \"{0}`t{1}`t{2}\" -f $_.ProcessId, $cmd, $owner",
     "  } catch { \"__OCX_ENUM_INCOMPLETE__\" }",
     "}",
+    "} catch { \"__OCX_ENUM_INCOMPLETE__\" }",
   ].join("\n");
+}
+
+export function listWindowsSnapshots(runPowerShell?: (psCommand: string) => string): ProcessSnapshot[] {
   // Top-level exec failure propagates (see listDarwinSnapshots note). The
   // executable resolves from the trusted System32 directory (never PATH), and
   // windowsHide keeps the enumeration console-less on desktop sessions (#1278).
-  const output = execFileSync(resolveTrustedWindowsPowerShellExe(), [
+  const psCommand = windowsSnapshotPowerShellCommand();
+  const output = runPowerShell
+    ? runPowerShell(psCommand)
+    : execFileSync(resolveTrustedWindowsPowerShellExe(), [
+      "-NoProfile", "-NoLogo", "-NonInteractive",
+      "-Command",
+      psCommand,
+    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true });
+  return parseWindowsSnapshotOutput(output);
+}
+
+async function listWindowsSnapshotsAsync(): Promise<ProcessSnapshot[]> {
+  const output = await execFileTextAsync(resolveTrustedWindowsPowerShellExe(), [
     "-NoProfile", "-NoLogo", "-NonInteractive",
     "-Command",
-    psCommand,
-  ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true });
-  for (const line of output.split(/\r?\n/)) {
-    // A candidate whose owner could not be verified makes the whole
-    // enumeration incomplete — the staleness collector must not read the
-    // partial result as "nothing running".
-    if (line.trim() === "__OCX_ENUM_INCOMPLETE__") throw new Error("windows_enum_incomplete");
-    const tab = line.indexOf("\t");
-    if (tab <= 0) continue;
-    const tab2 = line.indexOf("\t", tab + 1);
-    if (tab2 <= tab) continue;
-    const pid = Number(line.slice(0, tab));
-    const commandLine = line.slice(tab + 1, tab2).trim();
-    const owner = line.slice(tab2 + 1).trim();
-    if (!Number.isSafeInteger(pid) || pid <= 1 || !commandLine || !owner) continue;
-    out.push({ pid, commandLine, owner });
-  }
-  return out;
+    windowsSnapshotPowerShellCommand(),
+  ], 8_000);
+  return parseWindowsSnapshotOutput(output);
 }
 
 function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined): ProcessSnapshot[] {
@@ -403,7 +490,7 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
   const matched: CodexAppServerProcess[] = [];
   for (const snapshot of snapshots) {
     if (seen.has(snapshot.pid)) continue;
-    if (!isCodexAppServerCommandLine(snapshot.commandLine)) continue;
+    if (!isCodexAppServerCommandLine(snapshot.commandLine, snapshot.executable)) continue;
     seen.add(snapshot.pid);
     matched.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
   }
@@ -480,6 +567,41 @@ export function readProcessStartMs(pid: number, platform: NodeJS.Platform = proc
   return readLinuxProcStartMs(pid);
 }
 
+function windowsProcessStartPowerShellCommand(pids: readonly number[]): string {
+  const filter = pids.map(pid => `ProcessId=${pid}`).join(" OR ");
+  return `Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { "$($_.ProcessId)\t$($_.CreationDate.ToUniversalTime().ToString("o"))" }`;
+}
+
+function parseWindowsProcessStartTimes(
+  stdout: string,
+  pids: readonly number[],
+): Map<number, number | null> {
+  const byPid = new Map<number, number>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const tab = line.indexOf("\t");
+    if (tab <= 0) continue;
+    const pid = Number(line.slice(0, tab));
+    const parsed = Date.parse(line.slice(tab + 1).trim());
+    if (Number.isSafeInteger(pid) && Number.isFinite(parsed)) byPid.set(pid, parsed);
+  }
+  return new Map(pids.map(pid => [pid, byPid.get(pid) ?? null]));
+}
+
+async function readWindowsProcessStartMsBatchAsync(
+  pids: readonly number[],
+): Promise<Map<number, number | null>> {
+  try {
+    const stdout = await execFileTextAsync(resolveTrustedWindowsPowerShellExe(), [
+      "-NoProfile", "-NoLogo", "-NonInteractive",
+      "-Command",
+      windowsProcessStartPowerShellCommand(pids),
+    ], 5_000);
+    return parseWindowsProcessStartTimes(stdout, pids);
+  } catch {
+    return new Map(pids.map(pid => [pid, null]));
+  }
+}
+
 /**
  * Start times for many pids in ONE platform call where possible, so the
  * staleness check does not serialize per-process ps/PowerShell invocations
@@ -515,22 +637,12 @@ export function readProcessStartMsBatch(
   }
   if (platform === "win32") {
     try {
-      const filter = pids.map(pid => `ProcessId=${pid}`).join(" OR ");
       const stdout = execFileSync(resolveTrustedWindowsPowerShellExe(), [
         "-NoProfile", "-NoLogo", "-NonInteractive",
         "-Command",
-        `Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { "$($_.ProcessId)\t$($_.CreationDate.ToUniversalTime().ToString("o"))" }`,
+        windowsProcessStartPowerShellCommand(pids),
       ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true });
-      const byPid = new Map<number, number>();
-      for (const line of stdout.split(/\r?\n/)) {
-        const tab = line.indexOf("\t");
-        if (tab <= 0) continue;
-        const pid = Number(line.slice(0, tab));
-        const parsed = Date.parse(line.slice(tab + 1).trim());
-        if (Number.isSafeInteger(pid) && Number.isFinite(parsed)) byPid.set(pid, parsed);
-      }
-      for (const pid of pids) out.set(pid, byPid.get(pid) ?? null);
-      return out;
+      return parseWindowsProcessStartTimes(stdout, pids);
     } catch {
       for (const pid of pids) out.set(pid, null);
       return out;
@@ -557,10 +669,91 @@ function defaultCatalogMtimeMs(): number | null {
   }
 }
 
+function codexAppServerProcessesFromSnapshots(
+  snapshots: readonly ProcessSnapshot[],
+): CodexAppServerProcess[] {
+  const processes: CodexAppServerProcess[] = [];
+  const seen = new Set<number>();
+  for (const snapshot of snapshots) {
+    if (seen.has(snapshot.pid)) continue;
+    if (!isCodexAppServerCommandLine(snapshot.commandLine, snapshot.executable)) continue;
+    seen.add(snapshot.pid);
+    processes.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
+  }
+  return processes;
+}
+
+function catalogStatusFromProcesses(
+  processes: readonly CodexAppServerProcess[],
+  catalogMtimeMs: number | null,
+  starts: ReadonlyMap<number, number | null>,
+): CodexAppServerCatalogStatus {
+  const withStarts = processes.map(proc => ({
+    pid: proc.pid,
+    startedAtMs: starts.get(proc.pid) ?? null,
+  }));
+  if (catalogMtimeMs === null || withStarts.some(proc => proc.startedAtMs === null)) {
+    return { state: "unknown", processes: withStarts, catalogMtimeMs };
+  }
+  // `<=` is deliberate: coarse clocks (ps lstart is second-granularity) can
+  // report equal values when the catalog actually changed after startup.
+  const stale = withStarts.some(proc => proc.startedAtMs! <= catalogMtimeMs);
+  return { state: stale ? "stale" : "fresh", processes: withStarts, catalogMtimeMs };
+}
+
 // Short TTL: process listing + stat run once per window even under per-turn
 // guidance calls (#857).
 let catalogStateCache: { atMs: number; status: CodexAppServerCatalogStatus } | null = null;
+interface RequestCatalogStateIdentity {
+  platform: NodeJS.Platform;
+  listSnapshots?: CodexAppServerProcessIo["listSnapshots"];
+  listSnapshotsAsync?: CodexAppServerProcessIo["listSnapshotsAsync"];
+  readStartMs?: CodexAppServerProcessIo["readStartMs"];
+  readStartMsBatchAsync?: CodexAppServerProcessIo["readStartMsBatchAsync"];
+  catalogMtimeMs?: CodexAppServerProcessIo["catalogMtimeMs"];
+  now?: CodexAppServerProcessIo["now"];
+}
+
+interface RequestCatalogStateFlight {
+  generation: number;
+  identity: RequestCatalogStateIdentity;
+  promise: Promise<CodexAppServerCatalogStatus>;
+}
+
+let requestCatalogStateGeneration = 0;
+let requestCatalogStateCache: {
+  generation: number;
+  identity: RequestCatalogStateIdentity;
+  atMs: number;
+  status: CodexAppServerCatalogStatus;
+} | null = null;
+let requestCatalogStateFlight: RequestCatalogStateFlight | null = null;
 const CATALOG_STATE_TTL_MS = 5_000;
+/**
+ * `unknown` is a failure to observe, not an observation, so it gets a much shorter
+ * window than a real reading. At the full 5s a single transient enumeration failure
+ * suppresses guidance for every call in that window, and the retry that would have
+ * succeeded never runs. Keeping a brief window still collapses a burst of per-turn
+ * calls into one probe, which is what the cache is for.
+ */
+const CATALOG_STATE_UNKNOWN_TTL_MS = 250;
+
+export function catalogStateTtlMs(state: CodexAppServerCatalogState): number {
+  return state === "unknown" ? CATALOG_STATE_UNKNOWN_TTL_MS : CATALOG_STATE_TTL_MS;
+}
+
+function sameRequestCatalogStateIdentity(
+  left: RequestCatalogStateIdentity,
+  right: RequestCatalogStateIdentity,
+): boolean {
+  return left.platform === right.platform
+    && left.listSnapshots === right.listSnapshots
+    && left.listSnapshotsAsync === right.listSnapshotsAsync
+    && left.readStartMs === right.readStartMs
+    && left.readStartMsBatchAsync === right.readStartMsBatchAsync
+    && left.catalogMtimeMs === right.catalogMtimeMs
+    && left.now === right.now;
+}
 
 /**
  * Compare the on-disk catalog mtime against the start time of running Codex
@@ -585,7 +778,8 @@ export function collectCodexAppServerCatalogState(
   const fullyDefault = !io.listSnapshots && !io.readStartMs && !io.catalogMtimeMs
     && !io.platform && !io.getuid && !io.now;
   if (fullyDefault
-    && catalogStateCache && now - catalogStateCache.atMs < CATALOG_STATE_TTL_MS) {
+    && catalogStateCache
+    && now - catalogStateCache.atMs < catalogStateTtlMs(catalogStateCache.status.state)) {
     return catalogStateCache.status;
   }
   const compute = (): CodexAppServerCatalogStatus => {
@@ -599,45 +793,28 @@ export function collectCodexAppServerCatalogState(
     });
     let snapshots: ProcessSnapshot[];
     let enumerationFailed = false;
-    if (io.listSnapshots) {
-      snapshots = io.listSnapshots();
-    } else {
-      try {
-        snapshots = defaultListSnapshots(platform, getuid);
-      } catch {
-        // Enumeration failure must never read as "nothing running" — that
-        // would let positive model guidance through on guesswork (#857).
-        snapshots = [];
-        enumerationFailed = true;
-      }
+    const enumerate = io.listSnapshots ?? (() => defaultListSnapshots(platform, getuid));
+    try {
+      snapshots = enumerate();
+    } catch {
+      // Enumeration failure must never read as "nothing running" — that would let
+      // positive model guidance through on guesswork (#857). The injected seam gets
+      // the same contract as the default path: whoever enumerates, a failure to read
+      // the process list is unknown, not an empty machine.
+      snapshots = [];
+      enumerationFailed = true;
     }
-    const processes: CodexAppServerProcess[] = [];
-    const seen = new Set<number>();
-    for (const snapshot of snapshots) {
-      if (seen.has(snapshot.pid)) continue;
-      if (!isCodexAppServerCommandLine(snapshot.commandLine)) continue;
-      seen.add(snapshot.pid);
-      processes.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
-    }
+    const processes = codexAppServerProcessesFromSnapshots(snapshots);
     if (processes.length === 0) {
       return enumerationFailed
         ? { state: "unknown", processes: [], catalogMtimeMs: null }
         : { state: "not_running", processes: [], catalogMtimeMs: null };
     }
     const catalogMtimeMs = (io.catalogMtimeMs ?? defaultCatalogMtimeMs)();
-    const withStarts = io.readStartMs
-      ? processes.map(proc => ({ pid: proc.pid, startedAtMs: io.readStartMs!(proc.pid) }))
-      : (() => {
-        const batch = readProcessStartMsBatch(processes.map(proc => proc.pid), platform);
-        return processes.map(proc => ({ pid: proc.pid, startedAtMs: batch.get(proc.pid) ?? null }));
-      })();
-    if (catalogMtimeMs === null || withStarts.some(proc => proc.startedAtMs === null)) {
-      return { state: "unknown", processes: withStarts, catalogMtimeMs };
-    }
-    // `<=` is deliberate: coarse clocks (ps lstart is second-granularity) can
-    // report equal values when the catalog actually changed after startup.
-    const stale = withStarts.some(proc => proc.startedAtMs! <= catalogMtimeMs);
-    return { state: stale ? "stale" : "fresh", processes: withStarts, catalogMtimeMs };
+    const starts = io.readStartMs
+      ? new Map(processes.map(proc => [proc.pid, io.readStartMs!(proc.pid)] as const))
+      : readProcessStartMsBatch(processes.map(proc => proc.pid), platform);
+    return catalogStatusFromProcesses(processes, catalogMtimeMs, starts);
   };
   const status = compute();
   if (fullyDefault) {
@@ -646,9 +823,129 @@ export function collectCodexAppServerCatalogState(
   return status;
 }
 
-/** Test hook: drop the memoized catalog state. */
+/**
+ * Request-path catalog state collector.
+ *
+ * [Decision Log]
+ * - 목적과 의도: keep Windows CIM discovery from blocking Bun's event loop while v2 guidance is built.
+ * - 기존 구현 및 제약 조건: CLI/service operations still need the synchronous, fail-closed collector; the request path needs only advisory state.
+ * - 검토한 주요 대안: remove stale-catalog guidance, move all process work to workers, or add a Windows-only async boundary.
+ * - 선택한 방식: retain the synchronous API and use async PowerShell plus an identity-scoped in-flight refresh, short cache, and invalidation generation only for Windows requests.
+ * - 다른 대안 대신 이 방식을 선택한 이유: it fixes unrelated `/healthz` starvation without widening the process-matching or restart contract.
+ * - 장점, 단점 및 영향: concurrent turns share one CIM walk, invalidated pre-write results cannot repopulate the cache, and the event loop stays responsive; a cold v2 turn can still await the bounded advisory probe.
+ */
+export async function collectCodexAppServerCatalogStateForRequest(
+  io: CodexAppServerProcessIo = {},
+): Promise<CodexAppServerCatalogStatus> {
+  const platform = io.platform ?? process.platform;
+  if (platform !== "win32") return collectCodexAppServerCatalogState(io);
+
+  const now = (io.now ?? Date.now)();
+  const generation = requestCatalogStateGeneration;
+  const identity: RequestCatalogStateIdentity = {
+    platform,
+    listSnapshots: io.listSnapshots,
+    listSnapshotsAsync: io.listSnapshotsAsync,
+    readStartMs: io.readStartMs,
+    readStartMsBatchAsync: io.readStartMsBatchAsync,
+    catalogMtimeMs: io.catalogMtimeMs,
+    now: io.now,
+  };
+  if (requestCatalogStateCache
+    && requestCatalogStateCache.generation === generation
+    && sameRequestCatalogStateIdentity(requestCatalogStateCache.identity, identity)
+    && now - requestCatalogStateCache.atMs < catalogStateTtlMs(requestCatalogStateCache.status.state)) {
+    return requestCatalogStateCache.status;
+  }
+  if (requestCatalogStateFlight
+    && requestCatalogStateFlight.generation === generation
+    && sameRequestCatalogStateIdentity(requestCatalogStateFlight.identity, identity)) {
+    return requestCatalogStateFlight.promise;
+  }
+
+  const refresh = async (): Promise<CodexAppServerCatalogStatus> => {
+    let snapshots: ProcessSnapshot[];
+    try {
+      snapshots = io.listSnapshotsAsync
+        ? await io.listSnapshotsAsync()
+        : io.listSnapshots
+          ? io.listSnapshots()
+          : await listWindowsSnapshotsAsync();
+    } catch {
+      return { state: "unknown", processes: [], catalogMtimeMs: null };
+    }
+    const processes = codexAppServerProcessesFromSnapshots(snapshots);
+    if (processes.length === 0) {
+      return { state: "not_running", processes: [], catalogMtimeMs: null };
+    }
+    let catalogMtimeMs: number | null;
+    try {
+      catalogMtimeMs = (io.catalogMtimeMs ?? defaultCatalogMtimeMs)();
+    } catch {
+      catalogMtimeMs = null;
+    }
+    const pids = processes.map(proc => proc.pid);
+    const starts = io.readStartMsBatchAsync
+      ? await io.readStartMsBatchAsync(pids)
+      : io.readStartMs
+        ? new Map(pids.map(pid => [pid, io.readStartMs!(pid)] as const))
+        : await readWindowsProcessStartMsBatchAsync(pids);
+    return catalogStatusFromProcesses(processes, catalogMtimeMs, starts);
+  };
+
+  const pending = refresh().catch(() => ({
+    state: "unknown" as const,
+    processes: [],
+    catalogMtimeMs: null,
+  }));
+  let flight: RequestCatalogStateFlight;
+  const promise = pending.then(status => {
+    // A catalog write can invalidate while slow CIM is still running. The result
+    // describes the PRE-write world, so it must neither repopulate the post-write
+    // cache nor reach the caller.
+    //
+    // Suppressing only the cache write is not enough. The awaiting request still
+    // received `fresh`, and `fresh` is the one state that authorizes positive
+    // guidance (`src/server/responses/collaboration.ts:279-280` returns null for
+    // `stale`/`unknown` but describes the catalog for `fresh`). So the request
+    // would advertise the newly written disk catalog to an app-server whose
+    // in-memory copy the write just made stale — a wrong answer, which is worse
+    // than the slow answer this whole change exists to fix.
+    //
+    // Degrade to `unknown` instead: it is the honest description of what an
+    // invalidated observation knows, and the guidance path already treats it as
+    // "say nothing positive".
+    if (requestCatalogStateGeneration !== generation) {
+      return { state: "unknown" as const, processes: [], catalogMtimeMs: null };
+    }
+    if (requestCatalogStateFlight === flight) {
+      requestCatalogStateCache = {
+        generation,
+        identity,
+        atMs: (io.now ?? Date.now)(),
+        status,
+      };
+    }
+    return status;
+  }).finally(() => {
+    if (requestCatalogStateFlight === flight) requestCatalogStateFlight = null;
+  });
+  flight = { generation, identity, promise };
+  requestCatalogStateFlight = flight;
+  return flight.promise;
+}
+
+/**
+ * Drop memoized catalog state after a relevant catalog/cache write and before
+ * the post-write state read. Advancing the generation prevents an older
+ * in-flight Windows CIM refresh from publishing its pre-write result after the
+ * write has completed.
+ */
 export function resetCodexAppServerCatalogStateCache(): void {
   catalogStateCache = null;
+  requestCatalogStateGeneration += 1;
+  requestCatalogStateCache = null;
+  requestCatalogStateFlight = null;
 }
 
 export interface RestartCodexAppServersResult {
@@ -658,13 +955,57 @@ export interface RestartCodexAppServersResult {
   failed: Array<{ pid: number; error: string }>;
 }
 
+/**
+ * Platform-appropriate termination for a matched app-server.
+ *
+ * On Windows `process.kill(pid, "SIGTERM")` is not a graceful signal — it is an
+ * unconditional terminate of that one process, and it leaves the process tree
+ * behind. `taskkill /T /F` is therefore not an escalation there: the kill was
+ * hard either way, and `/T` adds the child cleanup that keeps an app-server's
+ * children from being orphaned when the window is closed without a quit
+ * affordance. That matters most on Windows precisely because there is no Ctrl+Q.
+ *
+ * The asymmetry with Unix is deliberate and must not be "fixed" into symmetry:
+ * on Unix, SIGTERM really is graceful, and following it with SIGKILL would ask a
+ * harsher consent than a restart click gives. Survivors are reported instead.
+ *
+ * The executable is resolved from a trusted system directory rather than PATH,
+ * matching how this file already resolves PowerShell — an unqualified
+ * `taskkill` is a hijack surface.
+ */
+function defaultKillCodexAppServer(
+  pid: number,
+  signal: NodeJS.Signals,
+  io: CodexAppServerProcessIo = {},
+): void {
+  const platform = io.platform ?? process.platform;
+  const signalProcess = io.processKill ?? ((target: number, sig: NodeJS.Signals) => {
+    process.kill(target, sig);
+  });
+  if (platform !== "win32") {
+    signalProcess(pid, signal);
+    return;
+  }
+  const exec = io.execFile ?? ((file: string, args: readonly string[]) => {
+    execFileSync(file, [...args], { stdio: "ignore", timeout: 5_000, windowsHide: true });
+  });
+  try {
+    exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(pid), "/T", "/F"]);
+  } catch {
+    // Fall back to the previous behavior rather than reporting a failure the old
+    // code would not have reported.
+    signalProcess(pid, signal);
+  }
+}
+
+
 /** Send SIGTERM to matched processes and wait briefly; never escalates to SIGKILL. */
 export function restartCodexAppServers(
   processes: readonly CodexAppServerProcess[] = listCodexAppServerProcesses(),
   io: CodexAppServerProcessIo = {},
 ): RestartCodexAppServersResult {
   const isAlive = io.isAlive ?? isProcessAlive;
-  const kill = io.kill ?? ((pid, signal) => { process.kill(pid, signal); });
+  const kill = io.kill ?? ((pid, signal) => { defaultKillCodexAppServer(pid, signal, io); });
   const wait = io.waitExit ?? waitForExit;
   const now = io.now ?? Date.now;
   const requested = processes.map(process => process.pid);

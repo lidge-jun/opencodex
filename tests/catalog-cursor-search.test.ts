@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 
 describe("routed catalog search advertising", () => {
-  test("cursor entries do not advertise the hosted search tool (runTurn bypasses the sidecar)", () => {
-    const entry = normalizeRoutedCatalogEntry({ slug: "cursor/auto" } as never) as Record<string, unknown>;
-    expect(entry.supports_search_tool).toBe(false);
+  test("cursor entries enable deferred discovery without advertising hosted web search", () => {
+    const entry = normalizeRoutedCatalogEntry({
+      slug: "cursor/auto",
+      web_search_tool_type: "text_and_image",
+    } as never) as Record<string, unknown>;
+    expect(entry.tool_mode).toBe("code_mode_only");
+    expect(entry.supports_search_tool).toBe(true);
     expect(entry.web_search_tool_type).toBeUndefined();
     expect(entry.supports_parallel_tool_calls).toBe(true);
   });
@@ -37,13 +41,14 @@ describe("routed catalog search advertising", () => {
     expect(routed?.web_search_tool_type).toBe("text_and_image");
   });
 
-  test("cursor template-less fallback rows stay opted out (no deferred discovery, no hosted search)", () => {
+  test("cursor template-less fallback rows keep deferred discovery without hosted search", () => {
     const entries = buildCatalogEntries(null, [], [
       { provider: "cursor", id: "auto" },
     ]) as Array<Record<string, unknown>>;
     const routed = entries.find(e => typeof e.slug === "string" && (e.slug as string).startsWith("cursor/"));
     expect(routed).toBeDefined();
-    expect(routed?.supports_search_tool).toBe(false);
+    expect(routed?.tool_mode).toBe("code_mode_only");
+    expect(routed?.supports_search_tool).toBe(true);
     expect(routed?.web_search_tool_type).toBeUndefined();
   });
 });

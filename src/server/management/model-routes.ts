@@ -29,6 +29,46 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
   }
   return { values: raw as string[] };
 }
+
+/**
+ * Custom-row reasoning ladder. Labels are validated against the Codex ladder (low..ultra)
+ * exactly like provider `modelReasoningEfforts` values; unknown labels would otherwise
+ * surface in a catalog the upstream never accepts. An empty array is meaningful (explicit
+ * "no reasoning" hides the effort control) and must be preserved, not cleared.
+ */
+function readReasoningEfforts(raw: unknown): { values?: string[]; error?: string } {
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) return { error: "reasoningEfforts must be an array" };
+  const rejected: string[] = [];
+  const values: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") return { error: "reasoningEfforts must contain only strings" };
+    if (!isDeclaredReasoningEffort(value)) { rejected.push(value); continue; }
+    if (!values.includes(value)) values.push(value);
+  }
+  if (rejected.length > 0) {
+    return { error: `unsupported reasoning effort: ${rejected.join(", ")} (allowed: none, minimal, low, medium, high, xhigh, max, ultra)` };
+  }
+  // Canonical order: the catalog writes supported_reasoning_levels in input order and the
+  // fallback default picks the first entry, so a caller-chosen order must not leak through.
+  return { values: canonicalizeReasoningEfforts(values) };
+}
+
+/** Default effort must be a ladder member that the declared ladder actually includes. */
+function readDefaultReasoningEffort(raw: unknown, efforts: string[] | undefined): { value?: string; error?: string } {
+  if (raw === undefined) return {};
+  if (raw === null) return { value: undefined };
+  if (typeof raw !== "string" || !isDeclaredReasoningEffort(raw)) {
+    return { error: "defaultReasoningEffort must be one of: none, minimal, low, medium, high, xhigh, max, ultra" };
+  }
+  if (efforts === undefined || efforts.length === 0) {
+    return { error: "defaultReasoningEffort requires a non-empty reasoningEfforts ladder" };
+  }
+  if (!efforts.includes(raw)) {
+    return { error: `defaultReasoningEffort "${raw}" is not in the declared reasoningEfforts ladder` };
+  }
+  return { value: raw };
+}
 import type { CatalogModel } from "../../codex/catalog";
 import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
@@ -57,7 +97,8 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
+import { knownModelIdsForProvider } from "../../router";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -71,6 +112,7 @@ import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summa
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
+import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
   clearDebugSettings,
@@ -87,6 +129,7 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO, corsHeaders } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 import {
+  ClientPathError,
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
   OPENCODE_PROVIDER_ID,
@@ -162,6 +205,27 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       );
     }
     const spec = EXPORT_CLIENTS[requested];
+    // Resolved before the catalog load on purpose. A refused override is a
+    // property of the request, not of the catalog: validating it afterwards
+    // let a busy or failing catalog answer 503 first, so a user with a
+    // relative override never saw the message that says how to fix it — and
+    // the route did the enumeration work anyway for input it was going to
+    // reject.
+    let destination: string;
+    try {
+      destination = spec.destination(process.env);
+    } catch (error) {
+      // A client's own environment override can name a path the resolver
+      // refuses — a relative value, which this process and the client would
+      // resolve against different working directories. That is a
+      // user-correctable configuration error, not a server fault, so it leaves
+      // this boundary as a bounded 400 instead of escaping handleManagementAPI
+      // as a generic 500 and stripping the message that says how to fix it.
+      // `integrations/state.ts` and `integrations/writer.ts` already catch the
+      // same error on their paths; this route was the one that did not.
+      if (!(error instanceof ClientPathError)) throw error;
+      return jsonResponse({ error: error.message }, 400, req, config);
+    }
     let models: ExportModel[];
     try {
       // The ONE loader every export surface uses. It carries the visibility
@@ -189,7 +253,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse({
       client: spec.id,
       filename: spec.filename,
-      destination: spec.destination(process.env),
+      destination,
       apiKeyEnv: spec.apiKeyEnv,
       exportHint: spec.exportHint,
       // The client's own format and the exact bytes for it. The GUI previously
@@ -330,12 +394,11 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   }
 
   if (url.pathname === "/api/custom-models" && req.method === "POST") {
-    let body: { provider?: unknown; modelId?: unknown; displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown };
+    let body: { provider?: unknown; modelId?: unknown; displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; reasoningEfforts?: unknown; defaultReasoningEffort?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const provider = typeof body.provider === "string" ? body.provider.trim() : "";
     const modelId = typeof body.modelId === "string" ? body.modelId.trim() : "";
     if (!provider || !modelId) return jsonResponse({ error: "provider and modelId are required" }, 400);
-    if (modelId.includes("/")) return jsonResponse({ error: "modelId must not contain /" }, 400);
     if (!isValidProviderName(provider)) return jsonResponse({ error: "invalid provider name" }, 400);
     if (!hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "provider not configured" }, 404);
     const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim() : undefined;
@@ -344,10 +407,18 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const modalities = readInputModalities(body.inputModalities);
     if (modalities.error) return jsonResponse({ error: modalities.error }, 400);
     const inputModalities = modalities.values;
+    const reasoning = readReasoningEfforts(body.reasoningEfforts);
+    if (reasoning.error) return jsonResponse({ error: reasoning.error }, 400);
+    const defaultEffort = readDefaultReasoningEffort(body.defaultReasoningEffort, reasoning.values);
+    if (defaultEffort.error) return jsonResponse({ error: defaultEffort.error }, 400);
     const existing = config.customModels ?? [];
     const newSlug = routedSlug(provider, modelId);
     if (existing.some(cm => routedSlug(cm.provider, cm.modelId) === newSlug)) {
       return jsonResponse({ error: "duplicate model" }, 409);
+    }
+    const known = knownModelIdsForProvider(provider, config.providers[provider], config);
+    if (encodedModelIdCollides(modelId, known)) {
+      return jsonResponse({ error: "ambiguous model id" }, 409);
     }
     const entry: OcxCustomModel = {
       id: randomUUID(),
@@ -356,6 +427,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       ...(displayName ? { displayName } : {}),
       ...(contextWindow ? { contextWindow } : {}),
       ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
+      ...(reasoning.values !== undefined ? { reasoningEfforts: reasoning.values } : {}),
+      ...(defaultEffort.value ? { defaultReasoningEffort: defaultEffort.value } : {}),
       addedAt: new Date().toISOString(),
     };
     config.customModels = [...existing, entry];
@@ -368,14 +441,13 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (customPutMatch && req.method === "PUT") {
     let id: string;
     try { id = decodeURIComponent(customPutMatch[1]); } catch { return jsonResponse({ error: "invalid id encoding" }, 400); }
-    let body: { displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; modelId?: unknown };
+    let body: { displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; modelId?: unknown; reasoningEfforts?: unknown; defaultReasoningEffort?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const list = config.customModels ?? [];
     const idx = list.findIndex(cm => cm.id === id);
     if (idx === -1) return jsonResponse({ error: "not found" }, 404);
     const cm = { ...list[idx] };
     if (typeof body.modelId === "string" && body.modelId.trim()) {
-      if (body.modelId.includes("/")) return jsonResponse({ error: "modelId must not contain /" }, 400);
       cm.modelId = body.modelId.trim();
     }
     if (body.displayName !== undefined) {
@@ -391,9 +463,42 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (edited.error) return jsonResponse({ error: edited.error }, 400);
       cm.inputModalities = edited.values && edited.values.length > 0 ? edited.values : undefined;
     }
+    // `null` clears the stored ladder back to "inherit from the provider row"; `[]` stays
+    // stored as an explicit "no reasoning" override. The default effort rides along and is
+    // validated against the ladder the row ends up with.
+    if (body.reasoningEfforts !== undefined) {
+      if (body.reasoningEfforts === null) {
+        cm.reasoningEfforts = undefined;
+      } else {
+        const edited = readReasoningEfforts(body.reasoningEfforts);
+        if (edited.error) return jsonResponse({ error: edited.error }, 400);
+        cm.reasoningEfforts = edited.values;
+      }
+    }
+    if (body.defaultReasoningEffort !== undefined) {
+      const edited = readDefaultReasoningEffort(body.defaultReasoningEffort, cm.reasoningEfforts);
+      if (edited.error) return jsonResponse({ error: edited.error }, 400);
+      cm.defaultReasoningEffort = edited.value;
+    }
+    // Mirror of the POST invariant: a default only survives as a member of the final ladder.
+    // Without this, a ladder shrink/clear on a row that was created with a default leaves a
+    // stale default that re-applies itself onto the inherited ladder in the generated catalog
+    // (the GUI toggle-off path sends only reasoningEfforts, never the default).
+    if (cm.defaultReasoningEffort !== undefined) {
+      const ladder = cm.reasoningEfforts;
+      if (!ladder || ladder.length === 0 || !ladder.includes(cm.defaultReasoningEffort)) {
+        cm.defaultReasoningEffort = undefined;
+      }
+    }
     const updatedSlug = routedSlug(cm.provider, cm.modelId);
     if (list.some((other, i) => i !== idx && routedSlug(other.provider, other.modelId) === updatedSlug)) {
       return jsonResponse({ error: "duplicate model" }, 409);
+    }
+    const known = knownModelIdsForProvider(cm.provider, config.providers[cm.provider], {
+      customModels: list.filter((_, i) => i !== idx),
+    });
+    if (encodedModelIdCollides(cm.modelId, known)) {
+      return jsonResponse({ error: "ambiguous model id" }, 409);
     }
     list[idx] = cm;
     config.customModels = list;

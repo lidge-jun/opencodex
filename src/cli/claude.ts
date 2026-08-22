@@ -19,6 +19,7 @@ import { configuredAdminToken } from "../lib/admin-secrets";
 import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
 
 export interface ClaudeLaunchEnv {
@@ -269,7 +270,7 @@ async function ensureProxyForClaude(): Promise<number | null> {
   if (live) return live.port;
   const cfgPort = loadConfig().port;
   const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
-  const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(pinPort)], {
+  const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(pinPort)]), {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -316,7 +317,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
   // Pre-write the CLI's gateway-model cache (devlog 030): without a token the CLI
   // never refreshes it, so the picker would keep showing yesterday's aliases.
   try {
-    const cachePath = await refreshGatewayModelCacheFromProxy(port);
+    const cachePath = await refreshGatewayModelCacheFromProxy(port, { admissionConfig: config });
     if (cachePath === null) {
       console.error("⚠ Gateway model cache could not be refreshed; the model picker may be stale.");
     }

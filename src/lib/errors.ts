@@ -43,6 +43,25 @@ function isSubscriptionGateMessage(text: string): boolean {
   );
 }
 
+function isLocalAclHardeningMessage(text: string): boolean {
+  const secretPathHardening = text.includes("secret path") && (
+    text.includes("acl") ||
+    text.includes("harden") ||
+    text.includes("permission") ||
+    text.includes("access denied") ||
+    text.includes("inheritance")
+  );
+  return (
+    text.includes("icacls") ||
+    text.includes("acl hardening") ||
+    text.includes("ntfs") ||
+    secretPathHardening ||
+    text.includes("inheritance:r") ||
+    /\bwindows\b.*\bacl\b/.test(text) ||
+    text.includes("/grant:r")
+  );
+}
+
 function isAuthenticationMessage(text: string): boolean {
   const accessDeniedWithCredentialCue = (
     text.includes("access denied") ||
@@ -124,6 +143,15 @@ export function classifyError(status: number, type: string, message: string): Oc
   if (type === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(text)) {
     return { message, type: "invalid_request_error", code: CYBER_POLICY_ERROR_CODE };
   }
+  // A LOCAL preflight refusal keeps its own code (#1524). The message necessarily says
+  // "context window" -- that is what it is refusing on -- so the generic remap below would
+  // rewrite it to `context_length_exceeded` and make it indistinguishable from an UPSTREAM
+  // verdict. The two need opposite fallback handling: ours means "this candidate does not
+  // fit", theirs means "the request is impossible", so collapsing them ended the chain at
+  // the first candidate that was merely too small.
+  if (type === "input_admission_refused") {
+    return { message, type: "invalid_request_error", code: "input_admission_refused" };
+  }
   if (
     text.includes("context_length_exceeded") ||
     text.includes("context window") ||
@@ -169,6 +197,11 @@ export function classifyError(status: number, type: string, message: string): Oc
   }
   if (type === "origin_rejected") {
     return { message, type: "invalid_request_error", code: "origin_rejected" };
+  }
+  // Local ACL setup failures can contain provider-like auth wording (for example
+  // "access denied" or "authentication") but represent unavailable infrastructure.
+  if (status === 503 && isLocalAclHardeningMessage(text)) {
+    return { message, type: "server_error", code: "upstream_server_error" };
   }
   // HTTP 401 and explicit auth failures are authoritative even when provider text
   // also advertises an upgrade or subscription.
@@ -280,6 +313,9 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
     lower.includes("too many requests") ||
     lower.includes("throttling")
   ) return 429;
+  // Local Windows filesystem hardening is infrastructure, not provider authentication.
+  // Keep this ahead of auth/permission and timeout keyword inference.
+  if (isLocalAclHardeningMessage(lower)) return 503;
   // Strong authentication signals win when a message contains mixed auth and
   // subscription/permission wording.
   if (isAuthenticationMessage(lower)) return 401;

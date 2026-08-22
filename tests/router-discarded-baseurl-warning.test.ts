@@ -7,12 +7,12 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
  * asserted in tests/router-template-baseurl.test.ts; these tests cover the diagnostic that
  * tells the user it happened, so a wrong-region URL stops surfacing as a bare 401.
  *
- * `anthropic` is the pinned fixture: a fixed remote registry endpoint, no `allowBaseUrlOverride`.
+ * `google` is the pinned fixture: a fixed remote registry endpoint, no `allowBaseUrlOverride`.
  * Warnings dedupe per (provider, discarded URL, effective URL), so each test uses a distinct
  * discarded URL and the suite stays order-independent.
  */
-const PINNED_PROVIDER = "anthropic";
-const PINNED_REGISTRY_BASE_URL = "https://api.anthropic.com";
+const PINNED_PROVIDER = "google";
+const PINNED_REGISTRY_BASE_URL = "https://generativelanguage.googleapis.com";
 
 function configFor(providerName: string, provider: OcxProviderConfig): OcxConfig {
   return {
@@ -37,8 +37,8 @@ function routeCapturingWarnings(config: OcxConfig, model: string, times = 1): st
 
 function routePinned(baseUrl: unknown, times = 1): string[] {
   return routeCapturingWarnings(
-    configFor(PINNED_PROVIDER, { adapter: "anthropic", baseUrl } as OcxProviderConfig),
-    `${PINNED_PROVIDER}/claude-sonnet-5`,
+    configFor(PINNED_PROVIDER, { adapter: "google", baseUrl } as OcxProviderConfig),
+    `${PINNED_PROVIDER}/gemini-3-pro`,
     times,
   );
 }
@@ -57,13 +57,13 @@ test("warns when a pinned provider discards a configured baseUrl", () => {
 
 test("routing is unchanged by the warning", () => {
   const config = configFor(PINNED_PROVIDER, {
-    adapter: "anthropic",
+    adapter: "google",
     baseUrl: "https://routing-unchanged.example.test/v1",
   });
   const originalWarn = console.warn;
   console.warn = () => {};
   try {
-    expect(routeModel(config, `${PINNED_PROVIDER}/claude-sonnet-5`).provider.baseUrl)
+    expect(routeModel(config, `${PINNED_PROVIDER}/gemini-3-pro`).provider.baseUrl)
       .toBe(PINNED_REGISTRY_BASE_URL);
   } finally {
     console.warn = originalWarn;
@@ -221,3 +221,4 @@ for (const { label, id, adapter, baseUrl } of [
     expect(routeModel(config, `${id}/model`).provider.baseUrl).toBe(baseUrl);
   });
 }
+

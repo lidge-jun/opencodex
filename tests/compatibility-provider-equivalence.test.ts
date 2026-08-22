@@ -12,7 +12,7 @@
  *                                                 scoring falls back to capability/health/
  *                                                 quota/cost as it did before CL-06
  *
- * devlog/_plan/260814_lab_core_decoupling/030_router_and_startup_activation.md
+ * devlog/_fin/260814_lab_core_decoupling/030_router_and_startup_activation.md
  */
 import { describe, expect, test } from "bun:test";
 import { assemblePolicyCandidateEvidence } from "../src/routing/compatibility/assemble";

@@ -59,7 +59,7 @@ function readMarketplaceTable(configText: string, name: string): Record<string, 
   for (let i = start; i < lines.length; i++) {
     const line = lines[i] ?? "";
     if (/^\s*\[/.test(line)) break; // next table starts; stop
-    const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*("(?:\\.|[^"])*"|'[^']*'|[^#]+?)\s*(?:#.*)?$/);
+    const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|(?!["'])[^\s#]+)\s*(?:#.*)?$/);
     if (!m) continue;
     table[m[1]] = unquoteTomlValue(m[2].trim());
   }

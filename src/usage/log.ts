@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
-import type { OcxUsage } from "../types";
+import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 
@@ -27,7 +28,9 @@ export type AttemptRecoveryKind =
   | "key-429"
   | "rate-limit-429"
   | "anthropic-oauth-429"
-  | "image-413";
+  | "image-413"
+  | "opaque-blob-rejection"
+  | "empty-completion";
 
 export interface PersistedUsageAttempt {
   ordinal: number;
@@ -36,6 +39,12 @@ export interface PersistedUsageAttempt {
   adapter: string;
   status: number;
   durationMs: number;
+  /**
+   * True only when the upstream stream died after its 200 head was committed,
+   * so the row must not meter as a success the client never received.
+   * Absent on ordinary attempts so old rows keep their exact shape.
+   */
+  streamAborted?: boolean;
   /** TTFT relative to THIS attempt's start (WP4); unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   sendCount: number;
@@ -54,6 +63,8 @@ export interface PersistedUsageAttempt {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  /** Adapter-produced tier fact for this physical attempt; absent on pre-B0 rows. */
+  tierOutcome?: AttemptTierOutcome;
 }
 
 export interface PersistedUsageEntry {
@@ -74,18 +85,24 @@ export interface PersistedUsageEntry {
   conversationId?: string;
   resolvedModel?: string;
   requestedModel?: string;
+  /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
+  shadowCallRewrittenFrom?: string;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
   requestedEffort?: string;
   /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  /** Raw caller tier captured before routing, sanitized and bounded for durable logs. */
+  callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
   configuredSpeedLabel?: string;
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
+  /** Summary of the final physical attempt for dashboard consumers. */
+  tierOutcome?: AttemptTierOutcome;
   status: number;
   durationMs: number;
   /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
@@ -202,6 +219,8 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "rate-limit-429",
   "anthropic-oauth-429",
   "image-413",
+  "opaque-blob-rejection",
+  "empty-completion",
 ]);
 const USAGE_STATUSES = new Set<UsageStatus>([
   "reported",
@@ -210,6 +229,15 @@ const USAGE_STATUSES = new Set<UsageStatus>([
   "estimated",
 ]);
 const LAB_ROUTE_SUBJECT_ID_RE = /^[0-9a-f]{64}$/;
+const FAST_OUTCOMES = new Set<AttemptTierOutcome["fastOutcome"]>([
+  "not-requested", "applied", "downgraded", "unknown",
+]);
+const TIER_CONFIRMATIONS = new Set<AttemptTierOutcome["confirmation"]>([
+  "confirmed", "assumed", "downgraded", "unknown",
+]);
+const FAST_DOWNGRADE_REASONS = new Set<NonNullable<AttemptTierOutcome["fastDowngradeReason"]>>([
+  "route-unsupported", "wire-unavailable", "response-declined",
+]);
 
 export function isLabRouteSubjectId(value: unknown): value is string {
   return typeof value === "string" && LAB_ROUTE_SUBJECT_ID_RE.test(value);
@@ -238,6 +266,53 @@ function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
   return normalizeUsageValue(usage as unknown as OcxUsage) ?? null;
 }
 
+function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const outcome = raw as Record<string, unknown>;
+  if (typeof outcome.fastOutcome !== "string"
+    || !FAST_OUTCOMES.has(outcome.fastOutcome as AttemptTierOutcome["fastOutcome"])
+    || typeof outcome.confirmation !== "string"
+    || !TIER_CONFIRMATIONS.has(outcome.confirmation as AttemptTierOutcome["confirmation"])) {
+    return null;
+  }
+  if ("canonical" in outcome && outcome.canonical !== "priority") return null;
+  if ("wireKind" in outcome
+    && outcome.wireKind !== null
+    && outcome.wireKind !== "service-tier"
+    && outcome.wireKind !== "anthropic-speed") return null;
+  if ("wireValue" in outcome && outcome.wireValue !== null && typeof outcome.wireValue !== "string") return null;
+  if ("fastDowngradeReason" in outcome
+    && (typeof outcome.fastDowngradeReason !== "string"
+      || !FAST_DOWNGRADE_REASONS.has(outcome.fastDowngradeReason as NonNullable<AttemptTierOutcome["fastDowngradeReason"]>))) {
+    return null;
+  }
+  if ("callerTierDropped" in outcome && typeof outcome.callerTierDropped !== "boolean") return null;
+  if ("callerFastSuppressedByConfig" in outcome
+    && typeof outcome.callerFastSuppressedByConfig !== "boolean") return null;
+  if ("responseServiceTier" in outcome && typeof outcome.responseServiceTier !== "string") return null;
+  const wireValue = sanitizeLogMetadataString(outcome.wireValue);
+  const responseServiceTier = sanitizeLogMetadataString(outcome.responseServiceTier);
+  return {
+    ...(outcome.canonical === "priority" ? { canonical: "priority" as const } : {}),
+    ...(outcome.wireKind === null || outcome.wireKind === "service-tier" || outcome.wireKind === "anthropic-speed"
+      ? { wireKind: outcome.wireKind }
+      : {}),
+    ...(outcome.wireValue === null
+      ? { wireValue: null }
+      : wireValue ? { wireValue } : {}),
+    fastOutcome: outcome.fastOutcome as AttemptTierOutcome["fastOutcome"],
+    ...(typeof outcome.fastDowngradeReason === "string"
+      ? { fastDowngradeReason: outcome.fastDowngradeReason as NonNullable<AttemptTierOutcome["fastDowngradeReason"]> }
+      : {}),
+    ...(typeof outcome.callerTierDropped === "boolean" ? { callerTierDropped: outcome.callerTierDropped } : {}),
+    ...(typeof outcome.callerFastSuppressedByConfig === "boolean"
+      ? { callerFastSuppressedByConfig: outcome.callerFastSuppressedByConfig }
+      : {}),
+    confirmation: outcome.confirmation as AttemptTierOutcome["confirmation"],
+    ...(responseServiceTier ? { responseServiceTier } : {}),
+  };
+}
+
 function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const attempt = raw as Record<string, unknown>;
@@ -264,6 +339,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     && !isNonNegativeFiniteNumber(attempt.totalTokens)) return null;
   const usage = "usage" in attempt ? normalizeAttemptUsage(attempt.usage) : undefined;
   if ("usage" in attempt && usage === null) return null;
+  const tierOutcome = "tierOutcome" in attempt
+    ? normalizeAttemptTierOutcome(attempt.tierOutcome)
+    : undefined;
   const recoveryKinds = Array.isArray(attempt.recoveryKinds)
     ? [...new Set(attempt.recoveryKinds.filter(
       (value): value is AttemptRecoveryKind => typeof value === "string"
@@ -277,6 +355,8 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     adapter: attempt.adapter,
     status: attempt.status,
     durationMs: attempt.durationMs,
+    // Absent by default; only the literal `true` marker survives the round trip.
+    ...(attempt.streamAborted === true ? { streamAborted: true } : {}),
     ...(isNonNegativeFiniteNumber(attempt.firstOutputMs)
       ? { firstOutputMs: attempt.firstOutputMs }
       : {}),
@@ -311,6 +391,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
         : { reasoningWireValue: attempt.reasoningWireValue }
       : {}),
+    ...(tierOutcome ? { tierOutcome } : {}),
   };
 }
 
@@ -347,6 +428,10 @@ export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): Persiste
 
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
+  const tierOutcome = entry.tierOutcome ? normalizeAttemptTierOutcome(entry.tierOutcome) : undefined;
+  const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
+  const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
+  const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
@@ -373,6 +458,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
       : {}),
@@ -387,6 +473,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
         ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
         : { reasoningWireValue: entry.reasoningWireValue }
       : {}),
+    ...(callerServiceTier ? { callerServiceTier } : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
       : {}),
@@ -402,9 +489,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.modelSupportsServiceTier === "boolean"
       ? { modelSupportsServiceTier: entry.modelSupportsServiceTier }
       : {}),
-    ...(typeof entry.responseServiceTier === "string" && entry.responseServiceTier
-      ? { responseServiceTier: capMetadataString(entry.responseServiceTier) }
-      : {}),
+    ...(responseServiceTier ? { responseServiceTier } : {}),
+    ...(tierOutcome ? { tierOutcome } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(isNonNegativeFiniteNumber(entry.firstOutputMs)

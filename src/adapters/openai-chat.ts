@@ -12,7 +12,20 @@ import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
+import {
+  canForwardForeignServiceTierForChatModel,
+  fastPolicyForModel,
+  supportsServiceTierForModel,
+} from "../providers/service-tier";
+import {
+  canonicalFastTierMarker,
+  createAdapterTierMetadata,
+  decideTier,
+  type AdapterTierMetadata,
+  type ResolvedFastPolicy,
+} from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
+import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import {
   isTranslatorBudgetExceededError,
   retainTranslatedEventBatch,
@@ -32,6 +45,140 @@ export function stripBracketedModelSuffix(modelId: string): string {
     if (modelId[i] === "[") suffixStart = i;
   }
   return suffixStart === -1 ? modelId : modelId.slice(0, suffixStart);
+}
+
+const CHAT_PASSTHROUGH_FIELDS = [
+  "audio",
+  "frequency_penalty",
+  "logit_bias",
+  "logprobs",
+  "max_completion_tokens",
+  "max_tokens",
+  "metadata",
+  "modalities",
+  "n",
+  "prediction",
+  "presence_penalty",
+  "reasoning_effort",
+  "response_format",
+  "seed",
+  "stop",
+  "store",
+  "temperature",
+  "tool_choice",
+  "tools",
+  "top_logprobs",
+  "top_p",
+  "user",
+  "web_search_options",
+] as const;
+
+function openAIChatTransport(provider: OcxProviderConfig): {
+  url: string;
+  headers: Record<string, string>;
+  hasCredential: boolean;
+} {
+  const hasCredential = typeof provider.apiKey === "string" && provider.apiKey.trim().length > 0;
+  if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
+    throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
+  }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
+  if (provider.headers) Object.assign(headers, provider.headers);
+  return { url: openaiChatCompletionsUrl(provider.baseUrl), headers, hasCredential };
+}
+
+/**
+ * Build a provider request from an inbound Chat Completions body without translating it
+ * through the Responses contract. This is deliberately a whitelist: Chat-only caller
+ * fields retain their exact wire representation, while provider capability gates remain
+ * centralized beside the ordinary openai-chat adapter.
+ */
+export function buildOpenAIChatPassthroughRequest(
+  provider: OcxProviderConfig,
+  rawBody: Record<string, unknown>,
+  modelId: string,
+  stream: boolean,
+  fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
+  fastMode?: boolean,
+): AdapterRequest {
+  const { url, headers, hasCredential } = openAIChatTransport(provider);
+
+  const body: Record<string, unknown> = {
+    model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId,
+    messages: rawBody.messages,
+    stream,
+  };
+  for (const field of CHAT_PASSTHROUGH_FIELDS) {
+    if (rawBody[field] !== undefined) body[field] = rawBody[field];
+  }
+
+  const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
+  if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
+
+  if (modelInList(provider.noTemperatureModels, modelId)) delete body.temperature;
+  if (modelInList(provider.noTopPModels, modelId)) delete body.top_p;
+  if (modelInList(provider.noPenaltyModels, modelId)) {
+    delete body.presence_penalty;
+    delete body.frequency_penalty;
+  }
+  // Exact match, unlike the gates above: `noStructuredOutputModels` is documented as
+  // "only an exact requested-model match omits the field" (#1424), and the Responses
+  // ingress enforces exactly that. A prefix match here would strip response_format from
+  // `<listed>:<tag>` siblings the operator never opted out, silently returning prose.
+  if (provider.noStructuredOutputModels?.includes(modelId)) delete body.response_format;
+
+  // Run the same complete Fast policy as the translated Chat path, including explicit
+  // fastMode and foreign-tier handling. On inherited canonical Fast, the passthrough still
+  // retains the caller's exact spelling; forced Fast uses the policy-owned wire value.
+  const callerTier = typeof rawBody.service_tier === "string" ? rawBody.service_tier : undefined;
+  const tierDecision = decideTier(fastPolicy, fastMode, callerTier);
+  if (tierDecision.kind === "set") {
+    body.service_tier = fastMode === undefined && canonicalFastTierMarker(callerTier) !== undefined
+      ? callerTier
+      : tierDecision.value;
+  } else if (tierDecision.kind === "forward-caller" && rawBody.service_tier !== undefined) {
+    body.service_tier = rawBody.service_tier;
+  }
+  if (provider.promptCacheKey && rawBody.prompt_cache_key !== undefined) {
+    body.prompt_cache_key = rawBody.prompt_cache_key;
+  }
+  if (Array.isArray(rawBody.tools) && rawBody.tools.length > 0) {
+    if (provider.parallelToolCalls === true) {
+      body.parallel_tool_calls = rawBody.parallel_tool_calls !== false;
+    } else if (provider.parallelToolCalls === false
+        && (provider.baseUrl === "https://integrate.api.nvidia.com/v1" || provider.pinParallelToolCallsFalse === true)) {
+      body.parallel_tool_calls = false;
+    }
+  }
+  if (stream) {
+    const callerOptions = rawBody.stream_options !== null
+        && typeof rawBody.stream_options === "object"
+        && !Array.isArray(rawBody.stream_options)
+      ? rawBody.stream_options as Record<string, unknown>
+      : {};
+    body.stream_options = { ...callerOptions, include_usage: true };
+  } else if (rawBody.stream_options !== undefined) {
+    body.stream_options = rawBody.stream_options;
+  }
+
+  const bodyJson = JSON.stringify(body);
+
+  if (isDebugEnabled()) {
+    let host = "upstream";
+    try { host = new URL(url).host; } catch { /* keep fallback */ }
+    debugProviderDiagnostic("openai-chat", "passthrough-request", {
+      host,
+      model: body.model,
+      stream,
+      messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+      toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+      hasCredential,
+      bodyBytes: new TextEncoder().encode(bodyJson).length,
+    });
+  }
+
+  return { url, method: "POST", headers, body: bodyJson };
 }
 
 // 260715 (issue #126): surface upstream error detail through the web-search sidecar loop.
@@ -171,10 +318,25 @@ function invalidChoicesEvent(usage?: OcxUsage): Extract<AdapterEvent, { type: "e
   };
 }
 
-function invalidToolCallsEvent(usage?: OcxUsage): Extract<AdapterEvent, { type: "error" }> {
+function invalidToolCallsEvent(
+  rawToolCalls: unknown,
+  mode: "stream" | "response",
+  usage?: OcxUsage,
+  diagnosticOverride?: InvalidToolCallDiagnostic,
+): Extract<AdapterEvent, { type: "error" }> {
+  // The streamed accumulator knows things a rescan cannot: which field on which pending call
+  // was actually rejected. Without the override, a stream carrying accepted padding on call 0
+  // and a real defect on call 1 blames call 0, because the stateless scan stops at the first
+  // structurally odd value it sees.
+  const diagnostic = diagnosticOverride ?? diagnoseInvalidToolCalls(rawToolCalls, mode);
+  const detail = diagnostic
+    ? ` (${diagnostic.reason}${diagnostic.callIndex !== undefined ? `; callIndex=${diagnostic.callIndex}` : ""}; valueType=${diagnostic.valueType})`
+    : "";
   return {
     type: "error",
-    message: "upstream response contained invalid tool calls",
+    status: 502,
+    errorType: "upstream_error",
+    message: `upstream response contained invalid tool calls${detail}`,
     ...(usage !== undefined ? { usage } : {}),
   };
 }
@@ -215,6 +377,93 @@ type InvalidToolCallReason =
   | "tool_call_function_name_blank"
   | "tool_call_function_arguments_invalid";
 
+type InvalidToolCallDiagnostic = {
+  reason: InvalidToolCallReason;
+  callIndex?: number;
+  valueType: string;
+};
+
+type InvalidFieldShape =
+  | {
+      kind: "object";
+      knownKeys: string[];
+      knownFieldTypes: Record<string, string>;
+      hasUnknownKeys: boolean;
+    }
+  | {
+      kind: "array";
+      length: number;
+    };
+
+const SAFE_TOOL_CALL_SHAPE_KEYS = [
+  "name",
+  "type",
+  "value",
+  "function",
+  "arguments",
+  "id",
+  "index",
+] as const;
+const SAFE_TOOL_CALL_SHAPE_KEY_SET = new Set<string>(SAFE_TOOL_CALL_SHAPE_KEYS);
+
+function structuralValueType(value: unknown): string {
+  return value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+}
+
+function invalidToolCallField(rawToolCalls: unknown, diagnostic: InvalidToolCallDiagnostic): unknown {
+  if (diagnostic.reason === "tool_calls_not_array") return rawToolCalls;
+  if (!Array.isArray(rawToolCalls) || diagnostic.callIndex === undefined) return undefined;
+
+  const rawToolCall = rawToolCalls[diagnostic.callIndex];
+  if (diagnostic.reason === "tool_call_not_object") return rawToolCall;
+  if (!isRecord(rawToolCall)) return undefined;
+  if (diagnostic.reason === "tool_call_function_not_object") return rawToolCall.function;
+
+  const rawFunction = rawToolCall.function;
+  switch (diagnostic.reason) {
+    case "tool_call_id_invalid":
+      return rawToolCall.id;
+    case "tool_call_function_name_invalid":
+      return isRecord(rawFunction) ? rawFunction.name : undefined;
+    case "tool_call_function_arguments_invalid":
+      return isRecord(rawFunction) ? rawFunction.arguments : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function fingerprintInvalidField(value: unknown): InvalidFieldShape | undefined {
+  if (Array.isArray(value)) return { kind: "array", length: value.length };
+  if (!isRecord(value)) return undefined;
+
+  const knownKeys: string[] = [];
+  const knownFieldTypes: Record<string, string> = {};
+  for (const key of SAFE_TOOL_CALL_SHAPE_KEYS) {
+    if (!Object.hasOwn(value, key)) continue;
+    knownKeys.push(key);
+    knownFieldTypes[key] = structuralValueType(value[key]);
+  }
+
+  let hasUnknownKeys = false;
+  for (const key of Object.keys(value)) {
+    if (!SAFE_TOOL_CALL_SHAPE_KEY_SET.has(key)) {
+      hasUnknownKeys = true;
+      break;
+    }
+  }
+  return { kind: "object", knownKeys, knownFieldTypes, hasUnknownKeys };
+}
+
+/**
+ * Streamed string fields are absent when null or undefined (#1731): OpenAI-compatible
+ * streamers repeat already-sent `id`/`name`/`arguments` as null on continuation deltas.
+ * The accumulator and this diagnostic share this predicate so they cannot disagree about
+ * which delta was the invalid one.
+ */
+function isInvalidStreamStringField(value: unknown): boolean {
+  return value != null && typeof value !== "string";
+}
+
 /**
  * Explain only the rejected wire shape, never its values. This diagnostic exists so provider
  * compatibility can be tightened from evidence without retaining tool arguments or credentials.
@@ -222,7 +471,7 @@ type InvalidToolCallReason =
 function diagnoseInvalidToolCalls(
   rawToolCalls: unknown,
   mode: "stream" | "response",
-): { reason: InvalidToolCallReason; callIndex?: number; valueType: string } | undefined {
+): InvalidToolCallDiagnostic | undefined {
   if (!Array.isArray(rawToolCalls)) {
     return { reason: "tool_calls_not_array", valueType: rawToolCalls === null ? "null" : typeof rawToolCalls };
   }
@@ -241,6 +490,10 @@ function diagnoseInvalidToolCalls(
       // Blank names are caught later at flush, not here, so they are not diagnosed on this
       // branch. Describe exactly that boundary rather than tightening compatibility in a
       // diagnostic change.
+      // #1731: "present" means the same thing here as in the accumulator — null and undefined
+      // are both absent, because some OpenAI-compatible streamers repeat already-sent fields
+      // as null on continuation deltas. A separate predicate here would diagnose accepted
+      // padding as the failure and point compatibility work at the wrong delta.
       const streamFunction = (rawToolCall as { function?: unknown }).function;
       if (streamFunction !== undefined && streamFunction !== null) {
         if (!isRecord(streamFunction)) {
@@ -250,14 +503,14 @@ function diagnoseInvalidToolCalls(
             valueType: Array.isArray(streamFunction) ? "array" : typeof streamFunction,
           };
         }
-        if (streamFunction.name !== undefined && typeof streamFunction.name !== "string") {
+        if (isInvalidStreamStringField(streamFunction.name)) {
           return { reason: "tool_call_function_name_invalid", callIndex, valueType: typeof streamFunction.name };
         }
-        if (streamFunction.arguments !== undefined && typeof streamFunction.arguments !== "string") {
+        if (isInvalidStreamStringField(streamFunction.arguments)) {
           return { reason: "tool_call_function_arguments_invalid", callIndex, valueType: typeof streamFunction.arguments };
         }
       }
-      if (rawToolCall.id !== undefined && typeof rawToolCall.id !== "string") {
+      if (isInvalidStreamStringField(rawToolCall.id)) {
         return { reason: "tool_call_id_invalid", callIndex, valueType: typeof rawToolCall.id };
       }
       continue;
@@ -293,9 +546,20 @@ function diagnoseInvalidToolCalls(
   return undefined;
 }
 
-function logInvalidToolCalls(mode: "stream" | "response", rawToolCalls: unknown): void {
-  const diagnostic = diagnoseInvalidToolCalls(rawToolCalls, mode);
-  if (diagnostic) debugProviderDiagnostic("openai-chat", "invalid-tool-calls", { mode, ...diagnostic });
+function logInvalidToolCalls(
+  mode: "stream" | "response",
+  rawToolCalls: unknown,
+  diagnosticOverride?: InvalidToolCallDiagnostic,
+): void {
+  if (!isDebugEnabled()) return;
+  const diagnostic = diagnosticOverride ?? diagnoseInvalidToolCalls(rawToolCalls, mode);
+  if (!diagnostic) return;
+  const fieldShape = fingerprintInvalidField(invalidToolCallField(rawToolCalls, diagnostic));
+  debugProviderDiagnostic("openai-chat", "invalid-tool-calls", {
+    mode,
+    ...diagnostic,
+    ...(fieldShape ? { fieldShape } : {}),
+  });
 }
 
 function developerSystemText(message: OcxMessage): string | undefined {
@@ -658,11 +922,11 @@ function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
     || baseUrl === "https://opencode.ai/zen/go/v1";
 }
 
-const XAI_SCHEMA_BASE_URLS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
-
 function isXaiSchemaTarget(provider: OcxProviderConfig): boolean {
   try {
-    return XAI_SCHEMA_BASE_URLS.has(new URL(provider.baseUrl).hostname);
+    // Public api.x.ai accepts native root object unions. Only the Grok CLI proxy
+    // 400s on a root oneOf/anyOf, so flattening/omitting is scoped to that host.
+    return new URL(provider.baseUrl).hostname === "cli-chat-proxy.grok.com";
   } catch {
     return false;
   }
@@ -696,47 +960,278 @@ function ensureRootObjectType(parameters: unknown): Record<string, unknown> {
   return { ...obj, type: "object" };
 }
 
-function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] | undefined {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
-  const obj = schema as Record<string, unknown>;
-  const compositionKey = ["oneOf", "anyOf"].find(key => Array.isArray(obj[key]));
-  if (!compositionKey) {
-    if (obj.type !== undefined && obj.type !== "object") return undefined;
-    return [{ ...obj, type: "object" }];
+function isXaiObjectSchema(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringRequiredFields(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+/** Variant keys the merger can keep. Anything else is refused, not silently dropped. */
+const XAI_VARIANT_MERGE_KEYS = new Set([
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "description",
+  "title",
+  "$comment",
+  "$defs",
+  "definitions",
+]);
+
+function decodeJsonPointerToken(token: string): string {
+  return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function lookupLocalJsonPointer(root: unknown, ref: string): unknown {
+  if (ref === "#" || ref === "#/") return root;
+  if (!ref.startsWith("#/")) return undefined;
+  let current: unknown = root;
+  for (const token of ref.slice(2).split("/").map(decodeJsonPointerToken)) {
+    if (!isXaiObjectSchema(current) || !Object.hasOwn(current, token)) return undefined;
+    current = current[token];
+  }
+  return current;
+}
+
+/** Resolve local `#/` `$ref`s. Unresolvable or cyclic refs return undefined. */
+function resolveXaiSchemaRefs(
+  schema: unknown,
+  root: Record<string, unknown>,
+  stack: Set<string> = new Set(),
+): unknown | undefined {
+  if (!isXaiObjectSchema(schema)) return schema;
+  if (typeof schema.$ref === "string") {
+    const ref = schema.$ref;
+    if (stack.has(ref)) return undefined;
+    const target = lookupLocalJsonPointer(root, ref);
+    if (target === undefined) return undefined;
+    stack.add(ref);
+    const resolvedTarget = resolveXaiSchemaRefs(target, root, stack);
+    stack.delete(ref);
+    if (resolvedTarget === undefined) return undefined;
+    const rest: Record<string, unknown> = { ...schema };
+    delete rest.$ref;
+    if (Object.keys(rest).length === 0) return resolvedTarget;
+    const resolvedRest = resolveXaiSchemaRefs(rest, root, stack);
+    if (resolvedRest === undefined || !isXaiObjectSchema(resolvedTarget) || !isXaiObjectSchema(resolvedRest)) {
+      return undefined;
+    }
+    return composeXaiObjectSchemas(resolvedTarget, resolvedRest);
   }
 
-  const siblings = Object.fromEntries(Object.entries(obj).filter(([key]) => key !== compositionKey));
-  const branches = obj[compositionKey];
+  const resolved: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if ((key === "oneOf" || key === "anyOf") && Array.isArray(value)) {
+      const items: unknown[] = [];
+      for (const item of value) {
+        const next = resolveXaiSchemaRefs(item, root, stack);
+        if (next === undefined) return undefined;
+        items.push(next);
+      }
+      resolved[key] = items;
+      continue;
+    }
+    if (key === "properties" && isXaiObjectSchema(value)) {
+      const properties: Record<string, unknown> = {};
+      for (const [name, property] of Object.entries(value)) {
+        const next = resolveXaiSchemaRefs(property, root, stack);
+        if (next === undefined) return undefined;
+        properties[name] = next;
+      }
+      resolved[key] = properties;
+      continue;
+    }
+    resolved[key] = value;
+  }
+  return resolved;
+}
+
+function xaiVariantIsConcreteObject(variant: Record<string, unknown>): boolean {
+  if (variant.type !== undefined && variant.type !== "object") return false;
+  return Object.keys(variant).every(key => XAI_VARIANT_MERGE_KEYS.has(key));
+}
+
+function variantProperties(variant: Record<string, unknown>): Record<string, unknown> {
+  return isXaiObjectSchema(variant.properties) ? variant.properties : {};
+}
+
+/**
+ * Independent per-property anyOf is lossless only when every property name exists
+ * on every variant (absence is meaningful under xAI's default additionalProperties:
+ * false, and promoting a branch-local key also tightens explicit-true variants)
+ * and at most one of those shared properties has a conflicting schema.
+ */
+function xaiPropertyMergeIsLossless(variants: Record<string, unknown>[]): boolean {
+  const names = new Set<string>();
+  const props = variants.map(variant => {
+    const properties = variantProperties(variant);
+    for (const name of Object.keys(properties)) names.add(name);
+    return properties;
+  });
+  let schemaConflicts = 0;
+  for (const name of names) {
+    const values = props.map(property => property[name]);
+    if (values.some(value => value === undefined)) return false;
+    if (values.some(value => JSON.stringify(value) !== JSON.stringify(values[0]))) schemaConflicts += 1;
+  }
+  return schemaConflicts <= 1;
+}
+
+function xaiRequiredSetsMatch(variants: Record<string, unknown>[]): boolean {
+  const serialized = variants.map(variant => [...stringRequiredFields(variant.required)].sort().join("\0"));
+  return serialized.every(value => value === serialized[0]);
+}
+
+function mergeXaiAdditionalProperties(
+  variants: Record<string, unknown>[],
+): { ok: true; value?: unknown } | { ok: false } {
+  const values = variants.map(variant => variant.additionalProperties);
+  const explicit = values.filter(value => value !== undefined);
+  if (explicit.length === 0) return { ok: true };
+  if (explicit.length !== values.length) return { ok: false };
+  const hasFalse = explicit.some(value => value === false);
+  const permissive = explicit.filter(value => value !== false);
+  if (hasFalse && permissive.length > 0) return { ok: false };
+  if (hasFalse) return { ok: true, value: false };
+  const unique: unknown[] = [];
+  const seen = new Set<string>();
+  for (const value of permissive) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(value);
+  }
+  if (unique.length !== 1) return { ok: false };
+  return { ok: true, value: unique[0] };
+}
+
+/** Compose root siblings into a branch so properties/required are not overwritten. */
+function composeXaiObjectSchemas(
+  inherited: Record<string, unknown>,
+  branch: Record<string, unknown>,
+): Record<string, unknown> {
+  const composed: Record<string, unknown> = { ...inherited, ...branch };
+  const inheritedProps = isXaiObjectSchema(inherited.properties) ? inherited.properties : undefined;
+  const branchProps = isXaiObjectSchema(branch.properties) ? branch.properties : undefined;
+  if (inheritedProps || branchProps) {
+    const properties: Record<string, unknown> = { ...(inheritedProps ?? {}) };
+    for (const [name, value] of Object.entries(branchProps ?? {})) {
+      const inheritedValue = inheritedProps?.[name];
+      properties[name] = inheritedValue !== undefined && JSON.stringify(inheritedValue) !== JSON.stringify(value)
+        ? { allOf: [inheritedValue, value] }
+        : value;
+    }
+    composed.properties = properties;
+  }
+  const required = [...new Set([
+    ...stringRequiredFields(inherited.required),
+    ...stringRequiredFields(branch.required),
+  ])];
+  if (required.length > 0) composed.required = required;
+  else delete composed.required;
+  return composed;
+}
+
+function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] | undefined {
+  if (!isXaiObjectSchema(schema)) return undefined;
+  const compositionKey = ["oneOf", "anyOf"].find(key => Array.isArray(schema[key]));
+  if (!compositionKey) {
+    if (schema.type !== undefined && schema.type !== "object") return undefined;
+    return [{ ...schema, type: "object" }];
+  }
+
+  const siblings = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== compositionKey));
+  const branches = schema[compositionKey];
   if (!Array.isArray(branches)) return undefined;
   const expanded: Record<string, unknown>[] = [];
   for (const branch of branches) {
     const variants = expandXaiRootObjectSchemas(branch);
     if (!variants) return undefined;
-    for (const variant of variants) expanded.push({ ...siblings, ...variant });
+    for (const variant of variants) expanded.push(composeXaiObjectSchemas(siblings, variant));
   }
   return expanded.length > 0 ? expanded : undefined;
 }
 
+function mergeXaiPropertySchemas(values: unknown[]): unknown {
+  const unique: unknown[] = [];
+  const serialized = new Set<string>();
+  for (const value of values) {
+    const key = JSON.stringify(value);
+    if (serialized.has(key)) continue;
+    serialized.add(key);
+    unique.push(value);
+  }
+  return unique.length === 1 ? unique[0] : { anyOf: unique };
+}
+
+/**
+ * The Grok CLI proxy rejects a function parameter schema whose root remains oneOf/anyOf.
+ * Flatten only when the merge is lossless: local $refs resolve, every variant is a concrete
+ * object whose keys we can preserve, required sets match, additionalProperties does not change
+ * meaning, every property name exists on every variant, and at most one property schema
+ * differs. Otherwise omit the tool rather than emit a weaker schema.
+ */
 function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
-  const variants = expandXaiRootObjectSchemas(parameters);
+  if (!isXaiObjectSchema(parameters)) return undefined;
+  const resolved = resolveXaiSchemaRefs(parameters, parameters);
+  if (!isXaiObjectSchema(resolved)) return undefined;
+
+  const normalizedRoot = { ...resolved };
+  delete normalizedRoot.$schema;
+
+  const variants = expandXaiRootObjectSchemas(normalizedRoot);
   if (!variants) return undefined;
-  if (variants.length === 1) return variants[0];
-  const root = parameters && typeof parameters === "object" && !Array.isArray(parameters)
-    ? parameters as Record<string, unknown>
-    : {};
-  const metadata = Object.fromEntries(Object.entries(root).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
-  return { ...metadata, oneOf: variants };
+  if (variants.length === 1) {
+    return xaiVariantIsConcreteObject(variants[0]) ? variants[0] : undefined;
+  }
+  if (!variants.every(xaiVariantIsConcreteObject) || !xaiRequiredSetsMatch(variants)) return undefined;
+  const additionalProperties = mergeXaiAdditionalProperties(variants);
+  if (!additionalProperties.ok) return undefined;
+  if (!xaiPropertyMergeIsLossless(variants)) return undefined;
+
+  const metadata = Object.fromEntries(Object.entries(normalizedRoot).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
+  delete metadata.properties;
+  delete metadata.required;
+  delete metadata.additionalProperties;
+
+  const propertyValues = new Map<string, unknown[]>();
+  for (const variant of variants) {
+    if (!variant.properties || typeof variant.properties !== "object" || Array.isArray(variant.properties)) continue;
+    for (const [name, value] of Object.entries(variant.properties as Record<string, unknown>)) {
+      const values = propertyValues.get(name) ?? [];
+      values.push(value);
+      propertyValues.set(name, values);
+    }
+  }
+
+  const properties = Object.fromEntries(
+    [...propertyValues].map(([name, values]) => [name, mergeXaiPropertySchemas(values)]),
+  );
+  const required = stringRequiredFields(variants[0]?.required);
+
+  return {
+    ...metadata,
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+    ...("value" in additionalProperties ? { additionalProperties: additionalProperties.value } : {}),
+  };
 }
 
 function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
-  const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice));
+  const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
-    const parameters = xaiTarget
+    const parameters = stripResponsesOnlyEncryptedMarker(xaiTarget
       ? normalizeXaiToolParameters(t.parameters)
-      : ensureRootObjectType(t.parameters);
+      : ensureRootObjectType(t.parameters));
 
     if (parameters === undefined) return [];
     return [{
@@ -818,6 +1313,26 @@ function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: stri
   return fraction === undefined ? undefined : Math.max(1, Math.floor(maxBudget * fraction));
 }
 
+function canSerializeOpenAIChatServiceTier(
+  provider: OcxProviderConfig,
+  modelId: string,
+  serviceTier: unknown,
+  tierDecision?: OcxParsedRequest["options"]["tierDecision"],
+): boolean {
+  if (serviceTier === undefined) return false;
+  if (tierDecision !== undefined) {
+    return tierDecision.kind === "set" || tierDecision.kind === "forward-caller";
+  }
+  // No decision from the router means this call did not go through the tier state machine, so
+  // ask that machine rather than re-deriving a looser answer beside it. The previous fallback
+  // returned true whenever foreign forwarding was allowed at all, which let a caller tier
+  // reach the wire in cases `decideTier` would have dropped — the two paths disagreeing is
+  // precisely the bug, so there is now only one authority.
+  const callerTier = typeof serviceTier === "string" ? serviceTier : undefined;
+  const decision = decideTier(fastPolicyForModel(provider, modelId, undefined, "chat"), undefined, callerTier);
+  return decision.kind === "set" || decision.kind === "forward-caller";
+}
+
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   return {
     name: "openai-chat",
@@ -825,11 +1340,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
     formatErrorBody: formatOpenAIChatErrorBody,
 
     buildRequest(parsed: OcxParsedRequest) {
-      const hasCredential = typeof provider.apiKey === "string" && provider.apiKey.trim().length > 0;
-      if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
-        throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
-      }
-
+      const { url, headers, hasCredential } = openAIChatTransport(provider);
       const messages = messagesToChatFormat(parsed, provider);
       const tools = toolsToChatFormatForProvider(parsed, provider);
       const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider);
@@ -839,17 +1350,19 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         messages,
         stream: parsed.stream,
       };
-      // Preserve a caller-selected service tier for OpenAI-compatible chat gateways. The
-      // request pipeline deliberately does not inject fast mode for this adapter, but dropping
-      // an explicit value here makes the Responses parser's serviceTier projection ineffective.
-      //
-      // Opt-in, like `prompt_cache_key` directly below: `service_tier` is an OpenAI-specific
-      // extension and 66 registry providers share this adapter, several of which reject
-      // unknown body fields. Forwarding unconditionally would turn a caller-supplied
-      // `service_tier` into an upstream 400 on those routes. `supportsServiceTier` is the
-      // Responses-wire flag (applyServiceTierGate) and deliberately does not gate this path.
-      if (provider.chatServiceTier && parsed.options.serviceTier !== undefined) {
-        body.service_tier = parsed.options.serviceTier;
+      // A policy-produced canonical decision has already passed capability validation. Without
+      // that decision, a canonical caller value still requires an explicit true capability;
+      // unclassified Chat routes remain behind the caller-forwarding opt-in.
+      const serviceTier = parsed.options.serviceTier;
+      const tierDecision = parsed.options.tierDecision;
+      const canSerializeServiceTier = canSerializeOpenAIChatServiceTier(
+        provider,
+        parsed.modelId,
+        serviceTier,
+        tierDecision,
+      );
+      if (canSerializeServiceTier && serviceTier !== undefined) {
+        body.service_tier = serviceTier;
       }
       if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
       const maxTokens = resolveMaxTokens(provider, parsed);
@@ -981,12 +1494,14 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.stream) body.stream_options = { include_usage: true };
 
-      const url = openaiChatCompletionsUrl(provider.baseUrl);
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-      if (provider.headers) Object.assign(headers, provider.headers);
-
       const bodyJson = JSON.stringify(body);
+      const actualServiceTier = typeof body.service_tier === "string" ? body.service_tier : null;
+      const tierLog = createAdapterTierMetadata(
+        parsed.options.tierObservation,
+        parsed.options.tierDecision,
+        actualServiceTier === null ? null : "service-tier",
+        actualServiceTier,
+      );
       if (isDebugEnabled()) {
         let host = "upstream";
         try { host = new URL(url).host; } catch { /* keep fallback */ }
@@ -1007,10 +1522,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         headers,
         body: bodyJson,
         ...(reasoningLog ? { reasoningLog } : {}),
+        ...(tierLog ? { tierLog } : {}),
       };
     },
 
-    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
+    async *parseStream(
+      response: Response,
+      budget: TranslatorBudget,
+      tierMetadata?: AdapterTierMetadata,
+    ): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
@@ -1021,7 +1541,20 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
-      interface PendingToolCall { key: string; id: string; name: string; args: string; argsBytes: number }
+      interface PendingToolCall {
+        key: string;
+        id: string;
+        name: string;
+        args: string;
+        argsBytes: number;
+        /**
+         * Whether this call has ever received `arguments` as an actual string, empty included.
+         * An empty string still counts: it proves the upstream sent the field with the right
+         * wire type, which is what a later malformed repeat of that field would be padding for.
+         * A canonical NAME is not evidence about the ARGUMENTS field and must not stand in.
+         */
+        sawArgumentsString: boolean;
+      }
       const pendingToolCalls: PendingToolCall[] = [];
       let toolCallSeq = 0;
       const closeToolCalls = (): PendingToolCall[] => {
@@ -1030,6 +1563,16 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         pendingToolCalls.length = 0;
         return calls;
       };
+      const pendingToolCallsAreCompleteJsonObjects = (): boolean =>
+        pendingToolCalls.length > 0 && pendingToolCalls.every(call => {
+          if (call.name.trim().length === 0 || !call.sawArgumentsString || call.args.length === 0) return false;
+          try {
+            const parsed = JSON.parse(call.args) as unknown;
+            return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+          } catch {
+            return false;
+          }
+        });
       // Returns "terminate" when a pending call cannot be dispatched, so every flush site
       // stops the turn instead of emitting an unusable call. `closeToolCalls()` runs first,
       // so budget reservations are released for every pending call even on the early return.
@@ -1079,11 +1622,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         try {
           parsed = JSON.parse(payload);
         } catch {
+          tierMetadata?.markResponseUnparseable();
           yield { type: "error", message: "malformed upstream SSE data frame" };
           return "terminate";
         }
         if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "continue";
         const chunk = parsed as Record<string, unknown>;
+        if (Object.hasOwn(chunk, "service_tier")) {
+          tierMetadata?.observeResponseServiceTier(chunk.service_tier);
+        }
 
         if (chunk.error !== undefined && chunk.error !== null) {
           const event = upstreamErrorEvent(chunk.error, pendingUsage);
@@ -1129,61 +1676,105 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             // tolerated as absent because OpenAI-compatible providers may emit it as stream padding.
             if (!Array.isArray(rawToolCalls)) {
               logInvalidToolCalls("stream", rawToolCalls);
-              return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
+              return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage));
             }
-            for (const rawToolCall of rawToolCalls) {
+            for (let callIndex = 0; callIndex < rawToolCalls.length; callIndex++) {
+              const rawToolCall: unknown = rawToolCalls[callIndex];
               if (!isRecord(rawToolCall)) {
-                logInvalidToolCalls("stream", rawToolCalls);
-                return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
+                const diagnostic: InvalidToolCallDiagnostic = {
+                  reason: "tool_call_not_object",
+                  callIndex,
+                  valueType: rawToolCall === null ? "null" : Array.isArray(rawToolCall) ? "array" : typeof rawToolCall,
+                };
+                logInvalidToolCalls("stream", rawToolCalls, diagnostic);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage, diagnostic));
               }
-              const tc = rawToolCall as {
-                index?: number;
-                id?: string;
-                function?: { name?: string; arguments?: string };
-              };
-              // That cast is a TypeScript convenience, not a runtime guarantee: this is
-              // upstream JSON. Validate the fields before they are stored, so a non-string
-              // name or arguments value fails closed through the #1325 channel here rather
-              // than escaping later as a TypeError from string handling at flush time.
-              const rawFunction = (rawToolCall as { function?: unknown }).function;
-              if (rawFunction !== undefined && rawFunction !== null) {
-                if (!isRecord(rawFunction)) {
-                  logInvalidToolCalls("stream", rawToolCalls);
-                  return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
-                }
-                const rawName = rawFunction.name;
-                const rawArguments = rawFunction.arguments;
-                if ((rawName !== undefined && typeof rawName !== "string")
-                  || (rawArguments !== undefined && typeof rawArguments !== "string")) {
-                  logInvalidToolCalls("stream", rawToolCalls);
-                  return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
-                }
+              // This is upstream JSON, so every field is validated before it is stored: a
+              // malformed value must fail closed through the #1325 channel here rather than
+              // escaping later as a TypeError from string handling at flush time.
+              const rawFunction = rawToolCall.function;
+              if (rawFunction !== undefined && rawFunction !== null && !isRecord(rawFunction)) {
+                const diagnostic: InvalidToolCallDiagnostic = {
+                  reason: "tool_call_function_not_object",
+                  callIndex,
+                  valueType: Array.isArray(rawFunction) ? "array" : typeof rawFunction,
+                };
+                logInvalidToolCalls("stream", rawToolCalls, diagnostic);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage, diagnostic));
               }
-              if (tc.id !== undefined && typeof tc.id !== "string") {
-                logInvalidToolCalls("stream", rawToolCalls);
-                return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
-              }
-              const key = typeof tc.index === "number"
-                ? `i:${tc.index}`
-                : tc.id
-                  ? `id:${tc.id}`
+              const fnRecord = isRecord(rawFunction) ? rawFunction : undefined;
+              const rawName = fnRecord?.name;
+              const rawArguments = fnRecord?.arguments;
+              const rawId = rawToolCall.id;
+              const idDelta = typeof rawId === "string" ? rawId : "";
+              const rawIndex = rawToolCall.index;
+
+              // Resolve the pending call BEFORE judging the fields. Some OpenAI-compatible
+              // streamers repeat an already-sent field as a non-string placeholder on a
+              // continuation delta; judging first meant the whole stream died with a 502 even
+              // though the value being repeated was already held in canonical form.
+              const key = typeof rawIndex === "number"
+                ? `i:${rawIndex}`
+                : idDelta
+                  ? `id:${idDelta}`
                   : pendingToolCalls[pendingToolCalls.length - 1]?.key;
               let call = key !== undefined ? pendingToolCalls.find(c => c.key === key) : undefined;
-              if (!call && tc.id) call = pendingToolCalls.find(c => c.id === tc.id);
+              if (!call && idDelta) call = pendingToolCalls.find(c => c.id === idDelta);
               if (!call) {
-                call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "", argsBytes: 0 };
+                call = {
+                  key: key ?? `seq:${pendingToolCalls.length}`,
+                  id: "",
+                  name: "",
+                  args: "",
+                  argsBytes: 0,
+                  sawArgumentsString: false,
+                };
                 pendingToolCalls.push(call);
                 budget.openCall(call.key);
               }
-              if (tc.id && !call.id) call.id = tc.id;
-              if (tc.function?.name && !call.name) call.name = tc.function.name;
-              if (tc.function?.arguments) {
+
+              // Tolerance is per FIELD, keyed on that field's own provenance. A canonical name
+              // says nothing about whether `arguments` was ever sent as a string, so it cannot
+              // authorize a malformed arguments value — that would silently drop a real
+              // argument payload the model intended to send.
+              const rejection: InvalidToolCallDiagnostic | undefined =
+                isInvalidStreamStringField(rawName) && call.name.trim() === ""
+                  ? { reason: "tool_call_function_name_invalid", callIndex, valueType: typeof rawName }
+                  : isInvalidStreamStringField(rawArguments) && !call.sawArgumentsString
+                    ? { reason: "tool_call_function_arguments_invalid", callIndex, valueType: typeof rawArguments }
+                    : isInvalidStreamStringField(rawId) && call.id === ""
+                      ? { reason: "tool_call_id_invalid", callIndex, valueType: typeof rawId }
+                      : undefined;
+              if (rejection) {
+                logInvalidToolCalls("stream", rawToolCalls, rejection);
+                return yield* terminateWithError(invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage, rejection));
+              }
+
+              if (idDelta && !call.id) call.id = idDelta;
+              if (typeof rawName === "string" && rawName && !call.name) call.name = rawName;
+              if (typeof rawArguments === "string") call.sawArgumentsString = true;
+              // Tool-call deltas are BUFFERED until a terminal signal, so this adapter can
+              // consume upstream frames for a long time while yielding nothing. The Responses
+              // bridge reads adapter activity, not socket activity, so a model that streams a
+              // large argument payload looks identical to a hung upstream and the stall
+              // watchdog can abort a turn that was progressing normally.
+              //
+              // Found while investigating #2156, but it is NOT that bug: a stall abort emits
+              // `response.incomplete` with `upstream_stall_timeout` from the bridge, whereas
+              // that report shows the adapter's own end-of-stream error after `reader.read()`
+              // returned EOF with tool calls still pending. Different path, different frame.
+              //
+              // A heartbeat is invisible downstream — the bridge consumes it to re-arm the
+              // watchdog and emits nothing — which is the same remedy the Cursor, Anthropic,
+              // Google, and Kiro adapters already use for their own silent phases.
+              yield { type: "heartbeat" };
+              if (typeof rawArguments === "string" && rawArguments) {
                 const previousBytes = call.argsBytes;
-                const nextBytes = previousBytes + budgetEncoder.encode(tc.function.arguments).byteLength;
+                const nextBytes = previousBytes + budgetEncoder.encode(rawArguments).byteLength;
                 const scope = { kind: "tool_args" as const, callId: call.key };
                 const reservation = budget.reserveTransient(nextBytes, scope);
                 try {
-                  call.args += tc.function.arguments;
+                  call.args += rawArguments;
                   reservation.commitRetained();
                   budget.releaseRetained(previousBytes, scope);
                   call.argsBytes = nextBytes;
@@ -1242,6 +1833,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
         const sawFinish = finishReason !== undefined;
         if (!sawFinish && pendingToolCalls.length > 0) {
+          // Some OpenAI-compatible gateways close immediately after a complete function-call
+          // delta and omit both terminal conventions. Keep the default fail-closed policy, and
+          // let an opted-in provider recover only calls whose assembled argument payload is a
+          // complete JSON object. A partial JSON prefix still takes the truncation path below.
+          if (provider.openaiChatEofTolerance === true && pendingToolCallsAreCompleteJsonObjects()) {
+            if ((yield* flushToolCalls()) === "terminate") return;
+            yield { type: "done", usage: pendingUsage };
+            return;
+          }
           debugProviderDiagnostic("openai-chat", "stream-truncated", {
             finishReason: null,
             hadUsage: pendingUsage !== undefined,
@@ -1282,8 +1882,26 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
     },
 
-    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
-      const json = await response.json() as Record<string, unknown>;
+    async parseResponse(
+      response: Response,
+      budget: TranslatorBudget,
+      tierMetadata?: AdapterTierMetadata,
+    ): Promise<AdapterEvent[]> {
+      let parsed: unknown;
+      try {
+        parsed = await response.json();
+      } catch (error) {
+        tierMetadata?.markResponseUnparseable();
+        throw error;
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        tierMetadata?.markResponseUnparseable();
+        throw new Error("upstream response was not a JSON object");
+      }
+      const json = parsed as Record<string, unknown>;
+      if (Object.hasOwn(json, "service_tier")) {
+        tierMetadata?.observeResponseServiceTier(json.service_tier);
+      }
       const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
       budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
       try {
@@ -1323,12 +1941,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (rawToolCalls !== undefined && rawToolCalls !== null) {
           if (!Array.isArray(rawToolCalls)) {
             logInvalidToolCalls("response", rawToolCalls);
-            return [invalidToolCallsEvent(usage)];
+            return [invalidToolCallsEvent(rawToolCalls, "response", usage)];
           }
           for (const rawToolCall of rawToolCalls) {
             if (!isRecord(rawToolCall) || !isRecord(rawToolCall.function)) {
               logInvalidToolCalls("response", rawToolCalls);
-              return [invalidToolCallsEvent(usage)];
+              return [invalidToolCallsEvent(rawToolCalls, "response", usage)];
             }
             const id = rawToolCall.id;
             const name = rawToolCall.function.name;
@@ -1339,7 +1957,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             if (typeof id !== "string" || typeof name !== "string" || typeof args !== "string"
               || name.trim().length === 0) {
               logInvalidToolCalls("response", rawToolCalls);
-              return [invalidToolCallsEvent(usage)];
+              return [invalidToolCallsEvent(rawToolCalls, "response", usage)];
             }
             events.push({ type: "tool_call_start", id, name });
             events.push({ type: "tool_call_delta", arguments: args });

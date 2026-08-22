@@ -7,8 +7,16 @@ import {
   clearCursorThreadContinuityForTests,
   lookupCursorThreadConversation,
 } from "../src/adapters/cursor/thread-continuity";
+import {
+  clearCursorCheckpointsForTests,
+  commitCursorCheckpoint,
+  getCursorCheckpoint,
+} from "../src/adapters/cursor/checkpoint-store";
+import { create, toBinary } from "@bufbuild/protobuf";
+import { ConversationStateStructureSchema } from "../src/adapters/cursor/gen/agent_pb";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
+import type { CursorTransportFactoryInput } from "../src/adapters/cursor/transport";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createCursorAdapter = (...args: Parameters<typeof createCursorAdapterProduction>) =>
@@ -84,11 +92,32 @@ describe("Cursor adapter live transport", () => {
     expect(requests[0]?.modelId).toBe("default");
     expect(requests[0]?.routingLevel).toBeUndefined();
     expect(writes).toEqual([]);
-    expect(events).toEqual([
-      { type: "thinking_delta", thinking: "검토 중" },
-      { type: "text_delta", text: "안녕하세요" },
-      { type: "done", usage: { inputTokens: 3, outputTokens: 5 } },
-    ]);
+    expect(events[0]).toEqual({ type: "thinking_delta", thinking: "검토 중" });
+    expect(events[1]).toEqual({ type: "text_delta", text: "안녕하세요" });
+    expect(events[2]).toMatchObject({ type: "done", usage: { inputTokens: 3, outputTokens: 5 } });
+  });
+
+  test("runTurn forwards the router-prepared provider fetch to the live transport", async () => {
+    const inputs: CursorTransportFactoryInput[] = [];
+    const pacedFetch = (async () => new Response()) as typeof fetch;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport(input) {
+        inputs.push(input);
+        return {
+          async *run() { yield { type: "done" } satisfies CursorServerMessage; },
+          writeClient() {},
+        };
+      },
+    });
+
+    await adapter.runTurn?.(
+      { ...parsed, context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] } },
+      { headers: new Headers(), providerFetch: pacedFetch },
+      () => {},
+    );
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.fetch).toBe(pacedFetch);
   });
 
   test("runTurn preserves explicit Cursor Router optimization levels", async () => {
@@ -161,6 +190,47 @@ describe("Cursor adapter live transport", () => {
     expect(scopes[0]).not.toBe(scopes[1]);
     expect(ids).toHaveLength(2);
     expect(ids[0]).not.toBe(ids[1]);
+  });
+  test("passes conversationId as Connect sessionId and isolates helper turns", async () => {
+    const captured: CursorTransportFactoryInput[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport(input) {
+        captured.push(input);
+        return {
+          async *run() {
+            yield { type: "done" } satisfies CursorServerMessage;
+          },
+          writeClient() {},
+        };
+      },
+    });
+
+    const parent: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _clientThreadId: "parent-thread-session-id",
+    };
+    await adapter.runTurn?.(parent, { headers: new Headers() }, () => {});
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.sessionId).toBeTruthy();
+    expect(captured[0]?.sessionId).toBe(parent._cursorConversationId);
+
+    const helper: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: { messages: [{ role: "user", content: "summarize", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _clientThreadId: "parent-thread-session-id",
+      _cursorConversationId: parent._cursorConversationId,
+      _cursorIsolateConversation: true,
+    };
+    await adapter.runTurn?.(helper, { headers: new Headers() }, () => {});
+    expect(captured).toHaveLength(2);
+    expect(captured[1]?.sessionId).toBeTruthy();
+    expect(captured[1]?.sessionId).not.toBe(captured[0]?.sessionId);
+    expect(captured[1]?.sessionId).toBe(helper._cursorConversationId);
   });
 
   test("parseStream reports that the fetch path is disabled", async () => {
@@ -285,6 +355,66 @@ describe("Cursor adapter live transport", () => {
     expect(seen[1]).not.toBe("cursor_stale");
     expect(body._cursorConversationId).toBe(seen[1]);
     expect(events.filter(event => event.type === "error")).toHaveLength(0);
+  });
+
+  test("forced-fresh recovery keeps the new checkpoint instead of deleting it", async () => {
+    clearCursorCheckpointsForTests();
+    const parentBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["parent-stale"],
+    }));
+    const parentRef = commitCursorCheckpoint({
+      conversationId: "cursor_stale",
+      identityScope: "acct-fresh",
+      modelId: "gpt-5.6-sol",
+      checkpointBytes: parentBytes,
+    });
+    expect(parentRef).toBeDefined();
+    const recoveredBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["recovered"],
+    }));
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          if (attempts === 1) {
+            throw Object.assign(
+              new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+              { code: "invalid_argument" },
+            );
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+        capturedConversationCheckpoint() {
+          return attempts === 1 ? undefined : recoveredBytes;
+        },
+      }),
+    });
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "retry me", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_stale",
+      _cursorIdentityScope: "acct-fresh",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_stale", checkpointUsable: true, checkpointRef: parentRef },
+      },
+    };
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+    expect(attempts).toBe(2);
+    expect(getCursorCheckpoint(parentRef)).toBeUndefined();
+    const done = events.find(event => event.type === "done");
+    const newRef = done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined;
+    expect(newRef).toBeDefined();
+    expect(newRef).not.toBe(parentRef);
+    expect(getCursorCheckpoint(newRef)?.conversationId).toBe(body._cursorConversationId);
+    clearCursorCheckpointsForTests();
   });
 
   test("does not replay invalid_argument after a local side effect", async () => {
@@ -501,5 +631,93 @@ describe("Cursor adapter live transport", () => {
     expect(attempts).toBe(1);
     expect(events.some(event => event.type === "text_delta")).toBe(true);
     expect(events.some(event => event.type === "error")).toBe(true);
+  });
+
+  test("attaches a committed checkpoint ref on done so stream persist can reuse it", async () => {
+    clearCursorCheckpointsForTests();
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["stream-fixture"],
+    }));
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          yield { type: "text", text: "remembered" } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+        capturedConversationCheckpoint() {
+          return checkpointBytes;
+        },
+      }),
+    });
+
+    const events: AdapterEvent[] = [];
+    const body: OcxParsedRequest = {
+      ...parsed,
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _cursorConversationId: "cursor_stream_persist",
+      _cursorIdentityScope: "acct-stream",
+    };
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    const done = events.find(event => event.type === "done");
+    expect(done?.type).toBe("done");
+    if (done?.type !== "done") throw new Error("expected done");
+    expect(done.providerState?.cursor?.checkpointRef).toBeDefined();
+    expect(done.providerState?.cursor?.checkpointUsable).toBe(true);
+    expect(getCursorCheckpoint(done.providerState?.cursor?.checkpointRef)?.conversationId).toBe("cursor_stream_persist");
+    expect(body._providerContinuation?.cursor?.checkpointRef).toBe(done.providerState?.cursor?.checkpointRef);
+    clearCursorCheckpointsForTests();
+  });
+
+  test("isolated helper turns do not inherit or invalidate a parent checkpoint ref", async () => {
+    clearCursorCheckpointsForTests();
+    const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      pendingToolCalls: ["isolate-fixture"],
+    }));
+    const parentRef = commitCursorCheckpoint({
+      conversationId: "cursor_parent_real",
+      identityScope: "acct-isolate-test",
+      modelId: "default",
+      checkpointBytes,
+      coveredMessageCount: 1,
+    });
+    expect(parentRef).toBeDefined();
+
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+    const body: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: { messages: [{ role: "user", content: "summarize", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_parent_real",
+      _cursorIsolateConversation: true,
+      _cursorIdentityScope: "acct-isolate-test",
+      _providerContinuation: {
+        cursor: { conversationId: "cursor_parent_real", checkpointUsable: true, checkpointRef: parentRef },
+      },
+    };
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+    expect(body._providerContinuation?.cursor?.checkpointRef).toBeUndefined();
+    const done = events.find(event => event.type === "done");
+    expect(done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined).toBeUndefined();
+    clearCursorCheckpointsForTests();
   });
 });

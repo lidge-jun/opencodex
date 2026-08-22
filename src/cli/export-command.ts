@@ -1,8 +1,8 @@
 /**
  * `ocx export --client <id>` — print a client config for the live proxy.
  *
- * Seven clients, four formats: opencode and Pi are JSON, OMP, Hermes and Gajae
- * are YAML, OpenClaw JSON5, Kimi TOML.
+ * Eight clients, four formats: OpenCode and Pi are JSON; OMP, Hermes, Gajae and
+ * MiniMax Code are YAML; OpenClaw is JSON5; Kimi is TOML.
  *
  * Two consumers, one payload (devlog 260731_client_config_export/020):
  *

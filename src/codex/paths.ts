@@ -108,6 +108,11 @@ export function resolveCodexStateDbPath(deps: CodexSqliteHomeDeps = {}): string 
   return join(resolveCodexSqliteHome(deps), "state_5.sqlite");
 }
 
+/** Active Codex diagnostic-log database, derived from the call-time SQLite root. */
+export function resolveCodexLogsDbPath(deps: CodexSqliteHomeDeps = {}): string {
+  return join(resolveCodexSqliteHome(deps), "logs_2.sqlite");
+}
+
 export function tomlString(value: string): string {
   return JSON.stringify(value);
 }

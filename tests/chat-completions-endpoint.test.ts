@@ -1,5 +1,5 @@
 import { waitForNativeMainStartupGate } from "../src/codex/native-profile-startup";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,12 +10,20 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../src/chat/inbound";
 import { chatCompletionsUsage } from "../src/chat/outbound";
+import { parseRequest } from "../src/responses/parser";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import type { TranslatorBudget } from "../src/lib/translator-budget";
 import {
+  resetProviderRequestPacingForTest,
+  setProviderRequestPacingRuntimeForTest,
+} from "../src/providers/request-pacing";
+import {
   acquireNativeMainProfileDrain,
+  activeRegistryMetrics,
+  getActiveTurnCount,
   getNativeMainProfileRequestCount,
   resetLifecycleDrainStateForTests,
+  tryAdmitTurn,
 } from "../src/server/lifecycle";
 import {
   blockNativeMainRecovery,
@@ -61,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetProviderRequestPacingForTest();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -218,7 +227,7 @@ test("chatCompletionsToResponsesBody maps messages/tools/system", () => {
   expect(body.stream).toBe(true);
   expect(body.instructions).toBe("be brief");
   expect(body.max_output_tokens).toBe(64);
-  expect(body.reasoning).toEqual({ effort: "high" });
+  expect(body.reasoning).toEqual({ effort: "high", summary: "auto" });
   expect(body.tool_choice).toBe("auto");
   expect(Array.isArray(body.tools)).toBe(true);
   expect((body.tools as Array<Record<string, unknown>>)[0]).toMatchObject({ type: "function", name: "lookup" });
@@ -226,6 +235,165 @@ test("chatCompletionsToResponsesBody maps messages/tools/system", () => {
   expect(input.some(i => i.type === "message" && i.role === "user")).toBe(true);
   expect(input.some(i => i.type === "function_call" && i.call_id === "call_1")).toBe(true);
   expect(input.some(i => i.type === "function_call_output" && i.call_id === "call_1")).toBe(true);
+});
+
+describe("chatCompletionsToResponsesBody service_tier", () => {
+  test("preserves a caller-supplied service_tier", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      service_tier: "flex",
+    });
+    expect(body.service_tier).toBe("flex");
+  });
+
+  test("does not inject service_tier when the caller omitted it", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(body).not.toHaveProperty("service_tier");
+  });
+});
+
+async function driveChatFallbackServiceTier(
+  providerOverrides: Partial<OcxProviderConfig>,
+): Promise<Record<string, unknown>> {
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  const captured: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    captured.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+
+  const providerName = "chat-tier-fixture";
+  const config = {
+    port: 0,
+    defaultProvider: providerName,
+    providers: {
+      [providerName]: {
+        adapter: "openai-chat",
+        baseUrl: "https://chat-tier.example.test/v1",
+        authMode: "key",
+        apiKey: "sk-test",
+        chatServiceTier: true,
+        supportsServiceTier: true,
+        ...providerOverrides,
+      },
+    },
+  } as OcxConfig;
+  const response = await handleChatCompletions(
+    new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: `${providerName}/model`,
+        messages: [{ role: "user", content: "ping" }],
+        stream: true,
+        // Force the Chat -> Responses fallback so this exercises the converter.
+        store: true,
+        service_tier: "flex",
+      }),
+    }),
+    config,
+    { model: "", provider: "" },
+  );
+
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(captured).toHaveLength(1);
+  return captured[0]!;
+}
+
+describe("POST /v1/chat/completions service_tier fallback", () => {
+  test("forwards the caller tier through a service-tier-capable openai-chat route", async () => {
+    const outboundBody = await driveChatFallbackServiceTier({});
+    expect(outboundBody.service_tier).toBe("flex");
+  });
+
+  test("strips the caller tier when the provider explicitly disables service tiers", async () => {
+    const outboundBody = await driveChatFallbackServiceTier({ supportsServiceTier: false });
+    expect(outboundBody).not.toHaveProperty("service_tier");
+  });
+});
+
+describe("chatCompletionsToResponsesBody reasoning summary", () => {
+  test("defaults summary to auto when the client only sent reasoning_effort", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "opencode-go/deepseek-v4-flash",
+      messages: [{ role: "user", content: "What is 17*19?" }],
+      reasoning_effort: "max",
+    });
+    expect(body.reasoning).toEqual({ effort: "max", summary: "auto" });
+    const parsed = parseRequest(body);
+    expect(parsed.options.hideThinkingSummary).not.toBe(true);
+    expect(parsed.options.reasoning).toBe("max");
+  });
+
+  test("preserves an explicit reasoning.summary", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning: { effort: "high", summary: "concise" },
+    });
+    expect(body.reasoning).toEqual({ effort: "high", summary: "concise" });
+  });
+
+  test("include_reasoning false hides thinking even when effort is set", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "high",
+      include_reasoning: false,
+    });
+    expect(body.reasoning).toEqual({ effort: "high", summary: "none" });
+    expect(parseRequest(body).options.hideThinkingSummary).toBe(true);
+  });
+
+  test("include_reasoning true requests a visible summary without an effort", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      include_reasoning: true,
+    });
+    expect(body.reasoning).toEqual({ summary: "auto" });
+    expect(parseRequest(body).options.hideThinkingSummary).not.toBe(true);
+  });
+
+  test("explicit reasoning.summary wins over include_reasoning true", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      include_reasoning: true,
+      reasoning: { summary: "none" },
+    });
+    expect(body.reasoning).toEqual({ summary: "none" });
+    expect(parseRequest(body).options.hideThinkingSummary).toBe(true);
+  });
+
+  test("explicit reasoning.summary wins over include_reasoning false", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      include_reasoning: false,
+      reasoning: { effort: "high", summary: "auto" },
+    });
+    expect(body.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(parseRequest(body).options.hideThinkingSummary).not.toBe(true);
+  });
+
+  test("omits reasoning when the client sent no reasoning knobs", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(body.reasoning).toBeUndefined();
+    expect(parseRequest(body).options.hideThinkingSummary).toBe(true);
+  });
 });
 
 test("chatCompletionsToResponsesBody rejects missing model", () => {
@@ -265,10 +433,9 @@ test("chatCompletionsUsage always emits detail objects with zero defaults", () =
 });
 
 test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwarding a raw frame", async () => {
-  // grok-build's strict Responses decoder dies on unknown variants (response.heartbeat),
-  // which is why the injected Grok config pins api_backend = "chat_completions". This
-  // regression pins the safety property: heartbeats never surface as raw frames here —
-  // at most a valid role chunk is emitted.
+  // Upstream responses SSE may contain heartbeat events (SSE comment keep-alive in
+  // bridge.ts, but some upstreams emit them as typed frames). The chat-completions
+  // converter must drop them rather than forwarding raw Responses-vocab frames.
   const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const upstream = new Response([
     `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
@@ -557,6 +724,53 @@ test("POST /v1/chat/completions forwards response_format to routed openai-chat",
   }
 });
 
+test("native Chat SSE holds its active-turn lease until terminal completion", async () => {
+  const encoder = new TextEncoder();
+  let upstreamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          upstreamController = controller;
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "held" } }] })}\n\n`,
+          ));
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  const before = getActiveTurnCount();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    expect(getActiveTurnCount()).toBe(before + 1);
+
+    upstreamController!.enqueue(encoder.encode("data: [DONE]\n\n"));
+    try { upstreamController!.close(); } catch { /* parser may cancel after terminal */ }
+    while (!(await reader.read()).done) { /* drain terminal frames */ }
+    reader = undefined;
+    expect(getActiveTurnCount()).toBe(before);
+  } finally {
+    await reader?.cancel();
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 test("POST /v1/responses carries text.format onto the routed chat wire", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
@@ -639,6 +853,710 @@ test("POST /v1/responses honors the per-model response_format opt-out", async ()
   }
 });
 
+test("chat-native consumes pacing before the response-header timeout starts", async () => {
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  let pacingTimer: (() => void) | undefined;
+  let now = 0;
+  setProviderRequestPacingRuntimeForTest({
+    now: () => now,
+    setTimer: callback => {
+      pacingTimer = callback;
+      return callback;
+    },
+    clearTimer: () => { pacingTimer = undefined; },
+    enqueueMicrotask: callback => callback(),
+  });
+
+  let starts = 0;
+  const providerExecutor = Object.assign(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.signal?.aborted) throw init.signal.reason;
+    starts += 1;
+    return Response.json({
+      id: `chatcmpl_paced_${starts}`,
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+    });
+  }, { preconnect() {} }) as typeof globalThis.fetch;
+  const config = mockConfig("https://provider.example/v1", {
+    requestPacing: { enabled: true, minIntervalMs: 100 },
+    fetch: providerExecutor,
+  } as Partial<OcxProviderConfig> & { fetch: typeof globalThis.fetch });
+  config.connectTimeoutMs = 1;
+  const request = () => new Request("http://localhost/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "mock/test-model",
+      stream: false,
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  });
+
+  const first = await handleChatCompletions(request(), config, {} as Parameters<typeof handleChatCompletions>[2]);
+  expect(first.status).toBe(200);
+  const secondPending = handleChatCompletions(request(), config, {} as Parameters<typeof handleChatCompletions>[2]);
+  await Bun.sleep(5);
+  expect(starts).toBe(1);
+  expect(pacingTimer).toBeDefined();
+  now = 100;
+  const release = pacingTimer;
+  pacingTimer = undefined;
+  release?.();
+  const second = await secondPending;
+  expect(second.status).toBe(200);
+  expect(starts).toBe(2);
+});
+
+test("chat-native stays outside the Responses empty-completion retry guard", async () => {
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  let upstreamCalls = 0;
+  const providerExecutor = Object.assign(async () => {
+    upstreamCalls += 1;
+    return Response.json({
+      id: "chatcmpl_empty_native",
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "stop" }],
+    });
+  }, { preconnect() {} }) as typeof globalThis.fetch;
+  const config = mockConfig("https://provider.example/v1", {
+    fetch: providerExecutor,
+  } as Partial<OcxProviderConfig> & { fetch: typeof globalThis.fetch });
+  config.emptyCompletionRetry = true;
+
+  const response = await handleChatCompletions(
+    new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    }),
+    config,
+    {} as Parameters<typeof handleChatCompletions>[2],
+  );
+
+  expect(response.status).toBe(200);
+  expect(upstreamCalls).toBe(1);
+  expect(await response.json()).toMatchObject({
+    choices: [{ message: { content: "" }, finish_reason: "stop" }],
+  });
+});
+
+test("chat-native does not forward ChatGPT account headers to third-party providers", async () => {
+  const seen: Array<{ authorization: string | null; account: string | null }> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seen.push({
+        authorization: req.headers.get("authorization"),
+        account: req.headers.get("chatgpt-account-id"),
+      });
+      return Response.json({
+        id: "chatcmpl_safe",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    },
+  });
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "chat-main-access", account_id: "chat-main-account" },
+  }));
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    apiKey: "third-party-key",
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([{ authorization: "Bearer third-party-key", account: null }]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native non-stream fold preserves tool calls and finish reason", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "lookup", arguments: '{"q":' } }] } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"x"}' } }] } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 2, completion_tokens: 1 } })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "use lookup" }],
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as {
+      choices: Array<{ finish_reason: string; message: { tool_calls?: unknown[] } }>;
+    };
+    expect(json.choices[0]?.finish_reason).toBe("tool_calls");
+    expect(json.choices[0]?.message.tool_calls).toEqual([{
+      id: "call_1",
+      type: "function",
+      function: { name: "lookup", arguments: '{"q":"x"}' },
+    }]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+
+test("chat-native non-stream upstream overflow returns 502 without hanging", async () => {
+  // Provider-controlled overflow is a 502; the second request proves the reader was released.
+  let calls = 0;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      calls += 1;
+      if (calls === 1) {
+        const chunk = new TextEncoder().encode('{"id":"chatcmpl_x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"' + "y".repeat(33 * 1024 * 1024) + '"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}');
+        return new Response(chunk, { headers: { "content-type": "application/json" } });
+      }
+      return Response.json({ id: "chatcmpl_ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { code?: string } };
+    expect(json.error?.code).toBe("translation_buffer_limit");
+    const response2 = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response2.status).toBe(200);
+    // Prove the overflow path released the body/reader: second request consumed a fresh upstream response.
+    expect(calls).toBe(2);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native non-stream invalid JSON returns a provider error", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("not-json-at-all", { headers: { "content-type": "application/json" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: { type?: string } };
+    expect(json.error?.type).toBe("upstream_error");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native uses the shared request builder and normalized Chat Completions URL", async () => {
+  const captured: Array<{ pathname: string; body: Record<string, unknown> }> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push({ pathname: new URL(req.url).pathname, body: await req.json() as Record<string, unknown> });
+      return Response.json({
+        id: "chatcmpl_builder",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      });
+    },
+  });
+  const endpointBase = `${upstream.url.toString().replace(/\/$/, "")}/v1/chat/completions/`;
+  saveConfig(mockConfig(endpointBase, { noTemperatureModels: ["test-model"] }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        temperature: 0.9,
+        service_tier: "priority",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.pathname).toBe("/v1/chat/completions");
+    expect(captured[0]?.body.model).toBe("test-model");
+    expect(captured[0]?.body.temperature).toBeUndefined();
+    expect(captured[0]?.body.service_tier).toBeUndefined();
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native preserves caller Chat fields on the upstream wire", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    chatServiceTier: true,
+    parallelToolCalls: true,
+  }));
+  const server = startServer(0);
+  const messages = [
+    { role: "system", name: "system-sentinel", content: "system sentinel" },
+    { role: "developer", name: "developer-sentinel", content: "developer sentinel" },
+    { role: "user", name: "user-sentinel", content: "user sentinel" },
+  ];
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        messages,
+        stream: true,
+        stream_options: { include_usage: false, sentinel_option: "preserved" },
+        max_completion_tokens: 321,
+        service_tier: "priority",
+        seed: 42,
+        n: 2,
+        logprobs: true,
+        top_logprobs: 3,
+        logit_bias: { "123": -5 },
+        user: "user-wire-sentinel",
+        metadata: { trace: "metadata-sentinel" },
+        parallel_tool_calls: false,
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      model: "test-model",
+      messages,
+      stream: true,
+      stream_options: { include_usage: true, sentinel_option: "preserved" },
+      max_completion_tokens: 321,
+      service_tier: "priority",
+      seed: 42,
+      n: 2,
+      logprobs: true,
+      top_logprobs: 3,
+      logit_bias: { "123": -5 },
+      user: "user-wire-sentinel",
+      metadata: { trace: "metadata-sentinel" },
+      parallel_tool_calls: false,
+    });
+    expect(captured[0]!.messages).toEqual(messages);
+    expect(captured[0]).not.toHaveProperty("max_tokens");
+    expect(captured[0]).not.toHaveProperty("instructions");
+    expect(captured[0]).not.toHaveProperty("input");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native streaming accepts CRLF events split across transport chunks", async () => {
+  const encoder = new TextEncoder();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"index":0,"delta":{"content":"split"}}]}\r'));
+          controller.enqueue(encoder.encode('\n\r'));
+          controller.enqueue(encoder.encode('\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\r\n'));
+          controller.enqueue(encoder.encode('\r\ndata: [DONE]\r\n\r\n'));
+          controller.close();
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain('"content":"split"');
+    expect(text).toContain('"object":"chat.completion.chunk"');
+    expect(text).toContain("data: [DONE]");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native streaming rejects an unterminated SSE event", async () => {
+  const before = getActiveTurnCount();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response('data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}', {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain('"code":"upstream_sse_unterminated"');
+    expect(text).not.toContain("data: [DONE]");
+    expect(getActiveTurnCount()).toBe(before);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native streaming bounds an oversized unterminated SSE event", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(`data: ${"x".repeat(33 * 1024 * 1024)}`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const first = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const firstText = await first.text();
+    expect(firstText).toContain('"code":"translation_buffer_limit"');
+    expect(firstText).not.toContain("data: [DONE]");
+
+    const second = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(await second.text()).toContain("data: [DONE]");
+    expect(calls).toBe(2);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native redacts structured provider errors before returning them", async () => {
+  const echoedSecret = "Authorization: Bearer opaquecredential123456";
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({
+        error: {
+          message: `upstream echoed ${echoedSecret}`,
+          type: "authentication_error",
+          code: "invalid_api_key",
+        },
+      }, { status: 401 });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const text = await response.text();
+    expect(response.status).toBe(401);
+    expect(text).toContain("Bearer [REDACTED]");
+    expect(text).not.toContain("opaquecredential123456");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native preserves same-key retry, key rotation, usage, and request logging", async () => {
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
+  const { clearKeyCooldowns } = await import("../src/providers/key-failover");
+  clearRequestLogsForTests();
+  clearKeyCooldowns("mock");
+  const authorizations: Array<string | null> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      authorizations.push(req.headers.get("authorization"));
+      if (authorizations.length < 3) {
+        return Response.json({ error: { message: "rate limited", type: "rate_limit_error" } }, {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+      }
+      return Response.json({
+        id: "chatcmpl_retry",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 4, completion_tokens: 2 },
+      });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    authMode: "key",
+    apiKey: "key-one",
+    apiKeyPool: [{ id: "one", key: "key-one" }, { id: "two", key: "key-two" }],
+    retryOn429: { attempts: 1, intervalMs: 100, maxIntervalMs: 100, respectRetryAfter: false },
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(authorizations).toEqual(["Bearer key-one", "Bearer key-one", "Bearer key-two"]);
+    const entry = getRequestLogEntries().at(-1);
+    expect(entry?.status).toBe(200);
+    expect(entry?.usage).toMatchObject({ inputTokens: 4, outputTokens: 2 });
+    expect(entry?.attempts?.[0]?.recoveryKinds).toEqual(["rate-limit-429", "key-429"]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+    clearKeyCooldowns("mock");
+  }
+});
+
+test("chat-native client cancellation cancels the upstream stream and logs 499", async () => {
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  clearRequestLogsForTests();
+  let markCancelled!: () => void;
+  const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+  const encoder = new TextEncoder();
+  const releaseMisses = activeRegistryMetrics().activeTurns.releaseMisses;
+  const before = getActiveTurnCount();
+  const lease = tryAdmitTurn();
+  if (!lease) throw new Error("failed to admit native Chat cancellation test turn");
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"index":0,"delta":{"content":"held"}}]}\n\n'));
+        },
+        cancel() {
+          markCancelled();
+        },
+      }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  try {
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const logCtx = {} as Parameters<typeof handleChatCompletions>[2];
+    const response = await handleChatCompletions(
+      request,
+      mockConfig("https://provider.example/v1"),
+      logCtx,
+      { requestId: "chat-cancel", start: Date.now(), turnAdmissionLease: lease },
+    );
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    expect(lease.isTransferred()).toBe(true);
+    expect(getActiveTurnCount()).toBe(before + 1);
+    const cancelOutcome = await Promise.race([
+      Promise.all([reader.cancel("client done"), cancelled]).then(() => "cancelled" as const),
+      Bun.sleep(2_000).then(() => "timeout" as const),
+    ]);
+    expect(cancelOutcome).toBe("cancelled");
+    expect(getRequestLogEntries().at(-1)?.status).toBe(499);
+    expect(getActiveTurnCount()).toBe(before);
+    expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(releaseMisses);
+  } finally {
+    lease.release();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat-native request abort releases its active-turn lease and logs 499", async () => {
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  clearRequestLogsForTests();
+  let markCancelled!: () => void;
+  const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+  const encoder = new TextEncoder();
+  const releaseMisses = activeRegistryMetrics().activeTurns.releaseMisses;
+  const before = getActiveTurnCount();
+  const lease = tryAdmitTurn();
+  if (!lease) throw new Error("failed to admit native Chat request-abort test turn");
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"index":0,"delta":{"content":"held"}}]}\n\n'));
+        },
+        cancel() {
+          markCancelled();
+        },
+      }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  try {
+    const clientAbort = new AbortController();
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+      signal: clientAbort.signal,
+    });
+    const response = await handleChatCompletions(
+      request,
+      mockConfig("https://provider.example/v1"),
+      {} as Parameters<typeof handleChatCompletions>[2],
+      { requestId: "chat-request-abort", start: Date.now(), turnAdmissionLease: lease },
+    );
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    expect(lease.isTransferred()).toBe(true);
+    expect(getActiveTurnCount()).toBe(before + 1);
+
+    const nextRead = reader.read();
+    clientAbort.abort("client done");
+    const abortOutcome = await Promise.race([
+      Promise.all([nextRead, cancelled]).then(([read]) => ({ kind: "cancelled" as const, read })),
+      Bun.sleep(2_000).then(() => ({ kind: "timeout" as const })),
+    ]);
+    expect(abortOutcome.kind).toBe("cancelled");
+    if (abortOutcome.kind === "cancelled") expect(abortOutcome.read.done).toBe(true);
+    expect(getRequestLogEntries().at(-1)?.status).toBe(499);
+    expect(getActiveTurnCount()).toBe(before);
+    expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(releaseMisses);
+  } finally {
+    lease.release();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat-native direct streaming without an admission lease does not record a release miss", async () => {
+  const { handleChatCompletions } = await import("../src/server/chat-completions");
+  const releaseMisses = activeRegistryMetrics().activeTurns.releaseMisses;
+  globalThis.fetch = (async () => new Response(
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    { headers: { "content-type": "text/event-stream" } },
+  )) as typeof fetch;
+  try {
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const response = await handleChatCompletions(
+      request,
+      mockConfig("https://provider.example/v1"),
+      {} as Parameters<typeof handleChatCompletions>[2],
+      { requestId: "chat-no-lease", start: Date.now() },
+    );
+    expect(await response.text()).toContain("data: [DONE]");
+    expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(releaseMisses);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat-native streaming synthesizes tool-call SSE from Chat JSON", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({
+        id: "chatcmpl_tc",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{\"q\":1}" } }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+      }),
+    });
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain("lookup");
+    expect(text).toContain("tool_calls");
+    expect(text).toContain("data: [DONE]");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("POST /v1/chat/completions direct mode forwards caller Authorization", async () => {
   const seen: Array<{ authorization: string | null }> = [];
   const upstream = Bun.serve({
@@ -704,7 +1622,7 @@ test("POST /v1/chat/completions direct mode forwards caller Authorization", asyn
  */
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("chat replay main-enrichment test");
 
-test("Chat replay owns optional main enrichment while routed work survives drain and recovery", async () => {
+test("chat-native skips optional main enrichment while routed work survives drain and recovery", async () => {
   resetLifecycleDrainStateForTests();
   writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
     tokens: { access_token: "chat-main-access", account_id: "chat-main-account" },
@@ -756,7 +1674,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
     await started;
     const response = await pending;
     expect(response.status).toBe(200);
-    expect(getNativeMainProfileRequestCount()).toBe(1);
+    expect(getNativeMainProfileRequestCount()).toBe(0);
     drain = acquireNativeMainProfileDrain("chat-overlap");
     expect(drain).not.toBeNull();
     const routedDuringDrain = await request();
@@ -819,7 +1737,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
     upstream.stop(true);
     resetLifecycleDrainStateForTests();
   }
-});
+}, 15_000);
 
 test("POST /v1/chat/completions finalizes native passthrough request logs", async () => {
   const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
@@ -1448,10 +2366,6 @@ test("responsesSseToChatCompletionsSse uses finalized arguments when the item do
 });
 
 test("chatCompletionsToResponsesBody recovers tool_calls function.name from earlier call_id", () => {
-  // Simulate replace-style client history: a later assistant tool_call has id+args but empty name,
-  // while an earlier function_call in the same transcript already named it.
-  // Our translator processes messages in order; recovery looks at previously emitted function_calls.
-  // First push a prior named call via a previous assistant message, then a nameless replay.
   const body = chatCompletionsToResponsesBody({
     model: "gpt-test",
     messages: [
@@ -1465,9 +2379,10 @@ test("chatCompletionsToResponsesBody recovers tool_calls function.name from earl
       {
         role: "assistant",
         content: null,
-        // Client lost the name on a re-serialized tool_call with same id (should still recover if same turn
-        // already registered the name earlier in the same tool_calls array / prior items).
         tool_calls: [
+          // The client lost call_a's name while re-serializing an earlier message.
+          { id: "call_a", type: "function", function: { arguments: '{"cmd":"ls"}' } },
+          // Same-array recovery remains supported as well.
           { id: "call_b", type: "function", function: { name: "exec_command", arguments: '{"cmd":"pwd"}' } },
           { id: "call_b", type: "function", function: { arguments: '{"cmd":"pwd"}' } },
         ],
@@ -1475,7 +2390,54 @@ test("chatCompletionsToResponsesBody recovers tool_calls function.name from earl
     ],
   });
   const calls = (body.input as Array<Record<string, unknown>>).filter(i => i.type === "function_call");
-  expect(calls.some(c => c.call_id === "call_b" && c.name === "exec_command")).toBe(true);
+  expect(calls.filter(c => c.call_id === "call_a").map(c => c.name)).toEqual(["exec_command", "exec_command"]);
+  expect(calls.filter(c => c.call_id === "call_b").map(c => c.name)).toEqual(["exec_command", "exec_command"]);
+});
+
+test("chatCompletionsToResponsesBody indexes tool-call names once per call", () => {
+  const count = 1_000;
+  const messages: Array<Record<string, unknown>> = [{ role: "user", content: "start" }];
+  for (let i = 0; i < count; i++) {
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: `linear_call_${i}`,
+        type: "function",
+        function: { name: "exec_command", arguments: "{}" },
+      }],
+    });
+  }
+
+  const descriptor = Object.getOwnPropertyDescriptor(Map.prototype, "set");
+  if (!descriptor || typeof descriptor.value !== "function") throw new Error("Map.prototype.set is unavailable");
+  const nativeSet = descriptor.value as (
+    this: Map<unknown, unknown>,
+    key: unknown,
+    value: unknown,
+  ) => Map<unknown, unknown>;
+  let matchingSetCalls = 0;
+  let body: Record<string, unknown> | null = null;
+  const countingSet: typeof Map.prototype.set = function <K, V>(
+    this: Map<K, V>,
+    key: K,
+    value: V,
+  ): Map<K, V> {
+    if (typeof key === "string" && key.startsWith("linear_call_") && value === "exec_command") {
+      matchingSetCalls += 1;
+    }
+    return Reflect.apply(nativeSet, this, [key, value]) as Map<K, V>;
+  };
+
+  Object.defineProperty(Map.prototype, "set", { ...descriptor, value: countingSet });
+  try {
+    body = chatCompletionsToResponsesBody({ model: "gpt-test", messages });
+  } finally {
+    Object.defineProperty(Map.prototype, "set", descriptor);
+  }
+
+  expect((body!.input as unknown[]).length).toBe(count + 1);
+  expect(matchingSetCalls).toBe(count);
 });
 
 // Local-stack fixup regressions (Sol audit of #279, devlog 100_merge_records.md WP5):
