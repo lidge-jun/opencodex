@@ -105,6 +105,25 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("runtimeTrusted");
   });
 
+  test("npm launcher restores the stopped runtime before reporting an update failure", () => {
+    const helperAt = launcherSource.indexOf("function recoverStoppedRuntimeAfterFailure()");
+    const callAt = launcherSource.indexOf("recoverStoppedRuntimeAfterFailure();");
+    const failureAt = launcherSource.indexOf("Update failed (npm exit");
+    const exitAt = launcherSource.indexOf("process.exit(1);", failureAt);
+
+    expect(helperAt).toBeGreaterThan(-1);
+    expect(callAt).toBeGreaterThan(helperAt);
+    expect(callAt).toBeLessThan(failureAt);
+    expect(failureAt).toBeLessThan(exitAt);
+
+    const helper = launcherSource.slice(helperAt, callAt);
+    expect(helper).toContain("serviceWasInstalled");
+    expect(helper).toContain("hasRuntimeState");
+    expect(helper).toContain("refreshBackgroundServiceOrStartDirect()");
+    expect(helper).toContain("startProxyDirectly()");
+    expect(launcherSource).toContain(`Try manually:  npm install -g --allow-scripts=bun \${PKG}@\${tag}`);
+  });
+
   test("both update paths surface a skipped history restore after the stop", () => {
     // A codex-history-backup-*.json surviving `ocx stop` means the native-history restore
     // was skipped (locked state DB) — users must be told or their threads silently stay
