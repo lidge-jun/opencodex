@@ -14,6 +14,7 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { setClientResourceData } from "../client-resource";
 import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
+import { navigateHash } from "../hash-routing";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -68,6 +69,7 @@ import {
 import { EmptyProviderHint } from "./models-provider-hints";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { buildFrontierRouteShortcuts } from "./frontier-route-shortcuts";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -1560,6 +1562,28 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     ? groups.filter(group => group.provider === selectedProvider)
     : groups;
 
+  const frontierShortcuts = useMemo(
+    () => buildFrontierRouteShortcuts(models, new Set(groups.map(group => group.provider))),
+    [groups, models],
+  );
+
+  const focusFrontierRoute = (provider: string, query: string, providerConfigured: boolean) => {
+    if (!providerConfigured) {
+      navigateHash("providers");
+      return;
+    }
+    setSelectedProvider(provider);
+    setSearch(previous => ({ ...previous, [provider]: query }));
+    setLimit(previous => ({ ...previous, [provider]: PAGE }));
+    setCollapsed(previous => {
+      if (!previous.has(provider)) return previous;
+      const next = new Set(previous);
+      next.delete(provider);
+      writeCollapsedProviders(next);
+      return next;
+    });
+  };
+
   const controlsBlock = (
     <>
       <div className="models-control-top-row">
@@ -2115,6 +2139,45 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           <div className="models-workspace-rail-header">
             <span className="models-workspace-rail-title">{t("models.workspace.providers")}</span>
             <span className="models-workspace-rail-count">{groups.length}</span>
+          </div>
+          <div className="models-frontier-shortcuts" role="group" aria-label={t("models.workspace.frontierRoutes")}>
+            <span className="models-frontier-shortcuts-title">{t("models.workspace.frontierRoutes")}</span>
+            <div className="models-frontier-shortcuts-list">
+              {frontierShortcuts.map(shortcut => {
+                const selected = shortcut.providerConfigured
+                  && selectedProvider === shortcut.provider
+                  && (search[shortcut.provider] ?? "") === shortcut.query;
+                const label = shortcut.id === "xai-grok"
+                  ? t("models.workspace.xaiGrok")
+                  : shortcut.id === "cursor-grok"
+                    ? t("models.workspace.cursorGrok")
+                    : shortcut.id === "opus-5"
+                      ? t("models.workspace.opus5")
+                      : t("models.workspace.fable5");
+                return (
+                  <button
+                    key={shortcut.id}
+                    type="button"
+                    className={`models-frontier-shortcut${selected ? " models-frontier-shortcut--selected" : ""}`}
+                    aria-pressed={selected}
+                    onClick={() => focusFrontierRoute(
+                      shortcut.provider,
+                      shortcut.query,
+                      shortcut.providerConfigured,
+                    )}
+                  >
+                    <span className="models-frontier-shortcut-name">{label}</span>
+                    <span className="models-frontier-shortcut-meta">
+                      {shortcut.route
+                        ? formatNamespacedModelId(shortcut.route, t)
+                        : shortcut.providerConfigured
+                          ? providerDisplaySlug(shortcut.provider)
+                          : t("models.workspace.addProvider")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div className="models-workspace-rail-list">
             <button
