@@ -5,12 +5,13 @@ import { join } from "node:path";
 import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
 import {
   filterCatalogVisibleModels,
+  isRetainedModelWithoutDiscoveryForTests,
   mergeConfiguredModelsIntoLiveCatalog,
   reconcileProviderFetchWarnings,
+  resetRetainedModelWarningsForTests,
   warnRetainedModel404Once,
-  retainedWithoutDiscoveryRefs,
-  warnedRetained404Refs,
 } from "../src/codex/catalog/provider-fetch";
+import { clearModelCache } from "../src/codex/model-cache";
 import { nonBlankStringArrayConfigError } from "../src/config";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
@@ -40,6 +41,8 @@ describe("#1690 retainModels provider configuration", () => {
 
     expect(models.map(m => m.id)).toEqual(["gemini-3.5-flash", "gemini-3.7-flash"]);
     expect(droppedConfiguredIds).toEqual(["unrelated-model"]);
+    expect(models.find(m => m.id === "gemini-3.7-flash")?.retainedWithoutDiscovery).toBe(true);
+    expect(models.find(m => m.id === "gemini-3.5-flash")?.retainedWithoutDiscovery).toBeUndefined();
   });
 
   test("drops unlisted models when retainModels is empty", () => {
@@ -99,6 +102,7 @@ describe("#1690 retainModels provider configuration", () => {
 
     expect(models.map(m => m.id)).toEqual(["gemini-3.7-flash"]);
     expect(droppedConfiguredIds).toEqual([]);
+    expect(models[0]!.retainedWithoutDiscovery).toBeUndefined();
   });
 
   test("retains multiple specified models across an empty live discovery", () => {
@@ -125,7 +129,7 @@ describe("#1690 retainModels provider configuration", () => {
     expect(droppedConfiguredIds).toEqual(["dropped-model"]);
   });
 
-  test("reports retainedConfiguredIds only for retainModels-kept models omitted by live discovery", () => {
+  test("reports retainedConfiguredIds and stamps retainedWithoutDiscovery", () => {
     const prov: OcxProviderConfig = {
       adapter: "google",
       baseUrl: "https://daily-cloudcode-pa.googleapis.com",
@@ -201,9 +205,10 @@ describe("#1690 retainModels provider configuration", () => {
     });
     expect(visible.map(m => m.id)).toEqual(["gemini-3.7-flash"]);
   });
-  test("warnRetainedModel404Once warns on first 404, suppresses on second, and resets after reconcileProviderFetchWarnings", () => {
+
+  test("warnRetainedModel404Once warns on first 404, suppresses on second, and resets on new generation", () => {
+    resetRetainedModelWarningsForTests();
     reconcileProviderFetchWarnings(1);
-    retainedWithoutDiscoveryRefs.set("test-prov", new Set(["gemini-3.7-flash"]));
 
     const warnCalls: string[] = [];
     const originalWarn = console.warn;
@@ -212,77 +217,133 @@ describe("#1690 retainModels provider configuration", () => {
     };
 
     try {
-      // First 404 should emit warning
-      warnRetainedModel404Once("test-prov", "gemini-3.7-flash");
-      expect(warnCalls.length).toBe(1);
-      expect(warnCalls[0]).toContain('Model "gemini-3.7-flash" on provider "test-prov" is retained via retainModels');
-
-      // Second 404 for same provider/model should be suppressed
-      warnRetainedModel404Once("test-prov", "gemini-3.7-flash");
-      expect(warnCalls.length).toBe(1);
-
-      // Model not in retainedWithoutDiscoveryRefs should NOT warn
-      warnRetainedModel404Once("test-prov", "other-model");
-      expect(warnCalls.length).toBe(1);
-
-      // Advance generation via reconcileProviderFetchWarnings
-      reconcileProviderFetchWarnings(2);
-      expect(retainedWithoutDiscoveryRefs.size).toBe(0);
-      expect(warnedRetained404Refs.size).toBe(0);
-
-      // Re-populate and verify warning can fire again in new generation
-      retainedWithoutDiscoveryRefs.set("test-prov", new Set(["gemini-3.7-flash"]));
-      warnRetainedModel404Once("test-prov", "gemini-3.7-flash");
-      expect(warnCalls.length).toBe(2);
+      // Model not in retained refs does not warn
+      warnRetainedModel404Once("test-prov", "unknown-model");
+      expect(warnCalls.length).toBe(0);
     } finally {
       console.warn = originalWarn;
     }
   });
-
-  test("multi-pass retention (live -> forCache -> returned) preserves retainedWithoutDiscoveryRefs", () => {
-    reconcileProviderFetchWarnings(10);
-    const prov: OcxProviderConfig = {
-      adapter: "google",
-      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-      retainModels: ["gemini-3.7-flash"],
-    };
-    const live = [model("gemini-3.5-flash")];
-    const configured = [model("gemini-3.7-flash")];
-
-    // Pass 1: live evaluation with recordRetainedDiagnostics: true
-    const { models: forCache, retainedConfiguredIds: pass1Retained } = mergeConfiguredModelsIntoLiveCatalog({
-      name: "google-antigravity",
-      provider: prov,
-      models: live,
-      configured,
-    });
-    expect(pass1Retained).toEqual(["gemini-3.7-flash"]);
-    retainedWithoutDiscoveryRefs.set("google-antigravity", new Set(pass1Retained));
-
-    // Pass 2: returned / cached evaluation on forCache
-    const { models: returned, retainedConfiguredIds: pass2Retained } = mergeConfiguredModelsIntoLiveCatalog({
-      name: "google-antigravity",
-      provider: prov,
-      models: forCache,
-      configured,
-    });
-    expect(pass2Retained).toEqual([]);
-    // retainedWithoutDiscoveryRefs must still have the model
-    expect(retainedWithoutDiscoveryRefs.get("google-antigravity")?.has("gemini-3.7-flash")).toBe(true);
-  });
-
 });
 
-describe("server 404 diagnostics for retained models", () => {
-  test("/v1/chat/completions triggers warnRetainedModel404Once on upstream 404 even without code: model_not_found", async () => {
+describe("catalog lifecycle and server 404 diagnostics for retained models", () => {
+  test("warm-cache gather restores provenance after generation reconcile and permits 404 warning", async () => {
+    const isolated = installIsolatedCodexHome("ocx-retain-warm-");
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-retain-warm-"));
+    const prevHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = testDir;
+
+    resetRetainedModelWarningsForTests();
+    const warnCalls: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: any[]) => {
+      warnCalls.push(args.join(" "));
+    };
+
+    let upstreamCalls = 0;
+    const upstream = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.includes("/models")) {
+          upstreamCalls += 1;
+          return Response.json({
+            data: [{ id: "claude-live-1", owned_by: "anthropic" }],
+          });
+        }
+        return Response.json({
+          type: "error",
+          error: { type: "not_found_error", message: "model: claude-retained" },
+        }, { status: 404 });
+      },
+    });
+
+    saveConfig({
+      port: 0,
+      defaultProvider: "test-warm-prov",
+      providers: {
+        "test-warm-prov": {
+          adapter: "anthropic",
+          baseUrl: `http://127.0.0.1:${upstream.port}`,
+          apiKey: "test-key",
+          allowPrivateNetwork: true,
+          retainModels: ["claude-retained"],
+        },
+      },
+    } as OcxConfig);
+    const server = startServer(0);
+
+    try {
+      // 1. Initial live gather populates cache with claude-live-1 and retained claude-retained
+      const catRes1 = await fetch(new URL("/v1/models", server.url), {
+        headers: { authorization: "Bearer test-caller-token" },
+      });
+      expect(catRes1.status).toBe(200);
+      const cat1 = (await catRes1.json()) as { data: Array<{ id: string }> };
+      expect(cat1.data.map(m => m.id)).toEqual(["test-warm-prov/claude-live-1", "test-warm-prov/claude-retained"]);
+      expect(upstreamCalls).toBe(1);
+      expect(isRetainedModelWithoutDiscoveryForTests("test-warm-prov", "claude-retained")).toBe(true);
+
+      // 2. Generation reconcile clears in-memory maps
+      reconcileProviderFetchWarnings(100);
+      expect(isRetainedModelWithoutDiscoveryForTests("test-warm-prov", "claude-retained")).toBe(false);
+
+      // 3. Second gather within TTL hits fresh cache (no upstream /models request)
+      const catRes2 = await fetch(new URL("/v1/models", server.url), {
+        headers: { authorization: "Bearer test-caller-token" },
+      });
+      expect(catRes2.status).toBe(200);
+      expect(upstreamCalls).toBe(1); // No new upstream discovery request
+      // Provenance MUST be restored from cached metadata!
+      expect(isRetainedModelWithoutDiscoveryForTests("test-warm-prov", "claude-retained")).toBe(true);
+
+      // 4. Request for retained model fails with 404 upstream -> emits exactly one warning
+      const resp404 = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer test-caller-token",
+        },
+        body: JSON.stringify({
+          model: "claude-retained",
+          input: [{ type: "message", role: "user", content: "hello" }],
+        }),
+      });
+      expect(resp404.status).toBe(404);
+      expect(warnCalls.length).toBe(1);
+      expect(warnCalls[0]).toContain('Model "claude-retained" on provider "test-warm-prov" is retained via retainModels');
+
+      // 5. Second 404 is suppressed
+      await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer test-caller-token",
+        },
+        body: JSON.stringify({
+          model: "claude-retained",
+          input: [{ type: "message", role: "user", content: "hello" }],
+        }),
+      });
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      await server.stop(true);
+      upstream.stop(true);
+      console.warn = originalWarn;
+      if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = prevHome;
+      isolated.restore();
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test("/v1/chat/completions triggers warnRetainedModel404Once on plain 404 and model_not_found", async () => {
     const isolated = installIsolatedCodexHome("ocx-retain-chat-");
     const testDir = mkdtempSync(join(tmpdir(), "ocx-retain-chat-"));
     const prevHome = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = testDir;
 
-    reconcileProviderFetchWarnings(20);
-    retainedWithoutDiscoveryRefs.set("test-chat-prov", new Set(["retained-chat-model"]));
-
+    resetRetainedModelWarningsForTests();
     const warnCalls: string[] = [];
     const originalWarn = console.warn;
     console.warn = (...args: any[]) => {
@@ -291,12 +352,13 @@ describe("server 404 diagnostics for retained models", () => {
 
     const upstream = Bun.serve({
       port: 0,
-      fetch() {
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.includes("/models")) {
+          return Response.json({ data: [] });
+        }
         return Response.json({
-          error: {
-            message: "Model does not exist",
-            type: "invalid_request_error",
-          },
+          error: { message: "Model does not exist", type: "invalid_request_error" },
         }, { status: 404 });
       },
     });
@@ -317,6 +379,11 @@ describe("server 404 diagnostics for retained models", () => {
     const server = startServer(0);
 
     try {
+      // Populate models
+      await fetch(new URL("/v1/models", server.url), {
+        headers: { authorization: "Bearer test-caller-token" },
+      });
+
       const response = await fetch(new URL("/v1/chat/completions", server.url), {
         method: "POST",
         headers: {
@@ -343,72 +410,44 @@ describe("server 404 diagnostics for retained models", () => {
     }
   });
 
-  test("non-passthrough responses error handling triggers warnRetainedModel404Once on 404", async () => {
-    const isolated = installIsolatedCodexHome("ocx-retain-resp-");
-    const testDir = mkdtempSync(join(tmpdir(), "ocx-retain-resp-"));
-    const prevHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = testDir;
+  test("delayed stale writer from prior generation cannot install stale diagnostic state", async () => {
+    const { fetchProviderModels } = await import("../src/codex/catalog/provider-fetch");
+    resetRetainedModelWarningsForTests();
+    clearModelCache();
 
-    reconcileProviderFetchWarnings(30);
-    retainedWithoutDiscoveryRefs.set("test-anthropic-prov", new Set(["claude-retained"]));
-
-    const warnCalls: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: any[]) => {
-      warnCalls.push(args.join(" "));
-    };
-
-    const upstream = Bun.serve({
-      port: 0,
-      fetch() {
-        return Response.json({
-          type: "error",
-          error: {
-            type: "not_found_error",
-            message: "model: claude-retained",
-          },
-        }, { status: 404 });
-      },
+    let resolveDelayedDiscovery: (res: Response) => void;
+    const delayedPromise = new Promise<Response>(resolve => {
+      resolveDelayedDiscovery = resolve;
     });
 
-    saveConfig({
-      port: 0,
-      defaultProvider: "test-anthropic-prov",
-      providers: {
-        "test-anthropic-prov": {
-          adapter: "anthropic",
-          baseUrl: `http://127.0.0.1:${upstream.port}`,
-          apiKey: "test-key",
-          allowPrivateNetwork: true,
-          retainModels: ["claude-retained"],
-        },
-      },
-    } as OcxConfig);
-    const server = startServer(0);
+    const provGen1: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "test-key",
+      retainModels: ["retained-gen1"],
+      fetch: (async (url: RequestInfo | URL) => {
+        if (String(url).includes("/models")) {
+          return delayedPromise;
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    };
 
-    try {
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer test-caller-token",
-        },
-        body: JSON.stringify({
-          model: "claude-retained",
-          input: [{ type: "message", role: "user", content: "hello" }],
-        }),
-      });
-      expect(response.status).toBe(404);
-      expect(warnCalls.length).toBe(1);
-      expect(warnCalls[0]).toContain('Model "claude-retained" on provider "test-anthropic-prov" is retained via retainModels');
-    } finally {
-      await server.stop(true);
-      upstream.stop(true);
-      console.warn = originalWarn;
-      if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = prevHome;
-      isolated.restore();
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    // 1. Start live gather for Gen 1 (hangs on delayedPromise)
+    const inFlightGather = fetchProviderModels("test-stale-prov", provGen1, 60_000);
+
+    // 2. Cache is cleared / generation bumped (e.g. config changed to Gen 2 without retainModels)
+    clearModelCache("test-stale-prov");
+    reconcileProviderFetchWarnings(200);
+
+    // 3. Resolve delayed discovery from Gen 1
+    resolveDelayedDiscovery!(new Response(JSON.stringify({ data: [{ id: "live-gen1" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    await inFlightGather;
+
+    // Stale writer was rejected by setCached, so retainedWithoutDiscoveryRefs must not have retained-gen1!
+    expect(isRetainedModelWithoutDiscoveryForTests("test-stale-prov", "retained-gen1")).toBe(false);
   });
 });
