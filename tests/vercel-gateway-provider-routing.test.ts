@@ -5,6 +5,7 @@ import {
   vercelGatewayProviderPayload,
 } from "../src/providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../src/providers/service-tier";
+import { safeConfigDTO, providerManagementConfigError } from "../src/server/auth-cors";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function provider(baseUrl: string, overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -105,6 +106,41 @@ describe("Vercel AI Gateway configurable provider routing (#1406)", () => {
       baseUrl: "https://ai-gateway.vercel.sh/v1",
       vercelGatewayRouting: { only: ["novita"] },
     })).toBe("Vercel AI Gateway routing preferences require the openai-chat adapter");
+  });
+
+  test("safeConfigDTO preserves vercelGatewayRouting and modelVercelGatewayRouting", () => {
+    const config: OcxConfig = {
+      providers: {
+        "vercel-ai-gateway": provider("https://ai-gateway.vercel.sh/v1", {
+          vercelGatewayRouting: { sort: "ttft" },
+          modelVercelGatewayRouting: {
+            "zai/glm-5.2": { only: ["novita"] },
+          },
+        }),
+      },
+    } as unknown as OcxConfig;
+    const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+    expect(dto.providers["vercel-ai-gateway"].vercelGatewayRouting).toEqual({ sort: "ttft" });
+    expect(dto.providers["vercel-ai-gateway"].modelVercelGatewayRouting).toEqual({
+      "zai/glm-5.2": { only: ["novita"] },
+    });
+  });
+
+  test("providerManagementConfigError validates vercelGatewayRouting on management writes", () => {
+    const valid = providerManagementConfigError("vercel-ai-gateway", {
+      adapter: "openai-chat",
+      baseUrl: "https://ai-gateway.vercel.sh/v1",
+      vercelGatewayRouting: { only: ["novita"] },
+    });
+    expect(valid).toBeNull();
+
+    const invalid = providerManagementConfigError("vercel-ai-gateway", {
+      adapter: "openai-chat",
+      baseUrl: "https://ai-gateway.vercel.sh/v1",
+      vercelGatewayRouting: { only: [] },
+    });
+    expect(invalid).not.toBeNull();
+    expect(invalid).toContain("must contain 1-64 provider slugs");
   });
 
   test.each([

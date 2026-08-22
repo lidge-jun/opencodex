@@ -91,6 +91,8 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Exact model-id overrides that replace the provider-wide OpenRouter preference. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Default Vercel AI Gateway `order`, `only`, and `sort` (`"cost"` \| `"ttft"` \| `"tps"`) preferences; valid only for canonical Vercel AI Gateway with `openai-chat`. |
+| `modelVercelGatewayRouting?` | `Record<string, VercelGatewayRouting>` | Exact model-id overrides that replace the provider-wide Vercel AI Gateway preference. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Authentication mode (default `key`). OAuth/subscription credentials are stored outside `config.json`; `local` is limited to providers whose registry entry permits it. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Canonical `openai` only; defaults to Pool. Direct bypasses pool state. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
@@ -437,6 +439,35 @@ eligible provider after the ordered list. `only` is always an allowlist.
         "anthropic/claude-sonnet-5": {
           "only": ["anthropic"],
           "allowFallbacks": false
+        }
+      }
+    }
+  }
+}
+```
+
+## Vercel AI Gateway provider routing
+
+Vercel AI Gateway can route a model across multiple underlying inference providers. `vercelGatewayRouting` configures provider-wide preferences; `modelVercelGatewayRouting` replaces it for exact model IDs.
+
+- `order`: provider slugs in priority order.
+- `only`: explicit allowlist restricting eligible providers.
+- `sort`: automatically sort eligible providers by `"cost"`, `"ttft"`, or `"tps"`.
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
         }
       }
     }

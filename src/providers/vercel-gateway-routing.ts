@@ -28,7 +28,10 @@ export function isCanonicalVercelGatewayTarget(baseUrl: string): boolean {
 function routingPreferenceError(value: unknown, field: string): string | null {
   if (!isPlainRecord(value)) return `${field} must be a plain object`;
   const unknown = Object.keys(value).find(key => !ROUTING_KEYS.has(key));
-  if (unknown) return `${field} contains unknown field "${sanitizeLogMetadataString(unknown)}"`;
+  if (unknown) {
+    const sanitized = sanitizeLogMetadataString(unknown);
+    return `${field} contains unknown field "${sanitized ?? "unknown"}"`;
+  }
 
   for (const listField of ["order", "only"] as const) {
     const list = value[listField];
@@ -75,7 +78,8 @@ export function vercelGatewayRoutingConfigError(provider: OcxProviderConfig): st
       if (!modelId.trim() || modelId !== modelId.trim()) {
         return "modelVercelGatewayRouting keys must be nonblank trimmed model ids";
       }
-      const error = routingPreferenceError(preference, `modelVercelGatewayRouting.${sanitizeLogMetadataString(modelId)}`);
+      const sanitizedModel = sanitizeLogMetadataString(modelId) ?? "model";
+      const error = routingPreferenceError(preference, `modelVercelGatewayRouting.${sanitizedModel}`);
       if (error) return error;
     }
   }
