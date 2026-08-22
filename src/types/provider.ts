@@ -17,6 +17,15 @@ export interface OpenRouterProviderRouting {
   allowFallbacks?: boolean;
 }
 
+export interface VercelGatewayRouting {
+  /** Vercel AI Gateway provider slugs to try first, in priority order. */
+  order?: string[];
+  /** Restrict routing to these Vercel AI Gateway provider slugs. */
+  only?: string[];
+  /** Sort providers by "cost", "ttft", or "tps". */
+  sort?: "cost" | "ttft" | "tps";
+}
+
 export interface ResponsesItemIdRepairConfig {
   /** Exact `message` item ids that the proxy should rewrite to request-local canonical ids. */
   message?: string[];
@@ -295,6 +304,10 @@ export interface OcxProviderConfig {
   openRouterRouting?: OpenRouterProviderRouting;
   /** Exact model-id overrides for `openRouterRouting`. Each matching entry replaces the default. */
   modelOpenRouterRouting?: Record<string, OpenRouterProviderRouting>;
+  /** Default provider-routing preferences for models sent through Vercel AI Gateway (issue #1406). */
+  vercelGatewayRouting?: VercelGatewayRouting;
+  /** Exact model-id overrides for `vercelGatewayRouting`. Each matching entry replaces the default. */
+  modelVercelGatewayRouting?: Record<string, VercelGatewayRouting>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.
    * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).

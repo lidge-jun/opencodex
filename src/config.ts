@@ -55,6 +55,7 @@ import {
   resolveTrustedWindowsSystemDirectory,
 } from "./lib/windows-elevation";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
+import { vercelGatewayRoutingConfigError } from "./providers/vercel-gateway-routing";
 import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -1400,6 +1401,20 @@ const configSchema = z.object({
             : "openRouterRouting",
         ],
         message: openRouterRoutingError,
+      });
+    }
+    const vercelRoutingError = vercelGatewayRoutingConfigError(provider);
+    if (vercelRoutingError) {
+      ctx.addIssue({
+        code: "custom",
+        path: [
+          "providers",
+          redactSecretString(name),
+          vercelRoutingError.startsWith("modelVercelGatewayRouting")
+            ? "modelVercelGatewayRouting"
+            : "vercelGatewayRouting",
+        ],
+        message: vercelRoutingError,
       });
     }
     if (Object.hasOwn(provider, "virtualModels")) {

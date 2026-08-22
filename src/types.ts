@@ -85,6 +85,7 @@ export type {
 export type {
   RefreshPolicy,
   OpenRouterProviderRouting,
+  VercelGatewayRouting,
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,
   ProviderCostOverlay,
@@ -102,4 +103,3 @@ export type {
   CodexAccountCredentials,
   CodexAccountCredentialRecord,
 } from "./types/accounts";
-
