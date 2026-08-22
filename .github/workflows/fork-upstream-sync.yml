@@ -67,7 +67,7 @@ jobs:
           bun scripts/fork/sync/cli.ts pin > "$event_file"
           kind="$(jq -r '.kind' "$event_file")"
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
-          echo "Fork sync event: $kind" >> "$GITHUB_STEP_SUMMARY"
+          echo "Fork sync lane: $kind" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$event_file" > "$RUNNER_TEMP/fork-sync-event-path"
 
       - name: Push updated vendor refs
@@ -76,6 +76,8 @@ jobs:
           set -eu
           git push origin refs/heads/vendor/main:refs/heads/vendor/main refs/heads/vendor/dev:refs/heads/vendor/dev
 
+      # Emit every actionable lane; already-current remains a silent no-op.
+      # main-behind and history-diverged use this same notification path.
       - name: Notify enabled fork sync plugins
         if: steps.pin.outputs.kind != 'already-current'
         env:
