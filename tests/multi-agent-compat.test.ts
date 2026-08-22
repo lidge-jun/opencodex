@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace, V2_GUIDANCE_CHAR_BUDGET } from "../src/server/responses";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../src/codex/catalog";
@@ -753,6 +753,223 @@ describe("multiAgentGuidanceText", () => {
     expect(text).toContain("FALLBACK=");
     expect(text).toContain("alibaba-token-plan/qwen3.8-max");
     expect(text).toContain("kimi/k3");
+  });
+
+  test("v2 built-in guidance includes enabled role id and model", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          effort: "high",
+          developerInstructions: "Review the diff.",
+          enabled: true,
+        }],
+      },
+    );
+    expect(text).toContain("reviewer");
+    expect(text).toContain("anthropic/claude-sonnet-5");
+    expect(text).toContain("named specialist");
+    expect(text).toContain("fork_turns");
+  });
+
+  test("omits a role whose model is outside the v2 candidate window", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [
+          {
+            id: "reviewer",
+            description: "PR review",
+            model: "anthropic/claude-sonnet-5",
+            effort: "high",
+            developerInstructions: "Review the diff.",
+            enabled: true,
+          },
+          {
+            id: "explorer",
+            description: "read-only search",
+            model: "kimi/k3",
+            developerInstructions: "Search the tree.",
+            enabled: true,
+          },
+        ],
+      },
+    );
+    expect(text).toContain("reviewer");
+    expect(text).not.toContain("explorer");
+    expect(text).not.toContain("kimi/k3");
+  });
+
+  test("omits a role whose effort is not supported on the resolved model", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium"],
+    }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          effort: "high",
+          developerInstructions: "Review the diff.",
+          enabled: true,
+        }],
+      },
+    );
+    expect(text).not.toContain("reviewer");
+    expect(text).not.toContain("named specialist");
+  });
+
+  test("built-in eight-role catalog stays within the v2 guidance budget", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    const models = Array.from({ length: 8 }, (_, i) => ({
+      slug: `provider-${i}/model-${"m".repeat(80)}`,
+      efforts: ["high"],
+    }));
+    catalogFixture(dir, models);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: models[0]!.slug,
+        subagentRoles: models.map((model, i) => ({
+          id: `role-${i}`,
+          description: "when to use this specialist for a long task description",
+          model: model.slug,
+          developerInstructions: "Do the specialist work.",
+          enabled: true,
+        })),
+      },
+    );
+    expect(text).toContain("<multi_agent_mode>");
+    expect(text!.length).toBeLessThanOrEqual(V2_GUIDANCE_CHAR_BUDGET + "<multi_agent_mode></multi_agent_mode>".length);
+    expect(text).toContain("fork_turns");
+  });
+
+  test("custom {{roles}} substitution stays within the catalog budget", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    const models = Array.from({ length: 8 }, (_, i) => ({
+      slug: `provider-${i}/model-${"m".repeat(80)}`,
+      efforts: ["high"],
+    }));
+    catalogFixture(dir, models);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: models[0]!.slug,
+        injectionPrompt: "ROLES={{roles}}",
+        subagentRoles: models.map((model, i) => ({
+          id: `role-${i}`,
+          description: "when to use this specialist for a long task description",
+          model: model.slug,
+          developerInstructions: "Do the specialist work.",
+          enabled: true,
+        })),
+      },
+    );
+    expect(text).not.toContain("{{roles}}");
+    const inner = text!.replace(/^<multi_agent_mode>/, "").replace(/<\/multi_agent_mode>$/, "");
+    const roles = inner.slice("ROLES=".length);
+    expect(roles.length).toBeLessThanOrEqual(V2_GUIDANCE_CHAR_BUDGET);
+  });
+
+  test("custom injectionPrompt without {{roles}} does not leak the catalog", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "anthropic/claude-sonnet-5", efforts: ["high"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        injectionPrompt: "Use {{model}} only.",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        }],
+      },
+    );
+    expect(text).toContain("Use anthropic/claude-sonnet-5 only.");
+    expect(text).not.toContain("reviewer");
+    expect(text).not.toContain("named specialist");
+  });
+
+  test("custom injectionPrompt with {{roles}} substitutes the catalog", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "gpt-5.6-luna", efforts: ["high"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "gpt-5.6-luna",
+        injectionPrompt: "ROLES={{roles}}",
+        subagentRoles: [{
+          id: "explorer",
+          description: "read-only search",
+          model: "gpt-5.6-luna",
+          developerInstructions: "Search the tree.",
+        }],
+      },
+    );
+    expect(text).toContain("explorer (gpt-5.6-luna) for read-only search");
+    expect(text).not.toContain("{{roles}}");
+  });
+
+  test("v1 ignores roles even at max", async () => {
+    codexHomeFixture(V2_OFF);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({
+        reasoning: "max",
+        tools: [{ name: "spawn_agent", namespace: "agents" }, { name: "send_input", namespace: "agents" }],
+      }),
+      {
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        }],
+      },
+    );
+    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).not.toContain("reviewer");
+    expect(text).not.toContain("named specialist");
+  });
+
+  test("stale catalog still returns null even when roles are configured", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "anthropic/claude-sonnet-5", efforts: ["high"] }]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionModel: "anthropic/claude-sonnet-5",
+        subagentRoles: [{
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        }],
+      },
+      { collectCatalogState: () => ({ state: "stale" }) },
+    );
+    expect(text).toBeNull();
   });
 
   test("v1 ignores injectionPrompt and custom prompt does not fire a bare v2 surface", async () => {

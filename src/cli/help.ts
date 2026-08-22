@@ -53,7 +53,7 @@ Usage:
   ocx account <sub>           Accounts, login/reauth, key pools, and quota controls
   ocx models <sub>            Live/custom models, visibility, context, and shadow calls
   ocx combo <sub>             Combo failover/round-robin routing
-  ocx agent <sub>             Subagents, injection, effort caps, and sidecars
+  ocx agent <sub>             Subagents, roles, injection, effort caps, and sidecars
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx route <sub>             Routing features (combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
