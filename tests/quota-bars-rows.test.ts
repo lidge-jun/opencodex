@@ -143,6 +143,7 @@ describe("formatResetFuture", () => {
     expect(formatResetFuture(NOW - 86_400_000, t, "en", NOW)).toContain("quota.resetsAt");
     expect(formatResetFuture(undefined, t, "en", NOW)).toBe("");
     expect(formatResetFuture(Number.NaN, t, "en", NOW)).toBe("");
+    expect(formatResetFuture(Number.MAX_VALUE, t, "en", NOW)).toBe("");
   });
 
   test("seconds-epoch inputs are normalized to milliseconds", () => {
