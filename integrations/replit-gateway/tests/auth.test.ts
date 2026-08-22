@@ -31,7 +31,7 @@ describe("authenticateGatewayRequest", () => {
 
   test("rejects wrong token without leaking timing differences via category", () => {
     const req = new Request("https://example.test/v1/models", {
-      headers: { Authorization: "Bearer wrong-token-012345678901234567890" },
+      headers: { Authorization: "Bearer wrong-token" },
     });
     expect(authenticateGatewayRequest(req, GATEWAY_KEY)).toEqual({
       ok: false,

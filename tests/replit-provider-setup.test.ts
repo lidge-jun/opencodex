@@ -169,7 +169,7 @@ describe("replit origin validation", () => {
 
   test("rejects non-https, credentialed, and pathful origins", () => {
     expect(validateReplitOrigin("http://my-app.replit.app").ok).toBe(false);
-    expect(validateReplitOrigin("https://user:pass@my-app.replit.app").ok).toBe(false);
+    expect(validateReplitOrigin("https://user:@my-app.replit.app").ok).toBe(false);
     expect(validateReplitOrigin("https://my-app.replit.app/gateway").ok).toBe(false);
   });
 
