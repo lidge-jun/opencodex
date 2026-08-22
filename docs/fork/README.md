@@ -81,4 +81,6 @@ Stop including a `feat/*` once it is in `vendor/dev`. Force-push `run/dev` onlyâ
 3. Classify `upstream/dev..archive/mixed-dev-*`: drop duplicates, keep open PRs on `feat/*`, cherry-pick local-forever as small `fork:` commits onto `main`.
 4. Rebuild public `main` from `vendor/dev` + overlay onlyâ€”not the old mixed `dev`.
 
+Classification of the 2026-08-21 mixed snapshot: [`MIXED-SPLIT.md`](./MIXED-SPLIT.md).
+
 Full design: `docs/superpowers/specs/2026-08-21-fork-sync-design.md`.
