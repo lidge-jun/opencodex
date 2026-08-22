@@ -898,7 +898,9 @@ export function resolveComboCatalogMember(
   ].filter((value): value is number => typeof value === "number" && value > 0);
   // A generic 128k synthesis is a catalog compatibility fallback, not evidence
   // that a configured soft policy has an authoritative window to clamp against.
-  const hasAuthoritativeAutoCompactBasis = usedDiscoveredWindow || contextCap !== undefined;
+  const hasAuthoritativeAutoCompactBasis = hintedContext !== undefined
+    || fallbackContext !== undefined
+    || contextCap !== undefined;
   const autoCompactTokenLimit = hasAuthoritativeAutoCompactBasis && softCandidates.length > 0
     ? clampAutoCompactTokenLimit(contextWindow, maxInputTokens, Math.min(...softCandidates))
     : undefined;
