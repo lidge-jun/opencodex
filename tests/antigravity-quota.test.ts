@@ -478,7 +478,7 @@ describe("Antigravity live quota", () => {
     expect(result.reports[0]?.source).toBe("google-antigravity:fetchAvailableModels");
   });
 
-  test("does not POST retrieveUserQuota or retrieveUserQuotaSummary to an http host", async () => {
+  test("rewrites known Google http host to HTTPS for live quota RPCs", async () => {
     const httpHost = "http://daily-cloudcode-pa.googleapis.com";
     const requested: string[] = [];
     const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -500,6 +500,33 @@ describe("Antigravity live quota", () => {
     expect(requested.filter(url => url.startsWith("http://"))).toEqual([]);
     expect(requested).not.toContain(`${httpHost}/v1internal:retrieveUserQuota`);
     expect(requested).not.toContain(`${httpHost}/v1internal:retrieveUserQuotaSummary`);
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuota`);
+    expect(requested).toContain(`${DAILY_HOST}/v1internal:retrieveUserQuotaSummary`);
+    expect(quota).not.toBeNull();
+    expect(quota?.customWindows?.[0]?.label).toBe("Gem");
+  });
+
+  test("returns null for a custom http host without POSTing live quota RPCs", async () => {
+    const httpHost = "http://custom.proxy";
+    const requested: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith(":retrieveUserQuota")) return liveGeminiQuota();
+      if (url.endsWith(":retrieveUserQuotaSummary")) return liveWeeklySummary();
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    const quota = await fetchAntigravityLiveQuota({
+      accessToken: TOKEN,
+      projectId: PROJECT,
+      baseUrl: httpHost,
+      timeoutMs: 8_000,
+      fetchImpl,
+    });
+
+    expect(requested.filter(url => url.startsWith("http://"))).toEqual([]);
+    expect(requested).toEqual([]);
     expect(quota).toBeNull();
   });
 
