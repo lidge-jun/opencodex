@@ -30,11 +30,16 @@ import type {
 } from "../src/codex/native-profile-types";
 import type { OcxConfig } from "../src/types";
 import {
+  bindNativeMainStartupLifecycle,
   blockNativeMainStartupForUnownedServiceHome,
   initializeNativeMainStartupGate,
   isNativeMainTrafficBlocked,
   nativeMainStartupGateSnapshot,
   NATIVE_MAIN_OWNERSHIP_RETRY_LIMIT,
+  prepareNativeMainStartupLifecycle,
+  releaseNativeMainStartupLifecycle,
+  type NativeMainStartupLifecycle,
+  waitForNativeMainStartupGate,
   __resetNativeMainOwnershipRetries,
 } from "../src/codex/native-profile-startup";
 import type { NativeCodexOwnership } from "../src/integrations/native/ownership-preflight";
@@ -47,10 +52,12 @@ import {
   resetLifecycleDrainStateForTests,
   tryAdmitTurn,
 } from "../src/server/lifecycle";
+import { startServer } from "../src/server";
 
 const roots: string[] = [];
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
+const OWNERSHIP_REPROBE_TEST_HOME = "ownership-reprobe-test-home";
 
 function restoreEnv(name: "OPENCODEX_HOME" | "CODEX_HOME", value: string | undefined): void {
   if (value === undefined) delete process.env[name];
@@ -81,6 +88,16 @@ function envelope(accountId: string, marker: string): string {
   }, null, 2) + "\n";
 }
 
+/** Lightweight owned transition for retry/refcount tests that do not exercise real recovery. */
+function startReadyOwnershipRetryLifecycle(): NativeMainStartupLifecycle {
+  const homeId = OWNERSHIP_REPROBE_TEST_HOME;
+  const readySettled = initializeNativeMainStartupGate({
+    manager: { context: { homeId } } as unknown as NativeProfileManager,
+    probeRecoveryState: () => "none",
+  });
+  return { homeId, settled: readySettled, release: async () => {} };
+}
+
 type Phase = "prepared" | "auth-replaced" | "vault-committed";
 type Observation = "source-exact" | "source-changed" | "target-exact" | "target-changed" | "unreadable" | "third";
 
@@ -95,7 +112,12 @@ interface Fixture {
   targetProfileId: string;
 }
 
-async function fixture(phase: Phase, observation: Observation, activePool = false): Promise<Fixture> {
+async function fixture(
+  phase: Phase,
+  observation: Observation,
+  activePool = false,
+  codexAccountMode: "pool" | "direct" = "pool",
+): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), "ocx-native-startup-"));
   roots.push(root);
   const codexHome = join(root, "codex");
@@ -182,7 +204,7 @@ async function fixture(phase: Phase, observation: Observation, activePool = fals
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
-        codexAccountMode: "pool",
+        codexAccountMode,
       },
     },
     codexAccounts: activePool ? [{ id: "pool-a", email: "pool@test", isMain: false }] : [],
@@ -649,6 +671,8 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     let answer: NativeCodexOwnership = "unknown";
     const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => answer,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: startReadyOwnershipRetryLifecycle,
     });
     try {
       expect(isNativeMainTrafficBlocked()).toBe(true);
@@ -661,15 +685,312 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
     }
   });
 
+  test("a later successful probe starts owned recovery before reopening admission", async () => {
+    let answer: NativeCodexOwnership = "unknown";
+    let finishRecovery!: () => void;
+    const recoveryBarrier = new Promise<void>(resolve => { finishRecovery = resolve; });
+    const f = await fixture("prepared", "source-exact");
+    let currentHomeId: string | null = f.manager.context.homeId;
+    let ownedReleases = 0;
+    const prepared = prepareNativeMainStartupLifecycle({
+      manager: f.manager,
+      beforeRecovery: () => recoveryBarrier,
+      owner: { retryMs: 10, hardenPath: async () => {} },
+      currentHomeId: () => currentHomeId,
+    }, {
+      codexHome: f.codexHome,
+      configDir: f.configDir,
+    });
+    expect(prepared).not.toBeNull();
+    const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: () => answer,
+      expectedHomeId: f.manager.context.homeId,
+      startOwnedLifecycle: () => {
+        const owned = prepared!.start();
+        return {
+          get homeId() { return owned.homeId; },
+          get settled() { return owned.settled; },
+          async release() {
+            ownedReleases += 1;
+            await owned.release();
+          },
+        };
+      },
+    });
+    try {
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      answer = "owned";
+
+      currentHomeId = "different-home";
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      expect(nativeMainStartupGateSnapshot()).toMatchObject({
+        status: "blocked",
+        reason: "ownership-unknown",
+      });
+      currentHomeId = f.manager.context.homeId;
+
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      expect(fence.homeId).toBe(f.manager.context.homeId);
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: f.manager.context.homeId,
+        reason: "recovery-pending",
+      });
+
+      finishRecovery();
+      await fence.settled;
+      expect(isNativeMainTrafficBlocked()).toBe(false);
+    } finally {
+      currentHomeId = f.manager.context.homeId;
+      finishRecovery();
+      await fence.release();
+      await fence.release();
+    }
+    expect(ownedReleases).toBe(1);
+  });
+
+  test("startServer promotes one pinned unknown scope through the owned lifecycle", async () => {
+    const f = await fixture("prepared", "source-exact", false, "direct");
+    process.env.CODEX_HOME = f.codexHome;
+    process.env.OPENCODEX_HOME = f.configDir;
+    let answer: NativeCodexOwnership = "unknown";
+    let finishRecovery!: () => void;
+    const recoveryBarrier = new Promise<void>(resolve => { finishRecovery = resolve; });
+    const scopes: Array<{
+      currentHomes?: { codexHome: string; opencodexHome: string };
+      statePaths?: readonly string[];
+    }> = [];
+    const server = startServer(0, {
+      inspectNativeCodexOwnership: (scope = {}) => {
+        scopes.push({
+          currentHomes: scope.currentHomes ? { ...scope.currentHomes } : undefined,
+          statePaths: scope.statePaths ? [...scope.statePaths] : undefined,
+        });
+        return { ownership: answer, reason: "pinned startup test" };
+      },
+      nativeMainStartup: {
+        manager: f.manager,
+        beforeRecovery: () => recoveryBarrier,
+        owner: { retryMs: 10, hardenPath: async () => {} },
+      },
+    });
+    try {
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      answer = "owned";
+
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: f.manager.context.homeId,
+        reason: "recovery-pending",
+      });
+      expect(scopes.length).toBeGreaterThanOrEqual(3);
+      const firstScope = scopes[0]!;
+      expect(firstScope.currentHomes).toEqual({
+        codexHome: f.codexHome,
+        opencodexHome: f.configDir,
+      });
+      expect(firstScope.statePaths?.[0]).toBe(join(f.configDir, "service-state.json"));
+      for (const scope of scopes.slice(1)) expect(scope).toEqual(firstScope);
+
+      finishRecovery();
+      expect(await waitForNativeMainStartupGate()).toEqual({
+        status: "ready",
+        homeId: f.manager.context.homeId,
+      });
+      const allowed = tryAcquireNativeMainProfileClaim();
+      expect(allowed).not.toBeNull();
+      allowed?.release();
+    } finally {
+      finishRecovery();
+      await server.stop(true);
+    }
+  });
+
+  test("an owned activation failure keeps the fence and retry hook intact", () => {
+    let activationFails = true;
+    let activations = 0;
+    const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: () => "owned",
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        activations += 1;
+        if (activationFails) throw new Error("test activation failure");
+        return startReadyOwnershipRetryLifecycle();
+      },
+    });
+    try {
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "ownership-unknown",
+      });
+
+      activationFails = false;
+      expect(isNativeMainTrafficBlocked()).toBe(false);
+      expect(activations).toBe(2);
+    } finally {
+      void fence.release();
+    }
+  });
+
+  test("activation re-entry stays fenced and starts the owned lifecycle once", () => {
+    let activations = 0;
+    let reentrantBlocked: boolean | undefined;
+    const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: () => "owned",
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        activations += 1;
+        reentrantBlocked = isNativeMainTrafficBlocked();
+        return startReadyOwnershipRetryLifecycle();
+      },
+    });
+    try {
+      expect(isNativeMainTrafficBlocked()).toBe(false);
+      expect(reentrantBlocked).toBe(true);
+      expect(activations).toBe(1);
+    } finally {
+      void fence.release();
+    }
+  });
+
+  test("probe re-entry stays fenced and consumes one bounded attempt", () => {
+    let probes = 0;
+    let activations = 0;
+    let reentrantBlocked: boolean | undefined;
+    const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: () => {
+        probes += 1;
+        reentrantBlocked = isNativeMainTrafficBlocked();
+        return "owned";
+      },
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        activations += 1;
+        return startReadyOwnershipRetryLifecycle();
+      },
+    });
+    try {
+      expect(isNativeMainTrafficBlocked()).toBe(false);
+      expect(reentrantBlocked).toBe(true);
+      expect(probes).toBe(1);
+      expect(activations).toBe(1);
+    } finally {
+      void fence.release();
+    }
+  });
+
+  test("preparing an injected manager rejects a different pinned home", async () => {
+    const one = await fixture("prepared", "source-exact");
+    const other = await fixture("prepared", "source-exact");
+    expect(prepareNativeMainStartupLifecycle(
+      { manager: one.manager },
+      { codexHome: other.codexHome, configDir: other.configDir },
+    )).toBeNull();
+  });
+
+  test("stale activation cleanup is joined by the wrapper release flight", async () => {
+    let finishOrphanRelease!: () => void;
+    const orphanBarrier = new Promise<void>(resolve => { finishOrphanRelease = resolve; });
+    let orphanReleases = 0;
+    let fence!: NativeMainStartupLifecycle;
+    fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: () => "owned",
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        void fence.release();
+        return {
+          homeId: OWNERSHIP_REPROBE_TEST_HOME,
+          settled: Promise.resolve({ status: "ready", homeId: OWNERSHIP_REPROBE_TEST_HOME }),
+          release: async () => {
+            orphanReleases += 1;
+            await orphanBarrier;
+          },
+        };
+      },
+    });
+    expect(isNativeMainTrafficBlocked()).toBe(true);
+    let releaseSettled = false;
+    const release = fence.release().then(() => { releaseSettled = true; });
+    await Bun.sleep(0);
+    expect(orphanReleases).toBe(1);
+    expect(releaseSettled).toBe(false);
+    finishOrphanRelease();
+    await release;
+    expect(releaseSettled).toBe(true);
+  });
+
+  test("server lifecycle cleanup callers join one release flight", async () => {
+    const server = {};
+    let finishRelease!: () => void;
+    const releaseBarrier = new Promise<void>(resolve => { finishRelease = resolve; });
+    let releases = 0;
+    bindNativeMainStartupLifecycle(server, {
+      homeId: OWNERSHIP_REPROBE_TEST_HOME,
+      settled: Promise.resolve({ status: "ready", homeId: OWNERSHIP_REPROBE_TEST_HOME }),
+      release: async () => {
+        releases += 1;
+        await releaseBarrier;
+      },
+    });
+    let secondSettled = false;
+    const first = releaseNativeMainStartupLifecycle(server);
+    const second = releaseNativeMainStartupLifecycle(server).then(() => { secondSettled = true; });
+    await Bun.sleep(0);
+    expect(releases).toBe(1);
+    expect(secondSettled).toBe(false);
+    finishRelease();
+    await Promise.all([first, second]);
+    expect(releases).toBe(1);
+    await releaseNativeMainStartupLifecycle(server);
+    expect(releases).toBe(1);
+  });
+
+  test("a null or mismatched owned lifecycle never spends the unknown fence", async () => {
+    for (const homeId of [null, "different-home"] as const) {
+      let releases = 0;
+      const gate = { status: "ready", homeId } as const;
+      const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+        reprobe: () => "owned",
+        expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+        startOwnedLifecycle: () => ({
+          homeId,
+          settled: Promise.resolve(gate),
+          release: async () => { releases += 1; },
+        }),
+      });
+      try {
+        expect(isNativeMainTrafficBlocked()).toBe(true);
+        await Promise.resolve();
+        expect(releases).toBe(1);
+        expect(nativeMainStartupGateSnapshot()).toMatchObject({
+          status: "blocked",
+          reason: "ownership-unknown",
+        });
+      } finally {
+        await fence.release();
+      }
+    }
+  });
+
   test("a foreign owner is a fact, not a question — it never retries", () => {
     let asked = 0;
+    let activations = 0;
     const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership", {
       reprobe: () => { asked += 1; return "owned"; },
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        activations += 1;
+        return startReadyOwnershipRetryLifecycle();
+      },
     });
     try {
       expect(isNativeMainTrafficBlocked()).toBe(true);
       expect(isNativeMainTrafficBlocked()).toBe(true);
       expect(asked).toBe(0);
+      expect(activations).toBe(0);
     } finally {
       void fence.release();
     }
@@ -677,14 +998,21 @@ describe("an unknown service-ownership fence is retryable (#2108)", () => {
 
   test("a host that stays unaskable stops being asked", () => {
     let asked = 0;
+    let activations = 0;
     const fence = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => { asked += 1; return "unknown"; },
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        activations += 1;
+        return startReadyOwnershipRetryLifecycle();
+      },
     });
     try {
       for (let i = 0; i < 25; i++) isNativeMainTrafficBlocked();
 
       expect(isNativeMainTrafficBlocked()).toBe(true);
-      expect(asked).toBeLessThanOrEqual(NATIVE_MAIN_OWNERSHIP_RETRY_LIMIT);
+      expect(asked).toBe(NATIVE_MAIN_OWNERSHIP_RETRY_LIMIT);
+      expect(activations).toBe(0);
     } finally {
       void fence.release();
     }
@@ -712,11 +1040,19 @@ describe("the retryable fence respects its own refcount (#2108)", () => {
   test("raising a second fence does not hand out a fresh retry budget", () => {
     let asked = 0;
     const probe = () => { asked += 1; return "unknown" as NativeCodexOwnership; };
-    const first = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", { reprobe: probe });
+    const first = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: probe,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: startReadyOwnershipRetryLifecycle,
+    });
     for (let i = 0; i < 20; i++) isNativeMainTrafficBlocked();
     const afterFirst = asked;
 
-    const second = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", { reprobe: probe });
+    const second = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
+      reprobe: probe,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: startReadyOwnershipRetryLifecycle,
+    });
     try {
       for (let i = 0; i < 20; i++) isNativeMainTrafficBlocked();
 
@@ -732,6 +1068,8 @@ describe("the retryable fence respects its own refcount (#2108)", () => {
     const hookless = blockNativeMainStartupForUnownedServiceHome("ownership-unknown");
     const hooked = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => "owned" as NativeCodexOwnership,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: startReadyOwnershipRetryLifecycle,
     });
     try {
       isNativeMainTrafficBlocked();
@@ -758,6 +1096,8 @@ describe("a foreign fence is never reopened by a probe (#2108)", () => {
   test("a foreign fence stays closed even when the host reports owned", () => {
     const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership", {
       reprobe: () => "owned" as NativeCodexOwnership,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => { throw new Error("foreign ownership must never activate"); },
     });
     try {
       for (let i = 0; i < 10; i++) isNativeMainTrafficBlocked();
@@ -785,6 +1125,8 @@ describe("a spent reprobe leaves the refcount coherent (#2108)", () => {
     const hookless = blockNativeMainStartupForUnownedServiceHome("ownership-unknown");
     const hooked = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => "owned" as NativeCodexOwnership,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: startReadyOwnershipRetryLifecycle,
     });
     try {
       isNativeMainTrafficBlocked();
@@ -799,21 +1141,35 @@ describe("a spent reprobe leaves the refcount coherent (#2108)", () => {
   });
 
   test("a fence raised after a spent probe still gets to re-ask", () => {
+    let firstStarts = 0;
     const first = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => "owned" as NativeCodexOwnership,
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        firstStarts += 1;
+        return startReadyOwnershipRetryLifecycle();
+      },
     });
     isNativeMainTrafficBlocked();
     void first.release();
 
     let asked = 0;
+    let laterStarts = 0;
     const later = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => { asked += 1; return "owned" as NativeCodexOwnership; },
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: () => {
+        laterStarts += 1;
+        return startReadyOwnershipRetryLifecycle();
+      },
     });
     try {
       isNativeMainTrafficBlocked();
 
       // A server started after an earlier probe must not be stuck needing `ocx restart`.
       expect(asked).toBeGreaterThan(0);
+      expect(firstStarts).toBe(1);
+      expect(laterStarts).toBe(1);
       expect(isNativeMainTrafficBlocked()).toBe(false);
     } finally {
       void later.release();
@@ -828,6 +1184,8 @@ describe("a spent reprobe leaves the refcount coherent (#2108)", () => {
     let asked = 0;
     const owner = blockNativeMainStartupForUnownedServiceHome("ownership-unknown", {
       reprobe: () => { asked += 1; return "owned" as NativeCodexOwnership; },
+      expectedHomeId: OWNERSHIP_REPROBE_TEST_HOME,
+      startOwnedLifecycle: startReadyOwnershipRetryLifecycle,
     });
     const other = blockNativeMainStartupForUnownedServiceHome("ownership-unknown");
     try {

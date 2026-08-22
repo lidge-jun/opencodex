@@ -97,11 +97,15 @@ function defaultOpenCodexHome(): string {
   return resolve(join(homedir(), ".opencodex"));
 }
 
-function serviceStatePaths(): string[] {
-  const paths = [serviceStatePath()];
+export function serviceStatePathsForOpenCodexHome(opencodexHome: string): string[] {
+  const paths = [join(opencodexHome, "service-state.json")];
   const defaultPath = join(defaultOpenCodexHome(), "service-state.json");
   if (normalizePathForCompare(defaultPath) !== normalizePathForCompare(paths[0])) paths.push(defaultPath);
   return paths;
+}
+
+function serviceStatePaths(): string[] {
+  return serviceStatePathsForOpenCodexHome(currentOpenCodexHome());
 }
 
 function currentCodexHome(deps: CodexHomeDeps = {}): string {

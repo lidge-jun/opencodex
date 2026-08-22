@@ -23,6 +23,7 @@ import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { getCodexHome } from "../codex/paths";
+import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import {
   inspectNativeCodexOwnership,
@@ -174,6 +175,7 @@ import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
 import {
   bindNativeMainStartupLifecycle,
   blockNativeMainStartupForUnownedServiceHome,
+  prepareNativeMainStartupLifecycle,
   releaseNativeMainStartupLifecycle,
   startNativeMainStartupLifecycle,
   type NativeMainStartupGateDeps,
@@ -451,9 +453,25 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
 }
 
-function inspectStartupOwnership(deps: StartServerDeps): OwnershipInspection {
+function inspectStartupOwnership(
+  deps: StartServerDeps,
+  currentHomes: ReturnType<typeof currentServiceHomes> | null,
+  statePaths: readonly string[] | null,
+): OwnershipInspection {
   try {
-    return (deps.inspectNativeCodexOwnership ?? inspectNativeCodexOwnership)();
+    if (deps.inspectNativeCodexOwnership) {
+      return deps.inspectNativeCodexOwnership({
+        ...(currentHomes ? { currentHomes } : {}),
+        ...(statePaths ? { statePaths } : {}),
+      });
+    }
+    if (currentHomes === null || statePaths === null) {
+      return {
+        ownership: "unknown",
+        reason: "startup service-home resolution failed",
+      };
+    }
+    return inspectNativeCodexOwnership({ currentHomes, statePaths });
   } catch {
     return {
       ownership: "unknown",
@@ -540,7 +558,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // journal, or credential path. Both positive foreign evidence and an unprovable
   // ownership state are non-authority.
   startupCacheInvalidationWrote = false;
-  const startupCacheOwnership = inspectStartupOwnership(deps);
+  let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
+  try { startupOwnershipHomes = currentServiceHomes(); } catch { /* inspection below stays unknown */ }
+  const startupOwnershipStatePaths = startupOwnershipHomes
+    ? serviceStatePathsForOpenCodexHome(startupOwnershipHomes.opencodexHome)
+    : null;
+  const startupCacheOwnership = inspectStartupOwnership(
+    deps,
+    startupOwnershipHomes,
+    startupOwnershipStatePaths,
+  );
   // Startup cache invalidation is best-effort and must never block the server from
   // serving. It now takes K so it cannot race a convergence commit, but both the
   // home resolution and the acquisition can fail on a machine with no Codex home —
@@ -705,18 +732,39 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // clients; no Codex request can use this lifecycle in that state.
   // Re-probe here instead of trusting the earlier cache decision: startup work
   // between the two sites must not widen the service-install race.
-  const nativeOwnership = inspectStartupOwnership(deps);
+  const nativeOwnership = inspectStartupOwnership(deps, startupOwnershipHomes, startupOwnershipStatePaths);
+  const preparedNativeMainLifecycle = nativeOwnership.ownership === "unknown"
+    && (startupOwnershipHomes !== null || deps.nativeMainStartup?.manager)
+    ? prepareNativeMainStartupLifecycle(
+      deps.nativeMainStartup,
+      startupOwnershipHomes
+        ? { codexHome: startupOwnershipHomes.codexHome, configDir: startupOwnershipHomes.opencodexHome }
+        : undefined,
+    )
+    : null;
   const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
     ? nativeOwnership.ownership === "owned"
       ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
-      : blockNativeMainStartupForUnownedServiceHome(
-        nativeOwnership.ownership === "foreign" ? "foreign-ownership" : "ownership-unknown",
-        // #2108: an `unknown` verdict means the probe could not answer, not that this host
-        // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
-        // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
-        // verdict ignores this by design — that one is a fact, not a question.
-        { reprobe: () => inspectStartupOwnership(deps).ownership },
-      )
+      : nativeOwnership.ownership === "foreign"
+        ? blockNativeMainStartupForUnownedServiceHome("foreign-ownership")
+        : preparedNativeMainLifecycle
+          ? blockNativeMainStartupForUnownedServiceHome(
+            "ownership-unknown",
+            // #2108: an `unknown` verdict means the probe could not answer, not that this host
+            // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
+            // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
+            // verdict ignores this by design — that one is a fact, not a question.
+            {
+              reprobe: () => inspectStartupOwnership(
+                deps,
+                startupOwnershipHomes,
+                startupOwnershipStatePaths,
+              ).ownership,
+              expectedHomeId: preparedNativeMainLifecycle.homeId,
+              startOwnedLifecycle: preparedNativeMainLifecycle.start,
+            },
+          )
+          : blockNativeMainStartupForUnownedServiceHome("ownership-unknown")
     : {
       homeId: null,
       settled: Promise.resolve({ status: "ready", homeId: null }),
