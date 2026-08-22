@@ -134,3 +134,55 @@ The Action needs repository secrets `FORK_SYNC_CURSOR_WEBHOOK_URL` and
 Cursor Automation described in the fork-sync skill; that agent rebuilds
 disposable `run/main`, opens a draft PR and decision table, then stops. A
 human reviews and merges `origin/main`.
+
+### Adding another coordinator
+
+Cursor is the first coordinator, not a hard-coded pipeline stage. The registry
+accepts multiple comma-separated coordinator IDs, so an operator can run
+`FORK_SYNC_COORDINATORS=cursor-webhook,http` or select `cli` without changing
+the sync or pin commands.
+
+Use the generic HTTP coordinator for agents that expose an inbound HTTP
+endpoint:
+
+```text
+FORK_SYNC_COORDINATORS=http
+FORK_SYNC_HTTP_URL=https://agent.example/hooks/fork-sync
+FORK_SYNC_HTTP_SECRET=<optional HMAC secret>
+FORK_SYNC_HTTP_SIGNATURE_HEADER=<optional target header>
+FORK_SYNC_HTTP_SIGNATURE_PREFIX=<optional prefix, default sha256=>
+FORK_SYNC_HTTP_AUTH_HEADER=<optional complete Authorization value>
+```
+
+Use the generic CLI coordinator for a local process that accepts one message
+on stdin:
+
+```text
+FORK_SYNC_COORDINATORS=cli
+FORK_SYNC_CLI_COMMAND=nanobot trigger <trigger-id>
+FORK_SYNC_CLI_INPUT=summary
+```
+
+The default CLI input is the full event JSON; `summary` is a readable,
+credential-free message. Commands are whitespace-separated executable and
+arguments. Both generic coordinators send only `pin-updated` and are silent
+when their required URL or command is absent.
+
+The current agent mappings are:
+
+- **Hermes:** configure `http` for its gateway webhook route and match its
+  route HMAC header and prefix.
+- **ZeroClaw:** configure `http` for its webhook channel, or its gateway with
+  `FORK_SYNC_HTTP_AUTH_HEADER=Bearer ...`.
+- **Nanobot:** create a local trigger, keep `nanobot gateway` running, and
+  configure `cli` with `nanobot trigger <trigger-id>`; use `summary` unless
+  the target workflow specifically consumes JSON.
+
+If an agent needs a protocol not covered by HTTP or stdin CLI, add one module
+under `scripts/fork/sync/coordinators/` implementing `ForkSyncCoordinator`,
+register it in `scripts/fork/sync/cli.ts`, add its ID to
+`FORK_SYNC_COORDINATORS`, and add a focused test under `tests/fork/`. Update
+this section and the design spec with the new environment values. No pipeline
+rewrite is needed. Every coordinator must stop at a draft PR or
+recommendation; the Action never merges `origin/main`, and a new agent must
+preserve that boundary.

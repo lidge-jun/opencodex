@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHttpCoordinator } from "./http";
 import type { FetchImplementation, ForkSyncCoordinator } from "../types";
 
 export interface CursorWebhookOptions {
@@ -10,25 +10,17 @@ export interface CursorWebhookOptions {
 export function createCursorWebhookCoordinator(
   options: CursorWebhookOptions,
 ): ForkSyncCoordinator {
+  const http = createHttpCoordinator({
+    ...options,
+    signatureHeader: "x-fork-sync-signature",
+    signaturePrefix: "sha256=",
+    errorLabel: "Cursor webhook",
+  });
   return {
     id: "cursor-webhook",
     async start(event) {
-      if (event.kind !== "pin-updated" || !options.url || !options.secret) return;
-      const body = JSON.stringify(event);
-      const signature = createHmac("sha256", options.secret)
-        .update(body)
-        .digest("hex");
-      const response = await (options.fetchImpl ?? fetch)(options.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-fork-sync-signature": `sha256=${signature}`,
-        },
-        body,
-      });
-      if (!response.ok) {
-        throw new Error(`Cursor webhook returned HTTP ${response.status}`);
-      }
+      if (!options.secret) return;
+      await http.start(event);
     },
   };
 }

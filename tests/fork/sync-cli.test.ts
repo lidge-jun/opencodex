@@ -103,6 +103,34 @@ describe("fork sync CLI", () => {
     expect(output.join("")).not.toContain("never-print-this");
   });
 
+  test("emit configures generic coordinators from environment", async () => {
+    let received: { args: readonly string[]; stdin: string } | undefined;
+    const event: SyncEvent = {
+      kind: "pin-updated",
+      upstreamRepo: "upstream",
+      latestTag: "v2.29.0",
+      latestTagSha: TAG_SHA,
+      vendorMainSha: MAIN_SHA,
+      vendorDevSha: DEV_SHA,
+      detectedAt: "2026-08-22T18:00:00.000Z",
+    };
+    await runCli(["emit"], {
+      env: {
+        FORK_SYNC_COORDINATORS: "cli",
+        FORK_SYNC_CLI_COMMAND: "nanobot trigger fork-sync",
+      },
+      stdin: JSON.stringify(event),
+      processRunner: async (args, stdin) => {
+        received = { args, stdin };
+        return result("");
+      },
+    });
+    expect(received).toEqual({
+      args: ["nanobot", "trigger", "fork-sync"],
+      stdin: JSON.stringify(event),
+    });
+  });
+
   test("rejects unknown commands", async () => {
     await expect(runCli(["unknown"], { write: () => {} }))
       .rejects.toThrow("usage");

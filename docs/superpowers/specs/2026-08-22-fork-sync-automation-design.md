@@ -3,8 +3,8 @@
 Date: 2026-08-22
 Status: approved implementation design
 Scope: fork-owned automation for polling released upstream tags, maintaining
-the two vendor refs, and notifying a Cursor Automation that prepares a human
-reviewable `origin/main` rebuild.
+the two vendor refs, and notifying a configured coordinator that prepares a
+human-reviewable `origin/main` rebuild. Cursor is the first coordinator.
 
 This is a fork-owned document. It must not be opened as a pull request to
 `lidge-jun/opencodex`.
@@ -14,9 +14,9 @@ This is a fork-owned document. It must not be opened as a pull request to
 Keep `origin/main` on released upstream code plus the fork overlay without
 auto-merging or force-pushing the public default branch. A GitHub Action polls
 `lidge-jun/opencodex` for the newest `v*` tag, fast-forwards the vendor refs,
-upserts one tracking issue, and starts a Cursor Automation only after a
-successful pin update. The Cursor agent rebuilds disposable `run/main` and
-opens a draft PR; a human merges `origin/main`.
+upserts one tracking issue, and starts configured coordinators only after a
+successful pin update. The first coordinator, Cursor, rebuilds disposable
+`run/main` and opens a draft PR; a human merges `origin/main`.
 
 ## Non-goals and safety rules
 
@@ -37,8 +37,8 @@ opens a draft PR; a human merges `origin/main`.
 
 ## Runtime data contract
 
-`SyncEvent` is the JSON boundary between Action steps, plugins, and the Cursor
-Automation:
+`SyncEvent` is the JSON boundary between Action steps, plugins, and the
+coordinators:
 
 ```ts
 export type SyncEventKind =
@@ -77,6 +77,9 @@ export interface CommandResult {
 
 export type CommandRunner =
   (args: readonly string[]) => Promise<CommandResult>;
+
+export type ProcessRunner =
+  (args: readonly string[], stdin: string) => Promise<CommandResult>;
 
 export type FetchImplementation = (
   input: string | URL | Request,
@@ -152,9 +155,9 @@ export function enabledCoordinators(
 
 `FORK_SYNC_NOTIFIERS` and `FORK_SYNC_COORDINATORS` are comma-separated IDs.
 Whitespace and empty entries are ignored. An unknown ID is an error. Built-ins
-are registered by the CLI: `github-issue` and `cursor-webhook`. Registries
-remain extensible so a future notifier or coordinator is one module plus an
-environment ID.
+are registered by the CLI: `github-issue`, `cursor-webhook`, `http`, and
+`cli`. Registries remain extensible so a future notifier or coordinator is one
+module plus an environment ID.
 
 The GitHub issue notifier uses an injected REST client:
 
@@ -216,15 +219,82 @@ request has `content-type: application/json` and
 `x-fork-sync-signature: sha256=<hex HMAC-SHA256>`. Missing URL or secret is a
 silent no-op. Non-2xx responses throw without logging credentials.
 
+The generic HTTP coordinator uses the same injected fetch boundary:
+
+```ts
+export interface HttpCoordinatorOptions {
+  url?: string;
+  secret?: string;
+  signatureHeader?: string;
+  signaturePrefix?: string;
+  authHeader?: string;
+  errorLabel?: string;
+  fetchImpl?: FetchImplementation;
+}
+
+export function createHttpCoordinator(
+  options: HttpCoordinatorOptions,
+): ForkSyncCoordinator;
+```
+
+It posts only `pin-updated` events when a URL is configured. A secret adds an
+HMAC-SHA256 header, defaulting to
+`x-fork-sync-signature: sha256=<hex>`. `signatureHeader` and
+`signaturePrefix` adapt the header spelling and encoding required by another
+agent. `authHeader` supports HTTP endpoints such as a bearer-token gateway.
+Missing URL is a silent no-op, and non-2xx responses throw without logging
+credentials.
+
+The generic CLI coordinator sends the event to a configured local process:
+
+```ts
+export interface CliCoordinatorOptions {
+  command?: string;
+  input?: "json" | "summary";
+  runner?: ProcessRunner;
+}
+
+export function createCliCoordinator(
+  options: CliCoordinatorOptions,
+): ForkSyncCoordinator;
+```
+
+The command is whitespace-separated executable/argument text and receives one
+event on stdin. `json` is the default input; `summary` sends a readable,
+credential-free release summary. It runs only for `pin-updated`, does nothing
+when the command is missing, and throws on a non-zero exit code.
+
+These adapter kinds cover the current extension points:
+
+- **Hermes:** its gateway webhook routes accept HTTP POSTs with route-level HMAC
+  validation, so use `http` with the route URL, secret, and target signature
+  header/prefix.
+- **ZeroClaw:** its webhook channel accepts HTTP POSTs with an optional HMAC,
+  while its gateway accepts bearer-authenticated HTTP; use `http` with either
+  the signature settings or `authHeader`.
+- **Nanobot:** local triggers are delivered through `nanobot trigger` and
+  Nanobot documents an external webhook as a small service that invokes that
+  command, so use `cli` with `nanobot trigger <trigger-id>` and `summary`
+  input.
+
+To add an agent that fits one of these kinds, add its ID to the workflow's
+`FORK_SYNC_COORDINATORS`, configure the corresponding `FORK_SYNC_HTTP_*` or
+`FORK_SYNC_CLI_*` environment values, add a focused adapter test, and update
+the operator docs. For a protocol that fits neither kind, add one coordinator
+module implementing `ForkSyncCoordinator`, register it in `registerBuiltins`,
+give it a stable ID, add a focused test, and document its environment values.
+No sync, pin, notifier, or workflow pipeline rewrite is required.
+
 ## CLI and workflow boundary
 
 `bun scripts/fork/sync/cli.ts detect|pin|emit` is the only executable entry
 point. `detect` prints a `SyncEvent`; `pin` detects, pins, and prints its final
 event; `emit` reads one event JSON object from stdin, calls enabled notifiers,
 then calls enabled coordinators. The CLI obtains `GITHUB_REPOSITORY`,
-`GITHUB_TOKEN`, `FORK_SYNC_CURSOR_WEBHOOK_URL`, and
-`FORK_SYNC_CURSOR_WEBHOOK_SECRET` from the environment. Secrets are never
-printed.
+`GITHUB_TOKEN`, the Cursor webhook values, the generic HTTP values
+(`FORK_SYNC_HTTP_URL`, optional secret/signature/auth values), and the generic
+CLI values (`FORK_SYNC_CLI_COMMAND` and optional `FORK_SYNC_CLI_INPUT`) from
+the environment. Secrets are never printed.
 
 The workflow `.github/workflows/fork-upstream-sync.yml`:
 
@@ -249,8 +319,12 @@ The focused suites are:
   dev pin only on a new tag, and merge failure classification.
 - `tests/fork/sync-notify.test.ts`: issue creation, same-tag update,
   already-current suppression, label preservation, and safe body content.
-- `tests/fork/sync-webhook.test.ts`: pin-updated POST, HMAC header, no-op
-  events, missing credentials, and non-2xx failure.
+- `tests/fork/sync-webhook.test.ts`: Cursor pin-updated POST, HMAC header,
+  no-op events, missing credentials, and non-2xx failure.
+- `tests/fork/sync-generic-http.test.ts`: configurable HMAC/auth HTTP POSTs,
+  unsigned endpoints, and no-op events.
+- `tests/fork/sync-generic-cli.test.ts`: JSON/summary stdin, command
+  execution, no-op events, and non-zero exit handling.
 - `tests/fork/sync-cli.test.ts`: command dispatch, JSON stdin/stdout,
   environment-selected plugin IDs, and secret-free output.
 - `tests/fork/sync-workflow.test.ts`: checkout SHA, default-branch ref,
@@ -262,5 +336,7 @@ The focused suites are:
 The parent agent must create the Cursor Automation after
 `.cursor/skills/opencodex-fork-sync/automation-prompt.md` is committed. The
 operator supplies `FORK_SYNC_CURSOR_WEBHOOK_URL` and
-`FORK_SYNC_CURSOR_WEBHOOK_SECRET` as repository secrets. The automation stops
-after creating a draft PR and decision table; a human merges `origin/main`.
+`FORK_SYNC_CURSOR_WEBHOOK_SECRET` as repository secrets and selects
+`cursor-webhook` as the first coordinator. Other coordinators may be enabled
+alongside it, but every agent must stop after a draft PR or recommendation;
+none may merge `origin/main`.

@@ -62,6 +62,57 @@ commit overlay work on either vendor branch. The issue notifier is selected by
 `FORK_SYNC_NOTIFIERS=github-issue`; the Cursor coordinator is selected by
 `FORK_SYNC_COORDINATORS=cursor-webhook`.
 
+Cursor is the first coordinator, not the only supported integration. The
+registry accepts comma-separated IDs and can run multiple coordinators, for
+example `FORK_SYNC_COORDINATORS=cursor-webhook,http`.
+
+## Other agent coordinators
+
+Use the generic HTTP coordinator for an agent with an inbound HTTP endpoint:
+
+```text
+FORK_SYNC_COORDINATORS=http
+FORK_SYNC_HTTP_URL=https://agent.example/hooks/fork-sync
+FORK_SYNC_HTTP_SECRET=<optional HMAC secret>
+FORK_SYNC_HTTP_SIGNATURE_HEADER=<optional target header>
+FORK_SYNC_HTTP_SIGNATURE_PREFIX=<optional prefix, default sha256=>
+FORK_SYNC_HTTP_AUTH_HEADER=<optional complete Authorization value>
+```
+
+It sends JSON `POST` requests only for `pin-updated`. A configured secret adds
+an HMAC-SHA256 signature; an auth header supports bearer-token endpoints. It
+does not print any of these values.
+
+Use the generic CLI coordinator for a local agent process that accepts a
+message on stdin:
+
+```text
+FORK_SYNC_COORDINATORS=cli
+FORK_SYNC_CLI_COMMAND=nanobot trigger <trigger-id>
+FORK_SYNC_CLI_INPUT=summary
+```
+
+The CLI defaults to JSON stdin; `summary` sends a readable,
+credential-free event summary. The command is whitespace-separated executable
+and arguments, runs only for `pin-updated`, and must exit successfully.
+
+The mapping for currently researched open-source agents is:
+
+- **Hermes:** use `http` for its HMAC-protected gateway webhook route.
+- **ZeroClaw:** use `http` for its webhook channel, or its bearer-authenticated
+  gateway endpoint.
+- **Nanobot:** use `cli` with a local trigger and a running `nanobot gateway`;
+  Nanobot's documented external-webhook path invokes `nanobot trigger`.
+
+To support an agent that does not fit either adapter, add one coordinator
+module implementing `ForkSyncCoordinator`, register it in
+`registerBuiltins` in `scripts/fork/sync/cli.ts`, select its stable ID in
+`FORK_SYNC_COORDINATORS`, and add a focused test and documentation. This is
+the complete extension recipe; do not rewrite detection, pinning, issue
+notification, or workflow stages. The Action still never merges
+`origin/main`, and every coordinator must stop at a draft PR or
+recommendation, just like Cursor.
+
 ## Cursor Automation stages 3–7
 
 The webhook-triggered Cursor Automation starts only after `pin-updated`. Fetch
