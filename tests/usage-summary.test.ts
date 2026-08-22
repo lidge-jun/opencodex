@@ -233,6 +233,57 @@ describe("projectUsageSummary", () => {
     const summary = summarizeUsage(entries, "30d", at + 1);
     expect(projectUsageSummary(summary, { provider: null, model: null }, entries)).toBe(summary);
   });
+
+  test("a combo contributes only its matching attempts to filtered totals", () => {
+    // Keeping the whole entry because one attempt matched dragged the other
+    // attempt's tokens and cost into the filtered totals: filtering a combo to
+    // its cheap model reported the expensive model's spend as well.
+    const entries = [entry({
+      ts: at,
+      requestId: "combo-1",
+      provider: "combo",
+      model: "combo",
+      usageStatus: "reported",
+      attempts: [
+        { provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: priced },
+        { provider: "openai", model: "gpt-5.4", usageStatus: "reported", usage: { inputTokens: 90_000, outputTokens: 9_000 } },
+      ],
+    } as Partial<PersistedUsageEntry> & { ts: number })];
+
+    const alone = summarizeUsage(
+      [entry({ ts: at, requestId: "solo", provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage: priced })],
+      "30d", at + 1,
+    );
+    const unfiltered = summarizeUsage(entries, "30d", at + 1);
+    const projected = projectUsageSummary(unfiltered, { model: "gpt-5.5" }, entries);
+
+    expect(unfiltered.summary.estimatedCostUsd).toBeGreaterThan(alone.summary.estimatedCostUsd);
+    expect(projected.summary.estimatedCostUsd).toBeCloseTo(alone.summary.estimatedCostUsd, 10);
+    expect(projected.models.map(row => row.model)).toEqual(["gpt-5.5"]);
+    // A combo entry reports no top-level usage of its own — the tokens live on
+    // its attempts — so the day/summary token total stays 0 here and the
+    // meaningful assertion is on the retained attempt's own row.
+    const retained = projected.models[0]!;
+    expect(retained.totalTokens).toBe(alone.models[0]!.totalTokens);
+    expect(retained.estimatedCostUsd).toBeCloseTo(alone.summary.estimatedCostUsd, 10);
+    expect(projected.filter?.comboOverlap).toBe(true);
+  });
+
+  test("matched reflects the requested window, not the whole log", () => {
+    // filter.matched drives the CLI's "no usage recorded" message, so a match
+    // outside the requested range must not claim there is something to show.
+    const yesterday = new Date(2026, 7, 21, 12, 0, 0).getTime();
+    const midday = new Date(2026, 7, 22, 12, 0, 0).getTime();
+    const entries = [entry({ ts: yesterday, requestId: "old", provider: "rare-provider", model: "m", usageStatus: "reported", usage: priced })];
+
+    const today = projectUsageSummary(summarizeUsage(entries, "today", midday), { provider: "rare-provider" }, entries);
+    expect(today.summary.requests).toBe(0);
+    expect(today.filter?.matched).toBe(false);
+
+    const wider = projectUsageSummary(summarizeUsage(entries, "30d", midday), { provider: "rare-provider" }, entries);
+    expect(wider.summary.requests).toBe(1);
+    expect(wider.filter?.matched).toBe(true);
+  });
 });
 
 describe("parseUsageSurface", () => {

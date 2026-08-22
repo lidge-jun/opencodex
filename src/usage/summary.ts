@@ -890,17 +890,35 @@ export function projectUsageSummary<T extends UsageSummary>(
     return true;
   };
 
+  // Narrow to matching ATTRIBUTIONS, not matching entries.
+  //
+  // Keeping a whole combo entry because one of its attempts matched drags the
+  // other attempts' tokens and cost into the filtered totals: a two-attempt
+  // combo filtered to its cheap model reported the expensive model's spend
+  // too. Rewriting the entry down to its matching attempts is what makes the
+  // filtered numbers mean what the flag says.
   const source = entries ?? [];
   let comboOverlap = false;
-  const filtered = source.filter(entry => {
-    const attributions = usageAttributions(entry);
-    const hits = attributions.filter(a => matches(a.provider, a.model));
-    if (hits.length === 0) return false;
-    if (attributions.length > 1) comboOverlap = true;
-    return true;
-  });
+  const filtered: PersistedUsageEntry[] = [];
+  for (const entry of source) {
+    if (!entry.attempts?.length) {
+      if (matches(entry.provider, antigravityUsageModel(entry.provider, entry.model))) filtered.push(entry);
+      continue;
+    }
+    const attempts = entry.attempts.filter(a => matches(a.provider, antigravityUsageModel(a.provider, a.model)));
+    if (attempts.length === 0) continue;
+    // A combo is still counted once per participating model, so a filtered
+    // request count can exceed the number of distinct requests. That is the
+    // documented overlap, and it is why comboOverlap exists.
+    if (entry.attempts.length > 1) comboOverlap = true;
+    filtered.push({ ...entry, attempts });
+  }
 
   const projected = summarizeUsage(filtered, summary.range, summary.generatedAt, summary.surface);
+  // matched reflects usage inside the requested WINDOW, not anywhere in the
+  // log: summarizeUsage applies the range and surface predicates, and the CLI
+  // uses this flag to decide between a table and "no usage recorded".
+  const matched = projected.summary.requests > 0;
   // A combo entry survives the entry filter as a whole, so its non-matching
   // attributions can still appear as rows. Drop those so every row in the
   // response satisfies the filter the caller asked for.
@@ -916,6 +934,6 @@ export function projectUsageSummary<T extends UsageSummary>(
     // honestly re-derive, and unfiltered account totals sitting beside filtered
     // model totals would invite exactly the wrong reading.
     accounts: [],
-    filter: { provider, model, matched: filtered.length > 0, comboOverlap },
+    filter: { provider, model, matched, comboOverlap },
   };
 }
