@@ -210,7 +210,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl]", summary: "Alias of ocx observe logs." },
   {
     name: "usage",
-    usage: "ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]",
+    usage: "ocx usage [--range <today|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]",
     summary: "Alias of ocx observe usage.",
   },
   { name: "storage", usage: "ocx storage [--json]", summary: "Alias of ocx observe storage." },

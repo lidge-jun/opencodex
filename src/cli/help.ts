@@ -57,7 +57,8 @@ Usage:
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx route <sub>             Routing features (combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
-  ocx usage [--range <7d|30d|all>]  Alias of ocx observe usage
+  ocx usage [--range <today|7d|30d|all>] [--provider <name>]
+                              Token and estimated-cost report (alias of ocx observe usage)
   ocx storage [--json]        Alias of ocx observe storage
   ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key
