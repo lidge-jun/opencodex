@@ -2,19 +2,23 @@
  * GET/PUT /api/subagent-roles: atomic validation, roster union warnings, routed-on-v2.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
+import { AGENT_ROLE_MARKER } from "../src/codex/agent-roles-sync";
 import type { OcxConfig, OcxSubagentRole } from "../src/types";
 import { ManagementRequest as Request } from "./helpers/management-auth";
 
 const savedHome = process.env.OPENCODEX_HOME;
+const savedCodexHome = process.env.CODEX_HOME;
 let tempHome: string | null = null;
 
 afterEach(() => {
   if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = savedHome;
+  if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = savedCodexHome;
   if (tempHome) {
     rmSync(tempHome, { recursive: true, force: true });
     tempHome = null;
@@ -24,6 +28,7 @@ afterEach(() => {
 function isolatedHome(): void {
   tempHome = mkdtempSync(join(tmpdir(), "ocx-subagent-roles-api-"));
   process.env.OPENCODEX_HOME = tempHome;
+  process.env.CODEX_HOME = tempHome;
 }
 
 const sampleRole: OcxSubagentRole = {
@@ -160,5 +165,53 @@ describe("/api/subagent-roles atomic validation", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { warnings: string[] };
     expect(body.warnings.some(warning => /routed|v2|#92/i.test(warning))).toBe(true);
+  });
+
+  test("PUT projects an owned ocx-*.toml file and remove prunes it", async () => {
+    isolatedHome();
+    const config = makeConfig();
+    const res = await put(config, { roles: [sampleRole] });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { syncCodexAgentRoles?: boolean; syncCodexAgentRolesEffective: boolean; warnings: string[] };
+    expect(body.syncCodexAgentRoles).toBeUndefined();
+    expect(body.syncCodexAgentRolesEffective).toBe(true);
+    expect(body.warnings).toEqual([]);
+    const file = join(tempHome!, "agents", "ocx-reviewer.toml");
+    expect(readFileSync(file, "utf8").startsWith(AGENT_ROLE_MARKER)).toBe(true);
+    expect(readFileSync(file, "utf8")).not.toContain("model_fallback");
+
+    const removed = await put(config, { remove: "reviewer" });
+    expect(removed.status).toBe(200);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("PUT syncCodexAgentRoles false prunes owned files while keeping the catalog", async () => {
+    isolatedHome();
+    const config = makeConfig();
+    await put(config, { roles: [sampleRole] });
+    const res = await put(config, { roles: [sampleRole], syncCodexAgentRoles: false });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, syncCodexAgentRoles: false, syncCodexAgentRolesEffective: false });
+    expect(existsSync(join(tempHome!, "agents", "ocx-reviewer.toml"))).toBe(false);
+    expect(config.subagentRoles?.[0]?.id).toBe("reviewer");
+  });
+
+  test("GET omits stored syncCodexAgentRoles when unset so a status echo cannot persist false", async () => {
+    isolatedHome();
+    const config = makeConfig({ subagentRoles: [] });
+    const res = await get(config);
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      syncCodexAgentRoles?: boolean;
+      syncCodexAgentRolesEffective: boolean;
+    };
+    expect(body.syncCodexAgentRoles).toBeUndefined();
+    expect(body.syncCodexAgentRolesEffective).toBe(false);
+    const echoed = await put(config, { ...body, roles: [sampleRole] });
+    expect(echoed.status).toBe(200);
+    expect(await echoed.json()).toMatchObject({
+      syncCodexAgentRolesEffective: true,
+    });
+    expect(existsSync(join(tempHome!, "agents", "ocx-reviewer.toml"))).toBe(true);
   });
 });

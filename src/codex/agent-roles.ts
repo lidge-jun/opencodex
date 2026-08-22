@@ -228,3 +228,11 @@ export function routedOnV2Warnings(
     `Role model(s) ${ids} are routed while multiAgentMode is v2 without keepNativeChatGptOnV1; ChatGPT-native v2 parents encrypt child tasks (#92).`,
   ];
 }
+
+/** Unset follows the catalog: on once any enabled role exists. Explicit false always wins. */
+export function agentRolesSyncEffective(
+  config: Pick<OcxConfig, "syncCodexAgentRoles" | "subagentRoles">,
+): boolean {
+  if (config.syncCodexAgentRoles === false) return false;
+  return enabledSubagentRoles(config.subagentRoles).length > 0;
+}
