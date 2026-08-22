@@ -312,6 +312,30 @@ describe("readBoundedResponseBody", () => {
 		}
 	});
 
+	test("an already-aborted signal still settles the original response body", async () => {
+		let cancelReason: unknown;
+		const body = new ReadableStream<Uint8Array>({
+			pull() { return new Promise<never>(() => {}); },
+			cancel(reason) { cancelReason = reason; },
+		}, { highWaterMark: 0 });
+		const response = new Response(body);
+		const controller = new AbortController();
+		const reason = { code: "already-stopped" };
+		controller.abort(reason);
+
+		let caught: unknown;
+		try {
+			await readBoundedResponseBody(response, { signal: controller.signal });
+		} catch (error) {
+			caught = error;
+		}
+		await Promise.resolve();
+
+		expect(caught).toBe(reason);
+		expect(cancelReason).toBe(reason);
+		expect(body.locked).toBe(false);
+	});
+
 	test("parent abort wins when EOF settles in the same turn", async () => {
 		const parent = new AbortController();
 		const reason = new Error("same-turn cancel");

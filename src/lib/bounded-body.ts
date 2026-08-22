@@ -103,6 +103,16 @@ function cancelWithoutWaiting(reader: ReadableStreamDefaultReader<Uint8Array>, r
 	}
 }
 
+function cancelBodyWithoutWaiting(body: ReadableStream<Uint8Array>, reason?: unknown): void {
+	// A signal can already be aborted before a reader is attached. Still settle the
+	// original body so fetch-backed streams cannot retain a rejected read in that gap.
+	try {
+		void body.cancel(reason).catch(() => undefined);
+	} catch {
+		// A locked or non-conforming stream may throw synchronously from cancel().
+	}
+}
+
 /**
  * Consume the original response body as raw bytes under a strict memory ceiling.
  *
@@ -208,9 +218,11 @@ export async function readBoundedResponseBody(
 	options: BoundedBodyOptions = {},
 ): Promise<BoundedBodyResult> {
 	const signal = options.signal;
-	if (signal?.aborted) throw signal.reason;
-
 	const body = response.body;
+	if (signal?.aborted) {
+		if (body) cancelBodyWithoutWaiting(body, signal.reason);
+		throw signal.reason;
+	}
 	if (!body) {
 		return {
 			text: "",

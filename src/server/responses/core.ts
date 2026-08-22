@@ -634,6 +634,26 @@ async function opaqueBlobRejectionBodyForRecovery(
   }
 }
 
+/**
+ * Materialize an upstream error body only when the bounded reader observed a complete,
+ * display-safe payload. Partial timeout and over-limit prefixes are attacker-controlled,
+ * so callers keep their existing status-only fallback instead.
+ */
+export async function readDisplaySafeErrorText(
+  response: Response,
+  signal: AbortSignal,
+  fallback: string,
+): Promise<string> {
+  try {
+    const body = await readBoundedResponseBody(response, { signal });
+    return body.displaySafe ? body.text : fallback;
+  } catch {
+    // Preserve the former Response.text().catch(fallback) contract. Request-abort
+    // classification remains owned by the surrounding response pipeline.
+    return fallback;
+  }
+}
+
 function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
 }
@@ -3546,19 +3566,13 @@ async function handleResponsesInner(
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
-      // The plain passthrough error path has no bounded reader of its own: `.text()` attaches
-      // the reader only when it runs, so an abort landing between fetch resolution and that
-      // call orphans Bun's internal read rejection (src/lib/abort.ts).
-      const detachPassthroughErrorGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
-      try {
-        const errorText = await upstreamResponse.text().catch(() => "");
-        return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
-          statusText: upstreamResponse.statusText,
-          headers,
-        });
-      } finally {
-        detachPassthroughErrorGuard();
-      }
+      // The bounded reader owns the original body, deadline, abort settlement, and lock.
+      // Unsafe partial data falls back to #452's non-empty status-only JSON.
+      const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
+      return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+        statusText: upstreamResponse.statusText,
+        headers,
+      });
     }
 
     // Bun#32111 workaround: passthrough SSE uses tee()+native relay to avoid the
@@ -4827,14 +4841,16 @@ async function handleResponsesInner(
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
-      // The plain error path has no bounded reader of its own: `.text()` attaches the reader
-      // only when it runs, so an abort landing between fetch resolution and that call orphans
-      // Bun's internal read rejection — the uncatchable teardown `cancelBodyOnAbort` absorbs
-      // (src/lib/abort.ts). Found while investigating #1419; not a fix for the native trap.
-      const detachErrorBodyGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
-      const errorText = await upstreamResponse.text().catch(() => "unknown error");
-      detachErrorBodyGuard();
-      cleanupUpstreamAbort();
+      let errorText: string;
+      try {
+        errorText = await readDisplaySafeErrorText(
+          upstreamResponse,
+          upstream.signal,
+          "unknown error",
+        );
+      } finally {
+        cleanupUpstreamAbort();
+      }
       if (!isFixedCodexAccount(authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
           req.headers,
@@ -5125,12 +5141,7 @@ async function handleResponsesInner(
     }
 
     if (!response.ok) {
-      // Same pre-read guard as the initial response's error branch: a non-2xx continuation body
-      // is still a Bun fetch body, and an abort landing before `.text()` attaches its reader
-      // orphans the internal rejection.
-      const detachContinuationErrorGuard = cancelBodyOnAbort(response.body, upstream.signal);
-      const errorText = await response.text().catch(() => "unknown error");
-      detachContinuationErrorGuard();
+      const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
       yield {
         type: "error",
         status: response.status,
