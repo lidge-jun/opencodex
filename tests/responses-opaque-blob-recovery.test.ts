@@ -372,6 +372,15 @@ describe("opaque blob recovery through /v1/responses", () => {
       adapter.buildRequest = async (parsed, incoming) => {
         const built = await buildRequest(parsed, incoming);
         buildCount += 1;
+        const body = JSON.parse(built.body) as Record<string, unknown>;
+        built.body = JSON.stringify({
+          ...body,
+          tools: [{
+            type: "function",
+            name: buildCount === 1 ? "stale_catalog__read" : "fresh_catalog__read",
+            parameters: { type: "object" },
+          }],
+        });
         built.convertedRoutedNamespaceToolAliases = buildCount === 1
           ? new Map([["stale_catalog__read", { namespace: "stale_catalog", name: "read" }]])
           : new Map([["fresh_catalog__read", { namespace: "fresh_catalog", name: "read" }]]);
@@ -422,6 +431,8 @@ describe("opaque blob recovery through /v1/responses", () => {
       expect(response.status).toBe(200);
       expect(buildCount).toBe(2);
       expect(outbound).toHaveLength(2);
+      expect((outbound[0]!.tools as Array<Record<string, unknown>>)[0]?.name).toBe("stale_catalog__read");
+      expect((outbound[1]!.tools as Array<Record<string, unknown>>)[0]?.name).toBe("fresh_catalog__read");
       expect(body.output[0]).toMatchObject({
         type: "function_call",
         namespace: "fresh_catalog",

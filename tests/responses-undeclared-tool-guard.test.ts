@@ -126,8 +126,24 @@ describe("hasExplicitWireToolCatalog", () => {
     expect(hasExplicitWireToolCatalog(undefined)).toBe(false);
     expect(hasExplicitWireToolCatalog({})).toBe(false);
     expect(hasExplicitWireToolCatalog({ tools: "nonsense" })).toBe(false);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "function" }] })).toBe(false);
     expect(hasExplicitWireToolCatalog({ tools: [] })).toBe(true);
     expect(hasExplicitWireToolCatalog({ tools: [{ type: "function", name: "exec" }] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      tools: [{ type: "function" }, { type: "custom", name: "apply_patch" }],
+    })).toBe(true);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "web_search" }] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({ tools: [{ type: "image_gen" }, { type: "x_search" }] })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      tools: [{ type: "namespace", name: "empty", tools: [] }],
+    })).toBe(true);
+    expect(hasExplicitWireToolCatalog({
+      tools: [{
+        type: "namespace",
+        name: "outer",
+        tools: [{ type: "namespace", name: "inner", tools: [] }],
+      }],
+    })).toBe(false);
   });
 
   test("recognizes an additional_tools array, including an explicit empty catalog", () => {
@@ -136,6 +152,9 @@ describe("hasExplicitWireToolCatalog", () => {
     })).toBe(true);
     expect(hasExplicitWireToolCatalog({
       input: [{ type: "additional_tools", role: "developer", tools: "nonsense" }],
+    })).toBe(false);
+    expect(hasExplicitWireToolCatalog({
+      input: [{ type: "additional_tools", role: "developer", tools: [{}] }],
     })).toBe(false);
   });
 });
@@ -499,6 +518,19 @@ describe("empty and absent tool catalogs", () => {
     },
   } as OcxConfig;
 
+  const xaiConfig = {
+    port: 0,
+    defaultProvider: "fixture",
+    providers: {
+      fixture: {
+        adapter: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
+        authMode: "key",
+        apiKey: "fixture-key",
+      },
+    },
+  } as OcxConfig;
+
   const call = {
     type: "function_call",
     id: "fc_1",
@@ -513,6 +545,7 @@ describe("empty and absent tool catalogs", () => {
     tools: unknown[] | undefined,
     upstream: () => Response,
     additionalTools?: unknown[],
+    requestConfig: OcxConfig = config,
   ) {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
@@ -531,7 +564,7 @@ describe("empty and absent tool catalogs", () => {
           ],
           ...(tools === undefined ? {} : { tools }),
         }),
-      }), config, { model: "", provider: "" });
+      }), requestConfig, { model: "", provider: "" });
     } finally {
       globalThis.fetch = savedFetch;
     }
@@ -571,6 +604,22 @@ describe("empty and absent tool catalogs", () => {
     expect(body).toContain("response.completed");
   });
 
+  test("non-streaming, an unreadable top-level catalog — relayed, not refused", async () => {
+    const response = await post(false, [{ type: "function" }], jsonUpstream);
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "apply_patch" });
+  });
+
+  test("streaming, an unreadable additional_tools catalog — relayed, not refused", async () => {
+    const response = await post(true, undefined, sseUpstream, [{}]);
+    const body = await response.text();
+
+    expect(body).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).toContain("response.completed");
+  });
+
   test("non-streaming, tools: [] — refuses an upstream client tool call", async () => {
     const response = await post(false, [], jsonUpstream);
 
@@ -597,6 +646,34 @@ describe("empty and absent tool catalogs", () => {
 
   test("streaming, additional_tools.tools: [] — refuses an upstream client tool call", async () => {
     const response = await post(true, undefined, sseUpstream, []);
+    const body = await response.text();
+
+    expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).not.toContain("response.completed");
+  });
+
+  test("non-streaming, a rewritten-away top-level catalog remains authoritative", async () => {
+    const response = await post(
+      false,
+      [{ type: "web_search", external_web_access: false }],
+      jsonUpstream,
+      undefined,
+      xaiConfig,
+    );
+
+    expect(response.status).toBe(502);
+    const body = await response.json() as { error: { message: string } };
+    expect(body.error.message).toContain('undeclared client tool "apply_patch"');
+  });
+
+  test("streaming, a rewritten-away additional_tools catalog remains authoritative", async () => {
+    const response = await post(
+      true,
+      undefined,
+      sseUpstream,
+      [{ type: "web_search", external_web_access: false }],
+      xaiConfig,
+    );
     const body = await response.text();
 
     expect(body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);

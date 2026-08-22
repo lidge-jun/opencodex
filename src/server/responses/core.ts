@@ -2904,6 +2904,9 @@ async function handleResponsesInner(
         + `(model ${parsed.modelId}); forwarding without it — earlier turns may be missing from this request`,
       );
     }
+    // Preserve the caller's readable catalog boundary before provider-specific normalization can
+    // remove an unsupported final entry (for example xAI cached-only web search).
+    const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(parsed._rawBody);
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
@@ -2963,17 +2966,28 @@ async function handleResponsesInner(
         return undefined;
       }
     };
-    let outboundRequestBody = parseOutboundRequestBody(request.body);
-    const declaredWireToolNames = collectDeclaredWireToolNames(outboundRequestBody);
-    // Union with the caller's own catalog, because the outbound body is not always a complete
-    // record of it: hosted-tool preference REPLACES a client tool with its hosted form, so a
-    // request declaring `image_gen.generate` ships `{type:"image_generation"}` upstream and gets
-    // the client's name back. Widening only ever makes the guard fire less; a name declared in
-    // neither place — #1700's `apply_patch` — is still refused.
-    for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
-    const explicitWireToolCatalog = hasExplicitWireToolCatalog(outboundRequestBody);
-    const undeclaredToolGuardActive = (declaredWireToolNames.size > 0 || explicitWireToolCatalog)
-      && route.provider.authMode !== "forward";
+    let outboundRequestBody: Record<string, unknown> | undefined;
+    const declaredWireToolNames = new Set<string>();
+    let undeclaredToolGuardActive = false;
+    const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
+      outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
+      declaredWireToolNames.clear();
+      for (const name of collectDeclaredWireToolNames(outboundRequestBody)) {
+        declaredWireToolNames.add(name);
+      }
+      // Union with the caller's own catalog, because the outbound body is not always a complete
+      // record of it: hosted-tool preference REPLACES a client tool with its hosted form, so a
+      // request declaring `image_gen.generate` ships `{type:"image_generation"}` upstream and gets
+      // the client's name back. Widening only ever makes the guard fire less; a name declared in
+      // neither place — #1700's `apply_patch` — is still refused.
+      for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
+      undeclaredToolGuardActive = (
+        declaredWireToolNames.size > 0
+        || clientExplicitWireToolCatalog
+        || hasExplicitWireToolCatalog(outboundRequestBody)
+      ) && route.provider.authMode !== "forward";
+    };
+    refreshUndeclaredToolGuard(request);
     // A refused turn must not seed `previous_response_id` replay. The inspection branch reads the
     // untouched upstream stream, so it can still observe a `response.completed` the client never
     // received; checking the payload itself rather than a flag shared with the client relay keeps
@@ -3166,7 +3180,7 @@ async function handleResponsesInner(
         ? request.usageLog.inputTokens
         : undefined;
       if (passthroughEstimate !== undefined) logCtx.usageLogInputTokens = passthroughEstimate;
-      outboundRequestBody = parseOutboundRequestBody(request.body);
+      refreshUndeclaredToolGuard(request);
       logCtx.providerAdapter = retryAdapter.name;
       sealRequestAttemptIdentity(
         logCtx.activeAttempt,
@@ -3276,6 +3290,7 @@ async function handleResponsesInner(
         const msg = err instanceof Error ? err.message : String(err);
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
       }
+      refreshUndeclaredToolGuard(request);
       try {
         upstreamResponse = await fetchWithTransientRetry(
           recovery => {
@@ -3427,6 +3442,7 @@ async function handleResponsesInner(
           authCtx = retry.authCtx;
           request = retry.request;
           refreshRoutedNamespaceToolAliases(request);
+          refreshUndeclaredToolGuard(request);
           upstreamResponse = retry.upstreamResponse;
           selectedForwardHeaders = retry.selectedForwardHeaders;
           // Keep subagent quota-failure health keyed to the account that actually served.

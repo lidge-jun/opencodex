@@ -8,6 +8,21 @@ import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
  */
 const CLIENT_EXECUTED_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
 
+/** Supported hosted/private declarations that carry no client-executable wire name. */
+const NAMELESS_TOOL_SPEC_TYPES = new Set([
+  "web_search",
+  "web_search_preview",
+  "file_search",
+  "computer_use_preview",
+  "code_interpreter",
+  "image_generation",
+  "image_gen",
+  "mcp",
+  "tool_search",
+  "local_shell",
+  "x_search",
+]);
+
 /** An upstream-supplied name reaches the error message; keep it bounded. */
 const MAX_REPORTED_NAME_CHARS = 100;
 
@@ -59,15 +74,44 @@ export function collectDeclaredWireToolNames(body: unknown): Set<string> {
   return names;
 }
 
-/** Whether the outbound request contains any supported, readable client-tool catalog. */
+function isReadableWireToolSpec(spec: unknown): boolean {
+  if (!isPlainObject(spec) || typeof spec.type !== "string" || spec.type.length === 0) return false;
+  if (spec.type === "function") {
+    return (typeof spec.name === "string" && spec.name.length > 0)
+      || (isPlainObject(spec.function)
+        && typeof spec.function.name === "string"
+        && spec.function.name.length > 0);
+  }
+  if (spec.type === "custom") return typeof spec.name === "string" && spec.name.length > 0;
+  if (spec.type === "namespace") {
+    return typeof spec.name === "string"
+      && spec.name.length > 0
+      && Array.isArray(spec.tools)
+      && (spec.tools.length === 0 || spec.tools.some(inner =>
+        isPlainObject(inner)
+        && (inner.type === "function" || inner.type === "custom")
+        && typeof inner.name === "string"
+        && inner.name.length > 0
+      ));
+  }
+  if (NAMELESS_TOOL_SPEC_TYPES.has(spec.type)) return true;
+  return typeof spec.name === "string" && spec.name.length > 0;
+}
+
+function isReadableWireToolCatalog(value: unknown): boolean {
+  return Array.isArray(value)
+    && (value.length === 0 || value.some(isReadableWireToolSpec));
+}
+
+/** Whether a request contains a supported catalog, including an explicit empty deny-all array. */
 export function hasExplicitWireToolCatalog(body: unknown): boolean {
   if (!isPlainObject(body)) return false;
-  if (Array.isArray(body.tools)) return true;
+  if (isReadableWireToolCatalog(body.tools)) return true;
   if (!Array.isArray(body.input)) return false;
   return body.input.some(item =>
     isPlainObject(item)
     && item.type === "additional_tools"
-    && Array.isArray(item.tools)
+    && isReadableWireToolCatalog(item.tools)
   );
 }
 
