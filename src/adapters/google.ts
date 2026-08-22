@@ -22,7 +22,7 @@ import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./g
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "./google-antigravity-tools";
-import { isAntigravityHttpsHost } from "./google-antigravity-hosts";
+import { canonicalAntigravityHttpsHost, isAntigravityHttpsHost } from "./google-antigravity-hosts";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
@@ -31,6 +31,8 @@ import { googleVertexLocationConfigError } from "../providers/google-vertex-loca
 import { lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
+  releaseTranslatedEvent,
+  retainTranslatedEvent,
   retainTranslatedEventBatch,
   type TranslatorBudget,
 } from "../lib/translator-budget";
@@ -404,8 +406,8 @@ function scanSseLineBytes(incompleteLineBytes: number, incoming: Uint8Array): {
 } {
   let lineBytes = incompleteLineBytes;
   let maximum = lineBytes;
-  for (const byte of incoming) {
-    if (byte === 0x0a) {
+  for (let index = 0; index < incoming.length; index++) {
+    if (incoming[index] === 0x0a) {
       lineBytes = 0;
       continue;
     }
@@ -710,10 +712,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (!token) throw new Error("google-antigravity oauth token missing — run ocx login google-antigravity");
         const base = provider.baseUrl?.trim();
         if (!base) throw new Error("google-antigravity requires a non-empty baseUrl");
-        if (!isAntigravityHttpsHost(base)) {
+        const canonicalBase = canonicalAntigravityHttpsHost(base) ?? base;
+        if (!isAntigravityHttpsHost(canonicalBase)) {
           throw new Error("google-antigravity requires an HTTPS baseUrl");
         }
-        const url = `${base.replace(/\/+$/, "")}/v1internal:${method}${streamParam}`;
+        const url = `${canonicalBase.replace(/\/+$/, "")}/v1internal:${method}${streamParam}`;
         const project = provider.project;
         if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);
@@ -1156,9 +1159,25 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // instead of maintaining a second CCA JSON parser.
       if (provider.googleMode === "cloud-code-assist") {
         const events: AdapterEvent[] = [];
-        for await (const event of this.parseStream(response, budget)) events.push(event);
-        retainTranslatedEventBatch(events, budget);
-        return events;
+        let previousTail: AdapterEvent | undefined;
+        try {
+          for await (const event of this.parseStream(response, budget)) {
+            retainTranslatedEvent(event, budget, previousTail);
+            events.push(event);
+            previousTail = event;
+          }
+          return events;
+        } catch (error) {
+          for (const event of events) releaseTranslatedEvent(event, budget);
+          if (!isTranslatorBudgetExceededError(error)) throw error;
+          return [{
+            type: "error",
+            status: 502,
+            errorType: "upstream_error",
+            code: "translation_buffer_limit",
+            message: "upstream translation buffer exceeded the safe limit",
+          }];
+        }
       }
       // Reject oversized responses before JSON parse. Prefer Content-Length when
       // present and truthful; always stream-read with a hard byte cap so a missing

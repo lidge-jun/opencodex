@@ -78,6 +78,14 @@ describe("antigravity CCA envelope", () => {
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
   });
 
+  test("known HTTP CCA origins are canonicalized to HTTPS before dispatch", async () => {
+    const req = await createGoogleAdapter({
+      ...provider,
+      baseUrl: "http://daily-cloudcode-pa.googleapis.com",
+    }).buildRequest(parsed("x", true));
+    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+  });
+
   test("host candidates keep the configured host first and use only daily/prod", () => {
     expect(antigravityHostCandidates("https://daily-cloudcode-pa.googleapis.com")).toEqual([
       "https://daily-cloudcode-pa.googleapis.com",
@@ -808,6 +816,18 @@ function sseResponse(chunks: unknown[]): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+function chunkedSseResponse(chunks: unknown[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+      }
+      controller.close();
+    },
+  }), { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 describe("antigravity parseStream unwraps response", () => {
   test("reads response.candidates and response.usageMetadata", async () => {
     const adapter = createGoogleAdapter(provider);
@@ -845,6 +865,22 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
 
     expect(events).toContainEqual({ type: "text_delta", text: "hello" });
     expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+  });
+
+  test("unary CCA responses fail boundedly when translated events exceed the budget", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 256 });
+    const events = await adapter.parseResponse!(chunkedSseResponse([
+      ...Array.from({ length: 16 }, (_, index) => ({
+        response: { candidates: [{ content: { parts: [{ text: `event-${index}` }] } }] },
+      })),
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]), budget);
+
+    expect(events).toEqual([expect.objectContaining({
+      type: "error",
+      code: "translation_buffer_limit",
+    })]);
   });
 
   test("reads response.candidates + response.usageMetadata from the CCA envelope", async () => {
