@@ -12,7 +12,7 @@ OpenAI 以外のモデル (Claude、Gemini、Grok など) を介して Codex を
 - **設定で `images.bridgeEnabled: true` を設定してブリッジを有効にします** (これはオフになっています)
 予期しない xAI 請求を避けるためのデフォルト — 以下の [構成](#configuration) を参照してください)。
 - **API キー**を持つ `xai` プロバイダー エントリ。ブリッジはフルフィルメントをレジストリ xAI に固定します
-画像エンドポイント (`https://api.x.ai/v1`);設定された `baseUrl` オーバーライドは、イメージ呼び出しでは無視されます。 OAuth / `ocx login xai` だけではブリッジを準備しません** (Grok CLI OAuth トランスポートはチャット指向であり、`/images/*` には使用されません)。
+画像エンドポイント (`https://api.x.ai/v1`);設定された `baseUrl` オーバーライドは、イメージ呼び出しでは無視されます。 OAuth / `ocx login xai` だけではこのサイドカー・ループは有効になりません。同じ `bridgeEnabled` フラグは、別系統の Codex `/v1/images` リレーを有効にし、組み込みの `image_gen` クライアントが Grok CLI の認可で Imagine を呼べるようにします。認可（または xAI API キー）が無い場合、`/v1/images` は ChatGPT にフォールスルーせずエラーを返します。詳細は [組み込み画像生成](/guides/codex-integration/#built-in-image-generation-image_gen) を参照してください。
 
 「`json { "providers": { "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" } } } `」
 
