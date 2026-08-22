@@ -25,6 +25,11 @@ export type CommandRunner = (
   args: readonly string[],
 ) => Promise<CommandResult>;
 
+export type ProcessRunner = (
+  args: readonly string[],
+  stdin: string,
+) => Promise<CommandResult>;
+
 export type FetchImplementation = (
   input: string | URL | Request,
   init?: RequestInit,

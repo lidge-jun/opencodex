@@ -1,13 +1,16 @@
 import { detectLatestVTag } from "./detect";
 import { pinVendorRefs } from "./pin";
 import { enabledCoordinators, enabledNotifiers, registerCoordinator, registerNotifier } from "./registry";
+import { createCliCoordinator } from "./coordinators/cli";
 import { createCursorWebhookCoordinator } from "./coordinators/cursor-webhook";
+import { createHttpCoordinator } from "./coordinators/http";
 import { createGitHubIssueNotifier } from "./notifiers/github-issue";
 import type {
   CommandResult,
   CommandRunner,
   FetchImplementation,
   GitHubIssuesClient,
+  ProcessRunner,
   SyncEvent,
 } from "./types";
 
@@ -21,6 +24,7 @@ export interface CliOptions {
   write?: (value: string) => void;
   githubClient?: GitHubIssuesClient;
   fetchImpl?: FetchImplementation;
+  processRunner?: ProcessRunner;
 }
 
 async function commandRunner(args: readonly string[]): Promise<CommandResult> {
@@ -106,6 +110,27 @@ function registerBuiltins(
       url: env.FORK_SYNC_CURSOR_WEBHOOK_URL,
       secret: env.FORK_SYNC_CURSOR_WEBHOOK_SECRET,
       fetchImpl: options.fetchImpl,
+    }));
+  }
+  if (coordinatorIds.includes("http")) {
+    registerCoordinator(createHttpCoordinator({
+      url: env.FORK_SYNC_HTTP_URL,
+      secret: env.FORK_SYNC_HTTP_SECRET,
+      signatureHeader: env.FORK_SYNC_HTTP_SIGNATURE_HEADER,
+      signaturePrefix: env.FORK_SYNC_HTTP_SIGNATURE_PREFIX,
+      authHeader: env.FORK_SYNC_HTTP_AUTH_HEADER,
+      fetchImpl: options.fetchImpl,
+    }));
+  }
+  if (coordinatorIds.includes("cli")) {
+    const input = env.FORK_SYNC_CLI_INPUT;
+    if (input && input !== "json" && input !== "summary") {
+      throw new Error("FORK_SYNC_CLI_INPUT must be json or summary");
+    }
+    registerCoordinator(createCliCoordinator({
+      command: env.FORK_SYNC_CLI_COMMAND,
+      input,
+      runner: options.processRunner,
     }));
   }
 }
