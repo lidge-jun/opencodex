@@ -192,4 +192,56 @@ describe("xAI OAuth Chat reasoning streaming", () => {
       await server.stop(true);
     }
   }, 10_000);
+
+  test("transfers retained native-call events before non-streaming JSON assembly", async () => {
+    // Newline-heavy writes stay below the per-call argument cap, but their translated
+    // apply_patch programs are materially larger than the native calls they replace.
+    const payload = "x\n".repeat(330_000);
+    const toolCalls = Array.from({ length: 12 }, (_, index) => ({
+      id: `call_large_edit_${index}`,
+      type: "function",
+      function: {
+        name: "write",
+        arguments: JSON.stringify({ file_path: `src/generated-${index}.ts`, content: payload }),
+      },
+    }));
+
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== CHAT_ENDPOINT) return originalFetch(input, init);
+      return Response.json({
+        id: "chatcmpl_xai_large_edits",
+        object: "chat.completion",
+        model: "grok-4.6",
+        choices: [{ index: 0, message: { role: "assistant", tool_calls: toolCalls }, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "xai/grok-4.6",
+          input: "create generated files",
+          stream: false,
+          tools: [{
+            type: "custom",
+            name: "exec",
+            description: "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };",
+          }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json() as { output?: Array<Record<string, unknown>> };
+      expect(body.output).toHaveLength(toolCalls.length);
+      expect(body.output?.every(item => item.type === "custom_tool_call" && item.name === "exec")).toBe(true);
+      expect(body.output?.[0]?.input).toContain("*** Add File: src/generated-0.ts");
+    } finally {
+      await server.stop(true);
+    }
+  }, 30_000);
 });

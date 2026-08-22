@@ -473,9 +473,11 @@ describe("Grok structured edit tools", () => {
     }
   });
 
-  test("escalates git add/commit through Codex exec_command permissions", async () => {
+  test("escalates Git index and ref mutations through Codex exec_command permissions", async () => {
     expect(grokShellNeedsGitEscalation("git add -- cogs/admin.py")).toBe(true);
     expect(grokShellNeedsGitEscalation("git commit -m 'split packages'")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git checkout feature/refactor")).toBe(true);
+    expect(grokShellNeedsGitEscalation("git switch -c feature/refactor")).toBe(true);
     expect(grokShellNeedsGitEscalation("git -C /repo add .")).toBe(true);
     expect(grokShellNeedsGitEscalation("git -C '/repo with spaces' commit -m split")).toBe(true);
     expect(grokShellNeedsGitEscalation("git -C /repo status --short")).toBe(false);

@@ -5275,18 +5275,12 @@ async function handleResponsesInner(
     } finally {
       cleanupUpstreamAbort();
     }
-    {
-      const rewritten: AdapterEvent[] = [];
-      for await (const event of rewriteAdapterEventsForGrokStructuredEdits(
-        (async function* () { yield* events; })(),
-        parsed,
-        route.provider,
-      )) rewritten.push(event);
-      events = rewritten;
-    }
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     const convertedGrokNativeToolNames = grokNativeToolNamesForRequest(parsed, route.provider);
     let providerState: OcxProviderContinuationState | undefined;
+    // Keep the retained adapter-event objects intact until the JSON builder rewrites the Grok
+    // calls. The builder atomically transfers their translator-budget leases to its replacements;
+    // rewriting here first would strand the source leases and double-count large parallel edits.
     const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
       translatorBudget,
       replayCacheScope: parsed._reasoningReplayScope,

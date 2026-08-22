@@ -101,7 +101,7 @@ export const GROK_RUN_TERMINAL_COMMAND_INPUT_SCHEMA = {
     with_escalated_permissions: {
       type: "boolean",
       description:
-        "True asks Codex to prompt for a sandbox escalation. Required for git add/commit because the sandbox cannot write .git/index.lock.",
+        "True asks Codex to prompt for a sandbox escalation. Required for Git operations that update the index or refs, such as add, commit, checkout, and switch.",
     },
     justification: {
       type: "string",
@@ -113,10 +113,10 @@ export const GROK_RUN_TERMINAL_COMMAND_INPUT_SCHEMA = {
 } as const;
 
 const GIT_INDEX_ESCALATION_JUSTIFICATION =
-  "Write the git index to stage or commit; the sandbox cannot create .git/index.lock.";
+  "Update Git index or refs; the sandbox cannot create .git/index.lock or other repository lock files.";
 
 const GIT_MUTATING_COMMANDS = new Set([
-  "add", "commit", "stash", "rm", "mv", "tag", "update-index", "cherry-pick", "rebase", "merge", "notes",
+  "add", "commit", "checkout", "switch", "stash", "rm", "mv", "tag", "update-index", "cherry-pick", "rebase", "merge", "notes",
 ]);
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C", "-c", "--config-env", "--exec-path", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
@@ -407,7 +407,7 @@ export function grokNativeCatalogTools(
     {
       name: GROK_RUN_TERMINAL_COMMAND_TOOL,
       description:
-        "Run a shell command. Use read_file, grep, list_dir, search_replace, and write for ordinary file work. Git add/commit must set with_escalated_permissions=true (and a short justification) so Codex can prompt to write .git/index.lock; a commentary message cannot request that permission. If a command fails with Operation not permitted, retry once with with_escalated_permissions=true.",
+        "Run a shell command. Use read_file, grep, list_dir, search_replace, and write for ordinary file work. Git operations that update the index or refs, including add, commit, checkout, and switch, must set with_escalated_permissions=true (and a short justification) so Codex can prompt to write repository lock files; a commentary message cannot request that permission. If a command fails with Operation not permitted, retry once with with_escalated_permissions=true.",
       parameters: { ...GROK_RUN_TERMINAL_COMMAND_INPUT_SCHEMA },
     },
   ];
