@@ -12,8 +12,17 @@ import {
 } from "../src/oauth/login-cli";
 import { startServer } from "../src/server";
 import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
+import { LOCAL_PROVIDER_RELOAD_TIMEOUT_MS } from "../src/server/local-provider-reload-client";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { watchdogMs } from "./helpers/ci-watchdog";
+
+/**
+ * `requestBoundLocalProviderReload` may spend one HTTP ceiling on /healthz and
+ * another on the reload POST. A 15s bun-test budget dies first on the unsharded
+ * macOS CI runner (observed 15012ms timeout after the proxy had already bound).
+ */
+const LIVE_UPDATE_TIMEOUT_MS = watchdogMs(LOCAL_PROVIDER_RELOAD_TIMEOUT_MS * 2 + 5_000);
 
 /**
  * Regression: CLI OAuth login used to POST the bare OAuth preset into a running proxy.
@@ -58,6 +67,10 @@ afterEach(() => {
 });
 
 describe("CLI OAuth live-update credential preservation", () => {
+  test("live notify case budget outlasts two reload HTTP ceilings", () => {
+    expect(LIVE_UPDATE_TIMEOUT_MS).toBeGreaterThan(LOCAL_PROVIDER_RELOAD_TIMEOUT_MS * 2);
+  });
+
   test("does not post provider credentials when a legacy health listener has no verified pid", async () => {
     const receivedPaths: string[] = [];
     let healthProbeCount = 0;
@@ -164,7 +177,7 @@ describe("CLI OAuth live-update credential preservation", () => {
     } finally {
       await server.stop(true);
     }
-  }, 15_000);
+  }, LIVE_UPDATE_TIMEOUT_MS);
 });
 
 /**
