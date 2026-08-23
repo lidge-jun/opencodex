@@ -268,6 +268,11 @@ task workflow.
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
 combos, and its target picker excludes disabled models and nested combos.
 
+Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. Save and
+Create are disabled only when every enabled target has fresh, complete evidence that its quota is exhausted.
+Missing, stale, malformed, or incomplete aggregate evidence stays unknown and never locks a control. Polling
+continues while the workspace is visible, so recovery automatically restores the action.
+
 ### CLI
 
 The primary commands are:

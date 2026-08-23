@@ -54,6 +54,7 @@ async function mountDetail(): Promise<{ container: HTMLElement; root: Root }> {
           otherIds={[]}
           otherAliases={[]}
           providerMap={{}}
+          providerQuotaStates={{}}
           providers={[]}
           models={[]}
           onSave={async () => ({ ok: true })}

@@ -65,6 +65,7 @@ async function renderPanel(baseline: ComboItem, isCreate: boolean, onSave: (item
           otherIds={[]}
           otherAliases={[]}
           providerMap={{ openai: {} }}
+          providerQuotaStates={{ openai: "available" }}
           providers={providers}
           models={models}
           onSaved={() => {}}
