@@ -156,6 +156,50 @@ function stripInvalidItemIds(body: unknown): unknown {
   return changed ? { ...body, input } : body;
 }
 
+function systemItemText(item: Record<string, unknown>): string {
+  const content = item.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!isPlainObject(block)) continue;
+    if (block.type !== "input_text" && block.type !== "text") continue;
+    if (typeof block.text !== "string" || block.text.length === 0) continue;
+    parts.push(block.text);
+  }
+  return parts.join("\n\n");
+}
+
+// Native ChatGPT backend rejects system message items in `input`.
+function foldSystemMessagesIntoInstructions(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  const remaining: unknown[] = [];
+  const systemParts: string[] = [];
+  let foundSystem = false;
+  for (const item of body.input) {
+    if (
+      !isPlainObject(item)
+      || item.role !== "system"
+      || (item.type !== "message" && item.type !== undefined)
+    ) {
+      remaining.push(item);
+      continue;
+    }
+    foundSystem = true;
+    const text = systemItemText(item);
+    if (text.length > 0) systemParts.push(text);
+  }
+  if (!foundSystem) return body;
+
+  const next: Record<string, unknown> = { ...body, input: remaining };
+  if (systemParts.length === 0) return next;
+  const joined = systemParts.join("\n\n");
+  const existing = typeof body.instructions === "string" ? body.instructions : "";
+  next.instructions = existing.length > 0 ? `${existing}\n\n${joined}` : joined;
+  return next;
+}
+
 /**
  * Codex-private tool fields that only the ChatGPT backend understands.
  *
@@ -1801,7 +1845,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         actualServiceTier === null ? null : "service-tier",
         actualServiceTier,
       );
-      const body = JSON.stringify(finalBody);
+      const wireBody = isOpenAiOperatedResponsesDestination(provider)
+        ? foldSystemMessagesIntoInstructions(finalBody)
+        : finalBody;
+      const body = JSON.stringify(wireBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         new TextEncoder().encode(body).byteLength,
