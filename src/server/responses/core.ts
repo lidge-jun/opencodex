@@ -106,11 +106,25 @@ import {
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
 import {
+  antigravity429StickWaitMs,
+  antigravitySessionKeyFromParts,
   bindAntigravityProject,
-  isAntigravityAccountInCooldown,
-  nextAntigravityAccount,
+  bindAntigravitySessionAffinity,
+  resolveAntigravityAccountForSession,
+  rotateAntigravityAccountOn429,
 } from "../../oauth/antigravity-routing";
-import { getAccountCredential, getAccountSet, setActiveAccount } from "../../oauth/store";
+import {
+  CURSOR_POOL_MAX_FAILOVERS_PER_REQUEST,
+  bindCursorSessionAffinity,
+  cursorSessionKeyFromParts,
+  formatCursorProviderForLog,
+  isCursorAccountPoolActive,
+  recordCursorAccountBillingCooldown,
+  resolveCursorAccountForSession,
+  rotateCursorAccountOn429,
+  rotateCursorAccountOnAuth,
+} from "../../oauth/cursor-routing";
+import { getAccountCredential } from "../../oauth/store";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -506,7 +520,7 @@ function bindRouteReasoningReplayScope(args: {
     // seed assigned before route binding. A Cursor conversation must be scoped to the exact
     // provider/destination/adapter/model/credential that serves it.
     if (continuationOwner) parsed._cursorIdentityScope = providerContinuationRouteScope(continuationOwner);
-    else if (!parsed._cursorIdentityScope?.startsWith("cursor-unowned:")) {
+    else if (!parsed._cursorIdentityScope?.trim()) {
       // Prevent the adapter's token-only fallback from recreating a provider-private id after the
       // route owner failed closed. The sentinel is per parsed request and contains no credential.
       parsed._cursorIdentityScope = `cursor-unowned:${randomUUID()}`;
@@ -2589,13 +2603,27 @@ async function handleResponsesInner(
   let anthropicPoolFailovers = 0;
   let antigravityAccountId: string | undefined;
   let antigravityFailovers = 0;
+  let cursorPoolAccountId: string | null = null;
+  let cursorPoolFailovers = 0;
+  const oauthSessionKeyParts = {
+    sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+    threadIdHeader: req.headers.get("thread-id"),
+    promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
+    clientThreadId: typeof parsed._clientThreadId === "string" ? parsed._clientThreadId : null,
+    promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort === true,
+  };
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
-    ? anthropicSessionKeyFromParts({
-      sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
-      threadIdHeader: req.headers.get("thread-id"),
-      promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
+    ? anthropicSessionKeyFromParts(oauthSessionKeyParts)
+    : null;
+  const antigravitySessionKey = route.providerName === "google-antigravity"
+    && route.provider.authMode === "oauth"
+    && route.provider.googleMode === "cloud-code-assist"
+    ? antigravitySessionKeyFromParts(oauthSessionKeyParts)
+    : null;
+  const cursorSessionKey = route.providerName === "cursor"
+    && route.provider.authMode === "oauth"
+    ? cursorSessionKeyFromParts({
       clientThreadId: typeof parsed._clientThreadId === "string" ? parsed._clientThreadId : null,
-      promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort === true,
     })
     : null;
   if (route.provider.authMode === "oauth") {
@@ -2620,48 +2648,88 @@ async function handleResponsesInner(
         promoteAnthropicActiveAccount(selection.accountId);
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
-      } else {
-        let resolved = await getValidAccessTokenSnapshot(route.providerName);
-        let skippedAntigravityCooldown = false;
-        if (route.providerName === "google-antigravity"
-          && route.provider.googleMode === "cloud-code-assist"
-          && isAntigravityAccountInCooldown(resolved.accountId)) {
-          const accountIds = getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
-          const nextAccountId = nextAntigravityAccount(accountIds, resolved.accountId);
-          if (!nextAccountId) {
-            return formatErrorResponse(429, "rate_limit_error", "All Google Antigravity OAuth accounts are temporarily unavailable");
+      } else if (
+        route.providerName === "google-antigravity"
+        && route.provider.googleMode === "cloud-code-assist"
+      ) {
+        const selection = resolveAntigravityAccountForSession(antigravitySessionKey);
+        if (!selection.accountId) {
+          if (selection.reason === "all-cooled") {
+            return formatErrorResponse(
+              429,
+              "rate_limit_error",
+              "All Google Antigravity OAuth accounts are temporarily unavailable",
+            );
           }
-          const accessToken = await getValidAccessTokenForAccount("google-antigravity", nextAccountId);
-          const nextCredential = getAccountCredential("google-antigravity", nextAccountId);
+          return formatErrorResponse(
+            401,
+            "authentication_error",
+            "No eligible Google Antigravity OAuth account available",
+          );
+        }
+        let resolved = await getValidAccessTokenSnapshot(route.providerName);
+        if (selection.accountId !== resolved.accountId) {
+          const accessToken = await getValidAccessTokenForAccount("google-antigravity", selection.accountId);
+          const nextCredential = getAccountCredential("google-antigravity", selection.accountId);
           resolved = {
             ...resolved,
-            accountId: nextAccountId,
+            accountId: selection.accountId,
             accessToken,
             // Always replace; omitting a missing id would keep the previous account's projectId.
             projectId: nextCredential?.projectId,
           };
-          skippedAntigravityCooldown = true;
         }
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
         };
-        if (skippedAntigravityCooldown) replayOAuthCredentialSnapshot = undefined;
+        if (selection.reason === "failover") replayOAuthCredentialSnapshot = undefined;
+        route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        antigravityAccountId = selection.accountId;
+        bindAntigravitySessionAffinity(antigravitySessionKey, selection.accountId);
+        const bound = bindAntigravityProject(route.provider, resolved.projectId);
+        if (!bound.ok) {
+          return formatErrorResponse(bound.status, bound.type, bound.message);
+        }
+        route.provider = bound.provider;
+      } else if (
+        route.providerName === "cursor"
+        && route.provider.authMode === "oauth"
+        && isCursorAccountPoolActive(config)
+      ) {
+        const selection = resolveCursorAccountForSession(cursorSessionKey, config);
+        if (!selection.accountId) {
+          if (selection.reason === "all-cooled") {
+            return formatErrorResponse(
+              429,
+              "rate_limit_error",
+              "All Cursor OAuth accounts are temporarily rate-limited",
+            );
+          }
+          return formatErrorResponse(401, "authentication_error", "No eligible Cursor OAuth account available");
+        }
+        let resolved = await getValidAccessTokenSnapshot("cursor");
+        if (selection.accountId !== resolved.accountId) {
+          const accessToken = await getValidAccessTokenForAccount("cursor", selection.accountId);
+          resolved = { ...resolved, accountId: selection.accountId, accessToken };
+        }
+        cursorPoolAccountId = selection.accountId;
+        parsed._cursorIdentityScope = selection.accountId;
+        bindCursorSessionAffinity(cursorSessionKey, selection.accountId);
+        replayOAuthCredentialSnapshot = {
+          accountId: resolved.accountId,
+          generation: resolved.generation,
+        };
+        route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        logCtx.provider = formatCursorProviderForLog("cursor", selection.accountId);
+      } else {
+        const resolved = await getValidAccessTokenSnapshot(route.providerName);
+        replayOAuthCredentialSnapshot = {
+          accountId: resolved.accountId,
+          generation: resolved.generation,
+        };
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
-        if (route.providerName === "google-antigravity" && route.provider.googleMode === "cloud-code-assist") {
-          antigravityAccountId = resolved.accountId;
-          // Always overwrite `project` from the credential in use. A missing id fails closed
-          // so a rotated account cannot inherit the previous account's Cloud Code Assist project.
-          const bound = bindAntigravityProject(route.provider, resolved.projectId);
-          if (!bound.ok) {
-            return formatErrorResponse(bound.status, bound.type, bound.message);
-          }
-          route.provider = bound.provider;
-          if (skippedAntigravityCooldown) {
-            void setActiveAccount("google-antigravity", resolved.accountId).catch(() => { /* best-effort promotion */ });
-          }
-        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
@@ -4782,8 +4850,29 @@ async function handleResponsesInner(
         && antigravityAccountId
         && antigravityFailovers < 3
       ) {
-        const accountIds = getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
-        const nextAccountId = nextAntigravityAccount(accountIds, antigravityAccountId);
+        const stickWaitMs = antigravity429StickWaitMs(antigravityAccountId);
+        if (stickWaitMs !== null) {
+          await Bun.sleep(stickWaitMs);
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          invalidateSameTargetRequest();
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+            codexAuthContext: authCtx,
+            forwardHeaders: selectedForwardHeaders,
+          });
+          const result = await rebuildAndRefetch("rate-limit-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue;
+        }
+        const nextAccountId = rotateAntigravityAccountOn429(antigravityAccountId, antigravitySessionKey);
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
@@ -4813,8 +4902,106 @@ async function handleResponsesInner(
             codexAuthContext: authCtx,
             forwardHeaders: selectedForwardHeaders,
           });
-          void setActiveAccount("google-antigravity", nextAccountId).catch(() => { /* best-effort promotion */ });
           const result = await rebuildAndRefetch("rate-limit-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
+      if (
+        upstreamResponse.status === 402
+        && cursorPoolAccountId
+        && isCursorAccountPoolActive(config)
+      ) {
+        recordCursorAccountBillingCooldown(
+          cursorPoolAccountId,
+          upstreamResponse.headers.get("retry-after"),
+        );
+      }
+      while (
+        (upstreamResponse.status === 401 || upstreamResponse.status === 403)
+        && route.providerName === "cursor"
+        && route.provider.authMode === "oauth"
+        && cursorPoolAccountId
+        && isCursorAccountPoolActive(config)
+        && cursorPoolFailovers < CURSOR_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateCursorAccountOnAuth(
+          config,
+          cursorPoolAccountId,
+          cursorSessionKey,
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getValidAccessTokenForAccount("cursor", nextAccountId);
+          cursorPoolAccountId = nextAccountId;
+          cursorPoolFailovers += 1;
+          parsed._cursorIdentityScope = nextAccountId;
+          route.provider = { ...route.provider, apiKey: accessToken };
+          replayOAuthCredentialSnapshot = undefined;
+          invalidateSameTargetRequest();
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+            codexAuthContext: authCtx,
+            forwardHeaders: selectedForwardHeaders,
+          });
+          logCtx.provider = formatCursorProviderForLog("cursor", nextAccountId);
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+          const result = await rebuildAndRefetch("cursor-oauth-auth");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
+      while (
+        upstreamResponse.status === 429
+        && route.providerName === "cursor"
+        && route.provider.authMode === "oauth"
+        && cursorPoolAccountId
+        && isCursorAccountPoolActive(config)
+        && cursorPoolFailovers < CURSOR_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateCursorAccountOn429(
+          config,
+          cursorPoolAccountId,
+          upstreamResponse.headers.get("retry-after"),
+          cursorSessionKey,
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getValidAccessTokenForAccount("cursor", nextAccountId);
+          cursorPoolAccountId = nextAccountId;
+          cursorPoolFailovers += 1;
+          parsed._cursorIdentityScope = nextAccountId;
+          route.provider = { ...route.provider, apiKey: accessToken };
+          replayOAuthCredentialSnapshot = undefined;
+          invalidateSameTargetRequest();
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+            codexAuthContext: authCtx,
+            forwardHeaders: selectedForwardHeaders,
+          });
+          logCtx.provider = formatCursorProviderForLog("cursor", nextAccountId);
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+          const result = await rebuildAndRefetch("cursor-oauth-429");
           if ("failed" in result) return result.failed;
           upstreamResponse = result;
         } catch {
@@ -5149,6 +5336,113 @@ async function handleResponsesInner(
             );
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
             nextContinuationRecoveryKind = "anthropic-oauth-429";
+            continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
+        }
+      }
+      if (
+        response.status === 402
+        && cursorPoolAccountId
+        && isCursorAccountPoolActive(config)
+      ) {
+        recordCursorAccountBillingCooldown(
+          cursorPoolAccountId,
+          response.headers.get("retry-after"),
+        );
+      }
+      if (
+        (response.status === 401 || response.status === 403)
+        && route.providerName === "cursor"
+        && route.provider.authMode === "oauth"
+        && cursorPoolAccountId
+        && isCursorAccountPoolActive(config)
+        && cursorPoolFailovers < CURSOR_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateCursorAccountOnAuth(
+          config,
+          cursorPoolAccountId,
+          cursorSessionKey,
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            const accessToken = await getValidAccessTokenForAccount("cursor", nextAccountId);
+            cursorPoolAccountId = nextAccountId;
+            cursorPoolFailovers += 1;
+            parsed._cursorIdentityScope = nextAccountId;
+            route.provider = { ...route.provider, apiKey: accessToken };
+            replayOAuthCredentialSnapshot = undefined;
+            invalidateSameTargetRequest();
+            activeAdapter = resolveAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+              config.cacheRetention,
+            );
+            bindRouteReasoningReplayScope({
+              parsed: nextParsed,
+              providerName: route.providerName,
+              provider: route.provider,
+              adapterName: activeAdapter.name,
+            });
+            bindRouteReasoningReplayScope({
+              parsed,
+              providerName: route.providerName,
+              provider: route.provider,
+              adapterName: activeAdapter.name,
+            });
+            logCtx.provider = formatCursorProviderForLog("cursor", nextAccountId);
+            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+            nextContinuationRecoveryKind = "cursor-oauth-auth";
+            continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
+        }
+      }
+      if (
+        response.status === 429
+        && route.providerName === "cursor"
+        && route.provider.authMode === "oauth"
+        && cursorPoolAccountId
+        && isCursorAccountPoolActive(config)
+        && cursorPoolFailovers < CURSOR_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateCursorAccountOn429(
+          config,
+          cursorPoolAccountId,
+          response.headers.get("retry-after"),
+          cursorSessionKey,
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            const accessToken = await getValidAccessTokenForAccount("cursor", nextAccountId);
+            cursorPoolAccountId = nextAccountId;
+            cursorPoolFailovers += 1;
+            parsed._cursorIdentityScope = nextAccountId;
+            route.provider = { ...route.provider, apiKey: accessToken };
+            replayOAuthCredentialSnapshot = undefined;
+            invalidateSameTargetRequest();
+            activeAdapter = resolveAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+              config.cacheRetention,
+            );
+            bindRouteReasoningReplayScope({
+              parsed: nextParsed,
+              providerName: route.providerName,
+              provider: route.provider,
+              adapterName: activeAdapter.name,
+            });
+            bindRouteReasoningReplayScope({
+              parsed,
+              providerName: route.providerName,
+              provider: route.provider,
+              adapterName: activeAdapter.name,
+            });
+            logCtx.provider = formatCursorProviderForLog("cursor", nextAccountId);
+            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+            nextContinuationRecoveryKind = "cursor-oauth-429";
             continue;
           } catch {
             // fall through to emit continuation error below

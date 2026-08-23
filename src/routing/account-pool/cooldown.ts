@@ -27,7 +27,7 @@ function createRegistry(): CooldownRegistry & { entries: Map<string, CooldownEnt
         entries.delete(accountId);
         return null;
       }
-      return { until: entry.until, reason: entry.reason };
+      return { until: entry.until, reason: entry.reason, source: entry.source };
     },
     clear(accountId) {
       entries.delete(accountId);

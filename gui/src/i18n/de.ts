@@ -1109,6 +1109,19 @@ export const de: Record<TKey, string> = {
   "anthropicPool.on": "An",
   "anthropicPool.off": "Aus",
 
+  "cursorPool.title": "Cursor-Kontenpool (experimentell)",
+  "cursorPool.enabledDesc": "Bei 429 oder Auth-Fehler wird das Konto gekühlt und für diese Konversation umgeschaltet. Jede Konversation bleibt auf einem Konto, bis ein Rate-Limit- oder Anmeldefehler auftritt.",
+  "cursorPool.disabledDesc": "Nutzt nur das aktive Cursor-Konto. Nur aktivieren, wenn experimentelles Routing akzeptabel ist.",
+  "cursorPool.experimentalWarning": "Experimentell und nicht kampferprobt. Die Cursor-Nutzungsrichtlinie verbietet das Umgehen von Rate-Limits und die Manipulation von Nutzungsmessung. Teams-Nutzung ist pro Sitz und kann nicht übertragen werden. Ausgeschaltet lassen, sofern das Risiko unklar ist.",
+  "cursorPool.needTwoAccounts": "Füge mindestens zwei Cursor-OAuth-Konten hinzu, bevor du den Pool aktivierst.",
+  "cursorPool.loadFailed": "Cursor-Pool-Einstellungen konnten nicht geladen werden.",
+  "cursorPool.saveFailed": "Cursor-Pool-Einstellungen konnten nicht gespeichert werden.",
+  "cursorPool.on": "An",
+  "cursorPool.off": "Aus",
+
+  "antigravityRouting.failoverOnlyTitle": "Multi-Konto-Routing (nur Failover)",
+  "antigravityRouting.failoverOnlyDesc": "Jede Konversation bleibt auf einem Antigravity-Konto. Bei Rate-Limit-429 oder Anmeldefehler kann opencodex für diese Konversation auf ein anderes geeignetes Konto umschalten — ohne neue Sitzungen zu verteilen oder das globale aktive Konto für andere laufende Konversationen zu ändern.",
+
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
   "accountPool.strategyQuota": "Kontingent",

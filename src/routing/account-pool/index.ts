@@ -41,4 +41,5 @@ export {
   resetPoolFailoverCount,
   resolvePoolAccount,
   rotatePoolAccountOn429,
+  rotatePoolAccountOnAuth,
 } from "./resolve";

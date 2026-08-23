@@ -310,6 +310,44 @@ export function rotatePoolAccountOn429(
   return next;
 }
 
+/**
+ * Pick a failover account after auth death (401/403). Shares the per-session cap with 429 hops.
+ * Does not call setActiveAccount.
+ */
+export function rotatePoolAccountOnAuth(
+  plugin: AccountPoolPlugin,
+  failedAccountId: string,
+  sessionKey: string | null,
+  now = Date.now(),
+): string | null {
+  const session = failoverKey(sessionKey);
+  const failoverMap = getFailoverMap(plugin.poolKey);
+  const prior = failoverMap.get(session) ?? 0;
+  if (prior >= ACCOUNT_POOL_MAX_FAILOVERS) return null;
+
+  clearSessionAffinityForAccount(plugin.poolKey, failedAccountId);
+  notePoolRotationFailure(plugin.poolKey, failedAccountId);
+
+  const eligible = filterKernelEligible(
+    plugin,
+    plugin.listEligibleAccountIds(now).filter(id => id !== failedAccountId),
+    now,
+  );
+  if (eligible.length === 0) return null;
+
+  const next = pickRoundRobinAccount(plugin.poolKey, eligible, 1) ?? eligible[0] ?? null;
+  if (!next) return null;
+
+  failoverMap.set(session, prior + 1);
+
+  const affinityKey = normalizeAffinityComponent(sessionKey);
+  if (affinityKey && normalizeAffinityComponent(next)) {
+    bindSessionAffinity(plugin.poolKey, affinityKey, next, now);
+  }
+
+  return next;
+}
+
 export function resetPoolFailoverCount(
   plugin: AccountPoolPlugin,
   sessionKey: string | null,

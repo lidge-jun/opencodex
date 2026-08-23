@@ -28,6 +28,8 @@ export type AttemptRecoveryKind =
   | "key-429"
   | "rate-limit-429"
   | "anthropic-oauth-429"
+  | "cursor-oauth-auth"
+  | "cursor-oauth-429"
   | "image-413"
   | "opaque-blob-rejection"
   | "empty-completion";
@@ -218,6 +220,8 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "key-429",
   "rate-limit-429",
   "anthropic-oauth-429",
+  "cursor-oauth-auth",
+  "cursor-oauth-429",
   "image-413",
   "opaque-blob-rejection",
   "empty-completion",

@@ -1632,6 +1632,19 @@ export const en = {
   "anthropicPool.on": "On",
   "anthropicPool.off": "Off",
 
+  "cursorPool.title": "Cursor account pool (experimental)",
+  "cursorPool.enabledDesc": "On 429 or auth failure, cools the account and fails over for this conversation. Each conversation stays on one account until a rate-limit or credential failure.",
+  "cursorPool.disabledDesc": "Uses only the active Cursor account. Enable only if you accept experimental routing.",
+  "cursorPool.experimentalWarning": "Experimental and not battle-tested. Cursor's acceptable-use policy forbids circumventing rate limits and manipulating usage metering. Teams included usage is per seat and may not transfer. Keep this off unless you understand the risk.",
+  "cursorPool.needTwoAccounts": "Add at least two Cursor OAuth accounts before enabling the pool.",
+  "cursorPool.loadFailed": "Cursor pool settings could not be loaded.",
+  "cursorPool.saveFailed": "Cursor pool settings could not be saved.",
+  "cursorPool.on": "On",
+  "cursorPool.off": "Off",
+
+  "antigravityRouting.failoverOnlyTitle": "Multi-account routing (failover only)",
+  "antigravityRouting.failoverOnlyDesc": "Each conversation stays on one Antigravity account. On rate-limit 429 or credential failure, opencodex may fail over to another eligible account for that conversation — without load-balancing new sessions across accounts or changing the global active account for other live conversations.",
+
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How OpenCodex assigns an account to a new/unbound task.",
   "accountPool.strategyQuota": "Quota",

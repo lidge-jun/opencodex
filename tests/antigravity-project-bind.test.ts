@@ -62,17 +62,28 @@ describe("bindAntigravityProject", () => {
     expect(bound.provider.project).toBe("project-from-current-account");
   });
 
-  test("binds a cooldown replacement before promoting it active", () => {
+  test("does not promote global active on session-scoped failover", () => {
     const source = readFileSync(new URL("../src/server/responses/core.ts", import.meta.url), "utf8");
-    const start = source.indexOf("let skippedAntigravityCooldown = false;");
+    const start = source.indexOf("resolveAntigravityAccountForSession(antigravitySessionKey)");
     const end = source.indexOf('if (route.providerName === "kiro")', start);
     const initialSelection = source.slice(start, end);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
-    expect(initialSelection.indexOf("bindAntigravityProject")).toBeLessThan(
-      initialSelection.indexOf('setActiveAccount("google-antigravity"'),
-    );
+    expect(initialSelection).toContain("bindAntigravityProject");
+    expect(initialSelection).not.toContain('setActiveAccount("google-antigravity"');
+  });
+
+  test("429 carousel does not promote global active on hop", () => {
+    const source = readFileSync(new URL("../src/server/responses/core.ts", import.meta.url), "utf8");
+    const start = source.indexOf("rotateAntigravityAccountOn429(antigravityAccountId");
+    const end = source.indexOf("// Unknown provenance is deliberately fail-soft", start);
+    const carousel = source.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(carousel).toContain("rotateAntigravityAccountOn429");
+    expect(carousel).not.toContain('setActiveAccount("google-antigravity"');
   });
 
   test("threads Antigravity accountId into image and web-search sidecar fetches", () => {

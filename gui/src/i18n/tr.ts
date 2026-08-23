@@ -1624,6 +1624,19 @@ export const tr: Record<TKey, string> = {
   "anthropicPool.on": "Açık",
   "anthropicPool.off": "Kapalı",
 
+  "cursorPool.title": "Cursor hesap havuzu (deneysel)",
+  "cursorPool.enabledDesc": "429 veya kimlik doğrulama hatasında hesabı soğutur ve bu konuşma için yedeklemeye geçer. Her konuşma, bir oran sınırı veya kimlik bilgisi hatası oluşana kadar tek bir hesapta kalır.",
+  "cursorPool.disabledDesc": "Yalnızca aktif Cursor hesabını kullanır. Deneysel yönlendirmeyi kabul ediyorsanız etkinleştirin.",
+  "cursorPool.experimentalWarning": "Deneysel ve yeterince test edilmemiş. Cursor kullanım politikası oran sınırlarını aşmayı ve kullanım ölçümünü manipüle etmeyi yasaklar. Teams dahil kullanım koltuk bazlıdır ve aktarılmayabilir. Riskleri anlamıyorsanız kapalı tutun.",
+  "cursorPool.needTwoAccounts": "Havuzu etkinleştirmeden önce en az iki Cursor OAuth hesabı ekleyin.",
+  "cursorPool.loadFailed": "Cursor havuz ayarları yüklenemedi.",
+  "cursorPool.saveFailed": "Cursor havuz ayarları kaydedilemedi.",
+  "cursorPool.on": "Açık",
+  "cursorPool.off": "Kapalı",
+
+  "antigravityRouting.failoverOnlyTitle": "Çoklu hesap yönlendirme (yalnızca yedekleme)",
+  "antigravityRouting.failoverOnlyDesc": "Her konuşma tek bir Antigravity hesabında kalır. Oran sınırı 429 veya kimlik bilgisi hatasında opencodex, bu konuşma için başka bir uygun hesaba geçebilir — yeni oturumları hesaplar arasında dağıtmadan veya diğer canlı konuşmaların genel aktif hesabını değiştirmeden.",
+
   "accountPool.strategy": "Rotasyon stratejisi",
   "accountPool.strategyDesc": "OpenCodex'in yeni bir göreve nasıl hesap atayacağı.",
   "accountPool.strategyQuota": "Kota",

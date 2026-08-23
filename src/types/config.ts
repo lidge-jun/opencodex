@@ -601,6 +601,14 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /**
+   * Opt-in Cursor OAuth account pool. Default OFF.
+   * Sticky `_clientThreadId` affinity + bounded 429/auth failover when ≥2 OAuth accounts exist.
+   * Does not wire weighted-round-robin `CursorCredentialRouter`.
+   */
+  cursorAccountPool?: {
+    enabled?: boolean;
+  };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**

@@ -1617,6 +1617,19 @@ export const ru: Record<TKey, string> = {
   "anthropicPool.on": "Вкл",
   "anthropicPool.off": "Выкл",
 
+  "cursorPool.title": "Пул аккаунтов Cursor (экспериментально)",
+  "cursorPool.enabledDesc": "При 429 или ошибке аутентификации аккаунт охлаждается и выполняется переключение для этой беседы. Каждая беседа остаётся на одном аккаунте до rate-limit или ошибки учётных данных.",
+  "cursorPool.disabledDesc": "Используется только активный аккаунт Cursor. Включайте только если принимаете экспериментальную маршрутизацию.",
+  "cursorPool.experimentalWarning": "Экспериментально и недостаточно проверено. Политика Cursor запрещает обход лимитов запросов и манипуляции с учётом использования. Включённое использование Teams рассчитывается на место и может не переноситься. Оставляйте выключенным, если не понимаете риск.",
+  "cursorPool.needTwoAccounts": "Перед включением пула добавьте минимум два OAuth-аккаунта Cursor.",
+  "cursorPool.loadFailed": "Не удалось загрузить настройки пула Cursor.",
+  "cursorPool.saveFailed": "Не удалось сохранить настройки пула Cursor.",
+  "cursorPool.on": "Вкл",
+  "cursorPool.off": "Выкл",
+
+  "antigravityRouting.failoverOnlyTitle": "Маршрутизация нескольких аккаунтов (только failover)",
+  "antigravityRouting.failoverOnlyDesc": "Каждая беседа остаётся на одном аккаунте Antigravity. При rate-limit 429 или ошибке учётных данных opencodex может переключиться на другой подходящий аккаунт для этой беседы — без распределения новых сессий между аккаунтами и без изменения глобального активного аккаунта для других живых бесед.",
+
   "accountPool.strategy": "Стратегия ротации",
   "accountPool.strategyDesc": "Как OpenCodex назначает аккаунт новой/непривязанной задаче.",
   "accountPool.strategyQuota": "Квота",

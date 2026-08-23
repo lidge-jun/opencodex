@@ -26,7 +26,7 @@ export interface AccountPoolPlugin {
 
 export interface CooldownRegistry {
   set(accountId: string, until: number, meta?: { source?: string; reason?: string }): void;
-  get(accountId: string, now?: number): { until: number; reason?: string } | null;
+  get(accountId: string, now?: number): { until: number; reason?: string; source?: string } | null;
   clear(accountId: string): void;
   sweep(now?: number): number;
 }
