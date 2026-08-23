@@ -106,6 +106,13 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
+    // The packed tarball name follows package.json (`yansigit-opencodex-*.tgz` on
+    // this fork). Installing a hardcoded upstream filename makes the smoke fail
+    // after `npm pack` with ENOENT.
+    expect(workflow).toContain(
+      `npm install -g "./$(node -p "require('./pack.json')[0].filename")"`,
+    );
+    expect(workflow).not.toContain("bitkyc08-opencodex-*.tgz");
     expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
     expect(ci.permissions).toEqual({ contents: "read" });
 
