@@ -165,7 +165,15 @@ if (import.meta.main) {
   const isolated = createIsolatedTestEnvironment();
   try {
     const requestedTests = process.argv.slice(2);
-    await waitForExclusiveRun(process.pid);
+    // Only full-suite runs queue. The lock guards CPU contention, not state — each run gets its
+    // own mkdtemp sandbox — and the case it was written for is two 900-file suites crawling into
+    // what reads as a hang. A focused file finishes in seconds, so making it wait behind someone
+    // else's multi-minute suite costs more than the contention it avoids. The trade-off is real
+    // though: with --parallel a full run already saturates the machine, so a focused run started
+    // alongside one does slow it.
+    if (isFullSuiteRun(requestedTests)) {
+      await waitForExclusiveRun(process.pid);
+    }
     const startedAt = Date.now();
     const child = Bun.spawnSync(
       [process.execPath, "test", ...resolveBunTestArgs(requestedTests)],
