@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { createIsolatedTestEnvironment } from "../scripts/test";
+import { createIsolatedTestEnvironment, resolveBunTestArgs } from "../scripts/test";
 import {
   decodeWindowsIdentityPowerShellOutputForTests,
   windowsIdentityPowerShellCommandForTests,
@@ -67,4 +67,33 @@ describe("test runner isolation", () => {
       }
     },
   );
+});
+
+/**
+ * Without `--parallel`, `--isolate` re-evaluates the module graph once per file on a single
+ * core. Past ~900 files that stops reading as slow and starts reading as hung: measured at
+ * 1 h 29 m with zero output, ~57 % CPU and 8.5 MB RSS, against ~110-190 s for the identical
+ * suite with the flag. These pin the argv so the flag cannot be dropped again silently.
+ */
+describe("bun test argv", () => {
+  test("a filter-less run gets isolate, parallel and the suite path", () => {
+    expect(resolveBunTestArgs([])).toEqual(["--isolate", "--parallel", "./tests/"]);
+  });
+
+  test("a file filter keeps isolate and parallel but no suite path", () => {
+    expect(resolveBunTestArgs(["tests/foo.test.ts"]))
+      .toEqual(["--isolate", "--parallel", "tests/foo.test.ts"]);
+  });
+
+  test("a caller-supplied concurrency is left alone", () => {
+    expect(resolveBunTestArgs(["--parallel=2"]))
+      .toEqual(["--isolate", "--parallel=2", "./tests/"]);
+    expect(resolveBunTestArgs(["--parallel"]))
+      .toEqual(["--isolate", "--parallel", "./tests/"]);
+  });
+
+  test("option-only arguments still count as a full suite run", () => {
+    expect(resolveBunTestArgs(["--timeout=30000"]))
+      .toEqual(["--isolate", "--parallel", "--timeout=30000", "./tests/"]);
+  });
 });

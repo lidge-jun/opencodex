@@ -59,6 +59,33 @@ export function createIsolatedTestEnvironment(
   };
 }
 
+function hasCliFlag(requested: string[], name: string): boolean {
+  return requested.some(arg => arg === name || arg.startsWith(`${name}=`));
+}
+
+/** True for a filter-less `bun run test`. `--timeout` / `--dots` / `--parallel=N` still count. */
+function isFullSuiteRun(requested: string[]): boolean {
+  return !requested.some(arg => arg !== "-" && !arg.startsWith("-"));
+}
+
+/**
+ * Default `bun test` argv for this repo.
+ *
+ * `--isolate` keeps a fresh global per file, and is the substring the exclusive-run pgrep
+ * matches. `--parallel` is what makes the suite finishable: with isolate alone Bun re-evaluates
+ * the module graph once per file on a single core, so past ~900 files the run stops looking slow
+ * and starts looking hung — measured here at 1 h 29 m with zero output, ~57 % CPU and 8.5 MB RSS,
+ * against ~110-190 s for the identical suite with `--parallel`. A caller-supplied `--parallel=N`
+ * is left alone.
+ */
+export function resolveBunTestArgs(requested: string[]): string[] {
+  const args = ["--isolate"];
+  if (!hasCliFlag(requested, "--parallel")) args.push("--parallel");
+  args.push(...requested);
+  if (isFullSuiteRun(requested)) args.push("./tests/");
+  return args;
+}
+
 /**
  * Other `bun test` runners already on this machine.
  *
@@ -141,7 +168,7 @@ if (import.meta.main) {
     await waitForExclusiveRun(process.pid);
     const startedAt = Date.now();
     const child = Bun.spawnSync(
-      [process.execPath, "test", "--isolate", ...(requestedTests.length > 0 ? requestedTests : ["./tests/"])],
+      [process.execPath, "test", ...resolveBunTestArgs(requestedTests)],
       {
         env: isolated.env,
         stdin: "inherit",
@@ -152,7 +179,7 @@ if (import.meta.main) {
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     if (requestedTests.length === 0 && elapsedSeconds > 600) {
       console.warn(
-        `[test] the suite took ${elapsedSeconds}s; it normally runs in about 210s on an idle machine. `
+        `[test] the suite took ${elapsedSeconds}s; with --parallel it should finish in a few minutes on an idle machine. `
         + "Check for another test runner, a busy CPU, or a test that started polling something real.",
       );
     }
