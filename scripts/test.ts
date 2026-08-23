@@ -136,6 +136,8 @@ const BUN_TEST_OPTIONS_REQUIRING_VALUES = new Set([
   "--jsx-runtime",
   "--env-file",
   "--cwd",
+  "-c",
+  "--config",
 ]);
 
 /** True for a filter-less `bun run test`. `--timeout` / `--dots` / `--parallel=N` still count. */

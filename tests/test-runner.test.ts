@@ -114,6 +114,10 @@ describe("bun test argv", () => {
         ".bun-test-timings/current.json",
         "./tests/",
       ]);
+    for (const configFlag of ["-c", "--config"]) {
+      expect(resolveBunTestArgs([configFlag, "ci.bunfig.toml"]))
+        .toEqual(["--isolate", "--parallel", configFlag, "ci.bunfig.toml", "./tests/"]);
+    }
     expect(resolveBunTestArgs(["-t", "serial test"])).toEqual([
       "--isolate",
       "--parallel",
@@ -131,7 +135,11 @@ describe("bun test argv", () => {
   test("the wrapper passes parallel execution through to bun", () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "opencodex-test-runner-"));
     const fixturePath = join(fixtureRoot, "parallel-smoke.test.ts");
-    writeFileSync(fixturePath, 'import { test } from "bun:test"; test("smoke", () => {});\n');
+    const markerPath = join(fixtureRoot, "executed.marker");
+    writeFileSync(
+      fixturePath,
+      `import { test } from "bun:test"; import { writeFileSync } from "node:fs"; test("smoke", () => writeFileSync(${JSON.stringify(markerPath)}, "executed"));\n`,
+    );
     try {
       const result = Bun.spawnSync([
         process.execPath,
@@ -148,6 +156,7 @@ describe("bun test argv", () => {
         + new TextDecoder().decode(result.stderr);
       expect(result.exitCode).toBe(0);
       expect(output).toContain("PARALLEL");
+      expect(existsSync(markerPath)).toBe(true);
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
