@@ -325,14 +325,15 @@ describe("native u64 fields advertised as number (#2316)", () => {
       .toBe('{"timeout_ms":"120000"}');
   });
 
-  test("a field NOT on the allowlist keeps its float even when integral", () => {
-    // Deliberate scope proof: only names with a captured u64 rejection are repaired.
+  test("Cursor's sibling field stays unchanged even with wait identity", () => {
+    // Cursor uses yield_time_ms (underscore), not wait's yield-time_ms (hyphen).
+    // Keep this explicit scope proof from #2316: field names are never broadened globally.
     const others = {
       type: "object",
       properties: { yield_time_ms: { type: "number" }, priority: { type: "number" } },
     };
     const raw = '{"yield_time_ms":60000.0,"priority":2.0}';
-    expect(coerceIntegerToolArguments(raw, others)).toBe(raw);
+    expect(coerceIntegerToolArguments(raw, others, "wait")).toBe(raw);
   });
 
   test("the namespaced wait_agent call is repaired through the real bridge", async () => {
@@ -363,3 +364,77 @@ describe("native u64 fields advertised as number (#2316)", () => {
   });
 });
 
+const CODEX_DESKTOP_WAIT_SCHEMA = {
+  type: "object",
+  properties: {
+    "yield-time_ms": { type: "number" },
+    max_tokens: { type: "number" },
+  },
+};
+
+const WAIT_SCOPE_SCHEMAS = new Map<string, Record<string, unknown>>([
+  ["wait", CODEX_DESKTOP_WAIT_SCHEMA],
+  ["other_tool", CODEX_DESKTOP_WAIT_SCHEMA],
+  ["cursor_wait", CODEX_DESKTOP_WAIT_SCHEMA],
+]);
+
+const WAIT_SCOPE_NAMESPACE_MAP = new Map([
+  ["cursor_wait", { namespace: "cursor", name: "wait" }],
+]);
+
+const WAIT_SCOPE_EVENTS: AdapterEvent[] = [
+  { type: "tool_call_start", id: "call_wait", name: "wait" },
+  { type: "tool_call_delta", arguments: '{"yield-time_ms":120000.0,"max_tokens":8000.0}' },
+  { type: "tool_call_end", id: "call_wait" },
+  { type: "tool_call_start", id: "call_fractional", name: "wait" },
+  { type: "tool_call_delta", arguments: '{"yield-time_ms":1.5,"max_tokens":1.5}' },
+  { type: "tool_call_end", id: "call_fractional" },
+  { type: "tool_call_start", id: "call_other", name: "other_tool" },
+  { type: "tool_call_delta", arguments: '{"yield-time_ms":120000.0,"max_tokens":8000.0}' },
+  { type: "tool_call_end", id: "call_other" },
+  { type: "tool_call_start", id: "call_namespaced", name: "cursor_wait" },
+  { type: "tool_call_delta", arguments: '{"yield-time_ms":120000.0,"max_tokens":8000.0}' },
+  { type: "tool_call_end", id: "call_namespaced" },
+  { type: "done" },
+];
+
+describe("Codex Desktop wait native integers (#2443)", () => {
+  const expectedCalls = [
+    { name: "wait", namespace: undefined, arguments: '{"yield-time_ms":120000,"max_tokens":8000}' },
+    { name: "wait", namespace: undefined, arguments: '{"yield-time_ms":1.5,"max_tokens":1.5}' },
+    { name: "other_tool", namespace: undefined, arguments: '{"yield-time_ms":120000.0,"max_tokens":8000.0}' },
+    { name: "wait", namespace: "cursor", arguments: '{"yield-time_ms":120000.0,"max_tokens":8000.0}' },
+  ];
+
+  test("streaming bridge scopes the repair to the bare wait tool", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(
+      replay(WAIT_SCOPE_EVENTS),
+      "grok-4.6",
+      WAIT_SCOPE_NAMESPACE_MAP,
+      undefined,
+      undefined,
+      undefined,
+      2_000,
+      { toolParameterSchemas: WAIT_SCOPE_SCHEMAS },
+    ));
+    const calls = frames
+      .filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>)
+      .filter(item => item.type === "function_call")
+      .map(item => ({ name: item.name, namespace: item.namespace, arguments: item.arguments }));
+
+    expect(calls).toEqual(expectedCalls);
+  });
+
+  test("non-streaming bridge scopes the repair to the bare wait tool", () => {
+    const body = buildResponseJSON(WAIT_SCOPE_EVENTS, "grok-4.6", {
+      toolNsMap: WAIT_SCOPE_NAMESPACE_MAP,
+      toolParameterSchemas: WAIT_SCOPE_SCHEMAS,
+    }) as Record<string, unknown>;
+    const calls = (body.output as Record<string, unknown>[])
+      .filter(item => item.type === "function_call")
+      .map(item => ({ name: item.name, namespace: item.namespace, arguments: item.arguments }));
+
+    expect(calls).toEqual(expectedCalls);
+  });
+});
