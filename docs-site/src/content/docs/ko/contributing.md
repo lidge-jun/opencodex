@@ -137,6 +137,20 @@ OAuth 설정 seed에 공급합니다. `enrichProviderFromCatalog()`는 모델 �
 `runTurn`을 사용하세요. `tests/` 아래에 집중된 테스트를 추가하고, public package API에 포함되는
 factory라면 `src/index.ts`에서도 export합니다.
 
+### 호환성 주장 추가하기
+
+호환성 주장은 `src/compatibility/`에 둡니다. 주장의 범위는 어댑터보다 좁으며, 검증한 정확한 프로바이더,
+정규화된 upstream base URL, 인증 모드, inbound/upstream 프로토콜과 model id를 지정합니다. 같은 어댑터나
+wire format을 쓴다는 이유만으로 다른 프로바이더 또는 목적지에 주장을 복사하지 마세요.
+
+버전이 지정된 disposition은 `passthrough`, `translated`, `degraded`, `unsupported` 중 하나를 사용합니다.
+`passthrough`가 아닌 주장에는 구체적인 제한을 적고, fixture 기반 주장에는 이를 입증하는 정확한 assertion id를
+명시하세요. 비밀정보가 없는 request vector를 `tests/fixtures/compatibility/`에 추가하고 production adapter를
+대상으로 실행하는 집중 테스트를 작성합니다.
+
+호환성 매니페스트는 수동적인 데이터입니다. 일반 router, Responses handler, server startup path가 manifest
+catalog를 import하거나 Compatibility Lab을 활성화해서는 안 됩니다.
+
 ## 완료를 주장하기 전에 검증하기
 
 변경을 증명하는 가장 좁은 명령부터 실행하세요. 타입은 `bun run typecheck`, 동작은 집중된
