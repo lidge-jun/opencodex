@@ -24,6 +24,7 @@ import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignat
 import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "./google-antigravity-tools";
 import { canonicalAntigravityHttpsHost, isAntigravityHttpsHost } from "./google-antigravity-hosts";
 import { compileGoogleWireBody } from "./google-wire-compiler";
+import { sanitizeGeminiToolParameters } from "./google-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
@@ -430,6 +431,30 @@ function isImageCapableModel(modelId: string): boolean {
   return IMAGE_CAPABLE_MODELS.has(modelId);
 }
 
+function applyGeminiStructuredOutput(
+  generationConfig: Record<string, unknown>,
+  parsed: OcxParsedRequest,
+  wireModelId: string,
+): void {
+  const textFormat = parsed.options.textFormat;
+  if (!textFormat) return;
+  if (Array.isArray(parsed.context.tools) && parsed.context.tools.length > 0) return;
+  if (/claude/i.test(wireModelId) || /claude/i.test(parsed.modelId)) return;
+  if (isImageCapableModel(parsed.modelId)) return;
+
+  generationConfig.responseMimeType = "application/json";
+  if (textFormat.type !== "json_schema" || textFormat.schema === undefined) return;
+
+  const sanitized = sanitizeGeminiToolParameters(textFormat.schema);
+  const props = sanitized.properties;
+  const propKeys = props !== null && typeof props === "object" && !Array.isArray(props)
+    ? Object.keys(props)
+    : [];
+  const required = Array.isArray(sanitized.required) ? sanitized.required : [];
+  if (propKeys.length === 0 && required.length === 0) return;
+  generationConfig.responseSchema = sanitized;
+}
+
 /**
  * Model-visible markdown link for a materialized artifact. Uses the authenticated
  * opaque HTTP route so remote/container clients can fetch the image without host
@@ -711,6 +736,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }
+      applyGeminiStructuredOutput(generationConfig, parsed, routedModelId);
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
       const ccaAlwaysSse = provider.googleMode === "cloud-code-assist";

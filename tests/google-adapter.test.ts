@@ -465,3 +465,71 @@ describe("google adapter — direct -tiered wire renames", () => {
     }
   });
 });
+
+describe("google adapter — structured output", () => {
+  function parsedWithTextFormat(
+    modelId: string,
+    textFormat: Record<string, unknown>,
+    tools?: unknown[],
+  ): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: { textFormat },
+      context: { messages: [{ role: "user", content: "return JSON" }], tools },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("AI Studio json_schema lowers to JSON mode with a sanitized responseSchema", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", {
+      type: "json_schema",
+      name: "answer",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string", additionalProperties: false } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+    }));
+
+    expect(body.generationConfig).toEqual({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      },
+    });
+  });
+
+  test("AI Studio json_object lowers to responseMimeType only", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", { type: "json_object" }));
+
+    expect(body.generationConfig).toEqual({ responseMimeType: "application/json" });
+  });
+
+  test("function tools suppress Gemini JSON mode", async () => {
+    const body = await geminiBody(parsedWithTextFormat(
+      "gemini-3-pro",
+      { type: "json_object" },
+      [{ name: "lookup", parameters: { type: "object" } }],
+    ));
+
+    expect(body.generationConfig?.responseMimeType).toBeUndefined();
+  });
+
+  test("schema-less json_schema still lowers to responseMimeType", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", {
+      type: "json_schema",
+      name: "answer",
+    }));
+
+    expect(body.generationConfig).toEqual({ responseMimeType: "application/json" });
+  });
+
+  test("image-capable models suppress Gemini JSON mode", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3.1-flash-image", { type: "json_object" }));
+
+    expect(body.generationConfig?.responseMimeType).toBeUndefined();
+  });
+});

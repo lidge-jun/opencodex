@@ -1053,3 +1053,46 @@ describe("canonicalAntigravityUsageModel", () => {
     expect(canonicalAntigravityUsageModel("unknown-model")).toBe("unknown-model");
   });
 });
+
+describe("antigravity structured output", () => {
+  function parsedWithTextFormat(modelId: string, textFormat: Record<string, unknown>): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      context: { messages: [{ role: "user", content: "return JSON" }], systemPrompt: [], tools: [] },
+      options: { textFormat },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("CCA Gemini lowers json_schema on request.generationConfig", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest(parsedWithTextFormat("gemini-3-pro", {
+      type: "json_schema",
+      name: "answer",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string", additionalProperties: false } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+    }));
+    const envelope = JSON.parse(request.body);
+
+    expect(envelope.request.generationConfig).toEqual({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      },
+    });
+  });
+
+  test("CCA Claude suppresses json_object responseMimeType", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest(parsedWithTextFormat("claude-sonnet-4-6", {
+      type: "json_object",
+    }));
+    const envelope = JSON.parse(request.body);
+
+    expect(envelope.request.generationConfig?.responseMimeType).toBeUndefined();
+  });
+});
