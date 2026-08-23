@@ -104,6 +104,39 @@ describe("Responses namespace tool compatibility", () => {
     expect(directCollision.tool_choice.name).toBe("read");
   });
 
+  test("only arms response aliases authorized by tool_choice", () => {
+    const tools = [{
+      type: "namespace",
+      name: "collaboration",
+      tools: [
+        { type: "function", name: "safe" },
+        { type: "function", name: "excluded" },
+      ],
+    }];
+
+    const allowed = rewriteRoutedNamespaceToolsForUpstream({
+      tools,
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "required",
+        tools: [{ type: "function", namespace: "collaboration", name: "safe" }],
+      },
+    });
+    expect([...allowed.aliases]).toEqual([
+      ["collaboration__safe", { namespace: "collaboration", name: "safe" }],
+    ]);
+    expect(restoreRoutedNamespaceCalls({
+      type: "function_call",
+      name: "collaboration__excluded",
+    }, allowed.aliases).changed).toBe(false);
+
+    expect(rewriteRoutedNamespaceToolsForUpstream({
+      tools,
+      tool_choice: { type: "function", namespace: "collaboration", name: "safe" },
+    }).aliases.has("collaboration__excluded")).toBe(false);
+    expect(rewriteRoutedNamespaceToolsForUpstream({ tools, tool_choice: "none" }).aliases.size).toBe(0);
+  });
+
   test("fails closed when flattening would collide with a declared wire name", () => {
     expect(() => rewriteRoutedNamespaceToolsForUpstream({
       tools: [

@@ -239,6 +239,38 @@ function rewriteToolChoice(value: unknown, plan: NamespaceRewritePlan): unknown 
   return changed ? { ...value, tools } : value;
 }
 
+/**
+ * Keep response restoration inside the caller's per-turn tool authorization boundary. The
+ * upstream sees every flattened declaration even when `tool_choice` narrows the tools it may call,
+ * so its output cannot be trusted merely because a wire name appeared in that catalog.
+ */
+function authorizedAliases(
+  aliases: Map<string, RoutedNamespaceToolIdentity>,
+  toolChoice: unknown,
+): Map<string, RoutedNamespaceToolIdentity> {
+  if (toolChoice === undefined || toolChoice === "auto" || toolChoice === "required") return aliases;
+  if (toolChoice === "none" || !isPlainObject(toolChoice)) return new Map();
+
+  let authorizedNames: Set<string>;
+  if (
+    (toolChoice.type === "function" || toolChoice.type === "custom")
+    && typeof toolChoice.name === "string"
+  ) {
+    authorizedNames = new Set([toolChoice.name]);
+  } else if (toolChoice.type === "allowed_tools" && Array.isArray(toolChoice.tools)) {
+    authorizedNames = new Set(
+      toolChoice.tools
+        .filter(tool => isPlainObject(tool) && typeof tool.name === "string")
+        .map(tool => tool.name as string),
+    );
+  } else {
+    // An explicit selector for another tool kind does not authorize a client namespace call.
+    return new Map();
+  }
+
+  return new Map([...aliases].filter(([wireName]) => authorizedNames.has(wireName)));
+}
+
 function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Set<string>): unknown {
   if (!isPlainObject(item)) return item;
   if (item.type === "additional_tools" && Array.isArray(item.tools)) {
@@ -292,7 +324,7 @@ export function rewriteRoutedNamespaceToolsForUpstream(body: unknown): {
       ...(input !== body.input ? { input } : {}),
       ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
     },
-    aliases: plan.aliases,
+    aliases: authorizedAliases(plan.aliases, toolChoice),
   };
 }
 
