@@ -92,6 +92,28 @@ function decideForkAutoRelease({
   return { action: "dispatch" };
 }
 
+function decideFromEnv(env = process.env) {
+  const input = {
+    eventName: env.EVENT_NAME,
+    workflowName: env.WORKFLOW_NAME,
+    conclusion: env.CONCLUSION,
+    headBranch: env.HEAD_BRANCH,
+    headSha: env.HEAD_SHA,
+    liveMainSha: env.LIVE_MAIN_SHA,
+    packageName: env.PACKAGE_NAME,
+    packageVersion: env.PACKAGE_VERSION,
+  };
+  if (Object.prototype.hasOwnProperty.call(env, "VERSION_ON_NPM")) {
+    input.versionOnNpm = env.VERSION_ON_NPM;
+  }
+  return decideForkAutoRelease(input);
+}
+
+if (require.main === module) {
+  process.stdout.write(JSON.stringify(decideFromEnv()));
+}
+
 module.exports = {
   decideForkAutoRelease,
+  decideFromEnv,
 };

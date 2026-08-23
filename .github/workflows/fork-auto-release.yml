@@ -49,22 +49,8 @@ jobs:
           LIVE_MAIN_SHA="$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')"
           export PACKAGE_NAME PACKAGE_VERSION LIVE_MAIN_SHA
 
-          initial_decision="$(
-            node <<'NODE'
-            const { decideForkAutoRelease } = require("./.github/scripts/fork-auto-release.cjs");
-            const result = decideForkAutoRelease({
-              eventName: process.env.EVENT_NAME,
-              workflowName: process.env.WORKFLOW_NAME,
-              conclusion: process.env.CONCLUSION,
-              headBranch: process.env.HEAD_BRANCH,
-              headSha: process.env.HEAD_SHA,
-              liveMainSha: process.env.LIVE_MAIN_SHA,
-              packageName: process.env.PACKAGE_NAME,
-              packageVersion: process.env.PACKAGE_VERSION,
-            });
-            process.stdout.write(JSON.stringify(result));
-            NODE
-          )"
+          # Indented heredocs in this step never terminate; call the env CLI instead.
+          initial_decision="$(node .github/scripts/fork-auto-release.cjs)"
 
           if [ "$(node -p "JSON.parse(process.argv[1]).action" "$initial_decision")" = "skip" ]; then
             node -e 'console.log(`::notice::${JSON.parse(process.argv[1]).reason}`)' "$initial_decision"
@@ -86,23 +72,7 @@ jobs:
           fi
           export VERSION_ON_NPM
 
-          final_decision="$(
-            node <<'NODE'
-            const { decideForkAutoRelease } = require("./.github/scripts/fork-auto-release.cjs");
-            const result = decideForkAutoRelease({
-              eventName: process.env.EVENT_NAME,
-              workflowName: process.env.WORKFLOW_NAME,
-              conclusion: process.env.CONCLUSION,
-              headBranch: process.env.HEAD_BRANCH,
-              headSha: process.env.HEAD_SHA,
-              liveMainSha: process.env.LIVE_MAIN_SHA,
-              packageName: process.env.PACKAGE_NAME,
-              packageVersion: process.env.PACKAGE_VERSION,
-              versionOnNpm: process.env.VERSION_ON_NPM,
-            });
-            process.stdout.write(JSON.stringify(result));
-            NODE
-          )"
+          final_decision="$(node .github/scripts/fork-auto-release.cjs)"
           if [ "$(node -p "JSON.parse(process.argv[1]).action" "$final_decision")" = "skip" ]; then
             node -e 'console.log(`::notice::${JSON.parse(process.argv[1]).reason}`)' "$final_decision"
             echo "dispatch=false" >> "$GITHUB_OUTPUT"

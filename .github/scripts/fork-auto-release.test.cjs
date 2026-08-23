@@ -57,3 +57,49 @@ describe("fork auto-release decision", () => {
     );
   });
 });
+
+describe("fork auto-release env CLI", () => {
+  const { spawnSync } = require("node:child_process");
+  const { join } = require("node:path");
+  const script = join(__dirname, "fork-auto-release.cjs");
+
+  function runCli(env) {
+    return spawnSync(process.execPath, [script], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+    });
+  }
+
+  it("prints dispatch JSON from env vars without a node heredoc", () => {
+    const result = runCli({
+      EVENT_NAME: "workflow_run",
+      WORKFLOW_NAME: "Cross-platform CI",
+      CONCLUSION: "success",
+      HEAD_BRANCH: "main",
+      HEAD_SHA: SHA,
+      LIVE_MAIN_SHA: SHA,
+      PACKAGE_NAME: "@yansigit/opencodex",
+      PACKAGE_VERSION: "2.32.0",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { action: "dispatch" });
+  });
+
+  it("treats VERSION_ON_NPM as already published when set", () => {
+    const result = runCli({
+      EVENT_NAME: "workflow_run",
+      WORKFLOW_NAME: "Cross-platform CI",
+      CONCLUSION: "success",
+      HEAD_BRANCH: "main",
+      HEAD_SHA: SHA,
+      LIVE_MAIN_SHA: SHA,
+      PACKAGE_NAME: "@yansigit/opencodex",
+      PACKAGE_VERSION: "2.32.0",
+      VERSION_ON_NPM: "2.32.0",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.action, "skip");
+    assert.match(parsed.reason, /already published/);
+  });
+});

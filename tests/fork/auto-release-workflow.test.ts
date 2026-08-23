@@ -83,4 +83,11 @@ describe("fork auto-release workflow contract", () => {
     expect(workflowText).toContain("waitForSuccessfulCi");
     expect(workflowText).toContain("service paths");
   });
+
+  // Indented `node <<` inside `run: |` never sees a column-0 terminator, so bash
+  // treats the rest of the step as the heredoc and exits 2 before npm view.
+  test("decides from the env CLI instead of a nested node heredoc", () => {
+    expect(workflowText).not.toMatch(/^\s*node <</m);
+    expect(workflowText).toContain("node .github/scripts/fork-auto-release.cjs");
+  });
 });
