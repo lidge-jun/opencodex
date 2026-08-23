@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "id": "openai-codex-forward-gpt56-sol-v1",
+  "manifestId": "openai.codex-forward.gpt-5-6-sol.responses",
+  "cases": [
+    {
+      "id": "field-contract",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "input": "ping",
+        "previous_response_id": "resp_fixture",
+        "stream": true,
+        "store": false,
+        "max_output_tokens": 32000,
+        "metadata": { "fixture": "not-forwarded" },
+        "reasoning": { "effort": "low" },
+        "prompt_cache_key": "project-cache-v1",
+        "prompt_cache_retention": "24h",
+        "tools": [
+          {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": { "type": "grammar", "syntax": "lark" }
+          }
+        ]
+      },
+      "assertions": [
+        {
+          "id": "custom-tool-preserved",
+          "operator": "equals",
+          "path": "/tools/0",
+          "expected": {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": { "type": "grammar", "syntax": "lark" }
+          }
+        },
+        { "id": "max-output-tokens-removed", "operator": "absent", "path": "/max_output_tokens" },
+        { "id": "metadata-removed", "operator": "absent", "path": "/metadata" },
+        { "id": "previous-response-id-removed", "operator": "absent", "path": "/previous_response_id" },
+        { "id": "prompt-cache-key-preserved", "operator": "equals", "path": "/prompt_cache_key", "expected": "project-cache-v1" },
+        { "id": "prompt-cache-retention-removed", "operator": "absent", "path": "/prompt_cache_retention" }
+      ]
+    },
+    {
+      "id": "orphan-tool-output",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "input": [
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_fixture",
+            "output": "fixture output"
+          }
+        ],
+        "previous_response_id": "resp_missing",
+        "stream": true
+      },
+      "assertions": [
+        {
+          "id": "orphan-output-converted",
+          "operator": "equals",
+          "path": "/input/0",
+          "expected": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "[tool output for call_fixture]\nfixture output"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

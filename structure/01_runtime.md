@@ -25,6 +25,7 @@ there. Feature code is grouped by responsibility:
 | Data plane | `src/adapters/`, `src/responses/`, `src/chat/`, `src/claude/`, `src/grok/`, `src/images/`, `src/vision/`, `src/web-search/` |
 | Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
+| Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/` |
 
 `src/generated/` is build output committed for the runtime; it is not edited by hand.

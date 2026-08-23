@@ -198,6 +198,19 @@ streaming/tool calls; use `fetchResponse` only when the adapter owns transport r
 for a genuinely bidirectional transport such as Cursor. Add focused tests under `tests/` and export
 the factory from `src/index.ts` when it belongs to the public package API.
 
+### Adding a compatibility claim
+
+Compatibility claims live under `src/compatibility/`. A claim is narrower than an adapter: it names
+the exact provider, authentication mode, inbound protocol, upstream protocol, and model ids whose
+behavior was proved. Do not copy a claim to every provider using the same adapter.
+
+Use one of the versioned dispositions: `passthrough`, `translated`, `degraded`, or `unsupported`.
+Every non-passthrough claim must state its limitation, and every fixture-backed claim must name the
+exact assertion ids that prove it. Add the secret-free request vector under
+`tests/fixtures/compatibility/` and execute it against the production adapter in a focused test.
+Compatibility manifests are passive data: the ordinary router, Responses handler, and server
+startup path must not import the manifest catalog or activate Compatibility Lab.
+
 ## Verify before you claim done
 
 Run the narrowest command that proves your change — `bun run typecheck` for types, a focused
