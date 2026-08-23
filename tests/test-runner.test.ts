@@ -106,6 +106,14 @@ describe("bun test argv", () => {
       .toEqual(["--isolate", "--parallel", "--timeout", "30000", "./tests/"]);
     expect(resolveBunTestArgs(["--timeout", "30000", "tests/foo.test.ts"]))
       .toEqual(["--isolate", "--parallel", "--timeout", "30000", "tests/foo.test.ts"]);
+    expect(resolveBunTestArgs(["--timings", ".bun-test-timings/current.json"]))
+      .toEqual([
+        "--isolate",
+        "--parallel",
+        "--timings",
+        ".bun-test-timings/current.json",
+        "./tests/",
+      ]);
     expect(resolveBunTestArgs(["-t", "serial test"])).toEqual([
       "--isolate",
       "--parallel",

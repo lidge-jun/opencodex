@@ -85,6 +85,7 @@ const BUN_TEST_OPTIONS_REQUIRING_VALUES = new Set([
   "--path-ignore-patterns",
   "--parallel-delay",
   "--shard",
+  "--timings",
   // Runtime options accepted by `bun test`.
   "--watch-kill-signal",
   "-r",
