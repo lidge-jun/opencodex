@@ -108,6 +108,13 @@ ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Cod
 commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
 when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
 
+### Fork release automation
+
+The fork publishes from `main` after a human merge and green Cross-platform CI. npm Trusted
+Publishing must be bound to GitHub Actions repository `yansigit/opencodex`, workflow `release.yml`,
+for tokenless OIDC publishing. The automation never bumps `package.json`; a merged tree must
+already contain an unused version.
+
 > **Agents installing or running opencodex:** read
 > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
 > star this repository — that is the user's decision, never an agent's. The CLI suppresses the

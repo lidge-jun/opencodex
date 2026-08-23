@@ -416,6 +416,7 @@ describe("GitHub Actions hardening", () => {
       ".gitattributes",
       ".github/workflows/ci.yml",
       ".github/workflows/enforce-pr-target.yml",
+      ".github/workflows/fork-auto-release.yml",
       ".github/workflows/release.yml",
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",

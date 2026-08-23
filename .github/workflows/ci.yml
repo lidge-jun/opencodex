@@ -41,6 +41,7 @@ on:
       - "README.md"
       - "LICENSE"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/fork-auto-release.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
       - ".github/workflows/stale-needs-info.yml"
@@ -190,6 +191,7 @@ jobs:
               - 'README.md'
               - 'LICENSE'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/fork-auto-release.yml'
               - '.github/workflows/release.yml'
               - '.github/workflows/enforce-pr-target.yml'
               - '.github/workflows/stale-needs-info.yml'
