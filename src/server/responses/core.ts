@@ -325,6 +325,7 @@ import {
   emptyCompletionRetryEnabled,
   guardEmptyCompletionEventStream,
 } from "./empty-completion-guard";
+import { preflightComboStreamResponse } from "./combo-stream-preflight";
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -1874,6 +1875,7 @@ export async function handleComboResponses(
     });
     let resolvedAuth: CodexAuthContext | undefined;
     let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+    let terminalOutcomeRecorded = false;
     const started = Date.now();
     const attempt = beginRequestAttempt(
       (logCtx.attempts?.length ?? 0) + 1,
@@ -1920,7 +1922,15 @@ export async function handleComboResponses(
           options.onFirstOutput?.();
         },
         onCodexAuthContextResolved: value => { resolvedAuth = value; },
-        setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
+        setTerminalOutcomeRecorder: value => {
+          terminalRecorder = value
+            ? (status, httpStatusOverride) => {
+              if (terminalOutcomeRecorded) return;
+              terminalOutcomeRecorded = true;
+              value(status, httpStatusOverride);
+            }
+            : undefined;
+        },
         onConsumedComboFailure: value => { consumedChildFailure = value; },
         onNativePassthroughTerminal: callbackGate.onTerminal,
         onNativePassthroughCancel: callbackGate.onCancel,
@@ -1938,6 +1948,31 @@ export async function handleComboResponses(
       callbackGate.discard();
       retainCancelledAttempt();
       return clientCancelledResponse();
+    }
+
+    if (response.ok) {
+      const nativePassthrough = isNativePassthroughSseResponse(response);
+      const eagerRelay = isEagerRelaySseResponse(response);
+      let preflight;
+      try {
+        preflight = await preflightComboStreamResponse(response, childLog);
+      } catch (error) {
+        callbackGate.discard();
+        if (options.abortSignal?.aborted) {
+          retainCancelledAttempt();
+          return clientCancelledResponse();
+        }
+        throw error;
+      }
+      if (preflight.kind === "failed") {
+        callbackGate.discard();
+        terminalRecorder?.("failed", preflight.response.status);
+        response = preflight.response;
+      } else {
+        response = preflight.response;
+        if (nativePassthrough) markNativePassthroughSseResponse(response);
+        if (eagerRelay) markEagerRelaySseResponse(response);
+      }
     }
 
     if (response.ok) {
@@ -1995,7 +2030,7 @@ export async function handleComboResponses(
     );
     finishRequestAttempt(
       attempt,
-      response.status,
+      failure.response.status,
       Date.now() - started,
       failure.usage,
     );
@@ -2009,7 +2044,7 @@ export async function handleComboResponses(
       return lastFailure;
     }
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
+      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status} after ${Date.now() - started}ms`,
     );
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,

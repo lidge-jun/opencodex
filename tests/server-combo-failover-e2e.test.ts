@@ -202,6 +202,17 @@ function chatStream(text: string): Response {
   return new Response(frames, { headers: { "content-type": "text/event-stream" } });
 }
 
+function chatErrorStream(message: string, prefix?: string): Response {
+  const frames = [
+    ...(prefix
+      ? [`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: prefix }, finish_reason: null }] })}\n\n`]
+      : []),
+    `data: ${JSON.stringify({ error: { type: "server_error", code: "upstream_server_error", message } })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
+}
+
 function responsesSuccess(text: string, model = "responses-model"): Record<string, unknown> {
   return {
     id: `resp-${model}`,
@@ -445,6 +456,109 @@ describe("server combo failover 030 activation matrix", () => {
     expect(streaming.status).toBe(200);
     expect(JSON.stringify(await collectSse(streaming))).toContain("stream backup");
     expect(hits).toEqual(["a:false", "b:false", "a:true", "b:true"]);
+  });
+
+  test("zero-output terminal SSE failure hops before committing the child stream", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return chatErrorStream("service busy, please try again later");
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatStream("stream backup");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await postLogged(config, { stream: true });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("stream backup");
+    expect(hits).toEqual(["a", "b"]);
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        resolvedModel: "m2",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 502 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+      expect(receipt.attempts[0]).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
+  test("terminal SSE failure after output stays on the first target and never replays", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return chatErrorStream("late service failure", "already visible");
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatStream("must not replay");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await post(config, { stream: true });
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response);
+    expect(JSON.stringify(frames)).toContain("already visible");
+    expect(frames.some(frame => frame.data.type === "response.failed")).toBe(true);
+    expect(JSON.stringify(frames)).not.toContain("must not replay");
+    expect(hits).toEqual(["a"]);
+  });
+
+  test("model-lifecycle 410 hops once and cools only the dead combo target", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return Response.json({
+        error: {
+          type: "invalid_request_error",
+          code: "model_end_of_life",
+          message: "The model 'm1' has reached its end of life and is no longer available.",
+        },
+      }, { status: 410 });
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatSuccess("lifecycle backup", "m2");
+    });
+    const targets = [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ];
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, targets);
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("lifecycle backup");
+    expect(isComboTargetInCooldown("free", targets[0]!)).toBe(true);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt.attempts).toMatchObject([
+        { ordinal: 1, provider: "a", model: "m1", status: 410 },
+        { ordinal: 2, provider: "b", model: "m2", status: 200 },
+      ]);
+    }
+
+    clearComboSelectionState();
+    const retry = await post(config);
+    expect(retry.status).toBe(200);
+    expect(await retry.text()).toContain("lifecycle backup");
+    expect(hits).toEqual(["a", "b", "b"]);
   });
 
   test("persists one logical A503 to B200 request with ordered physical usage", async () => {

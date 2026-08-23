@@ -1158,6 +1158,39 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
+## Combo streaming commit boundary
+
+An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's
+downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts`, which owns one
+reader and buffers only until one of these boundaries:
+
+- a non-control Responses event begins client-visible output or a tool/action item, after which the
+  target is committed and cross-target replay is forbidden;
+- a `response.failed` terminal arrives first, in which case the terminal is converted back through
+  the ordinary bounded combo-failure classifier and may advance to the next declared target;
+- a completed/incomplete terminal or the aggregate preflight byte cap is reached, in which case the
+  current target is committed conservatively.
+
+The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
+relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
+logging retain their existing owners. A failed child keeps its physical attempt receipt and usage,
+while the successful child remains the logical request result.
+
+HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
+structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
+deprecated, sunset, decommissioned, or no longer available). An unrelated application-level 410 is
+not retried.
+
+```text
+[Decision Log]
+- 목적과 의도: Recover a failover combo from a provider-local SSE or model-lifecycle failure only while replay is provably free of duplicate client output and tool calls.
+- 기존 구현 및 제약 조건: The parent committed every HTTP-200 child before reading its SSE body, while terminal stream errors were classified only later by logging; generic 410 responses stopped the chain.
+- 검토한 주요 대안: Retry every failed stream, buffer the complete turn, inspect only HTTP status, or preflight a bounded prefix until an explicit output/terminal boundary.
+- 선택한 방식: Put the one-reader bounded preflight in a dedicated module, commit on any non-control event, and treat only explicit model-lifecycle 410 evidence as target-local.
+- 다른 대안 대신 이 방식을 선택한 이유: Replaying after output can duplicate text or tools, full-turn buffering destroys streaming and grows memory, and making every 410 retryable hides caller/application errors.
+- 장점, 단점 및 영향: Zero-output provider failures can reach a healthy target with ordered receipts and cooldown; ambiguous or oversized pre-output streams keep the current fail-closed behavior instead of consuming unbounded memory.
+```
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

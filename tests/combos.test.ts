@@ -355,6 +355,9 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(403, '{"code":"origin_rejected"}')).toBe("stop");
     expect(comboFailureDecision(413, "request too large")).toBe("stop");
     expect(comboFailureDecision(409, "conflict")).toBe("stop");
+    expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
+    expect(comboFailureDecision(410, "The model has reached its end of life and is no longer available.")).toBe("hop");
+    expect(comboFailureDecision(410, "gone", { code: "model_retired" })).toBe("hop");
     expect(comboFailureDecision(499, "client cancelled")).toBe("stop");
     expect(comboFailureDecision(422, "invalid_api_key")).toBe("hop");
     // #1524: a LOCAL input-admission refusal means "this candidate cannot fit the request",
