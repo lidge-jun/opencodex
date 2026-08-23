@@ -65,13 +65,91 @@ function hasCliFlag(requested: string[], name: string): boolean {
   return wrapperArgs.some(arg => arg === name || arg.startsWith(`${name}=`));
 }
 
+// Bun 1.4.0 builds `bun test` options from its test, runtime, transpiler, and base tables.
+// Only required values consume the next argument. Optional values such as `--parallel=2`
+// must stay attached so a bare option cannot hide the positional filter that follows it.
+const BUN_TEST_OPTIONS_REQUIRING_VALUES = new Set([
+  // Test options.
+  "--timeout",
+  "--rerun-each",
+  "--retry",
+  "--seed",
+  "--coverage-reporter",
+  "--coverage-dir",
+  "-t",
+  "--test-name-pattern",
+  "--grep",
+  "--reporter",
+  "--reporter-outfile",
+  "--max-concurrency",
+  "--path-ignore-patterns",
+  "--parallel-delay",
+  "--shard",
+  // Runtime options accepted by `bun test`.
+  "--watch-kill-signal",
+  "-r",
+  "--preload",
+  "--require",
+  "--import",
+  "--cpu-prof-name",
+  "--cpu-prof-dir",
+  "--cpu-prof-interval",
+  "--heap-prof-name",
+  "--heap-prof-dir",
+  "--heap-prof-interval",
+  "--install",
+  "-e",
+  "--eval",
+  "-p",
+  "--print",
+  "--port",
+  "--origin",
+  "--conditions",
+  "--fetch-preconnect",
+  "--max-http-header-size",
+  "--dns-result-order",
+  "--redirect-warnings",
+  "--disable-warning",
+  "--title",
+  "--unhandled-rejections",
+  "--console-depth",
+  "--user-agent",
+  "--cron-title",
+  "--cron-period",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--stack-trace-limit",
+  // Transpiler and base options accepted by `bun test`.
+  "--main-fields",
+  "--extension-order",
+  "--tsconfig-override",
+  "-d",
+  "--define",
+  "--drop",
+  "--feature",
+  "-l",
+  "--loader",
+  "--jsx-factory",
+  "--jsx-fragment",
+  "--jsx-import-source",
+  "--jsx-runtime",
+  "--env-file",
+  "--cwd",
+]);
+
 /** True for a filter-less `bun run test`. `--timeout` / `--dots` / `--parallel=N` still count. */
 function isFullSuiteRun(requested: string[]): boolean {
   const delimiterIndex = requested.indexOf("--");
   const wrapperArgs = delimiterIndex === -1 ? requested : requested.slice(0, delimiterIndex);
   const passedThrough = delimiterIndex === -1 ? [] : requested.slice(delimiterIndex + 1);
-  return passedThrough.length === 0
-    && !wrapperArgs.some(arg => arg === "-" || !arg.startsWith("-"));
+  if (passedThrough.length > 0) return false;
+
+  for (let index = 0; index < wrapperArgs.length; index++) {
+    const arg = wrapperArgs[index];
+    if (arg === "-" || !arg.startsWith("-")) return false;
+    if (!arg.includes("=") && BUN_TEST_OPTIONS_REQUIRING_VALUES.has(arg)) index++;
+  }
+  return true;
 }
 
 /**

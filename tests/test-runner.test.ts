@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { createIsolatedTestEnvironment, resolveBunTestArgs } from "../scripts/test";
 import {
@@ -92,11 +93,26 @@ describe("bun test argv", () => {
       .toEqual(["--isolate", "--parallel=2", "./tests/"]);
     expect(resolveBunTestArgs(["--parallel"]))
       .toEqual(["--isolate", "--parallel", "./tests/"]);
+    expect(resolveBunTestArgs(["--parallel", "tests/foo.test.ts"]))
+      .toEqual(["--isolate", "--parallel", "tests/foo.test.ts"]);
+    expect(resolveBunTestArgs(["--parallel=2", "tests/foo.test.ts"]))
+      .toEqual(["--isolate", "--parallel=2", "tests/foo.test.ts"]);
   });
 
   test("option-only arguments still count as a full suite run", () => {
     expect(resolveBunTestArgs(["--timeout=30000"]))
       .toEqual(["--isolate", "--parallel", "--timeout=30000", "./tests/"]);
+    expect(resolveBunTestArgs(["--timeout", "30000"]))
+      .toEqual(["--isolate", "--parallel", "--timeout", "30000", "./tests/"]);
+    expect(resolveBunTestArgs(["--timeout", "30000", "tests/foo.test.ts"]))
+      .toEqual(["--isolate", "--parallel", "--timeout", "30000", "tests/foo.test.ts"]);
+    expect(resolveBunTestArgs(["-t", "serial test"])).toEqual([
+      "--isolate",
+      "--parallel",
+      "-t",
+      "serial test",
+      "./tests/",
+    ]);
   });
 
   test("arguments after the delimiter are passed through instead of parsed as wrapper flags", () => {
@@ -105,20 +121,27 @@ describe("bun test argv", () => {
   });
 
   test("the wrapper passes parallel execution through to bun", () => {
-    const result = Bun.spawnSync([
-      process.execPath,
-      join(import.meta.dir, "../scripts/test.ts"),
-      "--pass-with-no-tests",
-      join(import.meta.dir, "__no_matching_test_file__.test.ts"),
-    ], {
-      cwd: join(import.meta.dir, ".."),
-      env: { ...process.env, OCX_TEST_NO_QUEUE: "1" },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "opencodex-test-runner-"));
+    const fixturePath = join(fixtureRoot, "parallel-smoke.test.ts");
+    writeFileSync(fixturePath, 'import { test } from "bun:test"; test("smoke", () => {});\n');
+    try {
+      const result = Bun.spawnSync([
+        process.execPath,
+        join(import.meta.dir, "../scripts/test.ts"),
+        fixturePath,
+      ], {
+        cwd: join(import.meta.dir, ".."),
+        env: { ...process.env, OCX_TEST_NO_QUEUE: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
 
-    const output = new TextDecoder().decode(result.stdout)
-      + new TextDecoder().decode(result.stderr);
-    expect(output).toContain("PARALLEL");
+      const output = new TextDecoder().decode(result.stdout)
+        + new TextDecoder().decode(result.stderr);
+      expect(result.exitCode).toBe(0);
+      expect(output).toContain("PARALLEL");
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 });
