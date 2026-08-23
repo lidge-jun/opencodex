@@ -5,6 +5,14 @@
   "cases": [
     {
       "id": "field-contract",
+      "incomingHeaders": {
+        "authorization": "Bearer caller-stale-token",
+        "chatgpt-account-id": "caller-stale-account",
+        "openai-beta": "responses=experimental",
+        "originator": "codex_cli_rs",
+        "session_id": "fixture-session",
+        "x-not-forwarded": "must-not-cross"
+      },
       "request": {
         "model": "gpt-5.6-sol",
         "input": "ping",
@@ -26,10 +34,17 @@
         ]
       },
       "assertions": [
+        { "id": "canonical-url", "operator": "equals", "path": "/url", "expected": "https://chatgpt.com/backend-api/codex/responses" },
+        { "id": "selected-authorization", "operator": "equals", "path": "/headers/authorization", "expected": "Bearer fixture-runtime-token" },
+        { "id": "selected-account", "operator": "equals", "path": "/headers/chatgpt-account-id", "expected": "fixture-account" },
+        { "id": "openai-beta-preserved", "operator": "equals", "path": "/headers/openai-beta", "expected": "responses=experimental" },
+        { "id": "originator-preserved", "operator": "equals", "path": "/headers/originator", "expected": "codex_cli_rs" },
+        { "id": "session-id-preserved", "operator": "equals", "path": "/headers/session_id", "expected": "fixture-session" },
+        { "id": "unrelated-header-removed", "operator": "absent", "path": "/headers/x-not-forwarded" },
         {
           "id": "custom-tool-preserved",
           "operator": "equals",
-          "path": "/tools/0",
+          "path": "/body/tools/0",
           "expected": {
             "type": "custom",
             "name": "apply_patch",
@@ -37,11 +52,11 @@
             "format": { "type": "grammar", "syntax": "lark" }
           }
         },
-        { "id": "max-output-tokens-removed", "operator": "absent", "path": "/max_output_tokens" },
-        { "id": "metadata-removed", "operator": "absent", "path": "/metadata" },
-        { "id": "previous-response-id-removed", "operator": "absent", "path": "/previous_response_id" },
-        { "id": "prompt-cache-key-preserved", "operator": "equals", "path": "/prompt_cache_key", "expected": "project-cache-v1" },
-        { "id": "prompt-cache-retention-removed", "operator": "absent", "path": "/prompt_cache_retention" }
+        { "id": "max-output-tokens-removed", "operator": "absent", "path": "/body/max_output_tokens" },
+        { "id": "metadata-removed", "operator": "absent", "path": "/body/metadata" },
+        { "id": "previous-response-id-removed", "operator": "absent", "path": "/body/previous_response_id" },
+        { "id": "prompt-cache-key-preserved", "operator": "equals", "path": "/body/prompt_cache_key", "expected": "project-cache-v1" },
+        { "id": "prompt-cache-retention-removed", "operator": "absent", "path": "/body/prompt_cache_retention" }
       ]
     },
     {
@@ -62,7 +77,7 @@
         {
           "id": "orphan-output-converted",
           "operator": "equals",
-          "path": "/input/0",
+          "path": "/body/input/0",
           "expected": {
             "type": "message",
             "role": "user",

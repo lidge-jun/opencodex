@@ -26,6 +26,7 @@ type FixtureAssertion = {
 
 type FixtureCase = {
   id: string;
+  incomingHeaders?: Record<string, string>;
   request: Record<string, unknown>;
   assertions: FixtureAssertion[];
 };
@@ -82,20 +83,37 @@ function firstCompatibilityImportPath(entry: string): string[] | null {
   return null;
 }
 
-async function outboundBody(requestBody: Record<string, unknown>): Promise<Record<string, unknown>> {
+type OutboundFixtureRequest = {
+  url: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+async function outboundRequest(fixtureCase: FixtureCase): Promise<OutboundFixtureRequest> {
   const registry = getProviderRegistryEntry("openai");
   if (!registry) throw new Error("openai registry entry missing");
-  const provider = providerConfigSeed(registry);
+  const provider = {
+    ...providerConfigSeed(registry),
+    _codexAccountRequired: true,
+    _codexAccountOverride: {
+      accessToken: "fixture-runtime-token",
+      chatgptAccountId: "fixture-account",
+    },
+  };
   const adapter = createRegisteredAdapter(provider);
-  const parsed = parseRequest(structuredClone(requestBody));
+  const parsed = parseRequest(structuredClone(fixtureCase.request));
   const budget = createTranslatorBudget();
   try {
     const request = await adapter.buildRequest(parsed, {
-      headers: new Headers({ authorization: "Bearer fixture-token" }),
+      headers: new Headers(fixtureCase.incomingHeaders),
       translatorBudget: budget,
     });
     try {
-      return JSON.parse(request.body) as Record<string, unknown>;
+      return {
+        url: request.url,
+        headers: request.headers,
+        body: JSON.parse(request.body) as Record<string, unknown>,
+      };
     } finally {
       request.releaseBodyObservation?.();
     }
@@ -126,8 +144,10 @@ describe("versioned compatibility manifests", () => {
 
   test("rejects duplicate claims and unproved non-passthrough behavior", () => {
     const invalid = structuredClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST) as unknown as {
+      subject: Record<string, unknown>;
       claims: Array<Record<string, unknown>>;
     };
+    invalid.subject.baseUrl = "https://chatgpt.com/backend-api/codex/";
     invalid.claims[1]!.id = invalid.claims[0]!.id;
     invalid.claims[1]!.feature = invalid.claims[0]!.feature;
     delete invalid.claims[2]!.limitation;
@@ -136,6 +156,7 @@ describe("versioned compatibility manifests", () => {
     const issues = compatibilityManifestIssues(invalid);
     expect(issues.some(issue => issue.includes("duplicates"))).toBe(true);
     expect(issues.some(issue => issue.includes("feature duplicates"))).toBe(true);
+    expect(issues.some(issue => issue.includes("subject.baseUrl must be normalized"))).toBe(true);
     expect(issues.some(issue => issue.includes("limitation"))).toBe(true);
     expect(issues.some(issue => issue.includes("assertionIds"))).toBe(true);
     expect(issues.some(issue => issue.includes("unknownField"))).toBe(true);
@@ -145,6 +166,7 @@ describe("versioned compatibility manifests", () => {
     const manifest = OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST;
     const provider = getProviderRegistryEntry(manifest.subject.providerId);
     expect(provider).toBeDefined();
+    expect(provider?.baseUrl).toBe(manifest.subject.baseUrl);
     expect(provider?.adapter).toBe(manifest.subject.adapterId);
     expect(provider?.authKind).toBe(manifest.subject.authMode);
     expect(effectiveAdapterContract(manifest.subject.adapterId).wire)
@@ -176,8 +198,8 @@ describe("OpenAI Codex forward compatibility fixture", () => {
     expect(fixture.manifestId).toBe(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST.id);
     expect(new Set(fixture.cases.map(fixtureCase => fixtureCase.id)).size).toBe(fixture.cases.length);
     for (const fixtureCase of fixture.cases) {
-      const body = await outboundBody(fixtureCase.request);
-      for (const assertion of fixtureCase.assertions) expectAssertion(body, assertion);
+      const outbound = await outboundRequest(fixtureCase);
+      for (const assertion of fixtureCase.assertions) expectAssertion(outbound, assertion);
     }
   });
 

@@ -31,6 +31,8 @@ export interface CompatibilityClaimV1 {
 
 export interface CompatibilitySubjectV1 {
   providerId: string;
+  /** Exact normalized provider base URL; destination changes require a new subject/version. */
+  baseUrl: string;
   adapterId: string;
   authMode: "forward" | "key" | "oauth" | "local";
   inboundProtocol: "responses" | "chat" | "messages";
@@ -82,6 +84,36 @@ function checkNonBlank(value: unknown, path: string, issues: string[]): value is
     return false;
   }
   return true;
+}
+
+function checkNormalizedBaseUrl(value: unknown, path: string, issues: string[]): value is string {
+  if (typeof value !== "string") {
+    issues.push(`${path} must be a normalized absolute HTTP(S) base URL`);
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    if (
+      (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      issues.push(`${path} must be a normalized absolute HTTP(S) base URL without credentials, query, or fragment`);
+      return false;
+    }
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    const normalized = `${parsed.origin}${normalizedPath}`;
+    if (value !== normalized) {
+      issues.push(`${path} must be normalized as ${normalized}`);
+      return false;
+    }
+    return true;
+  } catch {
+    issues.push(`${path} must be a normalized absolute HTTP(S) base URL`);
+    return false;
+  }
 }
 
 function checkSortedUniqueStrings(
@@ -153,11 +185,12 @@ export function compatibilityManifestIssues(value: unknown): string[] {
   } else {
     checkKnownKeys(
       value.subject,
-      ["providerId", "adapterId", "authMode", "inboundProtocol", "upstreamProtocol", "modelIds"],
+      ["providerId", "baseUrl", "adapterId", "authMode", "inboundProtocol", "upstreamProtocol", "modelIds"],
       "subject",
       issues,
     );
     checkId(value.subject.providerId, "subject.providerId", issues);
+    checkNormalizedBaseUrl(value.subject.baseUrl, "subject.baseUrl", issues);
     checkId(value.subject.adapterId, "subject.adapterId", issues);
     if (!["forward", "key", "oauth", "local"].includes(String(value.subject.authMode))) {
       issues.push("subject.authMode must be forward, key, oauth, or local");

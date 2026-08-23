@@ -12,6 +12,7 @@ export const OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST = defineCompatibilityManife
   version: "1.0.0",
   subject: {
     providerId: "openai",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
     adapterId: "openai-responses",
     authMode: "forward",
     inboundProtocol: "responses",
