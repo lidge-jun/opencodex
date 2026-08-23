@@ -5,6 +5,7 @@
 # so a bare `bun test` — or `bun test tests/` (a substring filter that also matches
 # devlog/opencode-cursor/tests/) — drags them in and reports hundreds of spurious failures.
 # `root` pins discovery to ./tests so every invocation stays on the real suite.
+# File-level `--parallel` has no bunfig key; `scripts/test.ts` passes it for `bun run test`.
 # The npm script already uses `bun test ./tests/`; this makes a bare `bun test` behave the same.
 [test]
 root = "tests"
