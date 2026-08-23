@@ -245,7 +245,8 @@ export interface OcxRequestOptions {
   /**
    * Responses `text.format` (json_schema / json_object), preserved for adapters whose
    * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
-   * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts.
+   * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts; the
+   * Google adapter lowers it to Gemini JSON mode (`responseMimeType` / `responseSchema`).
    * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
    * keeps rejecting structured output via `_structuredOutput`.
    */

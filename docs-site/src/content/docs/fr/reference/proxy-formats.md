@@ -164,12 +164,14 @@ l’effort est par défaut `reasoning.summary: "auto"`, donc la réflexion revie
 `detailed`, ou `none` l'emporte sur `include_reasoning`.
 
 La sortie structurée fait partie de cette traduction : `response_format` avec `json_object` ou
-`json_schema` est transmis aux modèles `openai-chat` acheminés. Sur `POST /v1/responses` le
-le champ de requête équivalent est `text.format` : les routes de réponses natives le conservent dans le brut
-Corps des réponses, et il est traduit en `response_format` lorsque le modèle achemine vers un
-`openai-chat` fournisseur. Un modèle répertorié dans le `noStructuredOutputModels` du fournisseur omet
-`response_format` sur ce protocole ; les modèles apparentés conservent la traduction. Les services en amont non classés
-recevoir le champ et renvoyer sa propre erreur au lieu que le proxy devine sa capacité.
+`json_schema` est transmis aux modèles `openai-chat` acheminés et converti en mode JSON Gemini
+(`responseMimeType` / `responseSchema`) pour les modèles Google acheminés. Sur `POST
+/v1/responses` le champ de requête équivalent est `text.format` : les routes de réponses natives
+le conservent dans le brut Corps des réponses, et il est traduit en `response_format` lorsque le
+modèle achemine vers un fournisseur `openai-chat`. Un modèle répertorié dans le
+`noStructuredOutputModels` du fournisseur omet `response_format` sur le protocole `openai-chat`
+uniquement ; les modèles apparentés conservent la traduction. Les autres services en amont non
+classés reçoivent le champ et renvoient leur propre erreur au lieu que le proxy devine sa capacité.
 
 La sortie sans streaming a `object: "chat.completion"`. La sortie streaming utilise des objets SSE avec
 `object: "chat.completion.chunk"`, choix deltas, un choix terminal avec `finish_reason`, et

@@ -59,6 +59,58 @@ describe("Google wire compiler", () => {
     expect(body.futureTopLevelField).toBeUndefined();
   });
 
+  test("preserves Gemini JSON-mode generationConfig fields", () => {
+    const compiled = compileGoogleWireBody({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "object",
+          properties: { keep: { type: "boolean" } },
+          required: ["keep"],
+          additionalProperties: false,
+          futureSchemaField: true,
+        },
+        futureGenerationField: true,
+      },
+    });
+
+    expect(compiled.body.generationConfig).toEqual({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+      },
+    });
+  });
+
+  test("drops an explicitly empty responseSchema while preserving JSON mode", () => {
+    const compiled = compileGoogleWireBody({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {},
+      },
+    });
+
+    expect(compiled.body.generationConfig).toEqual({
+      responseMimeType: "application/json",
+    });
+  });
+
+  test("drops non-json responseMimeType and unknown schema types", () => {
+    const compiled = compileGoogleWireBody({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      generationConfig: {
+        responseMimeType: "text/plain",
+        responseSchema: { type: "string" },
+      },
+    });
+
+    expect(compiled.body.generationConfig).toBeUndefined();
+  });
+
   test("the Google adapter compiles tool names on request and restores them on response", async () => {
     const originalName = `9 invalid tool ${"x".repeat(80)}`;
     const adapter = createGoogleAdapter({
