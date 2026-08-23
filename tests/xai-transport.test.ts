@@ -3,6 +3,7 @@ import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { parseRequest } from "../src/responses/parser";
 import { buildModelsRequest } from "../src/oauth";
 import {
+  isXaiResponsesDestination,
   resolveProviderTransport,
   deriveXaiConvId,
   XAI_CONV_ID_HEADER,
@@ -50,6 +51,27 @@ function parsed(): OcxParsedRequest {
     options: { reasoning: "low" },
   };
 }
+
+describe("xAI Responses destination detection", () => {
+  test.each([
+    "https://api.x.ai/v1",
+    "https://api.x.ai:443/v1",
+    XAI_GROK_CLI_BASE_URL,
+    "https://CLI-CHAT-PROXY.GROK.COM:443/v1",
+  ])("accepts the exact xAI HTTPS destination %s", baseUrl => {
+    expect(isXaiResponsesDestination({ baseUrl })).toBe(true);
+  });
+
+  test.each([
+    "http://api.x.ai/v1",
+    "https://api.x.ai:444/v1",
+    "https://api.x.ai.evil.test/v1",
+    "https://cli-chat-proxy.grok.com.evil.test/v1",
+    "not a URL",
+  ])("rejects a non-xAI or malformed destination %s", baseUrl => {
+    expect(isXaiResponsesDestination({ baseUrl })).toBe(false);
+  });
+});
 
 describe("xAI auth-mode transport selection", () => {
   test("OAuth selects the Grok CLI subscription transport and required headers", () => {

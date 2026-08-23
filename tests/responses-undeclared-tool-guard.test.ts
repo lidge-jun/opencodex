@@ -1311,3 +1311,68 @@ describe("provider-executed hosted calls", () => {
     )).toBeUndefined();
   });
 });
+
+describe("xAI hosted-call authorization through handleResponses", () => {
+  const hostedCall = {
+    type: "custom_tool_call",
+    id: "ctc_search",
+    call_id: "xs_call-1",
+    name: "x_keyword_search",
+    input: "{}",
+    status: "completed",
+  };
+
+  async function post(baseUrl: string): Promise<Response> {
+    const config = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl,
+          authMode: "key",
+          apiKey: "fixture-key",
+        },
+      },
+    } as OcxConfig;
+    const savedFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_search",
+      status: "completed",
+      output: [hostedCall],
+    })) as typeof fetch;
+    try {
+      return await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/grok-4.6",
+          stream: false,
+          input: [{ role: "user", content: [{ type: "input_text", text: "search" }] }],
+          tools: [
+            { type: "function", name: "shell", parameters: { type: "object" } },
+            { type: "x_search" },
+          ],
+        }),
+      }), config, { model: "", provider: "" });
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  }
+
+  test("accepts the measured xs_call shape for an exact xAI destination", async () => {
+    const response = await post("https://api.x.ai/v1");
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject(hostedCall);
+  });
+
+  test("rejects the identical item for a lookalike destination", async () => {
+    const response = await post("https://api.x.ai.evil.test/v1");
+
+    expect(response.status).toBe(502);
+    const body = await response.json() as { error: { message: string } };
+    expect(body.error.message).toContain('undeclared client tool "x_keyword_search"');
+  });
+});
