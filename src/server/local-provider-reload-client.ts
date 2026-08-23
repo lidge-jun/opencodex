@@ -33,7 +33,7 @@ export interface LocalProviderReloadDeps {
   timeoutMs?: number;
 }
 
-const LOCAL_PROVIDER_RELOAD_TIMEOUT_MS = 10_000;
+export const LOCAL_PROVIDER_RELOAD_TIMEOUT_MS = 10_000;
 
 /**
  * Ask the exact runtime proxy to reload one already-persisted provider.
