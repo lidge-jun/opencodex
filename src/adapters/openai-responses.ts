@@ -156,35 +156,20 @@ function stripInvalidItemIds(body: unknown): unknown {
   return changed ? { ...body, input } : body;
 }
 
-function isSystemMessageItem(item: unknown): item is Record<string, unknown> {
-  return isPlainObject(item)
-    && item.role === "system"
-    && (item.type === "message" || item.type === undefined);
-}
-
-function splitSystemItem(item: Record<string, unknown>): { text: string; nonText: unknown[] } {
+function systemItemText(item: Record<string, unknown>): string {
   const content = item.content;
-  if (typeof content === "string") return { text: content, nonText: [] };
-  if (!Array.isArray(content)) return { text: "", nonText: [] };
-  const texts: string[] = [];
-  const nonText: unknown[] = [];
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
   for (const block of content) {
-    if (
-      isPlainObject(block)
-      && (block.type === "input_text" || block.type === "text")
-      && typeof block.text === "string"
-      && block.text.length > 0
-    ) {
-      texts.push(block.text);
-      continue;
-    }
-    nonText.push(block);
+    if (!isPlainObject(block)) continue;
+    if (block.type !== "input_text" && block.type !== "text") continue;
+    if (typeof block.text === "string" && block.text.length > 0) parts.push(block.text);
   }
-  return { text: texts.join("\n\n"), nonText };
+  return parts.join("\n\n");
 }
 
-// ChatGPT's Responses and compact endpoints reject role:system in input.
-// Text can live in instructions. Images and files cannot, so they stay as developer.
+// ponytail: ChatGPT 400s on role:system. Non-text on those items is dropped; no caller sends it.
 export function foldSystemMessagesIntoInstructions(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
@@ -192,23 +177,25 @@ export function foldSystemMessagesIntoInstructions(body: unknown): unknown {
   const systemParts: string[] = [];
   let foundSystem = false;
   for (const item of body.input) {
-    if (!isSystemMessageItem(item)) {
+    if (
+      !isPlainObject(item)
+      || item.role !== "system"
+      || (item.type !== "message" && item.type !== undefined)
+    ) {
       remaining.push(item);
       continue;
     }
     foundSystem = true;
-    const { text, nonText } = splitSystemItem(item);
+    const text = systemItemText(item);
     if (text.length > 0) systemParts.push(text);
-    if (nonText.length > 0) remaining.push({ ...item, role: "developer", content: nonText });
   }
   if (!foundSystem) return body;
 
   const next: Record<string, unknown> = { ...body, input: remaining };
-  if (systemParts.length > 0) {
-    const joined = systemParts.join("\n\n");
-    const existing = typeof body.instructions === "string" ? body.instructions : "";
-    next.instructions = existing.length > 0 ? `${existing}\n\n${joined}` : joined;
-  }
+  if (systemParts.length === 0) return next;
+  const joined = systemParts.join("\n\n");
+  const existing = typeof body.instructions === "string" ? body.instructions : "";
+  next.instructions = existing.length > 0 ? `${existing}\n\n${joined}` : joined;
   return next;
 }
 

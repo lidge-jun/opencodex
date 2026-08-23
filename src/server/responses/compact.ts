@@ -420,9 +420,7 @@ export async function handleResponsesCompact(
       headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
-    // Native compact POSTs {base}/responses/compact and never enters buildRequest.
-    // Copy the ChatGPT-facing body transforms that path already runs: blank reasoning_text
-    // content, and fold role:system out of input.
+    // compact never enters buildRequest; copy the two ChatGPT body transforms.
     const compactBody = foldSystemMessagesIntoInstructions(
       sanitizeReasoningInputContent(compactBodyRaw),
     ) as typeof compactBodyRaw;

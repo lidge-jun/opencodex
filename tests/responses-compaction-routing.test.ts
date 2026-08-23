@@ -172,7 +172,7 @@ describe("supportsNativeResponsesCompactEndpoint (#422)", () => {
 });
 
 describe("native compact system-message folding", () => {
-  test("folds role:system out of compact input and keeps leftover images as developer", async () => {
+  test("folds role:system out of compact input", async () => {
     const config = {
       defaultProvider: "openai-apikey",
       providers: {
@@ -184,35 +184,27 @@ describe("native compact system-message folding", () => {
         },
       },
     } as unknown as OcxConfig;
-    const image = { type: "input_image", image_url: "https://example.test/a.png" };
     let captured: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_input, init) => {
       captured = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       return jsonResponse(completedPayload("native summary"));
     }) as typeof fetch;
+    const user = { type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] };
     const response = await handleResponsesCompact(
       compactionRequest({
         model: "openai-apikey/gpt-5.5",
         instructions: "base instructions",
         input: [
-          {
-            type: "message",
-            role: "system",
-            content: [{ type: "input_text", text: "You are a coding agent." }, image],
-          },
-          { type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] },
+          { type: "message", role: "system", content: "You are a coding agent." },
+          user,
         ],
       }),
       config,
       { model: "", provider: "" },
     );
     expect(response.status).toBe(200);
-    expect(captured?.instructions, "folded system text into compact instructions")
-      .toBe("base instructions\n\nYou are a coding agent.");
-    expect(captured?.input, "kept leftover system images as developer items").toEqual([
-      { type: "message", role: "developer", content: [image] },
-      { type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] },
-    ]);
+    expect(captured?.instructions).toBe("base instructions\n\nYou are a coding agent.");
+    expect(captured?.input).toEqual([user]);
   });
 });
 
