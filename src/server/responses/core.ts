@@ -191,7 +191,7 @@ import {
   rotateProviderTransportOn429,
 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
-import { resolveProviderTransport } from "../../providers/xai-transport";
+import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
 import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
@@ -308,6 +308,7 @@ import {
 import {
   collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
+  collectProviderExecutedCallTypes,
   createUndeclaredToolCallGuardBlockRewrite,
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
@@ -2942,6 +2943,11 @@ async function handleResponsesInner(
     const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
       clientToolAuthorizationBody,
     );
+    // Hosted calls the PROVIDER runs itself. Gated on the destination actually being xAI, so a
+    // declaration alone cannot buy the exemption on some other upstream that never serves it.
+    const providerExecutedCallTypes = isXaiResponsesDestination(route.provider)
+      ? collectProviderExecutedCallTypes(clientToolAuthorizationBody)
+      : new Set<string>();
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
@@ -3061,6 +3067,7 @@ async function handleResponsesInner(
         payload,
         declaredWireToolNames,
         declaredNamelessClientCallTypes,
+        providerExecutedCallTypes,
       ) !== undefined) {
         inspectionSawUndeclaredTool = true;
       }
@@ -3074,6 +3081,7 @@ async function handleResponsesInner(
             response,
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
+            providerExecutedCallTypes,
           ) !== undefined
         ) {
           return;
@@ -3725,6 +3733,7 @@ async function handleResponsesInner(
           ? createUndeclaredToolCallGuardBlockRewrite(
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
+            providerExecutedCallTypes,
           )
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
@@ -3946,6 +3955,7 @@ async function handleResponsesInner(
               JSON.parse(clientJson),
               declaredWireToolNames,
               declaredNamelessClientCallTypes,
+              providerExecutedCallTypes,
             );
           } catch {
             return undefined;
