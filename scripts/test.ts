@@ -60,12 +60,18 @@ export function createIsolatedTestEnvironment(
 }
 
 function hasCliFlag(requested: string[], name: string): boolean {
-  return requested.some(arg => arg === name || arg.startsWith(`${name}=`));
+  const delimiterIndex = requested.indexOf("--");
+  const wrapperArgs = delimiterIndex === -1 ? requested : requested.slice(0, delimiterIndex);
+  return wrapperArgs.some(arg => arg === name || arg.startsWith(`${name}=`));
 }
 
 /** True for a filter-less `bun run test`. `--timeout` / `--dots` / `--parallel=N` still count. */
 function isFullSuiteRun(requested: string[]): boolean {
-  return !requested.some(arg => arg !== "-" && !arg.startsWith("-"));
+  const delimiterIndex = requested.indexOf("--");
+  const wrapperArgs = delimiterIndex === -1 ? requested : requested.slice(0, delimiterIndex);
+  const passedThrough = delimiterIndex === -1 ? [] : requested.slice(delimiterIndex + 1);
+  return passedThrough.length === 0
+    && !wrapperArgs.some(arg => arg === "-" || !arg.startsWith("-"));
 }
 
 /**

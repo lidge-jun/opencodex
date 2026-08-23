@@ -83,6 +83,8 @@ describe("bun test argv", () => {
   test("a file filter keeps isolate and parallel but no suite path", () => {
     expect(resolveBunTestArgs(["tests/foo.test.ts"]))
       .toEqual(["--isolate", "--parallel", "tests/foo.test.ts"]);
+    expect(resolveBunTestArgs(["-"]))
+      .toEqual(["--isolate", "--parallel", "-"]);
   });
 
   test("a caller-supplied concurrency is left alone", () => {
@@ -95,5 +97,28 @@ describe("bun test argv", () => {
   test("option-only arguments still count as a full suite run", () => {
     expect(resolveBunTestArgs(["--timeout=30000"]))
       .toEqual(["--isolate", "--parallel", "--timeout=30000", "./tests/"]);
+  });
+
+  test("arguments after the delimiter are passed through instead of parsed as wrapper flags", () => {
+    expect(resolveBunTestArgs(["--", "--parallel=2"]))
+      .toEqual(["--isolate", "--parallel", "--", "--parallel=2"]);
+  });
+
+  test("the wrapper passes parallel execution through to bun", () => {
+    const result = Bun.spawnSync([
+      process.execPath,
+      join(import.meta.dir, "../scripts/test.ts"),
+      "--pass-with-no-tests",
+      join(import.meta.dir, "__no_matching_test_file__.test.ts"),
+    ], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, OCX_TEST_NO_QUEUE: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const output = new TextDecoder().decode(result.stdout)
+      + new TextDecoder().decode(result.stderr);
+    expect(output).toContain("PARALLEL");
   });
 });
