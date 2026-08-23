@@ -328,9 +328,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 /* GitHub row: the label keeps the full-width link affordance, the two circular
    satellites (star, update) sit at the trailing edge without shrinking the label's
-   hover target. The update orb only exists when an update is available, so the row
+   hover target. That edge is the sidebar's 10px content inset, not the rail wall, so
+   the orbs stack under the lang chevron and the proxy orbs instead of hanging 10px
+   further out than both. The update orb only exists when an update is available, so the row
    is one or two circles wide — never a placeholder. */
-.sidebar-github-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sidebar-github-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 10px; }
 .sidebar-github-link { flex: 1 1 auto; min-width: 0; }
 .sidebar-github-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .sidebar-orb {
@@ -388,8 +390,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    row with a quiet label. The stop control used to be a full-width button; pairing it
    with restart as icons keeps the foot from growing a fifth stacked row and puts the
    destructive action next to the recovery action it is most often confused with. */
-.sidebar-action-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 8px 10px; }
-.sidebar-action-label { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: var(--text-control); }
+.sidebar-action-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 10px; }
+/* Left padding matches .sidebar-link, plus the 16px icon + 9px gap gutter the
+   iconless label has to clear to sit in the same text column as its neighbours.
+   Owning the block padding here (rather than on the row) keeps the row the same
+   height as the other three, which the 28px orbs would otherwise inflate. */
+.sidebar-action-label { flex: 1 1 auto; min-width: 0; padding: 8px 10px 8px calc(10px + 16px + 9px); color: var(--muted); font-size: var(--text-control); }
 .sidebar-action-orbs { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .sidebar-orb--danger { color: var(--red); }
 .sidebar-orb--danger:hover:not(:disabled) { background: var(--red-soft); color: var(--red); border-color: var(--red); }
