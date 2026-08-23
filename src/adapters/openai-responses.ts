@@ -156,47 +156,59 @@ function stripInvalidItemIds(body: unknown): unknown {
   return changed ? { ...body, input } : body;
 }
 
-function systemItemText(item: Record<string, unknown>): string {
-  const content = item.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isPlainObject(block)) continue;
-    if (block.type !== "input_text" && block.type !== "text") continue;
-    if (typeof block.text !== "string" || block.text.length === 0) continue;
-    parts.push(block.text);
-  }
-  return parts.join("\n\n");
+function isSystemMessageItem(item: unknown): item is Record<string, unknown> {
+  return isPlainObject(item)
+    && item.role === "system"
+    && (item.type === "message" || item.type === undefined);
 }
 
-// Native ChatGPT backend rejects system message items in `input`.
-function foldSystemMessagesIntoInstructions(body: unknown): unknown {
+function splitSystemItem(item: Record<string, unknown>): { text: string; nonText: unknown[] } {
+  const content = item.content;
+  if (typeof content === "string") return { text: content, nonText: [] };
+  if (!Array.isArray(content)) return { text: "", nonText: [] };
+  const texts: string[] = [];
+  const nonText: unknown[] = [];
+  for (const block of content) {
+    if (
+      isPlainObject(block)
+      && (block.type === "input_text" || block.type === "text")
+      && typeof block.text === "string"
+      && block.text.length > 0
+    ) {
+      texts.push(block.text);
+      continue;
+    }
+    nonText.push(block);
+  }
+  return { text: texts.join("\n\n"), nonText };
+}
+
+// ChatGPT's Responses and compact endpoints reject role:system in input.
+// Text can live in instructions. Images and files cannot, so they stay as developer.
+export function foldSystemMessagesIntoInstructions(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   const remaining: unknown[] = [];
   const systemParts: string[] = [];
   let foundSystem = false;
   for (const item of body.input) {
-    if (
-      !isPlainObject(item)
-      || item.role !== "system"
-      || (item.type !== "message" && item.type !== undefined)
-    ) {
+    if (!isSystemMessageItem(item)) {
       remaining.push(item);
       continue;
     }
     foundSystem = true;
-    const text = systemItemText(item);
+    const { text, nonText } = splitSystemItem(item);
     if (text.length > 0) systemParts.push(text);
+    if (nonText.length > 0) remaining.push({ ...item, role: "developer", content: nonText });
   }
   if (!foundSystem) return body;
 
   const next: Record<string, unknown> = { ...body, input: remaining };
-  if (systemParts.length === 0) return next;
-  const joined = systemParts.join("\n\n");
-  const existing = typeof body.instructions === "string" ? body.instructions : "";
-  next.instructions = existing.length > 0 ? `${existing}\n\n${joined}` : joined;
+  if (systemParts.length > 0) {
+    const joined = systemParts.join("\n\n");
+    const existing = typeof body.instructions === "string" ? body.instructions : "";
+    next.instructions = existing.length > 0 ? `${existing}\n\n${joined}` : joined;
+  }
   return next;
 }
 

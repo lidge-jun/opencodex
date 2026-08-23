@@ -7,7 +7,7 @@ import {
 } from "../../config";
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
-import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { FORWARD_HEADERS, foldSystemMessagesIntoInstructions, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { NoEligiblePolicyCandidateError, routeModel } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
@@ -420,10 +420,12 @@ export async function handleResponsesCompact(
       headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
-    // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
-    // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
-    // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
-    const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
+    // Native compact POSTs {base}/responses/compact and never enters buildRequest.
+    // Copy the ChatGPT-facing body transforms that path already runs: blank reasoning_text
+    // content, and fold role:system out of input.
+    const compactBody = foldSystemMessagesIntoInstructions(
+      sanitizeReasoningInputContent(compactBodyRaw),
+    ) as typeof compactBodyRaw;
     const compactUrl = `${base}/responses/compact`;
     const actualCompactHostKey = upstreamHostHealthKey(
       route.providerName,

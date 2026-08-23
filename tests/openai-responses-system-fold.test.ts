@@ -154,6 +154,27 @@ describe("OpenAI-operated Responses system-message folding", () => {
       expect(body.input.filter(item => item.role === "system"), "dropped system items from input").toEqual([]);
       expect(body.input, "left developer items in input").toEqual([developer, userHello]);
     });
+
+    test("keeps system images as developer items", () => {
+      const image = { type: "input_image", image_url: "https://example.test/a.png" };
+      const body = buildWire(canonicalForward, {
+        model: "test-model",
+        input: [
+          {
+            type: "message",
+            role: "system",
+            content: [{ type: "input_text", text: "You are a coding agent." }, image],
+          },
+          userHello,
+        ],
+      });
+      expect(body.instructions, "folded system text into instructions").toBe("You are a coding agent.");
+      expect(body.input.filter(item => item.role === "system"), "dropped system items from input").toEqual([]);
+      expect(body.input, "kept leftover system images as developer items").toEqual([
+        { type: "message", role: "developer", content: [image] },
+        userHello,
+      ]);
+    });
   });
 
   describe("official OpenAI API key", () => {
