@@ -5,19 +5,25 @@ import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 const CLIENT_EXECUTED_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
 
 /**
- * Hosted declarations whose response items the PROVIDER executes, keyed by the item type it
- * emits for them. These need no client answer, so their names are deliberately absent from the
- * request catalog and must not be read as an undeclared client tool.
+ * Hosted declarations whose response items the PROVIDER executes, keyed by the request
+ * declaration type. These need no client answer, so their names are deliberately absent from
+ * the request catalog and must not be read as an undeclared client tool.
  *
- * xAI surfaces hosted `x_search` as `custom_tool_call`. Probed 2026-08-22 through the proxy:
- * a request declaring a named client tool alongside `x_search` produced `response.failed` with
- * zero output, while the identical request direct to xAI completed normally. Observed call
- * names were `x_keyword_search` and `x_semantic_search` in one turn, and `x_user_search` on the
- * other xAI host — three literals for one tool, which is why this keys on the DECLARATION and
- * the item type, never on the name.
+ * xAI surfaces hosted `x_search` as `custom_tool_call`. Probed 2026-08-23 against the OAuth CLI
+ * destination: its hosted calls use an `xs_call-` call-id prefix. Observed call names were
+ * `x_keyword_search`, `x_semantic_search`, and `x_user_search` — three literals for one tool,
+ * which is why authorization keys on the declaration, item type, and call-id prefix, never on
+ * the name.
  */
-export const PROVIDER_EXECUTED_DECLARATION_CALL_TYPES = new Map([
-  ["x_search", "custom_tool_call"],
+export type ProviderExecutedCallType = Readonly<{
+  itemType: string;
+  callIdPrefix: string;
+}>;
+
+type ProviderExecutedCallTypes = ReadonlySet<ProviderExecutedCallType>;
+
+export const PROVIDER_EXECUTED_DECLARATION_CALL_TYPES = new Map<string, ProviderExecutedCallType>([
+  ["x_search", { itemType: "custom_tool_call", callIdPrefix: "xs_call-" }],
 ]);
 
 /** Nameless declaration kinds whose response items still require client execution. */
@@ -35,7 +41,7 @@ const NAMELESS_CLIENT_CALL_DISPLAY_NAMES = new Map([
 ]);
 
 const EMPTY_DECLARED_NAMELESS_CLIENT_CALL_TYPES: ReadonlySet<string> = new Set();
-const EMPTY_PROVIDER_EXECUTED_CALL_TYPES: ReadonlySet<string> = new Set<string>();
+const EMPTY_PROVIDER_EXECUTED_CALL_TYPES: ReadonlySet<ProviderExecutedCallType> = new Set();
 
 /** Supported hosted/private declarations that carry no client-executable wire name. */
 const NAMELESS_TOOL_SPEC_TYPES = new Set([
@@ -144,7 +150,10 @@ function addNamelessClientCallTypes(callTypes: Set<string>, specs: unknown): voi
   }
 }
 
-function addProviderExecutedCallTypes(callTypes: Set<string>, specs: unknown): void {
+function addProviderExecutedCallTypes(
+  callTypes: Set<ProviderExecutedCallType>,
+  specs: unknown,
+): void {
   if (!Array.isArray(specs)) return;
   for (const spec of specs) {
     if (!isPlainObject(spec) || typeof spec.type !== "string") continue;
@@ -159,8 +168,8 @@ function addProviderExecutedCallTypes(callTypes: Set<string>, specs: unknown): v
  * Caller must gate this on the destination actually being that provider; a declaration alone
  * is not authority, or any upstream could claim a hosted shape it never serves.
  */
-export function collectProviderExecutedCallTypes(body: unknown): Set<string> {
-  const callTypes = new Set<string>();
+export function collectProviderExecutedCallTypes(body: unknown): Set<ProviderExecutedCallType> {
+  const callTypes = new Set<ProviderExecutedCallType>();
   if (!isPlainObject(body)) return callTypes;
   addProviderExecutedCallTypes(callTypes, body.tools);
   if (Array.isArray(body.input)) {
@@ -172,6 +181,20 @@ export function collectProviderExecutedCallTypes(body: unknown): Set<string> {
     }
   }
   return callTypes;
+}
+
+function isAuthorizedProviderExecutedCall(
+  item: Record<string, unknown>,
+  callTypes: ProviderExecutedCallTypes,
+): boolean {
+  if (typeof item.call_id !== "string") return false;
+  for (const callType of callTypes) {
+    if (
+      item.type === callType.itemType
+      && item.call_id.startsWith(callType.callIdPrefix)
+    ) return true;
+  }
+  return false;
 }
 
 /** Nameless client-call item types authorized by supported request tool declarations. */
@@ -237,18 +260,14 @@ function undeclaredNameInItem(
   item: unknown,
   declared: ReadonlySet<string>,
   declaredNamelessClientCallTypes: ReadonlySet<string>,
-  providerExecutedCallTypes: ReadonlySet<string> = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
+  providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
 ): string | undefined {
   if (!isPlainObject(item)) return undefined;
   if (typeof item.type !== "string") return undefined;
-  // The provider executes this one itself, so there is no client name to authorize.
-  //
-  // RESIDUAL RISK, deliberate: inside a turn that declared such a hosted tool ON that provider,
-  // a hallucinated client custom tool is exempted too, because the three observed xAI names
-  // prove the name channel carries no signal. The alternative is failing every hosted-search
-  // turn. #1700's protection is untouched for every other turn, provider and item type — the
-  // exemption needs BOTH the destination and the declaration.
-  if (providerExecutedCallTypes.has(item.type)) return undefined;
+  // The provider executes this exact measured shape itself, so there is no client name to
+  // authorize. The caller supplies these signatures only for the matching destination and
+  // declarations; the item must additionally carry the hosted call-id prefix.
+  if (isAuthorizedProviderExecutedCall(item, providerExecutedCallTypes)) return undefined;
   const namelessDisplayName = NAMELESS_CLIENT_CALL_DISPLAY_NAMES.get(item.type);
   if (namelessDisplayName !== undefined) {
     // Only Codex's explicit `execution: "client"` form delegates tool search to the client.
@@ -270,7 +289,7 @@ export function undeclaredToolCallName(
   payload: unknown,
   declared: ReadonlySet<string>,
   declaredNamelessClientCallTypes: ReadonlySet<string> = EMPTY_DECLARED_NAMELESS_CLIENT_CALL_TYPES,
-  providerExecutedCallTypes: ReadonlySet<string> = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
+  providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
 ): string | undefined {
   if (!isPlainObject(payload)) return undefined;
   if (payload.type === "response.output_item.added" || payload.type === "response.output_item.done") {
@@ -288,7 +307,7 @@ export function undeclaredToolCallNameInResponse(
   response: unknown,
   declared: ReadonlySet<string>,
   declaredNamelessClientCallTypes: ReadonlySet<string> = EMPTY_DECLARED_NAMELESS_CLIENT_CALL_TYPES,
-  providerExecutedCallTypes: ReadonlySet<string> = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
+  providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
 ): string | undefined {
   if (!isPlainObject(response) || !Array.isArray(response.output)) return undefined;
   for (const item of response.output) {
@@ -332,7 +351,7 @@ function failedBlocks(name: string, newline: string): readonly string[] {
 export function createUndeclaredToolCallGuardBlockRewrite(
   declared: ReadonlySet<string>,
   declaredNamelessClientCallTypes: ReadonlySet<string> = EMPTY_DECLARED_NAMELESS_CLIENT_CALL_TYPES,
-  providerExecutedCallTypes: ReadonlySet<string> = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
+  providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
 ): SseBlockRewrite {
   let tripped = false;
   return (block: string) => {

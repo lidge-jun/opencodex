@@ -315,6 +315,7 @@ import {
   undeclaredToolCallMessage,
   undeclaredToolCallName,
   undeclaredToolCallNameInResponse,
+  type ProviderExecutedCallType,
 } from "../responses-undeclared-tool-guard";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
 import { responsesJsonToSseStream } from "../responses-json-events";
@@ -2947,7 +2948,7 @@ async function handleResponsesInner(
     // declaration alone cannot buy the exemption on some other upstream that never serves it.
     const providerExecutedCallTypes = isXaiResponsesDestination(route.provider)
       ? collectProviderExecutedCallTypes(clientToolAuthorizationBody)
-      : new Set<string>();
+      : new Set<ProviderExecutedCallType>();
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });

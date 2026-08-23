@@ -14,6 +14,7 @@ import {
   hasExplicitWireToolCatalog,
   undeclaredToolCallNameInResponse,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
+  type ProviderExecutedCallType,
 } from "../src/server/responses-undeclared-tool-guard";
 import { relaySseWithBlockRewrite } from "../src/server/sse-payload-rewrite";
 import { handleResponses } from "../src/server/responses";
@@ -1252,12 +1253,10 @@ describe("undeclaredToolCallNameInResponse", () => {
 
 /**
  * xAI runs hosted `x_search` itself and reports the activity as a `custom_tool_call` whose name
- * is absent from the request catalog. Probed 2026-08-22: a request declaring a named client tool
- * alongside `x_search` completed normally direct to xAI, but through the proxy produced
- * `response.failed` with zero output — the guard read the provider's own hosted call as an
- * undeclared client tool. Observed names were `x_keyword_search` and `x_semantic_search` in one
- * turn, and `x_user_search` on the other xAI host, so authorization keys on the declaration and
- * the item type, never on the name.
+ * is absent from the request catalog. Probed 2026-08-23 against the OAuth CLI destination: the
+ * provider's hosted calls carry an `xs_call-` call-id prefix. Observed names were
+ * `x_keyword_search`, `x_semantic_search`, and `x_user_search`, so authorization keys on the
+ * declaration, item type, and call-id prefix, never on the name.
  */
 describe("provider-executed hosted calls", () => {
   const declared = new Set(["shell"]);
@@ -1272,7 +1271,7 @@ describe("provider-executed hosted calls", () => {
 
   test("authorizes the provider's hosted call under any of its observed names", () => {
     expect(collectProviderExecutedCallTypes({ tools: [{ type: "x_search" }] }))
-      .toEqual(new Set(["custom_tool_call"]));
+      .toEqual(new Set([{ itemType: "custom_tool_call", callIdPrefix: "xs_call-" }]));
     for (const name of ["x_keyword_search", "x_semantic_search", "x_user_search"]) {
       expect(undeclaredToolCallNameInResponse(
         hostedCall(name), declared, nameless, xSearchAuthorized,
@@ -1294,13 +1293,13 @@ describe("provider-executed hosted calls", () => {
     // core.ts passes an empty set unless the route actually terminates at xAI, so a declaration
     // alone cannot buy the exemption on an upstream that never serves the hosted tool.
     expect(undeclaredToolCallNameInResponse(
-      hostedCall("x_keyword_search"), declared, nameless, new Set<string>(),
+      hostedCall("x_keyword_search"), declared, nameless, new Set<ProviderExecutedCallType>(),
     )).toBe("x_keyword_search");
   });
 
   test("#1700 still holds: an undeclared client tool is refused inside an authorized turn", () => {
     expect(undeclaredToolCallNameInResponse(
-      { output: [{ type: "function_call", name: "apply_patch", call_id: "c1" }] },
+      { output: [{ type: "custom_tool_call", name: "apply_patch", call_id: "call_patch" }] },
       declared, nameless, xSearchAuthorized,
     )).toBe("apply_patch");
   });
