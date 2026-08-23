@@ -161,12 +161,14 @@ yanıt formatlarını çevirir; normal Responses yönlendirme işlem hattını
 
 Yapılandırılmış çıktı bu çevirinin bir parçasıdır: `json_object` veya
 `json_schema` içeren `response_format`, yönlendirilen `openai-chat` modellerine
-iletilir. `POST /v1/responses` üzerinde eşdeğer istek alanı `text.format`'tır:
-yerel Responses rotaları onu ham Responses gövdesinde korur ve model bir
-`openai-chat` sağlayıcısına yönlendiğinde `response_format`'a çevrilir.
-Sağlayıcının `noStructuredOutputModels` listesinde yer alan bir model bu sohbet
-hattında `response_format`'ı atlar; kardeş modeller çeviriyi korur.
-Sınıflandırılmamış arka uçlar alanı alır ve proxy'nin yeteneklerini tahmin
+iletilir ve yönlendirilen Google modellerinde Gemini JSON modu olarak
+(`responseMimeType` / `responseSchema`) alt seviyeye çevrilir. `POST
+/v1/responses` üzerinde eşdeğer istek alanı `text.format`'tır: yerel Responses
+rotaları onu ham Responses gövdesinde korur ve model bir `openai-chat`
+sağlayıcısına yönlendiğinde `response_format`'a çevrilir. Sağlayıcının
+`noStructuredOutputModels` listesinde yer alan bir model yalnızca `openai-chat`
+hattında `response_format`'ı atlar; kardeş modeller çeviriyi korur. Diğer
+sınıflandırılmamış arka uçlar alanı alır ve proxy'nin yeteneklerini tahmin
 etmesi yerine kendi hatalarını döndürür.
 
 Akışsız çıktı `object: "chat.completion"` içerir. Akışlı çıktı `object:

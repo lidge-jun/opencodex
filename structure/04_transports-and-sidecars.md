@@ -964,6 +964,8 @@ JSON object or schema. A mixed-capability gateway may list exact native model id
 `noStructuredOutputModels`; only those models omit the wire field, while siblings keep the normal
 translation. The proxy does not infer this from provider names, localhost destinations, or a model
 family shared by unrelated upstreams.
+The Google adapter lowers the same internal `textFormat` to Gemini JSON mode; Kiro still rejects
+structured output.
 
 [Decision Log]
 - 목적과 의도: Recover chat models that reject `response_format` without removing structured output from models that support it.

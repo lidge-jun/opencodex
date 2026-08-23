@@ -116,6 +116,13 @@ of the HTTP retry loop.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- **Structured output:** Responses `text.format` and Chat Completions `response_format`
+  with `json_object` or `json_schema` become Gemini `generationConfig.responseMimeType:
+  "application/json"`. A `json_schema` with a schema is sanitized to Gemini
+  `responseSchema` using the same allowlist as function declarations. JSON mode is
+  omitted when the turn has function tools, when the routed model is
+  Claude-on-Antigravity, or when the model is image-capable (`responseModalities`
+  TEXT+IMAGE). Schema-less `json_schema` and `json_object` send mime type only.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending
