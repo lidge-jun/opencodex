@@ -10,11 +10,10 @@
  * Intentionally narrower than the Codex pool: no mid-session quota rotation,
  * soft-avoid ladders, or probe leases. Anthropic OAuth is ToS-sensitive.
  *
- * Affinity is process-local (lost on restart). Cooldown uses Retry-After when present,
- * otherwise a default backoff. 401/403 credential failures should set needsReauth on the
- * store (existing OAuth path) so the account is excluded from eligibility.
+ * Affinity and cooldown delegate to `src/routing/account-pool/` (process-local).
+ * 401/403 credential failures should set needsReauth on the store (existing OAuth path)
+ * so the account is excluded from eligibility.
  */
-import { createHash } from "node:crypto";
 import { setActiveAccount, getAccountSet, getAccountCredential } from "./store";
 import { getCachedProviderAccountQuota } from "../providers/quota";
 import { fallbackCodexAccountLogLabel } from "../codex/account-label";
@@ -22,25 +21,36 @@ import {
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   notePoolRotationFailure,
-  notePoolRotationSuccess,
   pickRoundRobinAccount,
   POOL_KEY_ANTHROPIC,
   seedPoolRotationAccount,
 } from "../codex/pool-rotation";
 import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
-import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
-import { retainedUtf8Bytes } from "../lib/admission";
+import {
+  ACCOUNT_POOL_MAX_FAILOVERS,
+  affinitySizeForTests,
+  bindSessionAffinity,
+  buildSessionKeyFromParts,
+  clearAccountPoolState,
+  clearAffinityState,
+  clearResolveState,
+  clearSessionAffinityForAccount,
+  getPoolCooldownRegistry,
+  getSessionAffinity,
+  isAccountPoolEligible,
+  isRateLimitStickWait,
+  normalizeAffinityComponent,
+  recordPoolAccountCooldown,
+  resolvePoolAccount,
+  touchSessionAffinity,
+  type AccountPoolPlugin,
+} from "../routing/account-pool";
 
 const PROVIDER = "anthropic";
-const DEFAULT_COOLDOWN_MS = 60_000;
-const MAX_COOLDOWN_MS = 15 * 60_000;
-const AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
-const MAX_AFFINITY_ENTRIES = 2_000;
-const MAX_AFFINITY_COMPONENT_BYTES = 512;
 const UNKNOWN_USAGE_SCORE = 100;
 const DEFAULT_AUTO_SWITCH_THRESHOLD = 80;
 /** Cap same-request 429 rotations so short Retry-After cannot infinite-loop. */
-export const ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST = 3;
+export const ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST = ACCOUNT_POOL_MAX_FAILOVERS;
 
 export interface AnthropicAccountPoolConfig {
   enabled?: boolean;
@@ -52,23 +62,24 @@ export interface AnthropicAccountPoolConfig {
   stickyLimit?: number;
 }
 
-interface AccountHealth {
-  cooldownUntil: number;
-  cooldownSource: "retry-after" | "default";
-}
+const anthropicPoolPlugin: AccountPoolPlugin = {
+  poolKey: POOL_KEY_ANTHROPIC,
+  sessionKeyFromRequest: buildSessionKeyFromParts,
+  listEligibleAccountIds(now) {
+    const set = getAccountSet(PROVIDER);
+    if (!set) return [];
+    return set.accounts
+      .filter(account =>
+        account.needsReauth !== true
+        && isPoolCredentialUsable(account.id, now))
+      .map(account => account.id);
+  },
+  usageScore(accountId) {
+    return anthropicUsageScore(accountId);
+  },
+};
 
-interface AffinityEntry {
-  accountId: string;
-  lastUsedAt: number;
-}
-
-const upstreamHealth = new Map<string, AccountHealth>();
-const sessionAffinity = new Map<string, AffinityEntry>();
-
-function normalizeAffinityComponent(value: string | null | undefined): string {
-  const normalized = value?.trim() ?? "";
-  return normalized && retainedUtf8Bytes(normalized) <= MAX_AFFINITY_COMPONENT_BYTES ? normalized : "";
-}
+const TOKEN_SKEW_MS = 60_000;
 
 export function anthropicAccountPoolConfig(config: OcxConfig): AnthropicAccountPoolConfig {
   const raw = config.anthropicAccountPool;
@@ -86,60 +97,34 @@ export function anthropicAutoSwitchThreshold(config: OcxConfig): number {
   return DEFAULT_AUTO_SWITCH_THRESHOLD;
 }
 
-function parseRetryAfterMs(value: string | null | undefined, now: number): number | undefined {
-  const text = value?.trim();
-  if (!text) return undefined;
-  if (/^\d+(?:\.\d+)?$/.test(text)) {
-    const seconds = Number(text);
-    if (Number.isFinite(seconds) && seconds > 0) {
-      return Math.min(Math.max(Math.ceil(seconds * 1000), 1), MAX_COOLDOWN_MS);
-    }
-  }
-  const timestamp = Date.parse(text);
-  if (!Number.isFinite(timestamp)) return undefined;
-  const delay = timestamp - now;
-  return delay > 0 ? Math.min(delay, MAX_COOLDOWN_MS) : undefined;
-}
-
 export function getAnthropicAccountHealthSnapshot(
   accountId: string,
   now = Date.now(),
-): { cooldownUntil?: number; cooldownSource?: AccountHealth["cooldownSource"] } | null {
-  const entry = upstreamHealth.get(accountId);
+): { cooldownUntil?: number; cooldownSource?: "retry-after" | "default" } | null {
+  const entry = getPoolCooldownRegistry(POOL_KEY_ANTHROPIC).get(accountId, now);
   if (!entry) return null;
-  if (entry.cooldownUntil <= now) {
-    upstreamHealth.delete(accountId);
-    return null;
-  }
-  return { cooldownUntil: entry.cooldownUntil, cooldownSource: entry.cooldownSource };
+  const source = entry.source === "retry-after" ? "retry-after" : "default";
+  return { cooldownUntil: entry.until, cooldownSource: source };
 }
 
 export function clearAnthropicAccountCooldown(accountId: string): boolean {
-  return upstreamHealth.delete(accountId);
+  const registry = getPoolCooldownRegistry(POOL_KEY_ANTHROPIC);
+  const had = registry.get(accountId) !== null;
+  registry.clear(accountId);
+  return had;
 }
 
 export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {
-  let removed = 0;
-  for (const [accountId, health] of upstreamHealth) {
-    if (health.cooldownUntil > now) continue;
-    upstreamHealth.delete(accountId);
-    removed += 1;
-  }
-  return removed;
+  return getPoolCooldownRegistry(POOL_KEY_ANTHROPIC).sweep(now);
 }
 
 /** Test / logout helper. */
 export function clearAnthropicAccountPoolState(): void {
-  upstreamHealth.clear();
-  sessionAffinity.clear();
+  clearAccountPoolState(POOL_KEY_ANTHROPIC);
 }
 
 export function anthropicSessionAffinitySizeForTests(): number {
-  return sessionAffinity.size;
-}
-
-function isCooled(accountId: string, now: number): boolean {
-  return getAnthropicAccountHealthSnapshot(accountId, now) !== null;
+  return affinitySizeForTests(POOL_KEY_ANTHROPIC);
 }
 
 function hasKnownUsage(accountId: string): boolean {
@@ -147,15 +132,13 @@ function hasKnownUsage(accountId: string): boolean {
   return typeof quota?.fiveHourPercent === "number" && Number.isFinite(quota.fiveHourPercent);
 }
 
-function usageScore(accountId: string): number {
+function anthropicUsageScore(accountId: string): number {
   const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
   if (!quota || typeof quota.fiveHourPercent !== "number" || !Number.isFinite(quota.fiveHourPercent)) {
     return UNKNOWN_USAGE_SCORE;
   }
   return Math.max(0, Math.min(100, quota.fiveHourPercent));
 }
-
-const TOKEN_SKEW_MS = 60_000;
 
 /** Background `local-cli` slots with expired access are not pool-eligible (identity adoption risk). */
 function isPoolCredentialUsable(accountId: string, now: number): boolean {
@@ -166,13 +149,19 @@ function isPoolCredentialUsable(accountId: string, now: number): boolean {
   return cred.expires > now + TOKEN_SKEW_MS;
 }
 
+function isAnthropicAccountEligible(accountId: string, now: number): boolean {
+  return isAccountPoolEligible(POOL_KEY_ANTHROPIC, accountId, now, {
+    allowStickWait: isRateLimitStickWait(POOL_KEY_ANTHROPIC, accountId, now),
+  });
+}
+
 export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
   const set = getAccountSet(PROVIDER);
   if (!set) return [];
   return set.accounts
     .filter(account =>
       account.needsReauth !== true
-      && !isCooled(account.id, now)
+      && isAnthropicAccountEligible(account.id, now)
       && isPoolCredentialUsable(account.id, now))
     .map(account => account.id);
 }
@@ -195,10 +184,10 @@ function pickLowestUsage(excludeId: string | undefined, now: number): string | n
   const eligible = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
   if (eligible.length === 0) return null;
   let best = eligible[0]!;
-  let bestScore = usageScore(best);
+  let bestScore = anthropicUsageScore(best);
   for (let i = 1; i < eligible.length; i++) {
     const id = eligible[i]!;
-    const score = usageScore(id);
+    const score = anthropicUsageScore(id);
     if (score < bestScore) {
       best = id;
       bestScore = score;
@@ -226,7 +215,6 @@ function pickNextFillFirstAnthropicAccount(
     }
     return ordered[0] ?? null;
   }
-  // Skip successors that are also at/above threshold (known drained usage).
   let fallback: string | null = null;
   for (let step = 1; step <= stableAll.length; step++) {
     const candidate = stableAll[(startIdx + step) % stableAll.length]!;
@@ -251,16 +239,6 @@ function pickAlternateAnthropicAccount(
     return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
   }
   return pickLowestUsage(excludeId, now);
-}
-
-function pruneExpiredAffinity(now: number): void {
-  for (const [key, entry] of sessionAffinity) {
-    if (now - entry.lastUsedAt > AFFINITY_IDLE_TTL_MS) sessionAffinity.delete(key);
-  }
-  if (sessionAffinity.size <= MAX_AFFINITY_ENTRIES) return;
-  const sorted = [...sessionAffinity.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
-  const drop = sessionAffinity.size - MAX_AFFINITY_ENTRIES;
-  for (let i = 0; i < drop; i++) sessionAffinity.delete(sorted[i]![0]);
 }
 
 export type AnthropicAccountSelectionReason =
@@ -290,15 +268,10 @@ function anthropicPoolStrategy(config: OcxConfig): OcxAccountPoolRotationStrateg
 function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
   const threshold = anthropicAutoSwitchThreshold(config);
   if (threshold <= 0) return true;
-  // Unknown usage must not force fill-first to abandon the active account.
   if (!hasKnownUsage(accountId)) return true;
-  return usageScore(accountId) < threshold;
+  return anthropicUsageScore(accountId) < threshold;
 }
 
-/**
- * Fill-first: keep eligible active under threshold; otherwise advance to the next
- * eligible id in stable sorted order after the current active (wrapping).
- */
 function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string | null {
   const eligible = getEligibleAnthropicAccounts(now);
   if (eligible.length === 0) return null;
@@ -320,33 +293,48 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
   return pickNextFillFirstAnthropicAccount(config, active, eligible);
 }
 
-/**
- * Unbound new-session pick for round-robin / fill-first. Returns null to fall through
- * to the legacy quota path (or when the strategy is quota).
- */
-function pickUnboundStrategyAccount(
+function resolveAnthropicFillFirst(
+  sessionKey: string | null | undefined,
   config: OcxConfig,
+  set: NonNullable<ReturnType<typeof getAccountSet>>,
   now: number,
-): { accountId: string; reason: "round-robin" | "fill-first" } | null {
-  const strategy = anthropicPoolStrategy(config);
-  if (strategy === "quota") return null;
-
-  if (strategy === "round-robin") {
-    const eligible = getEligibleAnthropicAccounts(now);
-    const limit = stickyLimitForPool(config);
-    const picked = pickRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, limit);
-    if (!picked) return null;
-    notePoolRotationSuccess(POOL_KEY_ANTHROPIC, picked, limit);
-    return { accountId: picked, reason: "round-robin" };
+): AnthropicAccountSelection {
+  const key = normalizeAffinityComponent(sessionKey);
+  if (key) {
+    const affined = getSessionAffinity(POOL_KEY_ANTHROPIC, key, now);
+    if (affined) {
+      const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
+      if (
+        stillThere
+        && isAnthropicAccountEligible(affined.accountId, now)
+        && isPoolCredentialUsable(affined.accountId, now)
+      ) {
+        touchSessionAffinity(POOL_KEY_ANTHROPIC, key, now);
+        return { accountId: affined.accountId, reason: "affinity" };
+      }
+      clearSessionAffinityForAccount(POOL_KEY_ANTHROPIC, affined.accountId);
+    }
   }
 
-  if (strategy === "fill-first") {
-    const picked = pickFillFirstAnthropicAccount(config, now);
-    if (!picked) return null;
-    return { accountId: picked, reason: "fill-first" };
+  if (!key) {
+    const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
+      && isAnthropicAccountEligible(set.activeAccountId, now)
+      && isPoolCredentialUsable(set.activeAccountId, now);
+    if (activeOk) {
+      return { accountId: set.activeAccountId, reason: "active" };
+    }
   }
 
-  return null;
+  const picked = pickFillFirstAnthropicAccount(config, now);
+  if (!picked) {
+    const anyCooled = set.accounts.some(a => !isAnthropicAccountEligible(a.id, now));
+    return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
+  }
+
+  if (key && normalizeAffinityComponent(picked)) {
+    bindSessionAffinity(POOL_KEY_ANTHROPIC, key, picked, now);
+  }
+  return { accountId: picked, reason: "fill-first" };
 }
 
 /**
@@ -358,7 +346,6 @@ export function resolveAnthropicAccountForSession(
   config: OcxConfig,
   now = Date.now(),
 ): AnthropicAccountSelection {
-  pruneExpiredAffinity(now);
   const set = getAccountSet(PROVIDER);
   if (!set || set.accounts.length === 0) return { accountId: null, reason: "none" };
 
@@ -366,87 +353,27 @@ export function resolveAnthropicAccountForSession(
     return { accountId: set.activeAccountId, reason: "pool-disabled" };
   }
 
-  const key = normalizeAffinityComponent(sessionKey);
-  if (key) {
-    const affined = sessionAffinity.get(key);
-    if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
-      const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
-      if (stillThere && !isCooled(affined.accountId, now) && isPoolCredentialUsable(affined.accountId, now)) {
-        affined.lastUsedAt = now;
-        return { accountId: affined.accountId, reason: "affinity" };
-      }
-      sessionAffinity.delete(key);
-    }
+  if (anthropicPoolStrategy(config) === "fill-first") {
+    return resolveAnthropicFillFirst(sessionKey, config, set, now);
   }
 
-  const strategy = anthropicPoolStrategy(config);
-  // No session identity (Desktop turns without a sticky key): hold the current
-  // active under RR/fill-first instead of treating every turn as a new session.
-  // Round-robin only when there is a real new-session key (or active is unusable).
-  if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
-    const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
-      && !isCooled(set.activeAccountId, now)
-      && isPoolCredentialUsable(set.activeAccountId, now);
-    if (activeOk) {
-      return { accountId: set.activeAccountId, reason: "active" };
-    }
-  }
+  const kernelResult = resolvePoolAccount(
+    anthropicPoolPlugin,
+    sessionKey ?? null,
+    {
+      strategy: anthropicPoolStrategy(config) === "round-robin" ? "round-robin" : "quota",
+      enabled: true,
+      activeAccountId: set.activeAccountId,
+      stickyLimit: stickyLimitForPool(config),
+      autoSwitchThreshold: anthropicAutoSwitchThreshold(config),
+    },
+    now,
+  );
 
-  const strategyPick = pickUnboundStrategyAccount(config, now);
-  if (strategyPick) {
-    // Do not promote active here — token validation may still fail. Callers
-    // (responses/core) promote after getAnthropicPoolAccessToken succeeds.
-    if (key && normalizeAffinityComponent(strategyPick.accountId)) {
-      sessionAffinity.set(key, { accountId: strategyPick.accountId, lastUsedAt: now });
-      pruneExpiredAffinity(now);
-    }
-    return { accountId: strategyPick.accountId, reason: strategyPick.reason };
-  }
-
-  const threshold = anthropicAutoSwitchThreshold(config);
-  const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
-    && !isCooled(set.activeAccountId, now)
-    && isPoolCredentialUsable(set.activeAccountId, now);
-
-  let accountId: string | null = null;
-  let reason: AnthropicAccountSelectionReason = "none";
-
-  if (threshold > 0) {
-    // Unknown usage must NOT force a switch away from the healthy active account.
-    if (activeOk && (!hasKnownUsage(set.activeAccountId) || usageScore(set.activeAccountId) < threshold)) {
-      accountId = set.activeAccountId;
-      reason = "active";
-    } else {
-      const picked = pickLowestUsage(undefined, now);
-      if (picked) {
-        accountId = picked;
-        reason = activeOk && picked === set.activeAccountId ? "active" : "lowest-usage";
-      } else if (activeOk) {
-        accountId = set.activeAccountId;
-        reason = "active";
-      }
-    }
-  } else if (activeOk) {
-    accountId = set.activeAccountId;
-    reason = "active";
-  } else {
-    const picked = pickLowestUsage(set.activeAccountId, now);
-    if (picked) {
-      accountId = picked;
-      reason = "only-eligible";
-    }
-  }
-
-  if (!accountId) {
-    const anyCooled = set.accounts.some(a => isCooled(a.id, now));
-    return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
-  }
-
-  if (key && normalizeAffinityComponent(accountId)) {
-    sessionAffinity.set(key, { accountId, lastUsedAt: now });
-    pruneExpiredAffinity(now);
-  }
-  return { accountId, reason };
+  return {
+    accountId: kernelResult.accountId,
+    reason: kernelResult.reason as AnthropicAccountSelectionReason,
+  };
 }
 
 export function bindAnthropicSessionAffinity(
@@ -454,16 +381,11 @@ export function bindAnthropicSessionAffinity(
   accountId: string,
   now = Date.now(),
 ): void {
-  const key = normalizeAffinityComponent(sessionKey);
-  if (!key || !normalizeAffinityComponent(accountId)) return;
-  sessionAffinity.set(key, { accountId, lastUsedAt: now });
-  pruneExpiredAffinity(now);
+  bindSessionAffinity(POOL_KEY_ANTHROPIC, sessionKey, accountId, now);
 }
 
 export function clearAnthropicSessionAffinityForAccount(accountId: string): void {
-  for (const [key, entry] of sessionAffinity) {
-    if (entry.accountId === accountId) sessionAffinity.delete(key);
-  }
+  clearSessionAffinityForAccount(POOL_KEY_ANTHROPIC, accountId);
 }
 
 /**
@@ -480,14 +402,14 @@ export function rotateAnthropicAccountOn429(
 ): string | null {
   if (!isAnthropicAccountPoolEnabled(config)) return null;
 
-  const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
-  const cooldownMs = parsedRetry ?? DEFAULT_COOLDOWN_MS;
-  upstreamHealth.set(failedAccountId, {
-    cooldownUntil: now + cooldownMs,
-    cooldownSource: parsedRetry ? "retry-after" : "default",
-  });
-  sweepExpiredOnWrite(now);
-  clearAnthropicSessionAffinityForAccount(failedAccountId);
+  recordPoolAccountCooldown(
+    POOL_KEY_ANTHROPIC,
+    failedAccountId,
+    "rate_limit",
+    retryAfterHeader,
+    now,
+  );
+  clearSessionAffinityForAccount(POOL_KEY_ANTHROPIC, failedAccountId);
   notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
 
   const next = pickAlternateAnthropicAccount(config, failedAccountId, now);
@@ -498,8 +420,7 @@ export function rotateAnthropicAccountOn429(
 
   const affinityKey = normalizeAffinityComponent(sessionKey);
   if (affinityKey && normalizeAffinityComponent(next)) {
-    sessionAffinity.set(affinityKey, { accountId: next, lastUsedAt: now });
-    pruneExpiredAffinity(now);
+    bindSessionAffinity(POOL_KEY_ANTHROPIC, affinityKey, next, now);
   }
   console.warn(
     `[anthropic-pool] 429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
@@ -517,7 +438,8 @@ export function promoteAnthropicActiveAccount(accountId: string): void {
  * unbound new session honors the operator-chosen account (Codex parity).
  */
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
-  sessionAffinity.clear();
+  clearAffinityState(POOL_KEY_ANTHROPIC);
+  clearResolveState(POOL_KEY_ANTHROPIC);
   seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
 }
 
@@ -578,17 +500,5 @@ export function anthropicSessionKeyFromParts(input: {
   /** When true, prompt_cache_key is a shared Desktop cohort — ignore it for affinity. */
   promptCacheKeyIsSharedCohort?: boolean;
 }): string | null {
-  const preferred = (
-    input.clientThreadId
-    ?? input.sessionIdHeader
-    ?? input.threadIdHeader
-    ?? ""
-  ).trim();
-  if (preferred) {
-    return preferred.length <= 128 ? preferred : createHash("sha256").update(preferred).digest("hex");
-  }
-  if (input.promptCacheKeyIsSharedCohort) return null;
-  const cacheKey = input.promptCacheKey?.trim() ?? "";
-  if (!cacheKey) return null;
-  return cacheKey.length <= 128 ? cacheKey : createHash("sha256").update(cacheKey).digest("hex");
+  return buildSessionKeyFromParts(input);
 }

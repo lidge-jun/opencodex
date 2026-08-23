@@ -1566,6 +1566,19 @@ export const ja: Record<TKey, string> = {
   "anthropicPool.on": "オン",
   "anthropicPool.off": "オフ",
 
+  "cursorPool.title": "Cursor アカウントプール（実験的）",
+  "cursorPool.enabledDesc": "429 または認証失敗時にアカウントをクールダウンし、この会話でフェイルオーバーします。レート制限または認証失敗が発生するまで、各会話は 1 つのアカウントに留まります。",
+  "cursorPool.disabledDesc": "アクティブな Cursor アカウントのみを使用します。実験的ルーティングを受け入れる場合のみ有効にしてください。",
+  "cursorPool.experimentalWarning": "実験的で十分に検証されていません。Cursor の利用規約はレート制限の回避と使用量計測の操作を禁止しています。Teams の含まれる使用量はシート単位で、転送されない場合があります。リスクを理解していない場合はオフのままにしてください。",
+  "cursorPool.needTwoAccounts": "プールを有効にする前に、Cursor OAuth アカウントを 2 つ以上追加してください。",
+  "cursorPool.loadFailed": "Cursor プール設定を読み込めませんでした。",
+  "cursorPool.saveFailed": "Cursor プール設定を保存できませんでした。",
+  "cursorPool.on": "オン",
+  "cursorPool.off": "オフ",
+
+  "antigravityRouting.failoverOnlyTitle": "マルチアカウントルーティング（フェイルオーバーのみ）",
+  "antigravityRouting.failoverOnlyDesc": "各会話は 1 つの Antigravity アカウントに留まります。レート制限 429 または認証失敗時に、opencodex はその会話の別の適格アカウントへフェイルオーバーできます — 新規セッションをアカウント間で分散したり、他の進行中会話のグローバルなアクティブアカウントを変更したりしません。",
+
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
   "accountPool.strategyQuota": "クォータ",

@@ -1126,6 +1126,19 @@ export const zh: Record<TKey, string> = {
   "anthropicPool.on": "开",
   "anthropicPool.off": "关",
 
+  "cursorPool.title": "Cursor 账户池（实验性）",
+  "cursorPool.enabledDesc": "遇到 429 或认证失败时冷却该账户并为此对话故障转移。每个对话会保持一个账户，直到发生限速或凭据失败。",
+  "cursorPool.disabledDesc": "仅使用当前活跃的 Cursor 账户。仅在接受实验性路由时启用。",
+  "cursorPool.experimentalWarning": "实验性功能，尚未充分验证。Cursor 使用政策禁止规避速率限制和操纵用量计量。Teams 包含用量按席位计算，可能无法转移。除非了解风险，否则请保持关闭。",
+  "cursorPool.needTwoAccounts": "启用账户池前请至少添加两个 Cursor OAuth 账户。",
+  "cursorPool.loadFailed": "无法加载 Cursor 账户池设置。",
+  "cursorPool.saveFailed": "无法保存 Cursor 账户池设置。",
+  "cursorPool.on": "开",
+  "cursorPool.off": "关",
+
+  "antigravityRouting.failoverOnlyTitle": "多账户路由（仅故障转移）",
+  "antigravityRouting.failoverOnlyDesc": "每个对话保持一个 Antigravity 账户。遇到限速 429 或凭据失败时，opencodex 可为该对话故障转移到另一个符合条件的账户 — 不会在新会话间负载均衡，也不会更改其他进行中对话的全局活跃账户。",
+
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "OpenCodex 如何为新建/未绑定任务分配账号。",
   "accountPool.strategyQuota": "配额",

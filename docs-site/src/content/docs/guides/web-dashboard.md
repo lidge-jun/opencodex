@@ -111,14 +111,22 @@ may clear affinity and rotate to another eligible Pool account. This is separate
 and other providers.
 
 :::caution[Provider-policy responsibility]
-The account pool is a technical account-management, routing, and resilience feature. It does not
+Account pools are technical account-management, routing, and resilience features. They do not
 claim that having multiple accounts is itself prohibited; compliance depends on the account setup and
 use pattern. OpenCodex does not endorse using additional accounts to circumvent rate limits, quotas,
 plan limits, or other provider restrictions, or sharing account credentials between people. You are
-responsible for complying with the provider's current terms for every connected account and use
+responsible for complying with each provider's current terms for every connected account and use
 pattern. Provider restrictions, suspension, or termination are outside OpenCodex's control;
 maintainers do not provide policy advice and cannot resolve provider enforcement. Review
-[OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/).
+[OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/) and the terms for every
+other OAuth provider you pool (Anthropic, Google Antigravity, Cursor, and others).
+
+The same caution applies to experimental Claude and Cursor account pools in
+[Provider Configuration](/reference/configuration/providers/#shared-oauth-account-pool-kernel).
+Those pools are off by default. Antigravity multi-account routing is failover-only — it does not
+spread new sessions across accounts. Command Code does not support account pooling; one account per
+person is required by Command Code terms. Billing and payment failures are not rate-limit 429s and do
+not trigger the short account-hop carousel.
 :::
 
 - Manually choosing an account applies immediately: an already-bound thread moves to it on its next

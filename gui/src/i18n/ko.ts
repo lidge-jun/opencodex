@@ -1133,6 +1133,19 @@ export const ko: Record<TKey, string> = {
   "anthropicPool.on": "켜짐",
   "anthropicPool.off": "꺼짐",
 
+  "cursorPool.title": "Cursor 계정 풀(실험적)",
+  "cursorPool.enabledDesc": "429 또는 인증 실패 시 계정을 쿨다운하고 이 대화에서 장애 조치합니다. 각 대화는 레이트 제한 또는 인증 실패가 발생할 때까지 한 계정에 유지됩니다.",
+  "cursorPool.disabledDesc": "활성 Cursor 계정만 사용합니다. 실험적 라우팅을 감수할 때만 켜세요.",
+  "cursorPool.experimentalWarning": "실험적이며 충분히 검증되지 않았습니다. Cursor 이용 규정은 레이트 제한 우회와 사용량 측정 조작을 금지합니다. Teams 포함 사용량은 좌석 단위이며 이전되지 않을 수 있습니다. 위험을 이해하지 못하면 꺼 두세요.",
+  "cursorPool.needTwoAccounts": "풀을 켜기 전에 Cursor OAuth 계정을 두 개 이상 추가하세요.",
+  "cursorPool.loadFailed": "Cursor 풀 설정을 불러오지 못했습니다.",
+  "cursorPool.saveFailed": "Cursor 풀 설정을 저장하지 못했습니다.",
+  "cursorPool.on": "켜짐",
+  "cursorPool.off": "꺼짐",
+
+  "antigravityRouting.failoverOnlyTitle": "다중 계정 라우팅(장애 조치만)",
+  "antigravityRouting.failoverOnlyDesc": "각 대화는 하나의 Antigravity 계정에 유지됩니다. 레이트 제한 429 또는 인증 실패 시 opencodex는 해당 대화의 다른 적격 계정으로 장애 조치할 수 있습니다 — 새 세션을 계정 간에 분산하거나 다른 진행 중 대화의 전역 활성 계정을 변경하지 않습니다.",
+
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "OpenCodex가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",
   "accountPool.strategyQuota": "할당량",

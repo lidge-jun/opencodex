@@ -1,9 +1,24 @@
+import { getAccountSet } from "./store";
+import {
+  bindSessionAffinity,
+  buildSessionKeyFromParts,
+  clearAffinityState,
+  clearSessionAffinityForAccount,
+  getSessionAffinity,
+  normalizeAffinityComponent,
+  touchSessionAffinity,
+} from "../routing/account-pool";
+
 /**
  * Process-local Antigravity account health (cooldowns). Stored in an in-memory
  * `Map<string, AntigravityAccountHealth>` for the lifetime of this process only —
  * cooldowns reset on restart and are not shared across workers.
  */
 export type AntigravityCooldownReason = "rate_limited" | "quota_exhausted" | "geo_blocked";
+
+const POOL_KEY_ANTIGRAVITY = "google-antigravity";
+/** Short rate-limit stick-wait: retry the same account instead of hopping. Never wait on quota/geo. */
+export const ANTIGRAVITY_STICK_WAIT_MAX_MS = 5_000;
 
 const DEFAULT_RATE_LIMITED_COOLDOWN_MS = 5_000;
 const MAX_RATE_LIMITED_COOLDOWN_MS = 60_000;
@@ -116,6 +131,156 @@ export function sweepExpiredAntigravityRoutingHealth(now = Date.now()): number {
 
 export function clearAntigravityAccountCooldown(accountId: string): void {
   accountHealth.delete(accountId);
+}
+
+/** Test helper: reset process-local cooldown state between cases. */
+export function clearAntigravityRoutingHealthForTests(): void {
+  accountHealth.clear();
+}
+
+export function isAntigravityRateLimitStickWait(accountId: string, now = Date.now()): boolean {
+  const health = getAntigravityAccountCooldown(accountId, now);
+  if (!health || health.reason !== "rate_limited") return false;
+  const remaining = health.cooldownUntil - now;
+  return remaining > 0 && remaining <= ANTIGRAVITY_STICK_WAIT_MAX_MS;
+}
+
+/** Milliseconds to wait before retrying the same account on 429, or null when failover should run. */
+export function antigravity429StickWaitMs(accountId: string, now = Date.now()): number | null {
+  if (!isAntigravityRateLimitStickWait(accountId, now)) return null;
+  const health = getAntigravityAccountCooldown(accountId, now);
+  if (!health) return null;
+  const remaining = health.cooldownUntil - now;
+  return remaining > 0 ? remaining : null;
+}
+
+export function isAntigravityAccountEligible(accountId: string, now = Date.now()): boolean {
+  if (!isAntigravityAccountInCooldown(accountId, now)) return true;
+  return isAntigravityRateLimitStickWait(accountId, now);
+}
+
+export function getEligibleAntigravityAccounts(now = Date.now()): string[] {
+  const set = getAccountSet(POOL_KEY_ANTIGRAVITY);
+  if (!set) return [];
+  return set.accounts
+    .filter(account => isAntigravityAccountEligible(account.id, now))
+    .map(account => account.id);
+}
+
+export type AntigravityAccountSelectionReason =
+  | "affinity"
+  | "active"
+  | "failover"
+  | "none"
+  | "all-cooled";
+
+export interface AntigravityAccountSelection {
+  accountId: string | null;
+  reason: AntigravityAccountSelectionReason;
+}
+
+function bindAntigravityAffinityIfPossible(
+  sessionKey: string | null | undefined,
+  accountId: string,
+  now: number,
+): void {
+  bindSessionAffinity(POOL_KEY_ANTIGRAVITY, sessionKey, accountId, now);
+}
+
+/**
+ * Failover-only account pick: stick bound sessions, default new sessions to the store active
+ * account, and hop only when the chosen account is cooled (except short rate-limit stick-wait).
+ * Does not call setActiveAccount.
+ */
+export function resolveAntigravityAccountForSession(
+  sessionKey: string | null | undefined,
+  now = Date.now(),
+): AntigravityAccountSelection {
+  const set = getAccountSet(POOL_KEY_ANTIGRAVITY);
+  if (!set || set.accounts.length === 0) return { accountId: null, reason: "none" };
+
+  const accountIds = set.accounts.map(account => account.id);
+  const activeId = set.activeAccountId;
+  const key = normalizeAffinityComponent(sessionKey);
+
+  if (key) {
+    const affined = getSessionAffinity(POOL_KEY_ANTIGRAVITY, key, now);
+    if (affined) {
+      if (isAntigravityAccountEligible(affined.accountId, now)) {
+        touchSessionAffinity(POOL_KEY_ANTIGRAVITY, key, now);
+        return { accountId: affined.accountId, reason: "affinity" };
+      }
+      const next = nextAntigravityAccount(accountIds, affined.accountId, now);
+      if (next) {
+        bindAntigravityAffinityIfPossible(sessionKey, next, now);
+        return { accountId: next, reason: "failover" };
+      }
+      clearSessionAffinityForAccount(POOL_KEY_ANTIGRAVITY, affined.accountId);
+      const anyCooled = accountIds.some(id => !isAntigravityAccountEligible(id, now));
+      return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
+    }
+  }
+
+  if (activeId && isAntigravityAccountEligible(activeId, now)) {
+    bindAntigravityAffinityIfPossible(sessionKey, activeId, now);
+    return { accountId: activeId, reason: "active" };
+  }
+
+  const next = nextAntigravityAccount(accountIds, activeId, now);
+  if (next) {
+    bindAntigravityAffinityIfPossible(sessionKey, next, now);
+    return { accountId: next, reason: "failover" };
+  }
+
+  const anyCooled = accountIds.some(id => !isAntigravityAccountEligible(id, now));
+  return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
+}
+
+export function bindAntigravitySessionAffinity(
+  sessionKey: string | null | undefined,
+  accountId: string,
+  now = Date.now(),
+): void {
+  bindAntigravityAffinityIfPossible(sessionKey, accountId, now);
+}
+
+/**
+ * Pick the next Antigravity account after a rate-limit 429. Cooldown is recorded upstream
+ * (google-http). Does not promote the global active account.
+ */
+export function rotateAntigravityAccountOn429(
+  failedAccountId: string,
+  sessionKey: string | null | undefined,
+  now = Date.now(),
+): string | null {
+  if (antigravity429StickWaitMs(failedAccountId, now) !== null) return null;
+
+  const set = getAccountSet(POOL_KEY_ANTIGRAVITY);
+  if (!set) return null;
+  const accountIds = set.accounts.map(account => account.id);
+
+  clearSessionAffinityForAccount(POOL_KEY_ANTIGRAVITY, failedAccountId);
+
+  const next = nextAntigravityAccount(accountIds, failedAccountId, now);
+  if (!next) return null;
+
+  bindAntigravityAffinityIfPossible(sessionKey, next, now);
+  return next;
+}
+
+/** Test / logout helper. */
+export function clearAntigravityAccountPoolState(): void {
+  clearAffinityState(POOL_KEY_ANTIGRAVITY);
+}
+
+export function antigravitySessionKeyFromParts(input: {
+  sessionIdHeader?: string | null;
+  threadIdHeader?: string | null;
+  promptCacheKey?: string | null;
+  clientThreadId?: string | null;
+  promptCacheKeyIsSharedCohort?: boolean;
+}): string | null {
+  return buildSessionKeyFromParts(input);
 }
 
 export const ANTIGRAVITY_MISSING_PROJECT_MESSAGE =
