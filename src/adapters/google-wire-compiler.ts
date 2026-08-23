@@ -147,8 +147,7 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
     const properties = isObject(responseSchema.properties) ? responseSchema.properties : undefined;
     const hasProperties = properties !== undefined && Object.keys(properties).length > 0;
     const hasRequired = Array.isArray(responseSchema.required) && responseSchema.required.length > 0;
-    const isExplicitEmptySchema = Object.keys(value.responseSchema).length === 0;
-    if (hasProperties || hasRequired || isExplicitEmptySchema) out.responseSchema = responseSchema;
+    if (hasProperties || hasRequired) out.responseSchema = responseSchema;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

@@ -85,6 +85,20 @@ describe("Google wire compiler", () => {
     });
   });
 
+  test("drops an explicitly empty responseSchema while preserving JSON mode", () => {
+    const compiled = compileGoogleWireBody({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {},
+      },
+    });
+
+    expect(compiled.body.generationConfig).toEqual({
+      responseMimeType: "application/json",
+    });
+  });
+
   test("drops non-json responseMimeType and unknown schema types", () => {
     const compiled = compileGoogleWireBody({
       contents: [{ role: "user", parts: [{ text: "hi" }] }],
