@@ -16,6 +16,7 @@ import {
   httpStatusForRequestLogTerminal,
   inspectResponseLogJson,
   inspectResponseLogSsePayloadParsed,
+  noteStreamTimelineEvent,
   recordFirstOutput,
   type RequestLogContext,
   type RequestLogEntry,
@@ -1084,6 +1085,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try { handlers.onParsedPayload(parsed); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
+    if (handlers.logCtx && handlers.logCtx.firstOutputMs !== undefined) {
+      noteStreamTimelineEvent(handlers.logCtx, "upstreamFirstSemanticOutputMs");
+    }
     const status = terminalStatusFromParsed(parsed);
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
@@ -1095,6 +1099,10 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         if (handlers.logCtx) {
           handlers.logCtx.transportPhase = "terminal_sse";
           handlers.logCtx.terminalSource = "upstream";
+          if (status === "failed") {
+            handlers.logCtx.failureSide = "upstream";
+            handlers.logCtx.failureStage = "terminal_delivery";
+          }
         }
         handlers.onTerminal(status, policyTerminal ? 400 : undefined);
       } finally {
@@ -1221,7 +1229,11 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
   return {
     feed(chunk) {
-      if (!disposed) scanChunk(chunk);
+      if (disposed) return;
+      if (chunk.byteLength > 0 && handlers.logCtx) {
+        noteStreamTimelineEvent(handlers.logCtx, "upstreamFirstByteMs");
+      }
+      scanChunk(chunk);
     },
     finish() {
       if (disposed) return;
@@ -1439,7 +1451,11 @@ export function consumeForInspection(
     onCancel,
     onCleanEof: () => {
       if (!inspector.reported()) {
-        if (logCtx) logCtx.terminalSource = "synthetic";
+        if (logCtx) {
+          logCtx.terminalSource = "synthetic";
+          logCtx.failureSide = "upstream";
+          logCtx.failureStage = "upstream_read";
+        }
         if (bareUpstreamError !== undefined) {
           onTerminal("failed", httpStatusForRequestLogTerminal("failed", logCtx));
         } else {
@@ -1455,6 +1471,8 @@ export function consumeForInspection(
         if (logCtx) {
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
+          logCtx.failureSide = "upstream";
+          logCtx.failureStage = "upstream_read";
           // A truncated 200 body must not meter as a success the client never
           // received; the router's equivalent turn carries 502 + streamAborted
           // (codex-router #139).

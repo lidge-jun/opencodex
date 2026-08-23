@@ -1100,4 +1100,86 @@ describe("usage log", () => {
     expect(row?.attempts?.[0].transportPhase).toBeUndefined();
     expect(row?.attempts?.[0].terminalSource).toBeUndefined();
   });
+
+  test("drops credential-shaped values from diagnostic metadata (#1217)", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-credential-drop-test",
+      timestamp: Date.now(),
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 502,
+      durationMs: 1000,
+      usageStatus: "unreported",
+      failureSide: "Basic dXNlcjpwYXNz" as unknown as any,
+      failureStage: "token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" as unknown as any,
+      transportPhase: "password=super-secret-pw" as unknown as any,
+      terminalSource: "api-key=supersecret12345" as unknown as any,
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === "ocx-stream-credential-drop-test");
+    expect(row).toBeDefined();
+    expect(row?.failureSide).toBeUndefined();
+    expect(row?.failureStage).toBeUndefined();
+    expect(row?.transportPhase).toBeUndefined();
+    expect(row?.terminalSource).toBeUndefined();
+  });
+
+  test("shared request logging flow populates streamTimeline and failure attribution from real streaming failure (#1217)", async () => {
+    const { addFinalRequestLog } = await import("../src/server/request-log");
+    const { consumeForInspection } = await import("../src/server/relay");
+    type ReqLogCtx = import("../src/server/request-log").RequestLogContext;
+
+    const requestId = "ocx-real-stream-fail-test";
+    const start = Date.now() - 50;
+    const logCtx: ReqLogCtx = {
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      providerAdapter: "anthropic",
+      requestStartedAt: start,
+    };
+
+    // Simulate an SSE stream that delivers data then encounters an upstream read error (socket reset)
+    let sentFirst = false;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sentFirst) {
+          sentFirst = true;
+          controller.enqueue(new TextEncoder().encode('data: {"type":"response.output_item.added"}\n\n'));
+          return;
+        }
+        controller.error(new Error("socket reset mid-stream"));
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(
+        stream,
+        (terminalStatus, httpStatusOverride) => {
+          addFinalRequestLog(
+            requestId,
+            start,
+            logCtx,
+            httpStatusOverride ?? (terminalStatus === "completed" ? 200 : 502),
+            { terminalStatus },
+          );
+          resolve();
+        },
+        undefined,
+        () => resolve(),
+        logCtx,
+      );
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === requestId);
+    expect(row).toBeDefined();
+    expect(row?.status).toBe(502);
+    expect(row?.terminalStatus).toBe("failed");
+    expect(row?.transportPhase).toBe("mid_stream");
+    expect(row?.terminalSource).toBe("synthetic");
+    expect(row?.failureSide).toBe("upstream");
+    expect(row?.failureStage).toBe("upstream_read");
+    expect(row?.streamTimeline?.upstreamFirstByteMs).toBeGreaterThanOrEqual(0);
+  });
 });
