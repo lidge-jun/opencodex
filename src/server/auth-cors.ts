@@ -649,6 +649,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (raw.xaiResponsesXSearch !== undefined && typeof raw.xaiResponsesXSearch !== "boolean") {
     return `provider ${name} xaiResponsesXSearch must be a boolean`;
   }
+  if (raw.annotateEmptyToolOutputs !== undefined && typeof raw.annotateEmptyToolOutputs !== "boolean") {
+    return `provider ${name} annotateEmptyToolOutputs must be a boolean`;
+  }
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");

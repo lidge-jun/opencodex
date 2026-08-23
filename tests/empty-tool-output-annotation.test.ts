@@ -198,4 +198,68 @@ describe("openai-responses empty tool output annotation", () => {
     const input = body.input as Array<Record<string, unknown>>;
     expect(input[0].output).toBe("");
   });
+
+  test("whitespace-only text-part array is annotated when enabled", async () => {
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_5", output: [{ type: "text", text: "   \n  " }] },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toBe(ANNOTATION);
+  });
+
+  test("image-only output is never replaced when enabled", async () => {
+    const output = [{ type: "input_image", image_url: { url: "data:image/png;base64,AAAA" } }];
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_6", output },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toEqual(output);
+  });
+
+  test("image plus whitespace text is never replaced when enabled", async () => {
+    const output = [
+      { type: "text", text: "   " },
+      { type: "input_image", image_url: { url: "data:image/png;base64,AAAA" } },
+    ];
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_7", output },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toEqual(output);
+  });
+
+  test("encrypted_content output is never replaced when enabled", async () => {
+    const output = [{ type: "encrypted_content", data: "opaque-blob" }];
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_8", output },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toEqual(output);
+  });
+
+  test("file_id-only output is never replaced when enabled", async () => {
+    const output = [{ type: "input_file", file_id: "file_123" }];
+    const { body } = await drive(responsesConfig(true), [
+      { type: "custom_tool_call_output", call_id: "call_9", output },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toEqual(output);
+  });
+
+  test("non-empty refusal output is never replaced when enabled", async () => {
+    const output = [{ type: "refusal", refusal: "I cannot do that" }];
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_10", output },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toEqual(output);
+  });
+
+  test("whitespace-only refusal output is annotated when enabled", async () => {
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_11", output: [{ type: "refusal", refusal: "   " }] },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toBe(ANNOTATION);
+  });
 });

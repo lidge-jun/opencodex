@@ -8,6 +8,7 @@ import { isDebugEnabled } from "../lib/debug-settings";
 import { isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
+import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
@@ -589,10 +590,6 @@ function isNativeOpenAIChatTarget(provider: OcxProviderConfig): boolean {
   }
 }
 
-/** Wire text used when a present-but-empty tool result must stay visible to the model. */
-const EMPTY_TOOL_OUTPUT_ANNOTATION =
-  "[ocx] empty tool output: the tool ran but produced no stdout or return value; do not treat this as success, failure, or user-provided input.";
-
 /**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
  * content is text-only on every chat provider, so these ride in a follow-up user message instead of
@@ -608,10 +605,11 @@ function toolResultTextForWire(content: string | OcxContentPart[], annotateEmpty
     return content;
   }
   const text = content.filter((p) => p.type === "text").map((p) => (p as OcxTextContent).text).join("");
-  // A whitespace-only text-part array is the array twin of a blank string: the
-  // Responses adapter treats it as empty, so the Chat adapter must annotate it too
-  // instead of forwarding whitespace the model silently accepts (CodeRabbit).
-  if (annotateEmpty && content.every(part => part.type === "text") && text.trim() === "") {
+  // A whitespace-only text-part array is the array twin of a blank string; the
+  // shared emptiness contract (same module as the Responses adapter) annotates it
+  // instead of forwarding whitespace the model silently accepts. Image parts and
+  // any other non-text part keep the array non-empty.
+  if (annotateEmpty && isWhitespaceOnlyTextPartArray(content)) {
     return EMPTY_TOOL_OUTPUT_ANNOTATION;
   }
   if (text) {

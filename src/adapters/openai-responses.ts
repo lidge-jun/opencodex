@@ -21,6 +21,7 @@ import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-com
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
+import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import {
   isXaiSchemaTarget,
   normalizeXaiToolParameters,
@@ -842,20 +843,15 @@ function toolOutputText(output: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
-/** Wire text used when a present-but-empty tool output must stay visible to the model. */
-const EMPTY_TOOL_OUTPUT_ANNOTATION =
-  "[ocx] empty tool output: the tool ran but produced no stdout or return value; do not treat this as success, failure, or user-provided input.";
-
 /** True when a Responses tool output item is present but carries no usable content. */
 function isToolOutputEmpty(output: unknown): boolean {
   if (typeof output === "string") return output.trim() === "";
   if (Array.isArray(output)) {
-    return output.every(part => {
-      if (!isPlainObject(part)) return true;
-      if (typeof part.text === "string" && part.text.trim() !== "") return false;
-      if (part.type === "refusal" && typeof part.refusal === "string" && part.refusal.trim() !== "") return false;
-      return true;
-    });
+    // Mirror the Chat wire rule through the shared contract: only a pure
+    // text/refusal part array whose joined content trims empty is annotated.
+    // input_image, encrypted_content, input_file and any other non-text part is
+    // real output and must never be replaced.
+    return isWhitespaceOnlyTextPartArray(output);
   }
   return output === undefined || output === null;
 }
