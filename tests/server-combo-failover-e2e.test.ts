@@ -970,6 +970,49 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
+  test("records one account-health failure for one zero-output native terminal", async () => {
+    const rawAccountId = "combo-terminal-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "combo-terminal@example.test",
+      isMain: false,
+      logLabel: "pterm001",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.upstreamFailoverThreshold = 3;
+    config.streamMode = "legacy-tee";
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "combo-terminal-access",
+      refreshToken: "combo-terminal-refresh",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-combo-terminal",
+    });
+    customTransientResponse = async () => new Response([
+      "event: response.created",
+      'data: {"type":"response.created","response":{"id":"resp_failed","status":"in_progress"}}',
+      "",
+      "event: response.failed",
+      'data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"type":"server_error","code":"upstream_server_error","message":"busy"}}}',
+      "",
+      "",
+    ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+
+    const response = await post(config, { stream: true });
+    expect(response.status).toBe(502);
+    expect(getCodexUpstreamHealth(rawAccountId)).toMatchObject({
+      consecutiveFailures: 1,
+      lastFailureStatus: 502,
+    });
+  });
+
   test("lets a same-provider combo try its next model after a reset-derived 429", async () => {
     const rawAccountId = "combo-reset-account";
     const config = comboConfig({

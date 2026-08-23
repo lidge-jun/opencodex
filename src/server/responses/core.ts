@@ -1880,7 +1880,6 @@ export async function handleComboResponses(
     });
     let resolvedAuth: CodexAuthContext | undefined;
     let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
-    let terminalOutcomeRecorded = false;
     const started = Date.now();
     const attempt = beginRequestAttempt(
       (logCtx.attempts?.length ?? 0) + 1,
@@ -1927,15 +1926,7 @@ export async function handleComboResponses(
           options.onFirstOutput?.();
         },
         onCodexAuthContextResolved: value => { resolvedAuth = value; },
-        setTerminalOutcomeRecorder: value => {
-          terminalRecorder = value
-            ? (status, httpStatusOverride) => {
-              if (terminalOutcomeRecorded) return;
-              terminalOutcomeRecorded = true;
-              value(status, httpStatusOverride);
-            }
-            : undefined;
-        },
+        setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
         onConsumedComboFailure: value => { consumedChildFailure = value; },
         onNativePassthroughTerminal: callbackGate.onTerminal,
         onNativePassthroughCancel: callbackGate.onCancel,
@@ -3578,13 +3569,21 @@ async function handleResponsesInner(
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
-    const terminalRecorder = codexForwardTerminalOutcomeRecorder(
+    const recordTerminalOutcome = codexForwardTerminalOutcomeRecorder(
       config,
       authCtx,
       route.provider,
       route.modelId,
       logCtx,
     );
+    let terminalOutcomeRecorded = false;
+    const terminalRecorder = recordTerminalOutcome
+      ? (status: ResponsesTerminalStatus, httpStatusOverride?: number): void => {
+        if (terminalOutcomeRecorded) return;
+        terminalOutcomeRecorded = true;
+        recordTerminalOutcome(status, httpStatusOverride);
+      }
+      : undefined;
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
