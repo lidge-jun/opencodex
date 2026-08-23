@@ -76,10 +76,20 @@ test("the foot's four rows share one text column and one trailing inset", async 
   // padding on the label rather than the row is what keeps the row's height tied to
   // its text, like its neighbours, instead of to the taller orbs beside it.
   expect(rule(".sidebar-action-label")).toContain("padding: 8px 10px 8px calc(10px + 16px + 9px)");
-  expect(rule(".sidebar-action-row")).not.toContain("padding: 8px 10px");
+
+  /*
+   * Reject block padding on the row in every spelling, not just the shorthand it
+   * shipped with: `padding: 8px 0`, or a lone `padding-top`, would hand the 28px orbs
+   * back control of the row height and still slip past a check for the exact original
+   * string. `padding-right` survives both patterns — "padding" is followed by "-",
+   * never by a colon.
+   */
+  const proxyRow = rule(".sidebar-action-row");
+  expect(proxyRow).not.toMatch(/padding\s*:/);
+  expect(proxyRow).not.toMatch(/padding-(top|bottom|block)/);
 
   // Trailing controls stop on the same inset as the lang chevron above them.
-  expect(rule(".sidebar-action-row")).toContain("padding-right: 10px");
+  expect(proxyRow).toContain("padding-right: 10px");
   expect(rule(".sidebar-github-row")).toContain("padding-right: 10px");
 });
 
