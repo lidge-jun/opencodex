@@ -4,6 +4,7 @@ import {
   preflightComboStreamResponse,
 } from "../src/server/responses/combo-stream-preflight";
 import type { RequestLogContext } from "../src/server/request-log";
+import { MAX_CLIENT_SSE_FRAME_BYTES } from "../src/server/sse-frame-buffer";
 
 const sse = (...payloads: unknown[]): Response => new Response(
   payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
@@ -61,5 +62,32 @@ describe("combo stream preflight", () => {
 
     expect(result.kind).toBe("accepted");
     expect(await result.response.text()).toBe(expected);
+  });
+
+  test("commits an oversized next chunk without copying it beyond the preflight cap", async () => {
+    const encoder = new TextEncoder();
+    const preamble = encoder.encode(`data: ${JSON.stringify({
+      type: "response.created",
+      response: { id: "r1", status: "in_progress" },
+    })}\n\n`);
+    const oversized = new Uint8Array(MAX_CLIENT_SSE_FRAME_BYTES + 1);
+    oversized.fill(120);
+    const chunks = [preamble, oversized];
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
+
+    const result = await preflightComboStreamResponse(response, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    const reader = result.response.body!.getReader();
+    const first = await reader.read();
+    const second = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe(new TextDecoder().decode(preamble));
+    expect(second.value).toBe(oversized);
+    await reader.cancel();
   });
 });

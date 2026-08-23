@@ -141,6 +141,15 @@ export async function preflightComboStreamResponse(
       if (next.done) {
         inspector.finish();
       } else {
+        if (bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES) {
+          // Keep the cap about memory the preflight allocates. The upstream chunk already exists;
+          // copying it before committing would transiently exceed the boundary for no
+          // replay benefit. Preserve it unsliced behind the already-bounded prefix.
+          return {
+            kind: "accepted",
+            response: replayBufferedResponse(response, reader, [...buffered, next.value]),
+          };
+        }
         const retained = next.value.slice();
         buffered.push(retained);
         bufferedBytes += retained.byteLength;

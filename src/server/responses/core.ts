@@ -327,6 +327,11 @@ import {
 } from "./empty-completion-guard";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 
+// runTurn adapters own an event queue and perform their combo preflight before
+// bridging. A second byte-stream reader would reinterpret that transport's
+// already-committed event boundary and can replay custom adapter work.
+const runTurnAdapterSseResponses = new WeakSet<Response>();
+
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
  */
@@ -1950,7 +1955,7 @@ export async function handleComboResponses(
       return clientCancelledResponse();
     }
 
-    if (response.ok) {
+    if (response.ok && !runTurnAdapterSseResponses.has(response)) {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
@@ -4473,9 +4478,11 @@ async function handleResponsesInner(
       );
       const bridgeTurnAc = new AbortController();
       const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, undefined, options.turnAdmissionLease);
-      return new Response(trackedSse, {
+      const response = new Response(trackedSse, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" },
       });
+      runTurnAdapterSseResponses.add(response);
+      return response;
     }
 
     await runTurn();

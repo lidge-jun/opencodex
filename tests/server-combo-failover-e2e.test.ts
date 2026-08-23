@@ -2374,6 +2374,32 @@ describe("server combo failover 030 activation matrix", () => {
     expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
   });
 
+  test("runTurn control-only late errors stay on the adapter-owned stream", async () => {
+    let aHits = 0;
+    let bHits = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      aHits += 1;
+      // preflightAdapterEvents commits this custom transport at its first
+      // non-heartbeat event even though the bridge emits no visible output.
+      emit({ type: "assistant_boundary" });
+      emit({ type: "error", message: "late runTurn failure" });
+    };
+    const b = serve(() => {
+      bHits += 1;
+      return chatStream("must not replay");
+    });
+    const config = comboConfig({
+      a: provider("test-run-turn", "test://run-turn", "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await post(config, { stream: true });
+    const frames = await collectSse(response);
+    expect(aHits).toBe(1);
+    expect(bHits).toBe(0);
+    expect(frames.filter(frame => frame.event === "response.failed")).toHaveLength(1);
+    expect(frames.some(frame => frame.event === "response.output_text.delta")).toBe(false);
+  });
+
   test("PATCH-disable-all returns combo_unavailable without any fallback hit", async () => {
     let aHits = 0;
     let bHits = 0;

@@ -12,7 +12,6 @@ import {
   comboDefaultEffort,
   comboDisabledModelId,
   comboDisabledModelSelectors,
-  comboFailureDecision,
   comboIdFromRawBody,
   comboModelId,
   comboPublicModelId,
@@ -37,6 +36,7 @@ import {
   tryPickComboModel,
   UnknownComboError,
 } from "../src/combos";
+import { comboFailureDecision } from "../src/combos/failover";
 import { getConfigPath, readConfigDiagnostics, saveConfig } from "../src/config";
 import { routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -357,6 +357,7 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(409, "conflict")).toBe("stop");
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
     expect(comboFailureDecision(410, "The model has reached its end of life and is no longer available.")).toBe("hop");
+    expect(comboFailureDecision(410, "The model is scheduled for retirement.")).toBe("hop");
     expect(comboFailureDecision(410, "gone", { code: "model_retired" })).toBe("hop");
     expect(comboFailureDecision(499, "client cancelled")).toBe("stop");
     expect(comboFailureDecision(422, "invalid_api_key")).toBe("hop");

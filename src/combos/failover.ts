@@ -127,7 +127,7 @@ function isModelLifecycleGone(
   return /\bmodel\b/.test(text) && (
     /\bend[ -]of[ -]life\b/.test(text)
     || /\bno longer available\b/.test(text)
-    || /\b(?:deprecated|retired|sunset|decommissioned)\b/.test(text)
+    || /\b(?:deprecated|retired|retirement|sunset|decommissioned)\b/.test(text)
   );
 }
 
