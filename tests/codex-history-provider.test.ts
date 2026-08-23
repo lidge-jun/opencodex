@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
+import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "./helpers/codex-history-manifest-fixtures";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
 // bun's 5s default per-test timeout by itself. Fail fast into withHistoryRetry instead.
@@ -805,49 +806,8 @@ describe("Design B migration helpers", () => {
     const rolloutPath = join(dir, "rollout.jsonl");
     noopSnapshotArtifacts.add(backupPath);
     noopSnapshotArtifacts.add(dir);
-    type MutableManifest = {
-      version: number;
-      stateDbPath?: unknown;
-      entries: Record<string, {
-        id?: unknown;
-        rolloutPath?: unknown;
-        modelProvider?: unknown;
-        source?: unknown;
-        hasUserEvent?: unknown;
-      }>;
-    };
-    const cases: Array<{ name: string; mutate: (manifest: MutableManifest) => void }> = [
-      { name: "blank stateDbPath", mutate: manifest => { manifest.stateDbPath = ""; } },
-      { name: "relative stateDbPath", mutate: manifest => { manifest.stateDbPath = "state.sqlite"; } },
-      { name: "mismatched id", mutate: manifest => { manifest.entries["thread-1"].id = "thread-2"; } },
-      { name: "missing rolloutPath", mutate: manifest => { delete manifest.entries["thread-1"].rolloutPath; } },
-      { name: "blank rolloutPath", mutate: manifest => { manifest.entries["thread-1"].rolloutPath = ""; } },
-      { name: "relative rolloutPath", mutate: manifest => { manifest.entries["thread-1"].rolloutPath = "rollout.jsonl"; } },
-      { name: "missing modelProvider", mutate: manifest => { delete manifest.entries["thread-1"].modelProvider; } },
-      { name: "mistyped modelProvider", mutate: manifest => { manifest.entries["thread-1"].modelProvider = 7; } },
-      { name: "unsupported modelProvider", mutate: manifest => { manifest.entries["thread-1"].modelProvider = "other"; } },
-      { name: "missing source", mutate: manifest => { delete manifest.entries["thread-1"].source; } },
-      { name: "mistyped source", mutate: manifest => { manifest.entries["thread-1"].source = 7; } },
-      { name: "invalid provider/source tuple", mutate: manifest => { manifest.entries["thread-1"].source = "cli"; } },
-      { name: "missing hasUserEvent", mutate: manifest => { delete manifest.entries["thread-1"].hasUserEvent; } },
-      { name: "mistyped hasUserEvent", mutate: manifest => { manifest.entries["thread-1"].hasUserEvent = "0"; } },
-      { name: "non-boolean hasUserEvent", mutate: manifest => { manifest.entries["thread-1"].hasUserEvent = 2; } },
-    ];
-
-    for (const invalid of cases) {
-      const manifest: MutableManifest = {
-        version: 1,
-        stateDbPath: dbPath,
-        entries: {
-          "thread-1": {
-            id: "thread-1",
-            rolloutPath,
-            modelProvider: "opencodex",
-            source: "exec",
-            hasUserEvent: 0,
-          },
-        },
-      };
+    for (const invalid of INVALID_HISTORY_BACKUP_FIXTURES) {
+      const manifest = validHistoryBackupFixture(dbPath, rolloutPath);
       invalid.mutate(manifest);
       writeFileSync(backupPath, JSON.stringify(manifest));
       expect(snapshotCodexHistoryNoop(dbPath, backupPath), invalid.name)

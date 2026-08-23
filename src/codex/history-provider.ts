@@ -1,10 +1,18 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
 import { atomicWriteFile, getConfigDir } from "../config";
+import {
+  CODEX_HISTORY_RESUMABLE_SOURCES,
+  codexHistoryBackupId,
+  sameCodexHistoryPath,
+  validateCodexHistoryBackupManifest,
+  type CodexHistoryBackupEntry,
+  type CodexHistoryBackupManifest,
+} from "./history-manifest";
 
 /**
  * Cap for decompressing a lone `.jsonl.zst` rollout during quarantine restore.
@@ -21,11 +29,8 @@ export const MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
  * the same way, since a manifest addressed differently is a different manifest.
  */
 export function historyBackupPathFor(stateDbPath: string): string {
-  const normalized = process.platform === "win32" ? resolve(stateDbPath).toLowerCase() : resolve(stateDbPath);
-  const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-  return join(getConfigDir(), `codex-history-backup-${id}.json`);
+  return join(getConfigDir(), `codex-history-backup-${codexHistoryBackupId(stateDbPath)}.json`);
 }
-const RESUMABLE_SOURCES = ["cli", "vscode"] as const;
 
 /**
  * Open the live `state_5.sqlite` the way the Codex app expects a *secondary* writer to behave:
@@ -256,20 +261,6 @@ function hasFirstUserMessage(value: string | null): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-interface BackupEntry {
-  id: string;
-  rolloutPath: string;
-  modelProvider: string;
-  source: string;
-  hasUserEvent: number;
-}
-
-interface BackupManifest {
-  version: 1;
-  stateDbPath?: string;
-  entries: Record<string, BackupEntry>;
-}
-
 export interface CodexHistoryVerifiedNoopProof {
   readonly kind: "verified-noop";
   readonly pendingRows: 0;
@@ -311,7 +302,7 @@ type StrictBackupRead =
   | {
       readonly kind: "known";
       readonly present: boolean;
-      readonly manifest: BackupManifest;
+      readonly manifest: CodexHistoryBackupManifest;
       readonly fingerprint: string;
     }
   | {
@@ -350,12 +341,6 @@ export function setAfterStrictHistoryRolloutAppendForTests(hook: (() => void) | 
 /** Test seam: runs after manifest snapshot publication and before apply's database CAS. */
 export function setBeforeHistoryApplyTransactionForTests(hook: (() => void) | undefined): void {
   beforeHistoryApplyTransactionForTests = hook;
-}
-
-function samePath(a: string, b: string): boolean {
-  const left = resolve(a);
-  const right = resolve(b);
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 function readBackupStrict(path: string, stateDbPath: string): StrictBackupRead {
@@ -401,50 +386,18 @@ function readBackupStrict(path: string, stateDbPath: string): StrictBackupRead {
   } catch {
     return { kind: "unknown", present: true, reason: "manifest-read" };
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { kind: "unknown", present: true, reason: "manifest-schema" };
-  }
-  const manifest = parsed as Partial<BackupManifest>;
-  if (manifest.version !== 1
-    || typeof manifest.stateDbPath !== "string"
-    || !manifest.stateDbPath.trim()
-    || !isAbsolute(manifest.stateDbPath)) {
-    return { kind: "unknown", present: true, reason: "manifest-schema" };
-  }
-  if (!samePath(manifest.stateDbPath, stateDbPath)) {
-    return { kind: "unknown", present: true, reason: "manifest-foreign" };
-  }
-  if (!manifest.entries || typeof manifest.entries !== "object" || Array.isArray(manifest.entries)) {
-    return { kind: "unknown", present: true, reason: "manifest-schema" };
-  }
-  for (const [id, value] of Object.entries(manifest.entries)) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { kind: "unknown", present: true, reason: "manifest-schema" };
-    }
-    const entry = value as Partial<BackupEntry>;
-    if (!id
-      || entry.id !== id
-      || typeof entry.rolloutPath !== "string"
-      || !entry.rolloutPath.trim()
-      || !isAbsolute(entry.rolloutPath)
-      || typeof entry.modelProvider !== "string"
-      || !entry.modelProvider.trim()
-      || typeof entry.source !== "string"
-      || !entry.source.trim()
-      || typeof entry.hasUserEvent !== "number"
-      || !Number.isSafeInteger(entry.hasUserEvent)
-      || (entry.hasUserEvent !== 0 && entry.hasUserEvent !== 1)
-      || !(
-        (entry.modelProvider === "openai" && RESUMABLE_SOURCES.includes(entry.source as (typeof RESUMABLE_SOURCES)[number]))
-        || (entry.modelProvider === "opencodex" && entry.source === "exec")
-      )) {
-      return { kind: "unknown", present: true, reason: "manifest-schema" };
-    }
+  const validated = validateCodexHistoryBackupManifest(parsed, stateDbPath);
+  if (!validated.ok) {
+    return {
+      kind: "unknown",
+      present: true,
+      reason: validated.reason === "foreign-database" ? "manifest-foreign" : "manifest-schema",
+    };
   }
   return {
     kind: "known",
     present: true,
-    manifest: manifest as BackupManifest,
+    manifest: validated.manifest,
     fingerprint: createHash("sha256").update(raw).digest("hex"),
   };
 }
@@ -500,7 +453,7 @@ function consumeBackupIfUnchanged(path: string, stateDbPath: string, expectedFin
   unlinkSync(path);
 }
 
-function writeBackup(path: string, manifest: BackupManifest, stateDbPath?: string): void {
+function writeBackup(path: string, manifest: CodexHistoryBackupManifest, stateDbPath?: string): void {
   if (Object.keys(manifest.entries).length === 0) {
     if (existsSync(path)) unlinkSync(path);
     return;
@@ -509,7 +462,7 @@ function writeBackup(path: string, manifest: BackupManifest, stateDbPath?: strin
   atomicWriteFile(path, JSON.stringify({ ...manifest, stateDbPath: manifest.stateDbPath ?? stateDbPath }, null, 2) + "\n");
 }
 
-function rememberOriginal(manifest: BackupManifest, row: ThreadRow): void {
+function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ThreadRow): void {
   if (manifest.entries[row.id]) return;
   manifest.entries[row.id] = {
     id: row.id,
@@ -531,7 +484,7 @@ function rowMatchesRestoreTuple(
     && row.has_user_event === hasUserEvent;
 }
 
-function rowMatchesExpectedPostImage(row: RestoreRowSnapshot, entry: BackupEntry): boolean {
+function rowMatchesExpectedPostImage(row: RestoreRowSnapshot, entry: CodexHistoryBackupEntry): boolean {
   if (entry.modelProvider === "openai") {
     const postHasUserEvent = hasFirstUserMessage(row.first_user_message) ? 1 : entry.hasUserEvent;
     return rowMatchesRestoreTuple(row, "opencodex", entry.source, postHasUserEvent);
@@ -564,7 +517,7 @@ function normalizedSessionMetaTuple(meta: ParsedSessionMeta): { provider: string
 
 function rolloutMatchesRestoreTuple(
   meta: ParsedSessionMeta,
-  entry: BackupEntry,
+  entry: CodexHistoryBackupEntry,
   provider: string,
   source: string,
 ): boolean {
@@ -574,7 +527,7 @@ function rolloutMatchesRestoreTuple(
     && tuple.source === source;
 }
 
-function rolloutMatchesExpectedPostImage(meta: ParsedSessionMeta, entry: BackupEntry): boolean {
+function rolloutMatchesExpectedPostImage(meta: ParsedSessionMeta, entry: CodexHistoryBackupEntry): boolean {
   if (entry.modelProvider === "openai") {
     const tuple = normalizedSessionMetaTuple(meta);
     const rawSource = meta.record.payload.source;
@@ -591,7 +544,7 @@ function rolloutMatchesExpectedPostImage(meta: ParsedSessionMeta, entry: BackupE
     || rolloutMatchesRestoreTuple(meta, entry, "openai", "cli");
 }
 
-function snapshotRolloutForRestore(entry: BackupEntry): RestoreRolloutSnapshot {
+function snapshotRolloutForRestore(entry: CodexHistoryBackupEntry): RestoreRolloutSnapshot {
   const identityBefore = historyFileIdentity(entry.rolloutPath);
   if (identityBefore === null) {
     throw new CodexHistoryIntegrityError("history_backup_rollout_unrestorable");
@@ -632,7 +585,7 @@ interface RestoreTargetPreflight {
  */
 function preflightRestoreTargets(
   getCurrent: (id: string) => RestoreRowSnapshot | null,
-  entries: BackupEntry[],
+  entries: CodexHistoryBackupEntry[],
 ): RestoreTargetPreflight {
   const snapshots = preflightRestoreRows(getCurrent, entries);
   const rolloutSnapshots = new Map<string, RestoreRolloutSnapshot>();
@@ -647,12 +600,12 @@ function preflightRestoreTargets(
 /** Cheap manifest-to-database authority check used by recurring no-op probes. */
 function preflightRestoreRows(
   getCurrent: (id: string) => RestoreRowSnapshot | null,
-  entries: BackupEntry[],
+  entries: CodexHistoryBackupEntry[],
 ): Map<string, RestoreRowSnapshot> {
   const snapshots = new Map<string, RestoreRowSnapshot>();
   for (const entry of entries) {
     const row = getCurrent(entry.id);
-    if (!row || typeof row.rollout_path !== "string" || !samePath(row.rollout_path, entry.rolloutPath)) {
+    if (!row || typeof row.rollout_path !== "string" || !sameCodexHistoryPath(row.rollout_path, entry.rolloutPath)) {
       throw new CodexHistoryIntegrityError("history_backup_target_mismatch");
     }
     if (!rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)
@@ -666,12 +619,12 @@ function preflightRestoreRows(
 
 function assertRestoreReadback(
   getCurrent: (id: string) => RestoreRowSnapshot | null,
-  entries: BackupEntry[],
+  entries: CodexHistoryBackupEntry[],
 ): void {
   for (const entry of entries) {
     const row = getCurrent(entry.id);
     if (!row
-      || !samePath(row.rollout_path, entry.rolloutPath)
+      || !sameCodexHistoryPath(row.rollout_path, entry.rolloutPath)
       || !rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)) {
       throw new CodexHistoryIntegrityError("history_backup_database_readback_mismatch");
     }
@@ -1177,7 +1130,7 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
 
   const db = openStateDb(stateDbPath);
   try {
-    const placeholders = RESUMABLE_SOURCES.map(() => "?").join(",");
+    const placeholders = CODEX_HISTORY_RESUMABLE_SOURCES.map(() => "?").join(",");
     const openaiRows = db
       .query<ApplyRowSnapshot, string[]>(`
         SELECT id, rollout_path, model_provider, source, has_user_event, first_user_message
@@ -1185,7 +1138,7 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
         WHERE model_provider = 'openai'
           AND source IN (${placeholders})
       `)
-      .all(...RESUMABLE_SOURCES);
+      .all(...CODEX_HISTORY_RESUMABLE_SOURCES);
     const execRows = db
       .query<ApplyRowSnapshot, []>(`
         SELECT id, rollout_path, model_provider, source, has_user_event, first_user_message
@@ -1470,7 +1423,7 @@ export function snapshotCodexHistoryNoop(
   const stateDbPresent = existsSync(stateDbPath);
   const backupPresent = existsSync(backupPath);
   const base = { canonicalStateDbPath, stateDbPresent, canonicalBackupPath, backupPresent };
-  if (!samePath(backupPath, historyBackupPathFor(stateDbPath))) {
+  if (!sameCodexHistoryPath(backupPath, historyBackupPathFor(stateDbPath))) {
     return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "backup-path" };
   }
   const backup = inspectBackupForNoop(backupPath, stateDbPath);

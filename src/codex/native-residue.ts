@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   closeSync,
   fstatSync,
@@ -11,12 +10,13 @@ import {
   statSync,
 } from "node:fs";
 import type { Stats } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
 import { getConfigDir } from "../config";
 import { catalogHasRoutedEntries, parseCatalogJson } from "./catalog/parsing";
+import { codexHistoryBackupId, validateCodexHistoryBackupManifest } from "./history-manifest";
 import {
   hasInjectedCodexRouting,
   OCX_SECTION_MARKER,
@@ -583,11 +583,7 @@ function classifyHistoryDatabase(path: string): NativeRoutedResidueResult {
 }
 
 function historyBackupPath(stateDatabasePath: string): string {
-  const normalized = process.platform === "win32"
-    ? resolve(stateDatabasePath).toLowerCase()
-    : resolve(stateDatabasePath);
-  const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-  return join(getConfigDir(), `codex-history-backup-${id}.json`);
+  return join(getConfigDir(), `codex-history-backup-${codexHistoryBackupId(stateDatabasePath)}.json`);
 }
 
 function classifyHistoryBackup(path: string, stateDatabasePath: string): NativeRoutedResidueResult {
@@ -600,52 +596,25 @@ function classifyHistoryBackup(path: string, stateDatabasePath: string): NativeR
   } catch (error) {
     return indeterminate("history-backup", read.path, `malformed history backup JSON: ${errorReason(error)}`);
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return indeterminate("history-backup", read.path, "history backup has an unknown shape");
-  }
-  const manifest = parsed as Record<string, unknown>;
-  if (manifest.version !== 1
-    || typeof manifest.stateDbPath !== "string"
-    || !manifest.stateDbPath.trim()
-    || !isAbsolute(manifest.stateDbPath)
-    || !manifest.entries
-    || typeof manifest.entries !== "object"
-    || Array.isArray(manifest.entries)) {
-    return indeterminate("history-backup", read.path, "history backup has an unknown shape");
-  }
-  const expected = process.platform === "win32" ? resolve(stateDatabasePath).toLowerCase() : resolve(stateDatabasePath);
-  const actual = process.platform === "win32" ? resolve(manifest.stateDbPath).toLowerCase() : resolve(manifest.stateDbPath);
-  if (actual !== expected) {
+  const validated = validateCodexHistoryBackupManifest(parsed, stateDatabasePath);
+  if (!validated.ok && validated.reason === "foreign-database") {
     return indeterminate("history-backup", read.path, "history backup names a different state database");
   }
-  const entries = Object.entries(manifest.entries as Record<string, unknown>);
+  if (!validated.ok) {
+    return indeterminate(
+      "history-backup",
+      read.path,
+      validated.scope === "entry-shape"
+        ? "history backup entry has an unknown shape"
+        : validated.scope === "entry-provenance"
+          ? "history backup entry has invalid provenance metadata"
+          : "history backup has an unknown shape",
+    );
+  }
+  const entries = Object.entries(validated.manifest.entries);
   const references: RolloutReference[] = [];
-  for (const [id, entry] of entries) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return indeterminate("history-backup", read.path, "history backup entry has an unknown shape");
-    }
-    const candidate = entry as Record<string, unknown>;
-    if (!id
-      || typeof candidate.id !== "string"
-      || candidate.id !== id
-      || typeof candidate.rolloutPath !== "string"
-      || !candidate.rolloutPath
-      || !isAbsolute(candidate.rolloutPath)
-      || typeof candidate.modelProvider !== "string"
-      || !candidate.modelProvider
-      || typeof candidate.source !== "string"
-      || !candidate.source
-      || typeof candidate.hasUserEvent !== "number"
-      || !Number.isSafeInteger(candidate.hasUserEvent)
-      || (candidate.hasUserEvent !== 0 && candidate.hasUserEvent !== 1)
-      || !(
-        (candidate.modelProvider === "openai"
-          && (candidate.source === "cli" || candidate.source === "vscode"))
-        || (candidate.modelProvider === "opencodex" && candidate.source === "exec")
-      )) {
-      return indeterminate("history-backup", read.path, "history backup entry has invalid provenance metadata");
-    }
-    references.push({ id: candidate.id, path: candidate.rolloutPath });
+  for (const entry of Object.values(validated.manifest.entries)) {
+    references.push({ id: entry.id, path: entry.rolloutPath });
   }
   const rollouts = classifyReferencedRollouts("history-backup", references);
   if (rollouts.kind !== "clean") return rollouts;

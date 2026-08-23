@@ -30,6 +30,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import type { OcxConfig } from "../src/types";
+import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "./helpers/codex-history-manifest-fixtures";
 
 let codexHome = "";
 let opencodexHome = "";
@@ -835,56 +836,37 @@ test("a missing manifest-referenced rollout is indeterminate", () => {
   });
 });
 
-type MutableHistoryBackupFixture = {
-  version: number;
-  stateDbPath?: unknown;
-  entries: Record<string, {
-    id?: unknown;
-    rolloutPath?: unknown;
-    modelProvider?: unknown;
-    source?: unknown;
-    hasUserEvent?: unknown;
-  }>;
-};
+test("history backup schema diagnostics preserve entry shape and provenance distinctions", () => {
+  const stateDbPath = join(realpathSync.native(codexHome), "state_5.sqlite");
+  const rolloutPath = pathInCodexHome("rollout.jsonl");
+  writeFileSync(historyBackupPath(), JSON.stringify({
+    version: 1,
+    stateDbPath,
+    entries: { "thread-1": null },
+  }));
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history-backup",
+    reason: "history backup entry has an unknown shape",
+  });
 
-const invalidHistoryBackupFixtures: Array<{
-  name: string;
-  mutate: (manifest: MutableHistoryBackupFixture) => void;
-}> = [
-  { name: "missing state database identity", mutate: manifest => { delete manifest.stateDbPath; } },
-  { name: "blank state database identity", mutate: manifest => { manifest.stateDbPath = ""; } },
-  { name: "relative state database identity", mutate: manifest => { manifest.stateDbPath = "state.sqlite"; } },
-  { name: "mismatched entry id", mutate: manifest => { manifest.entries["thread-1"].id = "thread-2"; } },
-  { name: "missing rollout path", mutate: manifest => { delete manifest.entries["thread-1"].rolloutPath; } },
-  { name: "blank rollout path", mutate: manifest => { manifest.entries["thread-1"].rolloutPath = ""; } },
-  { name: "relative rollout path", mutate: manifest => { manifest.entries["thread-1"].rolloutPath = "rollout.jsonl"; } },
-  { name: "missing model provider", mutate: manifest => { delete manifest.entries["thread-1"].modelProvider; } },
-  { name: "mistyped model provider", mutate: manifest => { manifest.entries["thread-1"].modelProvider = 7; } },
-  { name: "unsupported model provider", mutate: manifest => { manifest.entries["thread-1"].modelProvider = "other"; } },
-  { name: "missing source", mutate: manifest => { delete manifest.entries["thread-1"].source; } },
-  { name: "mistyped source", mutate: manifest => { manifest.entries["thread-1"].source = 7; } },
-  { name: "invalid provider/source tuple", mutate: manifest => { manifest.entries["thread-1"].modelProvider = "opencodex"; } },
-  { name: "missing event marker", mutate: manifest => { delete manifest.entries["thread-1"].hasUserEvent; } },
-  { name: "mistyped event marker", mutate: manifest => { manifest.entries["thread-1"].hasUserEvent = "1"; } },
-  { name: "non-boolean event marker", mutate: manifest => { manifest.entries["thread-1"].hasUserEvent = 2; } },
-];
+  const invalidProvenance = validHistoryBackupFixture(stateDbPath, rolloutPath);
+  invalidProvenance.entries["thread-1"].id = "thread-2";
+  writeFileSync(historyBackupPath(), JSON.stringify(invalidProvenance));
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history-backup",
+    reason: "history backup entry has invalid provenance metadata",
+  });
+});
 
-for (const fixture of invalidHistoryBackupFixtures) {
+for (const fixture of INVALID_HISTORY_BACKUP_FIXTURES) {
   test(`a history backup with ${fixture.name} is indeterminate and not adopted`, () => {
     writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "opencodex") + "\n");
-    const manifest: MutableHistoryBackupFixture = {
-      version: 1,
-      stateDbPath: join(realpathSync.native(codexHome), "state_5.sqlite"),
-      entries: {
-        "thread-1": {
-          id: "thread-1",
-          rolloutPath: pathInCodexHome("rollout.jsonl"),
-          modelProvider: "openai",
-          source: "cli",
-          hasUserEvent: 1,
-        },
-      },
-    };
+    const manifest = validHistoryBackupFixture(
+      join(realpathSync.native(codexHome), "state_5.sqlite"),
+      pathInCodexHome("rollout.jsonl"),
+    );
     fixture.mutate(manifest);
     writeFileSync(historyBackupPath(), JSON.stringify(manifest));
 
