@@ -115,16 +115,12 @@ import {
   applyCodexAuthContextToProvider,
   codexPoolAffinityKey,
   CodexAccountCooldownError,
-  codexMainProfileDrainingResponse,
-  cooldownErrorResponse,
   CodexAuthContextError,
-  CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
   materializeCodexUpstreamAuth,
-  CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   codexProbeLeaseId,
@@ -274,6 +270,7 @@ import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from ".
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
+import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
@@ -1541,44 +1538,20 @@ async function resolveResponsesCodexAuth(
       substituteMainCredential,
     };
   } catch (err) {
-    if (err instanceof CodexAccountCooldownError) {
-      return { ok: false, response: cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace) };
-    }
-    if (err instanceof CodexMainProfileDrainingError) {
-      return { ok: false, response: codexMainProfileDrainingResponse() };
-    }
-    if (err instanceof CodexThreadAffinityExpiredError) {
-      return {
-        ok: false,
-        response: formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session"),
-      };
-    }
     if (err instanceof CodexAuthContextError) {
       const safeAccountLabel = route.codexAccountNamespace
         ? `${route.providerName}-${route.codexAccountNamespace}`
         : formatCodexProviderForLog(route.providerName, err.accountId, config);
       console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
-      return {
-        ok: false,
-        response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
-      };
-    }
-    if (err instanceof CodexPoolAuthenticationError) {
-      return { ok: false, response: formatErrorResponse(401, "authentication_error", err.message) };
-    }
-    if (err instanceof CodexDirectAuthenticationError) {
-      return { ok: false, response: formatErrorResponse(401, "authentication_error", err.message) };
     }
     if (err instanceof ForwardAdmissionCredentialError) {
       return { ok: false, response: formatErrorResponse(401, "authentication_error", err.message) };
     }
-    if (err instanceof CodexMainSubstitutionUnavailableError) {
-      // Fail BEFORE any upstream I/O. The alternative is forwarding the admission secret.
-      return {
-        ok: false,
-        response: formatErrorResponse(401, "authentication_error", "No usable Codex main credential to serve this request"),
-      };
-    }
+    const response = mapCodexAuthContextErrorToResponse(err, {
+      accountSelector: route.codexAccountNamespace,
+      now: Date.now(),
+    });
+    if (response) return { ok: false, response };
     throw err;
   }
 }

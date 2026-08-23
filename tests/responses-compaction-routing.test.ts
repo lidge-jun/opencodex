@@ -171,6 +171,142 @@ describe("supportsNativeResponsesCompactEndpoint (#422)", () => {
   });
 });
 
+describe("Codex auth-context error parity (#2392)", () => {
+  const cases: Array<{
+    label: string;
+    createError: () => Error;
+    status: number;
+    retryAfter?: string;
+    regularLog: boolean;
+  }> = [
+    {
+      label: "account cooldown",
+      createError: () => new authContextModule.CodexAccountCooldownError(
+        "sensitive-account-id",
+        Date.now() + 120_000,
+        "retry-after",
+      ),
+      status: 429,
+      regularLog: false,
+    },
+    {
+      label: "native-main drain",
+      createError: () => new authContextModule.CodexMainProfileDrainingError(),
+      status: 503,
+      retryAfter: "1",
+      regularLog: false,
+    },
+    {
+      label: "expired thread affinity",
+      createError: () => new authContextModule.CodexThreadAffinityExpiredError("sensitive-account-id"),
+      status: 409,
+      regularLog: false,
+    },
+    {
+      label: "pool credential refresh failure",
+      createError: () => new authContextModule.CodexAuthContextError(
+        "sensitive-account-id",
+        new Error("private refresh detail"),
+      ),
+      status: 401,
+      regularLog: true,
+    },
+    {
+      label: "pool authentication failure",
+      createError: () => new authContextModule.CodexPoolAuthenticationError("Pool credential is unavailable"),
+      status: 401,
+      regularLog: false,
+    },
+    {
+      label: "direct authentication failure",
+      createError: () => new authContextModule.CodexDirectAuthenticationError(),
+      status: 401,
+      regularLog: false,
+    },
+    {
+      label: "main credential substitution failure",
+      createError: () => new authContextModule.CodexMainSubstitutionUnavailableError(),
+      status: 401,
+      regularLog: false,
+    },
+  ];
+
+  function regularAuthRequest(): Request {
+    return compactionRequest({ model: "gpt-5.6-sol", input: "hello", stream: false });
+  }
+
+  function compactAuthRequest(): Request {
+    return compactionRequest(baseCompactionBody({ model: "gpt-5.6-sol" }));
+  }
+
+  test.each(cases)("maps $label identically on regular and compact Responses", async testCase => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return jsonResponse(completedPayload("unexpected upstream response"));
+    }) as typeof fetch;
+    const error = testCase.createError();
+    const authSpy = spyOn(authContextModule, "resolveCodexAuthContext").mockRejectedValue(error);
+    const errorLog = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const regular = await handleResponses(regularAuthRequest(), nativePoolConfig(), { model: "", provider: "" });
+      const regularLogCount = errorLog.mock.calls.length;
+      const compact = await handleResponsesCompact(compactAuthRequest(), nativePoolConfig(), { model: "", provider: "" });
+
+      expect(regular.status).toBe(testCase.status);
+      expect(compact.status).toBe(testCase.status);
+      expect(regular.headers.get("content-type")).toBe("application/json");
+      expect(compact.headers.get("content-type")).toBe("application/json");
+      expect(await regular.text()).toBe(await compact.text());
+      expect(compact.headers.get("retry-after")).toBe(regular.headers.get("retry-after"));
+      if (testCase.retryAfter) expect(regular.headers.get("retry-after")).toBe(testCase.retryAfter);
+      if (testCase.label === "account cooldown") expect(regular.headers.get("retry-after")).not.toBeNull();
+      if (testCase.label === "main credential substitution failure") expect(upstreamCalls).toBe(0);
+
+      expect(regularLogCount).toBe(testCase.regularLog ? 1 : 0);
+      expect(errorLog.mock.calls.length).toBe(regularLogCount);
+      if (testCase.regularLog) {
+        const line = errorLog.mock.calls[0]!.join(" ");
+        expect(line).toContain("[codex-auth] Pool account openai token failed; reauthentication required");
+        expect(line).not.toContain("sensitive-account-id");
+        expect(line).not.toContain("private refresh detail");
+      }
+    } finally {
+      errorLog.mockRestore();
+      authSpy.mockRestore();
+    }
+  });
+
+  test("unknown auth-resolution errors reject on both handlers instead of being mapped", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return jsonResponse(completedPayload("unexpected upstream response"));
+    }) as typeof fetch;
+    const authSpy = spyOn(authContextModule, "resolveCodexAuthContext");
+    try {
+      const regularError = new Error("unmapped regular auth failure");
+      authSpy.mockRejectedValueOnce(regularError);
+      await expect(handleResponses(
+        regularAuthRequest(),
+        nativePoolConfig(),
+        { model: "", provider: "" },
+      )).rejects.toBe(regularError);
+
+      const compactError = new Error("unmapped compact auth failure");
+      authSpy.mockRejectedValueOnce(compactError);
+      await expect(handleResponsesCompact(
+        compactAuthRequest(),
+        nativePoolConfig(),
+        { model: "", provider: "" },
+      )).rejects.toBe(compactError);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      authSpy.mockRestore();
+    }
+  });
+});
+
 describe("native compact usage reporting", () => {
   test("the buffered upstream body fills the request log usage and stays intact for the client", async () => {
     const config = {
