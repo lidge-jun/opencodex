@@ -40,6 +40,28 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.top_p).toBe(0.8);
   });
 
+  test("modelDefaultReasoningEfforts supplies reasoning when caller omits it", async () => {
+    const b = await bodyOf(parsed(undefined, { temperature: 0.5, topP: 0.8 }, "always-thinking-model"), {
+      ...provider,
+      modelDefaultReasoningEfforts: { "always-thinking-model": "high" },
+    });
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(typeof thinking?.budget_tokens).toBe("number");
+    expect(b.temperature).toBeUndefined();
+    expect(b.top_p).toBeUndefined();
+  });
+
+  test("explicit reasoning overrides modelDefaultReasoningEfforts", async () => {
+    const b = await bodyOf(parsed("low", {}, "always-thinking-model"), {
+      ...provider,
+      modelDefaultReasoningEfforts: { "always-thinking-model": "high" },
+    });
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(thinking?.budget_tokens).toBe(4096);
+  });
+
   test("reasoning 'high' enables thinking and drops sampling (extended-thinking rule)", async () => {
     const b = await bodyOf(parsed("high", { temperature: 0.3, topP: 0.9 }));
     const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
