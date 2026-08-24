@@ -32,6 +32,10 @@ describe("provider TLS profile validation", () => {
       ...canonicalProvider,
       baseUrl: "https://cloudcode-pa.googleapis.com",
     })).toBeNull();
+    expect(providerTlsProfileConfigError("google-antigravity", {
+      ...canonicalProvider,
+      baseUrl: "https://user:secret@daily-cloudcode-pa.googleapis.com",
+    })).toContain("canonical");
     expect(providerTlsProfileConfigError("google", canonicalProvider)).toContain("google-antigravity");
     expect(providerTlsProfileConfigError("google-antigravity", {
       ...canonicalProvider,
@@ -73,6 +77,7 @@ describe("Antigravity TLS transport gate", () => {
     ]));
     expect(isCanonicalAntigravityUrl("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent")).toBe(true);
     expect(isCanonicalAntigravityUrl("https://cloudcode-pa.googleapis.com:443/v1internal")).toBe(true);
+    expect(isCanonicalAntigravityUrl("https://user:secret@daily-cloudcode-pa.googleapis.com/v1internal")).toBe(false);
     expect(isCanonicalAntigravityUrl("http://daily-cloudcode-pa.googleapis.com/v1internal")).toBe(false);
     expect(isCanonicalAntigravityUrl("https://evil.example/v1internal")).toBe(false);
     expect(isCanonicalAntigravityUrl("https://daily-cloudcode-pa.googleapis.com:8443/v1internal")).toBe(false);
@@ -105,7 +110,7 @@ describe("Antigravity TLS transport gate", () => {
         headers: { authorization: "Bearer redacted", "content-type": "application/json" },
         body: "{\"request\":1}",
         signal,
-        redirect: "manual",
+        redirect: "follow",
       },
     );
 
@@ -150,6 +155,57 @@ describe("Antigravity TLS transport gate", () => {
     });
     await explicitDefault("https://daily-cloudcode-pa.googleapis.com/v1internal");
     expect(bunCalls).toBe(1);
+  });
+
+  test("requires the configured provider base URL to be canonical", async () => {
+    let wreqCalls = 0;
+    let bunCalls = 0;
+    const bunFetch = mock(async () => {
+      bunCalls += 1;
+      return new Response("bun");
+    }) as typeof globalThis.fetch;
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          wreqCalls += 1;
+          return new Response("wreq");
+        },
+      }),
+    });
+    const executor = providerTlsFetch("google-antigravity", {
+      ...canonicalProvider,
+      baseUrl: "https://attacker.example",
+    }, bunFetch);
+    await executor("https://daily-cloudcode-pa.googleapis.com/v1internal");
+    await executor("https://user:secret@daily-cloudcode-pa.googleapis.com/v1internal");
+    expect(wreqCalls).toBe(0);
+    expect(bunCalls).toBe(2);
+  });
+
+  test("caches one successful module initialization and falls back if a later import would fail", async () => {
+    let importCalls = 0;
+    let bunCalls = 0;
+    const bunFetch = mock(async () => {
+      bunCalls += 1;
+      return new Response("bun");
+    }) as typeof globalThis.fetch;
+    const partialTransport = { close: mock(async () => undefined) };
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => {
+        importCalls += 1;
+        if (importCalls > 1) throw new Error("hypothetical second import failure");
+        return {
+          createTransport: async () => partialTransport,
+          fetch: async () => new Response("wreq"),
+        };
+      },
+    });
+    const executor = providerTlsFetch("google-antigravity", canonicalProvider, bunFetch);
+    await expect(executor("https://daily-cloudcode-pa.googleapis.com/v1internal")).resolves.toEqual(expect.any(Response));
+    expect(importCalls).toBe(1);
+    expect(bunCalls).toBe(0);
+    expect(partialTransport.close).not.toHaveBeenCalled();
   });
 
   test("falls back once when import or construction fails and never replays post-dispatch errors", async () => {

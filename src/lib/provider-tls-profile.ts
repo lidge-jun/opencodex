@@ -22,6 +22,11 @@ interface WreqModule {
   fetch(input: string | URL | Request, init?: Record<string, unknown>): Promise<unknown>;
 }
 
+interface InitializedTransport {
+  module: WreqModule;
+  transport: WreqTransport;
+}
+
 export interface ProviderTlsRuntimeForTest {
   importWreq: () => Promise<WreqModule>;
 }
@@ -32,7 +37,7 @@ const defaultRuntime: ProviderTlsRuntimeForTest = {
 
 let runtime = defaultRuntime;
 const statusByProvider = new Map<string, ProviderTlsProfileStatus>();
-const transports = new Map<string, Promise<WreqTransport | undefined>>();
+const transports = new Map<string, Promise<InitializedTransport | undefined>>();
 let shutdownDetach: (() => void) | undefined;
 let fallbackWarned = false;
 
@@ -58,6 +63,7 @@ function profileIsSupported(providerName: string, provider: Pick<OcxProviderConf
     && provider.adapter === "google"
     && provider.authMode === "oauth"
     && provider.googleMode === "cloud-code-assist"
+    && isCanonicalAntigravityUrl(provider.baseUrl)
     && provider.tlsProfile === "antigravity-browser";
 }
 
@@ -87,6 +93,8 @@ export function isCanonicalAntigravityUrl(input: string | URL): boolean {
     const url = new URL(input);
     return url.protocol === "https:"
       && (url.port === "" || url.port === "443")
+      && url.username === ""
+      && url.password === ""
       && ANTIGRAVITY_TLS_HOSTS.has(url.hostname.toLowerCase());
   } catch {
     return false;
@@ -104,7 +112,7 @@ function registerShutdownHook(): void {
     transports.clear();
     shutdownDetach = undefined;
     for (const transport of pending) {
-      void transport.then(value => value?.close()).catch(() => undefined);
+      void transport.then(value => value?.transport.close()).catch(() => undefined);
     }
   });
 }
@@ -113,21 +121,23 @@ function transportKey(proxy: string | undefined): string {
   return `${process.platform}:${proxy ?? "direct"}`;
 }
 
-async function getTransport(proxy: string | undefined): Promise<WreqTransport | undefined> {
+async function getTransport(proxy: string | undefined): Promise<InitializedTransport | undefined> {
   const key = transportKey(proxy);
   const existing = transports.get(key);
   if (existing) return existing;
   const pending = (async () => {
+    let transport: WreqTransport | undefined;
     try {
       const module = await runtime.importWreq();
-      const transport = await module.createTransport({
+      transport = await module.createTransport({
         browser: "chrome_142",
         os: emulationOs(),
         ...(proxy ? { proxy } : {}),
       });
       registerShutdownHook();
-      return transport;
+      return { module, transport };
     } catch {
+      if (transport) await transport.close().catch(() => undefined);
       return undefined;
     }
   })();
@@ -152,21 +162,21 @@ export function providerTlsFetch(
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" || input instanceof URL ? input : input.url;
     if (!isCanonicalAntigravityUrl(url)) return bunFetch(input, init);
-    const transport = await getTransport(proxyForUrl(url));
-    if (!transport) {
+    const initialized = await getTransport(proxyForUrl(url));
+    if (!initialized) {
       setStatus(providerName, "fallback");
       warnFallbackOnce();
       return bunFetch(input, init);
     }
     setStatus(providerName, "active");
-    const module = await runtime.importWreq();
     const wreqInit = {
       ...init,
-      transport,
+      transport: initialized.transport,
       disableDefaultHeaders: true,
       cookieMode: "ephemeral" as const,
+      redirect: "manual" as const,
     };
-    return await module.fetch(input, wreqInit) as Response;
+    return await initialized.module.fetch(input, wreqInit) as Response;
   }) as typeof globalThis.fetch;
 }
 
@@ -175,7 +185,7 @@ export function setProviderTlsRuntimeForTest(next: ProviderTlsRuntimeForTest | u
 }
 
 export function resetProviderTlsProfileForTests(): void {
-  for (const pending of transports.values()) void pending.then(value => value?.close()).catch(() => undefined);
+  for (const pending of transports.values()) void pending.then(value => value?.transport.close()).catch(() => undefined);
   transports.clear();
   shutdownDetach?.();
   shutdownDetach = undefined;
