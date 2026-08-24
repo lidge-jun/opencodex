@@ -4,6 +4,7 @@ import {
   __resetAzureCredentialCache,
   getAzureAccessToken,
   setAzureCredentialFactoryForTests,
+  setAzureLoggerModuleLoaderForTests,
   setAzureIdentityModuleLoaderForTests,
 } from "../src/lib/azure-identity";
 import type { OcxProviderConfig } from "../src/types";
@@ -96,5 +97,34 @@ describe("Azure identity credential helper", () => {
     expect(error.message).toBe(AZURE_IDENTITY_UNAVAILABLE_ERROR);
     expect(error.message).not.toContain("tenant-secret");
     expect(error.message).not.toContain("@azure/identity");
+  });
+
+  test("suppresses Azure SDK diagnostics before constructing the credential chain", async () => {
+    const previousAzureLogLevel = process.env.AZURE_LOG_LEVEL;
+    const previousDebug = process.env.DEBUG;
+    const emitted: string[] = [];
+    const logger = {
+      log: (...args: unknown[]) => emitted.push(args.map(String).join(" ")),
+    };
+    process.env.AZURE_LOG_LEVEL = "info";
+    process.env.DEBUG = "azure:*";
+    setAzureLoggerModuleLoaderForTests(async () => ({ AzureLogger: logger }));
+    setAzureIdentityModuleLoaderForTests(async () => ({
+      DefaultAzureCredential: class {
+        constructor() {
+          logger.log("azure:identity diagnostic synthetic-client-id");
+        }
+        getToken = async () => ({ token: "synthetic-token" });
+      },
+    }));
+    try {
+      await expect(getAzureAccessToken(provider())).resolves.toBe("synthetic-token");
+      expect(emitted).toEqual([]);
+    } finally {
+      if (previousAzureLogLevel === undefined) delete process.env.AZURE_LOG_LEVEL;
+      else process.env.AZURE_LOG_LEVEL = previousAzureLogLevel;
+      if (previousDebug === undefined) delete process.env.DEBUG;
+      else process.env.DEBUG = previousDebug;
+    }
   });
 });

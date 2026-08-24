@@ -12,11 +12,29 @@ export type AzureCredentialFactory = (options?: { managedIdentityClientId?: stri
 export type AzureIdentityModuleLoader = () => Promise<{
   DefaultAzureCredential: new (options?: { managedIdentityClientId?: string }) => AzureTokenCredential;
 }>;
+export type AzureLoggerModuleLoader = () => Promise<{
+  AzureLogger: { log: (...args: unknown[]) => void };
+}>;
 
 const credentials = new Map<string, AzureTokenCredential>();
 const inflight = new Map<string, Promise<AzureTokenCredential>>();
 let testFactory: AzureCredentialFactory | undefined;
 let testModuleLoader: AzureIdentityModuleLoader | undefined;
+let testLoggerModuleLoader: AzureLoggerModuleLoader | undefined;
+
+async function loadAzureLoggerModule(): Promise<{
+  AzureLogger: { log: (...args: unknown[]) => void };
+}> {
+  const packageName: string = "@azure/logger";
+  return await import(packageName) as unknown as {
+    AzureLogger: { log: (...args: unknown[]) => void };
+  };
+}
+
+async function suppressAzureSdkLogging(): Promise<void> {
+  const module = await (testLoggerModuleLoader ?? loadAzureLoggerModule)();
+  module.AzureLogger.log = () => {};
+}
 
 async function loadAzureIdentityModule(): Promise<{
   DefaultAzureCredential: new (options?: { managedIdentityClientId?: string }) => AzureTokenCredential;
@@ -29,6 +47,7 @@ async function loadAzureIdentityModule(): Promise<{
 }
 
 async function loadDefaultAzureCredential(options?: { managedIdentityClientId?: string }): Promise<AzureTokenCredential> {
+  await suppressAzureSdkLogging();
   const module = await (testModuleLoader ?? loadAzureIdentityModule)();
   return options === undefined
     ? new module.DefaultAzureCredential()
@@ -74,6 +93,7 @@ export function setAzureCredentialFactoryForTests(factory: AzureCredentialFactor
   cacheGeneration++;
   testFactory = factory;
   testModuleLoader = undefined;
+  testLoggerModuleLoader = undefined;
   credentials.clear();
   inflight.clear();
 }
@@ -82,6 +102,7 @@ export function __resetAzureCredentialCache(): void {
   cacheGeneration++;
   testFactory = undefined;
   testModuleLoader = undefined;
+  testLoggerModuleLoader = undefined;
   credentials.clear();
   inflight.clear();
 }
@@ -94,4 +115,8 @@ export function setAzureIdentityModuleLoaderForTests(loader: AzureIdentityModule
   testModuleLoader = loader;
   credentials.clear();
   inflight.clear();
+}
+
+export function setAzureLoggerModuleLoaderForTests(loader: AzureLoggerModuleLoader): void {
+  testLoggerModuleLoader = loader;
 }

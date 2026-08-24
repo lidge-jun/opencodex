@@ -64,6 +64,7 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { AUTH_MATRIX, isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 import { buildApiAccessEndpoints } from "./api-access";
+import { isAzureIdentityProvider } from "../../config/provider-validation";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -527,6 +528,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/providers/keys" && req.method === "GET") {
     const name = (url.searchParams.get("name") ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (isAzureIdentityProvider(config.providers[name]!)) return jsonResponse({ error: "provider does not use API-key auth" }, 400);
     const { listProviderApiKeys } = await import("../../providers/api-keys");
     return jsonResponse(listProviderApiKeys(config, name));
   }
@@ -534,6 +536,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; key?: string; label?: string };
     const name = (body.name ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (isAzureIdentityProvider(config.providers[name]!)) return jsonResponse({ error: "provider does not use API-key auth" }, 400);
     if (typeof body.key !== "string" || !body.key.trim()) return jsonResponse({ error: "key is required" }, 400);
     const { addProviderApiKey } = await import("../../providers/api-keys");
     const result = addProviderApiKey(config, name, body.key, body.label);
@@ -550,6 +553,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };
     const name = (body.name ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (isAzureIdentityProvider(config.providers[name]!)) return jsonResponse({ error: "provider does not use API-key auth" }, 400);
     if (!body.id) return jsonResponse({ error: "missing id" }, 400);
     const { setActiveProviderApiKey } = await import("../../providers/api-keys");
     if (!setActiveProviderApiKey(config, name, body.id)) return jsonResponse({ error: "key not found" }, 404);
@@ -567,6 +571,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const id = typeof body.id === "string" ? body.id.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (isAzureIdentityProvider(config.providers[name]!)) return jsonResponse({ error: "provider does not use API-key auth" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     if (typeof body.alias !== "string" || alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) {
       return jsonResponse({ error: "alias must be at most 80 printable characters" }, 400);
@@ -579,6 +584,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const name = (url.searchParams.get("name") ?? "").trim();
     const id = url.searchParams.get("id") ?? "";
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (isAzureIdentityProvider(config.providers[name]!)) return jsonResponse({ error: "provider does not use API-key auth" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeProviderApiKey } = await import("../../providers/api-keys");
     if (!removeProviderApiKey(config, name, id)) return jsonResponse({ error: "key not found" }, 404);

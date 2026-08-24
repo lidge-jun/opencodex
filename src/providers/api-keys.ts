@@ -8,6 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
+import { isAzureIdentityProvider } from "../config/provider-validation";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 export interface ProviderApiKeyInfo {
@@ -36,7 +37,7 @@ export function apiKeyPoolEntryId(key: string): string {
 
 /** True for providers whose upstream auth is a configured API key (not oauth/forward). */
 export function isKeyAuthProvider(provider: OcxProviderConfig): boolean {
-  return provider.authMode !== "oauth" && provider.authMode !== "forward";
+  return !isAzureIdentityProvider(provider) && provider.authMode !== "oauth" && provider.authMode !== "forward";
 }
 
 /** Trim and reject blank / CRLF-bearing secrets. Shared by pool writes and OAuth upsert. */

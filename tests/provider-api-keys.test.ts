@@ -4,6 +4,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import {
+  addProviderApiKey,
+  isKeyAuthProvider,
+  listProviderApiKeys,
+  removeProviderApiKey,
+  setActiveProviderApiKey,
+  setProviderApiKeyLabel,
+} from "../src/providers/api-keys";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -40,6 +48,27 @@ afterEach(() => {
 });
 
 describe("provider API key pool", () => {
+  test("fails closed for Azure identity without mutating or persisting keys", () => {
+    const provider = {
+      adapter: "azure-openai",
+      baseUrl: "https://resource.openai.azure.com/openai",
+      azureCredential: { type: "default-azure-credential" as const },
+      models: ["gpt-4o"],
+      liveModels: false,
+    };
+    const config = { ...baseConfig(), providers: { identity: provider } };
+    const before = structuredClone(provider);
+    expect(isKeyAuthProvider(provider)).toBe(false);
+    expect(listProviderApiKeys(config, "identity")).toEqual({ activeId: null, keys: [] });
+    expect(addProviderApiKey(config, "identity", "secret-key")).toEqual({ error: "provider does not use API-key auth" });
+    expect(setActiveProviderApiKey(config, "identity", "entry")).toBe(false);
+    expect(setProviderApiKeyLabel(config, "identity", "entry", "label")).toBe(false);
+    expect(removeProviderApiKey(config, "identity", "entry")).toBe(false);
+    expect(provider).toEqual(before);
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
+  });
+
   test("GET seeds legacy bare apiKey into a one-entry pool with masked value", async () => {
     const server = startServer(0);
     try {
@@ -97,6 +126,44 @@ describe("provider API key pool", () => {
       expect(list.activeId).toBe(secondId);
       const cfg2 = JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8"));
       expect(cfg2.providers["opencode-go"].apiKey).toBe("key-second-444555666777");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects every management key-pool operation for Azure identity", async () => {
+    const config = baseConfig();
+    config.defaultProvider = "azure-identity";
+    config.providers["azure-identity"] = {
+      adapter: "azure-openai",
+      baseUrl: "https://resource.openai.azure.com/openai",
+      azureCredential: { type: "default-azure-credential" },
+      models: ["gpt-4o"],
+      liveModels: false,
+    };
+    saveConfig(config);
+    const before = readFileSync(join(testDir, "config.json"), "utf-8");
+    const server = startServer(0);
+    try {
+      const requests: Array<Promise<Response>> = [
+        fetch(new URL("/api/providers/keys?name=azure-identity", server.url)),
+        fetch(new URL("/api/providers/keys", server.url), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "azure-identity", key: "should-not-persist" }),
+        }),
+        fetch(new URL("/api/providers/keys/active", server.url), {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "azure-identity", id: "entry" }),
+        }),
+        fetch(new URL("/api/providers/keys/alias", server.url), {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "azure-identity", id: "entry", alias: "label" }),
+        }),
+        fetch(new URL("/api/providers/keys?name=azure-identity&id=entry", server.url), { method: "DELETE" }),
+      ];
+      const responses = await Promise.all(requests);
+      expect(responses.map(response => response.status)).toEqual([400, 400, 400, 400, 400]);
+      expect(readFileSync(join(testDir, "config.json"), "utf-8")).toBe(before);
     } finally {
       await server.stop(true);
     }

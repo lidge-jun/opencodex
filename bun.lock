@@ -6,6 +6,7 @@
       "name": "@bitkyc08/opencodex",
       "dependencies": {
         "@azure/identity": "^4.13.2",
+        "@azure/logger": "^1.4.0",
         "@bufbuild/protobuf": "^2.14.0",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@napi-rs/keyring": "1.3.0",
