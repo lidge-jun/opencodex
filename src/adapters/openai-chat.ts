@@ -1932,8 +1932,28 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const choice = rawChoice;
         if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage)];
         if (!choice.message) return [{ type: "error", message: "upstream response contained no choices", ...(usage ? { usage } : {}) }];
+        // `!choice.message` splits this input class on TRUTHINESS, not on shape: `null` and `0` fail
+        // closed here, while `"text"`, `true` and `[{...}]` pass and every property read below yields
+        // `undefined` — so a choice claiming an assistant message completed as a SUCCESSFUL EMPTY
+        // turn, stranding any tool call it claimed. The one line above already validates the choice
+        // container this way; its message was left on a truthiness test.
+        //
+        // Every non-record is rejected, arrays included. The google adapter does carve out `[]` for
+        // `content`, but that carve-out is specific to a protobuf-derived wire where a repeated
+        // field can spell an empty message — and `content` is genuinely an ARRAY of blocks there.
+        // `message` is a record on a plain-JSON wire that already has `{}`, so importing the
+        // exception would be an analogy rather than evidence. `[{"content":"…"}]` is the case that
+        // matters: it discards a complete answer, #2232's `content: [{ parts: [...] }]` one adapter over.
+        //
+        // Read through `unknown` rather than the declared type: `choices` is a cast over wire data,
+        // so its `message?: Record<string, unknown>` is an assertion the upstream never made, and
+        // narrowing against it is what let the missing check look type-safe.
+        const rawMessage: unknown = choice.message;
+        if (!isRecord(rawMessage)) {
+          return [invalidChoicesEvent(usage)];
+        }
 
-        const msg = choice.message;
+        const msg = rawMessage as Record<string, unknown>;
         const reasoningText = reasoningTextFrom(msg);
         if (reasoningText !== undefined) events.push({ type: "reasoning_raw_delta", text: reasoningText });
         if (typeof msg.content === "string") events.push({ type: "text_delta", text: msg.content });

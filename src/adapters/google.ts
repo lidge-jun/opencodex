@@ -1158,7 +1158,18 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       let raw: Record<string, unknown>;
       let rawBytes = 0;
       try {
-        raw = JSON.parse(rawText) as Record<string, unknown>;
+        const parsedRaw: unknown = JSON.parse(rawText);
+        // `JSON.parse("null")` returns null instead of throwing, so the catch below cannot see it
+        // and the `raw.error` read crashed the turn — #1219 at the buffered body root, which #1240
+        // never reached because that audit swept SSE frame parsers only. There is no next frame to
+        // recover into here, so unlike a stream frame this fails closed, matching the
+        // unparseable-body branch just below and the buffered candidate guards added in #2232.
+        if (!isGoogleRecord(parsedRaw)) {
+          budget.releaseRetained(rawTextBytes, { kind: "retained_collectors" });
+          const valueType = googleStructuralValueType(parsedRaw);
+          return [{ type: "error", message: `google response was not a JSON object (${valueType})` }];
+        }
+        raw = parsedRaw;
         rawBytes = new TextEncoder().encode(JSON.stringify(raw)).byteLength;
         const rawReservation = budget.reserveTransient(rawBytes, { kind: "retained_collectors" });
         rawReservation.commitRetained();

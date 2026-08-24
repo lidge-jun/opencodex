@@ -265,6 +265,39 @@ export function formatAnthropicErrorBody(status: number, _headers: Headers, payl
   return redactSecretString(detail).slice(0, 400);
 }
 
+function isAnthropicRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function anthropicStructuralValueType(value: unknown): string {
+  if (value === null) return "null";
+  return Array.isArray(value) ? "array" : typeof value;
+}
+
+interface InvalidAnthropicShapeDiagnostic {
+  reason: "content_not_array" | "content_block_not_object";
+  blockIndex?: number;
+  valueType: string;
+}
+
+/**
+ * Structured refusal for a malformed buffered response body, shaped like the google adapter's
+ * `invalidGoogleShapeEvent` so an operator reading a log can tell which rung failed: the content
+ * container, or one block inside an otherwise well-formed container.
+ */
+function invalidAnthropicShapeEvent(
+  diagnostic: InvalidAnthropicShapeDiagnostic,
+): Extract<AdapterEvent, { type: "error" }> {
+  const at = diagnostic.blockIndex !== undefined ? `; blockIndex=${diagnostic.blockIndex}` : "";
+  const subject = diagnostic.reason === "content_not_array" ? "content" : "content block";
+  return {
+    type: "error",
+    message: `anthropic response contained invalid ${subject} (${diagnostic.reason}${at}; valueType=${diagnostic.valueType})`,
+    status: 502,
+    errorType: "upstream_error",
+  };
+}
+
 function extractAnthropicErrorDetail(parsed: unknown): string | undefined {
   if (typeof parsed === "string") return parsed.trim() || undefined;
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
@@ -1279,12 +1312,55 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
-      const json = await response.json() as Record<string, unknown>;
+      const parsed: unknown = await response.json();
+      // `response.json()` resolves a body of `null` to `null` without throwing, so the cast below
+      // used to reach `json.content` on it — the #1219 defect at the buffered body root. The
+      // streaming parser has skipped a non-record frame since #1240, but a buffered body has no
+      // next frame to recover into, so this fails closed instead.
+      if (!isAnthropicRecord(parsed)) {
+        return [{
+          type: "error",
+          message: `anthropic response was not a JSON object (${anthropicStructuralValueType(parsed)})`,
+          status: 502,
+          errorType: "upstream_error",
+        }];
+      }
+      const json = parsed;
       const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
       budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
       try {
       const events: AdapterEvent[] = [];
-      const content = json.content as { type: string; text?: string; id?: string; name?: string; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
+      // Same retain-then-return tail every other terminal branch in this function uses; naming it
+      // keeps the two shape guards below from drifting out of step with the accounting.
+      const finishWithEvents = (batch: AdapterEvent[]): AdapterEvent[] => {
+        retainTranslatedEventBatch(batch, budget);
+        return batch;
+      };
+      const rawContent: unknown = json.content;
+      // `content` is claimed model output inside a well-formed response, so it is governed by the
+      // #1332 nested-shape rule (fail closed) rather than #1240's root-frame padding rule (skip).
+      // Absence stays legal in both encodings. A present non-array was silently accepted and is
+      // the dangerous case: a string is iterable, so `for (const block of "text")` walked it one
+      // CHARACTER at a time, read `undefined` from every `block.type`, and completed the turn as a
+      // successful empty response — the #2231 failure mode on a different adapter.
+      if (rawContent !== undefined && rawContent !== null && !Array.isArray(rawContent)) {
+        return finishWithEvents([invalidAnthropicShapeEvent({
+          reason: "content_not_array",
+          valueType: anthropicStructuralValueType(rawContent),
+        })]);
+      }
+      if (Array.isArray(rawContent)) {
+        for (let blockIndex = 0; blockIndex < rawContent.length; blockIndex++) {
+          if (!isAnthropicRecord(rawContent[blockIndex])) {
+            return finishWithEvents([invalidAnthropicShapeEvent({
+              reason: "content_block_not_object",
+              blockIndex,
+              valueType: anthropicStructuralValueType(rawContent[blockIndex]),
+            })]);
+          }
+        }
+      }
+      const content = rawContent as { type: string; text?: string; id?: string; name?: string; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
       if (content) {
         for (const block of content) {
           if (block.type === "text" && block.text) {

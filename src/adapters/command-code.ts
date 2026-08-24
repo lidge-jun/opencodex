@@ -7,6 +7,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { debugDroppedFrame } from "../lib/debug";
 import { configuredReasoningEfforts } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
@@ -365,7 +366,7 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
-        if (line) { try { yield JSON.parse(stripEventFrame(line)) as Record<string, unknown>; } catch { /* ignore non-events */ } }
+        if (line) yield* decodeEventLine(line);
         newline = buffer.indexOf("\n");
       }
       const residualBytes = encoder.encode(buffer).byteLength;
@@ -376,12 +377,47 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
       if (done) break;
     }
     const final = buffer.trim();
-    if (final) { try { yield JSON.parse(stripEventFrame(final)) as Record<string, unknown>; } catch { /* ignore */ } }
+    if (final) yield* decodeEventLine(final);
   } finally {
     budget.releaseRetained(bufferBytes, { kind: "live_transient" });
     try { await reader.cancel(); } catch { /* already closed */ }
     reader.releaseLock();
   }
+}
+
+/**
+ * Yield one NDJSON line as an event record, or nothing.
+ *
+ * `JSON.parse("null")` returns `null` instead of throwing, so the `try/catch` around the parse
+ * cannot see it and the `event.type` read in parseStream crashed the turn — the #1219 defect, on
+ * the one streaming transport the #1240 audit did not cover because it is NDJSON rather than SSE.
+ *
+ * A frame that does not parse to a record is padding, not an event: drop it and continue exactly
+ * as an unparseable line is already dropped, so a stream whose only frames are junk ends in the
+ * same single terminal `done` as an empty body. Skipping is what preserves an answer whose deltas
+ * have already arrived — the observed #1219 case is `null` padding BETWEEN content deltas, where
+ * terminating would discard a complete response (#1240).
+ *
+ * Note this deliberately makes a junk-only stream a quiet `[done]` where it previously threw. That
+ * throw was an unguarded type assumption, not a designed failure signal, and `[done]` is already
+ * what an empty body, a blank-line-only body and an unparseable-only body all produce here. The
+ * broader question — whether this adapter should report *any* no-valid-event stream as a failure
+ * rather than an empty success — is pre-existing, applies to all four of those inputs equally, and
+ * is deliberately not decided by this change.
+ */
+function* decodeEventLine(line: string): Generator<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripEventFrame(line));
+  } catch {
+    debugDroppedFrame("command-code", line);
+    return;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    debugDroppedFrame("command-code", line);
+    return;
+  }
+  yield parsed as Record<string, unknown>;
 }
 
 /** The endpoint is newline-delimited JSON; defensively strip an SSE `data:` frame if the gateway ever switches shapes. */
