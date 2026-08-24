@@ -748,6 +748,69 @@ describe("oversized Codex create frames", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
+  // The unit tests above measure the helper; these two measure the REAL serialized
+  // frame, one byte on each side of the limit. That distinction matters because the
+  // request body is not the frame: `stream` is deleted and `type` is added before
+  // sending, so padding sized against the body would sit at a different offset than
+  // the bytes actually transmitted. An off-by-one lives exactly here and nowhere else.
+  describe("the adjacent-byte transport boundary", () => {
+    // Build padding such that the serialized frame is EXACTLY `target` bytes.
+    function initForFrameBytes(target: number): RequestInit {
+      const probe = frameTextFor(0);
+      const padding = "x".repeat(target - Buffer.byteLength(probe, "utf8"));
+      const init = streamingInit({ padding });
+      const actual = Buffer.byteLength(frameTextFor(padding.length), "utf8");
+      if (actual !== target) throw new Error(`frame sizing is wrong: wanted ${target}, built ${actual}`);
+      return init;
+    }
+
+    function frameTextFor(paddingLength: number): string {
+      const body = JSON.parse(streamingInit({ padding: "x".repeat(paddingLength) }).body as string) as Record<string, unknown>;
+      delete body.stream;
+      return JSON.stringify({ ...body, type: "response.create" });
+    }
+
+    test("a frame one byte under the limit goes over WS", async () => {
+      installFake(ws => {
+        ws.emit("open", {});
+        ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
+      });
+      const fallback = (() => {
+        throw new Error("fallback must not run one byte under the limit");
+      }) as unknown as typeof fetch;
+
+      const response = await codexWsUpstreamFetch(
+        CODEX_URL,
+        initForFrameBytes(CODEX_WS_CREATE_FRAME_LIMIT_BYTES - 1),
+        fallback,
+      );
+      expect(isCodexWsUpstreamResponse(response)).toBe(true);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(FakeWebSocket.instances[0]!.sent).toHaveLength(1);
+      // Byte length, not code units: the limit is a byte budget, and this
+      // assertion should keep meaning the same thing if the fixture ever
+      // carries non-ASCII text.
+      expect(Buffer.byteLength(FakeWebSocket.instances[0]!.sent[0]!, "utf8"))
+        .toBe(CODEX_WS_CREATE_FRAME_LIMIT_BYTES - 1);
+    });
+
+    test("the very next byte takes SSE without dialing", async () => {
+      installFake(() => { throw new Error("WS must not be dialed at the limit"); });
+      const sentinel = new Response("sse");
+      let fallbackCalls = 0;
+      const fallback = (async () => { fallbackCalls += 1; return sentinel; }) as unknown as typeof fetch;
+
+      const response = await codexWsUpstreamFetch(
+        CODEX_URL,
+        initForFrameBytes(CODEX_WS_CREATE_FRAME_LIMIT_BYTES),
+        fallback,
+      );
+      expect(response).toBe(sentinel);
+      expect(fallbackCalls).toBe(1);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+  });
+
   test("names the oversized close instead of reporting a bare drop", async () => {
     installFake(ws => {
       ws.emit("open", {});
