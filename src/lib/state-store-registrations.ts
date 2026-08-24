@@ -6,6 +6,7 @@ import {
 import { reconcileCodexReauthState } from "../codex/account-runtime-state";
 import { reconcileCatalogWarningMemos } from "../codex/catalog/aggregation";
 import { reconcileProviderFetchWarnings } from "../codex/catalog/provider-fetch";
+import { reconcileModelMetadataSnapshot } from "../codex/catalog/model-metadata";
 import { reconcileModelCacheGeneration } from "../codex/model-cache";
 import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
@@ -103,6 +104,7 @@ export const STATE_STORE_REGISTRATIONS = [
   { name: "provider-quota-history", reconcileGeneration: reconcileProviderAccountQuotaRows },
   { name: "codex-routing-health", reconcileGeneration: reconcileCodexRoutingHealth },
   { name: "model-cache-history", reconcileGeneration: reconcileModelCacheGeneration },
+  { name: "model-metadata-snapshot", reconcileGeneration: reconcileModelMetadataSnapshot },
   { name: "pool-rotation", reconcileGeneration: reconcilePoolRotationState },
   { name: "combo-rotation", reconcileGeneration: reconcileComboRotationState },
   { name: "guardian-backoff", reconcileGeneration: reconcileGuardianBackoff },
