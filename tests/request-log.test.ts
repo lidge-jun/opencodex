@@ -1020,6 +1020,44 @@ describe("request log metadata", () => {
     });
   });
 
+  test("deferred SSE logging recognizes policy text from incomplete_details.message", async () => {
+    const entries: RequestLogEntry[] = [];
+    const policyMessage = "This request was flagged for possible cybersecurity risk.";
+    const payload = JSON.stringify({
+      type: "response.incomplete",
+      response: {
+        id: "resp-policy-incomplete-message",
+        status: "incomplete",
+        incomplete_details: {
+          reason: "content_filter",
+          message: policyMessage,
+        },
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`event: response.incomplete\ndata: ${payload}\n\n`));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cyber-policy-incomplete-message",
+      Date.now(),
+      { model: "gpt-5.6-sol", provider: "openai" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      upstreamError: policyMessage,
+      status: 400,
+      errorCode: "cyber_policy",
+      closeReason: "terminal",
+    });
+  });
+
   test("deferred SSE logging maps a policy top-level error to failed 400", async () => {
     const entries: RequestLogEntry[] = [];
     const payload = JSON.stringify({
