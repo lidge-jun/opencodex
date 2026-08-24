@@ -25,6 +25,25 @@ on the v1 surface so they can still spawn Grok or Claude. ChatGPT-native parents
 `NEW_TASK` bodies; routed models cannot read them. Routed parents stay on v2, where child tasks
 are plaintext. This is a switch *inside* v2, not a fourth catalog mode.
 
+For a different trade-off, the experimental **V2 native parent override** can replace an eligible
+ChatGPT-native v2 root parent with one routed model before the parent runs. It keeps the v2 tool
+surface and makes that root's child tasks plaintext, but it is independent of both
+`keepNativeChatGptOnV1` and `agentTaskRecovery`:
+
+| Setting | What it preserves or changes | Cost/limitation |
+| --- | --- | --- |
+| `keepNativeChatGptOnV1` | Preserves the native ChatGPT parent, but advertises it on v1. | The native v2 task-encryption problem is avoided by leaving v2, and it applies to new sessions. |
+| `agentTaskRecovery` | Preserves the native v2 parent and recovers a routed child task through ChatGPT. | The extra authenticated ChatGPT request consumes quota, adds latency, and returns model-produced plaintext. |
+| `v2NativeParentOverride` | Preserves v2 tools while executing eligible native roots on one configured routed model. | The routed provider receives the root data; availability, context, behavior, latency, cost, and privacy differ by provider. |
+
+The override is off unless explicitly enabled, requires an explicitly forced v2 surface and the
+upstream V2 flag, and is unavailable while **Keep ChatGPT on v1** is on. There is no automatic
+target selection or fallback. Once a root qualifies, a missing, unavailable, or canonical ChatGPT
+target fails closed instead of sending that request to ChatGPT. The target is looked up for every
+eligible request, so changing it affects later parent turns and compaction; it is not pinned per
+thread. The requested model remains the request identity in logs, while the effective/resolved
+model and provider show what OpenCodex actually executes.
+
 :::tip[Not sure?]
 Start with **base**. Choose **v1** when cross-provider delegation must work predictably. Force **v2**
 only when you specifically want its newer session model across every catalog entry.
@@ -162,6 +181,11 @@ for the full trust boundary and configuration.
 Combo routing remains unchanged and continues to consider only canonical native ChatGPT targets for
 encrypted tasks.
 
+The parent override avoids this recovery path by routing the eligible root before Codex can create
+encrypted child content. It does not decrypt or rewrite Codex's protocol. Native children remain
+native; if a native child later creates a routed grandchild, that nested native parent can still
+produce an unreadable encrypted task. Nested parent override is not supported.
+
 ## Changing the mode
 
 ### GUI
@@ -202,7 +226,7 @@ The management API exposes matching `GET` and `PUT` endpoints:
 
 | Endpoint | Manages |
 | --- | --- |
-| `/api/v2` | Surface mode, native feature flag, and thread settings |
+| `/api/v2` | Surface mode, native feature flag, thread settings, and the V2 native parent override |
 | `/api/injection-model` | Preferred model, effort, custom prompt, guidance, and native-default sync |
 | `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
 | `/api/subagent-models` | Ordered roster of up to five models |
@@ -219,6 +243,18 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
   -d '{"model":"anthropic/claude-sonnet-5","effort":"xhigh"}'
 ```
+
+The override is managed through the dashboard or this endpoint; it has no CLI command:
+
+```bash
+curl -X PUT http://localhost:10100/api/v2 \
+  -H 'Content-Type: application/json' \
+  -d '{"v2NativeParentOverride":{"enabled":true,"model":"anthropic/claude-sonnet-5"}}'
+```
+
+See [Agent configuration](/reference/configuration/agents/#v2-native-parent-override) and the
+[Management API reference](/reference/management-api/#v2-native-parent-override) for the exact
+contracts and validation rules.
 
 ## FAQ
 
