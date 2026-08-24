@@ -466,8 +466,10 @@ the curated `noVisionModels` list and use the vision describe sidecar instead.
 Cursor server-driven local tools are disabled by default. Codex continues using its own tools such as
 `apply_patch` and `exec_command` with its own approval and sandbox policy:
 
-- `"off"` (default) rejects Cursor-native `read`, `write`, `delete`, `ls`, `grep`, `shell`, and
-  `fetch` execution.
+- `"off"` (default) denies proxy-local Cursor-native `read`, `write`, `delete`, `ls`, `grep`,
+  `shell`, and `fetch` execution. When the turn advertises a bare Codex `shell_command` or
+  `exec_command` tool, native Shell/Read/Ls/Grep/Fetch map to that Codex shell bridge instead of
+  running on the proxy host; write/delete stay refused.
 - `"on"` opts into trusted-local execution and bypasses Codex approval/sandbox semantics.
 - `"codex-sandbox"` is retained for compatibility but fails closed like `"off"`; request prose is
   not trustworthy sandbox attestation.

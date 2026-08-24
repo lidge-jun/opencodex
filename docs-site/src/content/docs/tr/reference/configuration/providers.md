@@ -328,8 +328,10 @@ Cursor sunucu güdümlü yerel araçlar varsayılan olarak devre dışıdır. Co
 onayı ve sanal alan politikasıyla `apply_patch` ve `exec_command` gibi kendi
 araçlarını kullanmaya devam eder:
 
-- `"off"` (varsayılan), Cursor yerel `read`, `write`, `delete`, `ls`, `grep`,
-  `shell` ve `fetch` yürütmesini reddeder.
+- `"off"` (varsayılan), proxy üzerinde Cursor yerel `read`, `write`, `delete`, `ls`, `grep`,
+  `shell` ve `fetch` yürütmesini reddeder. Tur bare Codex `shell_command` veya `exec_command`
+  duyurduğunda yerel Shell/Read/Ls/Grep/Fetch proxy yerine bu Codex köprüsüne eşlenir; write/delete
+  reddedilmeye devam eder.
 - `"on"`, güvenilen yerel yürütmeyi seçer ve Codex onay/sanal alan anlambilimini
   atlar.
 - `"codex-sandbox"` uyumluluk için tutulur ancak `"off"` gibi kapalı olarak

@@ -298,8 +298,8 @@ sur la liste curatée `noVisionModels` et passent par le sidecar de description 
 Les outils locaux pilotés par le serveur Cursor sont désactivés par défaut. Codex continue d'utiliser ses propres outils tels que
 `apply_patch` et `exec_command` avec sa propre politique d'approbation et de bac à sable :
 
-- `"off"` (par défaut) rejette l'exécution des outils Cursor natifs `read`, `write`, `delete`, `ls`, `grep`, `shell` et
-  `fetch`.
+- `"off"` (par défaut) refuse l'exécution proxy-locale des outils Cursor natifs `read`, `write`, `delete`, `ls`, `grep`, `shell` et
+  `fetch`. Lorsque le tour annonce un outil Codex nu `shell_command` ou `exec_command`, Shell/Read/Ls/Grep/Fetch natifs sont mappés vers ce pont Codex au lieu de s'exécuter sur l'hôte proxy ; write/delete restent refusés.
 - `"on"` active une exécution locale de confiance et contourne les règles d'approbation et de bac à sable de Codex.
 - `"codex-sandbox"` est conservé pour compatibilité, mais échoue de manière sûre comme `"off"` ; le texte de la requête
   ne constitue pas une attestation fiable d'exécution en bac à sable.

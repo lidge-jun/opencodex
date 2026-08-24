@@ -210,8 +210,8 @@ Cursor Router 的最佳化階梯以獨立的 Codex id 暴露，因為 picker 無
 
 Cursor 伺服器驅動的本機工具預設停用。Codex 繼續使用其自身工具如 `apply_patch` 與 `exec_command` 及其自身的核准與沙箱政策：
 
-- `"off"`（預設）拒絕 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 與
-  `fetch` 執行。
+- `"off"`（預設）拒絕在 proxy 上執行 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 與
+  `fetch`。當 turn 公布了 bare Codex `shell_command` 或 `exec_command` 時，原生 Shell/Read/Ls/Grep/Fetch 會映射到該 Codex shell 橋接工具，而不是在 proxy 上執行；write/delete 仍被拒絕。
 - `"on"` 選擇加入受信任的本機執行並繞過 Codex 核准／沙箱語意。
 - `"codex-sandbox"` 為相容性而保留，但像 `"off"` 般 fail closed；請求文字不是可信的沙箱證明。
 

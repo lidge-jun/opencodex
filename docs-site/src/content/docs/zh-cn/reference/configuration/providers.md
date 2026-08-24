@@ -244,7 +244,8 @@ Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择�
 
 Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用自己的工具，例如 `apply_patch` 和 `exec_command`，并沿用自己的审批与沙箱策略：
 
-- `"off"`（默认）会拒绝执行 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 和 `fetch`。
+- `"off"`（默认）拒绝在 proxy 上执行 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 和
+  `fetch`。当 turn 公布了 bare Codex `shell_command` 或 `exec_command` 时，原生 Shell/Read/Ls/Grep/Fetch 会映射到该 Codex shell 桥接工具，而不是在 proxy 上运行；write/delete 仍被拒绝。
 - `"on"` 会启用受信任的本地执行，并绕过 Codex 的审批/沙箱语义。
 - `"codex-sandbox"` 为兼容性保留，但会像 `"off"` 一样失败关闭；请求文案并不是可信的沙箱证明。
 

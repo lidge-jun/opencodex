@@ -246,6 +246,22 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+  With default-off policy, native Shell/Read/Ls/Grep/Fetch map to Codex `shell_command`/`exec_command`
+  when that bridge tool is in the catalog; write/delete remain refused.
+
+## `command-code`
+
+**Targets:** Command Code **OAuth** subscription agent API (`POST {baseUrl}/alpha/generate`).
+**Auth:** OAuth Bearer from `ocx login command-code`.
+
+- Distinct from the API-key `commandcode` preset (`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`). The API-key route never reads `projectContext` or fills the generate envelope from disk.
+- Optional `projectContext: "on"` on `providers.command-code` copies bounded files from `process.cwd()` at request time into `memory`, `taste`, and `skills`. Absent or `"off"` sends `memory: ""`, `taste: null`, `skills: null` even when those files exist in the repo — opt-in only, never auto-load.
+- Start the proxy from the trusted Codex project directory so the working directory matches the repository Codex is editing.
+- **Memory:** UTF-8 of `AGENTS.md` at cwd only (not `CLAUDE.md`, `CODEX.md`, or home paths). Cap 32,768 bytes; oversize prefixes truncate with `<!-- truncated -->`.
+- **Taste:** UTF-8 of `.commandcode/taste/taste.md`, or `null` when missing. Cap 8,192 bytes with the same truncation marker. A present-but-empty file sends `""`. `x-taste-learning` remains `"false"`; loading taste is not Command Code taste learning.
+- **Skills:** XML bundle from project skill roots in order: `.commandcode/skills`, `.agents/skills`, `.pi/skills`. Each subdirectory with `SKILL.md` becomes one `<skill name="…">…</skill>` entry (name from YAML frontmatter `name:` or the directory name). Skips dotted names and non-directories; first-wins by resolved name; max 16 skills; total XML cap 32,768 bytes. Never reads `~/.commandcode/skills` or other home skill trees.
+- Path confinement uses realpath checks under cwd; symlink escapes are omitted. Each file operation has a 2-second timeout. Results are cached per cwd for 30 seconds (max 128 entries). Any failure omits that piece fail-softly.
+- `commandCodeVersion` pins `x-command-code-version` (default `0.52.1`). `permissionMode` stays `"standard"` and `mode` stays `"agent"`.
 
 ## `azure-openai` (alias: `azure`)
 

@@ -381,6 +381,11 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
+When `nativeLocalExec` is not `"on"` but the turn advertises a bare Codex `shell_command` or
+`exec_command` bridge tool, native Shell/Read/Ls/Grep/Fetch exec frames map to one Codex shell tool
+call through the existing MCP split-turn instead of writing proxy-local policy rejections. Write and
+delete stay refused; `nativeLocalExec: "on"` still runs native exec on the proxy host.
+
 [Decision Log]
 - 목적과 의도: prevent caller-controlled Responses text from authorizing Cursor native local shell, filesystem, or fetch execution.
 - 기존 구현 및 제약 조건: the adapter preserved top-level `instructions`, system messages, and developer messages, then treated a `sandbox_mode ... danger-full-access` prose marker as an exec allow signal in `codex-sandbox` mode.
@@ -388,6 +393,14 @@ MCP, screen recording, and computer-use stay on their separate explicit executor
 - 선택한 방식: keep marker detection only as diagnostic/context and make `nativeLocalExec: "on"` the only non-legacy mode that enables built-in local exec; unset, `off`, and `codex-sandbox` all deny.
 - 다른 대안 대신 이 방식을 선택한 이유: opencodex has no trustworthy per-request sandbox attestation in request text or headers, so any prompt-carried marker is spoofable by data-plane callers.
 - 장점, 단점 및 영향: this closes prompt-to-native-exec escalation while preserving an explicit operator escape hatch; existing configs that relied on `codex-sandbox` must switch to `nativeLocalExec: "on"` for trusted local experiments.
+
+[Decision Log]
+- 목적과 의도: when default-off policy blocks proxy-local native exec, route read-class native execs to the advertised Codex shell bridge instead of writing `#604` retry prose that stalls the Cursor run.
+- 기존 구현 및 제약 조건: `handleServerMessage` fell through every native exec to `handleCursorNativeExec`, which wrote policy-rejection Connect frames even when `shell_command`/`exec_command` was already in the catalog.
+- 검토한 주요 대안: keep pure rejection; auto-enable proxy-local exec in codex-sandbox mode; add a new operator flag for bridging.
+- 선택한 방식: pure mapper plus reuse of `planMcpArgsHandling` / client-tool finalize; no new config flag; write/delete stay on the policy path.
+- 다른 대안 대신 이 방식을 선택한 이유: the MCP bridge already ends the Cursor turn correctly without fake native results; bridging reuses that path and keeps Codex execution on the client host.
+- 장점, 단점 및 영향: default-off turns stop looping on native retries; POSIX command templates may need client-side adaptation on non-POSIX Codex hosts.
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
 that survives the transport budget: unified Desktop `exec` as well as the legacy

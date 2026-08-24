@@ -146,7 +146,22 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
   `effort` 和 `fast=true` 值放入 `requested_model.parameters`。
 - Cursor 原生本地 filesystem/shell/network 执行默认被拒绝。显式 `mcpServers` 与
   `desktopExecutor` 集成分别需要 opt-in；`unsafeAllowNativeLocalExec` 会启用更广泛的内置
-  executor，并绕过 Codex 审批和 sandbox 语义。
+  executor，并绕过 Codex 审批和 sandbox 语义。默认 `off` 下，当目录中有桥接工具时，原生
+  Shell/Read/Ls/Grep/Fetch 会映射为 Codex `shell_command`/`exec_command` 调用；write/delete 仍被拒绝。
+
+## `command-code`
+
+**目标：** Command Code **OAuth** 订阅 agent API（`POST {baseUrl}/alpha/generate`）。
+**认证：** 通过 `ocx login command-code` 的 OAuth Bearer。
+
+- 与 API 密钥 `commandcode` 预设（`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`）不同。API 密钥路由从不读取 `projectContext`，也不会从磁盘填充 generate 信封。
+- 在 `providers.command-code` 上可选的 `projectContext: "on"` 会在请求时从 `process.cwd()` 复制有界文件到 `memory`、`taste` 和 `skills`。未设置或 `"off"` 时即使仓库中已有这些文件，也发送 `memory: ""`、`taste: null`、`skills: null` — 仅 opt-in，不会自动加载。
+- 请从受信任的 Codex 项目目录启动代理，使工作目录与 Codex 正在编辑的仓库一致。
+- **Memory：** 仅 cwd 下的 `AGENTS.md` UTF-8（不是 `CLAUDE.md`、`CODEX.md` 或主目录路径）。上限 32,768 字节；超限时前缀截断并附加 `<!-- truncated -->`。
+- **Taste：** `.commandcode/taste/taste.md` 的 UTF-8，缺失时为 `null`。上限 8,192 字节，使用相同截断标记。存在但为空的文件发送 `""`。`x-taste-learning` 保持 `"false"`；加载 taste 不是 Command Code 的 taste learning。
+- **Skills：** 按顺序从项目 skill 根生成 XML：`.commandcode/skills`、`.agents/skills`、`.pi/skills`。每个含 `SKILL.md` 的子目录成为一个 `<skill name="…">…</skill>` 条目（名称来自 YAML frontmatter 的 `name:` 或目录名）。跳过以 `.` 开头的名称和非目录；按解析名 first-wins；最多 16 个 skill；XML 总上限 32,768 字节。从不读取 `~/.commandcode/skills` 或其他主目录 skill 树。
+- 路径限制使用 cwd 下的 realpath 检查；符号链接逃逸会被省略。每个文件操作 2 秒超时。结果按 cwd 缓存 30 秒（最多 128 条）。任何失败都会 fail-soft 地省略该部分。
+- `commandCodeVersion` 固定 `x-command-code-version`（默认 `0.52.1`）。`permissionMode` 保持 `"standard"`，`mode` 保持 `"agent"`。
 
 ## `azure-openai`（别名：`azure`）
 

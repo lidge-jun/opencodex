@@ -55,12 +55,18 @@ import { classifyCursorError, CursorUnexpectedCancelError, isCursorAbortError, i
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import {
+  cursorUnsafeNativeLocalExecEnabled,
   handleCursorNativeExec,
   handleCursorNativeKv,
   releaseCursorBlobRequestScope,
   type CursorBlobRequestScopeToken,
   type CursorNativeExecContext,
 } from "./native-exec";
+import {
+  advertisedBareCodexShellBridgeName,
+  nativeExecBridgeToMcpExec,
+  planNativeExecBridge,
+} from "./native-exec-bridge";
 import { effectiveCursorNativeExecAllow } from "./exec-policy";
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
@@ -1440,6 +1446,21 @@ class LiveCursorTransport implements CursorTransport {
       const execMsg = message.message.value;
       if (execMsg.message.case === "mcpArgs") {
         const plan = planMcpArgsHandling(execMsg, state);
+        if (plan.handledByResponsesBridge) {
+          this.noteClientToolActivity();
+          for (const event of plan.events) push(event);
+          if (plan.cancelCursorRun) this.cancelCursorRun();
+          else if (plan.finalizeWhenDrained) this.scheduleClientToolFinalize(state, push);
+          return;
+        }
+      }
+      const advertisedShellBridgeName = advertisedBareCodexShellBridgeName(state.clientToolNames ?? []);
+      const nativePlan = planNativeExecBridge(execMsg, {
+        nativeLocalExecEnabled: cursorUnsafeNativeLocalExecEnabled(this.execContext),
+        advertisedShellBridgeName,
+      });
+      if (nativePlan.bridge) {
+        const plan = planMcpArgsHandling(nativeExecBridgeToMcpExec(execMsg, nativePlan), state);
         if (plan.handledByResponsesBridge) {
           this.noteClientToolActivity();
           for (const event of plan.events) push(event);

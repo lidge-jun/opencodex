@@ -295,8 +295,9 @@ Bridge Cursor экспериментальный. После `ocx login cursor` 
 Server-driven local tool'ы Cursor по умолчанию выключены. Codex продолжает использовать собственные
 инструменты, такие как `apply_patch` и `exec_command`, со своей же approval/sandbox policy:
 
-- `"off"` (по умолчанию) отвергает нативное выполнение `read`, `write`, `delete`, `ls`, `grep`,
-  `shell` и `fetch` со стороны Cursor.
+- `"off"` (по умолчанию) запрещает proxy-local выполнение нативных Cursor `read`, `write`, `delete`, `ls`, `grep`,
+  `shell` и `fetch`. Когда в turn объявлен bare Codex `shell_command` или `exec_command`, нативные Shell/Read/Ls/Grep/Fetch
+  маппятся в этот Codex shell bridge вместо выполнения на proxy; write/delete по-прежнему запрещены.
 - `"on"` включает trusted local execution и обходит approval/sandbox semantics Codex.
 - `"codex-sandbox"` сохранён ради совместимости, но закрывается с ошибкой так же, как `"off"`; на
   prose запроса нельзя полагаться как на достоверную sandbox-attestation.

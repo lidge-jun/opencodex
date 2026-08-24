@@ -242,7 +242,7 @@ Cursor 브리지는 실험적입니다. `ocx login cursor`를 실행한 뒤 `pro
 
 Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Codex는 계속해서 `apply_patch`, `exec_command` 같은 자체 도구를 자체 승인 및 샌드박스 정책과 함께 사용합니다.
 
-- `"off"`(기본값)는 Cursor 네이티브 `read`, `write`, `delete`, `ls`, `grep`, `shell`, `fetch` 실행을 거부합니다.
+- `"off"`(기본값)는 프록시에서 Cursor 네이티브 `read`, `write`, `delete`, `ls`, `grep`, `shell`, `fetch` 실행을 거부합니다. 턴에 bare Codex `shell_command` 또는 `exec_command`가 광고되어 있으면 네이티브 Shell/Read/Ls/Grep/Fetch는 프록시가 아니라 해당 Codex 셸 브리지로 매핑되며 write/delete는 계속 거부됩니다.
 - `"on"`은 신뢰된 로컬 실행을 허용하고, Codex 승인/샌드박스 의미를 우회합니다.
 - `"codex-sandbox"`는 호환성을 위해 남아 있지만 `"off"`처럼 실패를 닫습니다. 요청 문구는 신뢰할 수 있는 샌드박스 증명이 아닙니다.
 

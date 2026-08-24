@@ -239,8 +239,8 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 
 カーソル サーバー駆動のローカル ツールは、デフォルトでは無効になっています。 Codex は、独自の承認とサンドボックス ポリシーを備えた `apply_patch` や `exec_command` などの独自のツールを引き続き使用します。
 
-- `"off"` (デフォルト) は、カーソルネイティブの `read`、`write`、`delete`、`ls`、`grep`、`shell`、および
-`fetch`実行。
+- `"off"` (デフォルト) は、プロキシ上での Cursor ネイティブ `read`、`write`、`delete`、`ls`、`grep`、`shell`、および
+  `fetch` 実行を拒否します。ターンが素の Codex `shell_command` または `exec_command` を公開している場合、ネイティブ Shell/Read/Ls/Grep/Fetch はプロキシではなくその Codex シェルブリッジへマップされ、write/delete は引き続き拒否されます。
 - `"on"` は、信頼できるローカルでの実行を選択し、Codex 承認/サンドボックス セマンティクスをバイパスします。
 - `"codex-sandbox"` は互換性のために残されていますが、`"off"` と同様にフェールクローズされます。散文のリクエストは
 信頼できるサンドボックス証明書ではありません。
