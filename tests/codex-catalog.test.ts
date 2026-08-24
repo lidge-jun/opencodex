@@ -198,10 +198,44 @@ describe("combo catalog capability intersection", () => {
       id: "mixed",
       owned_by: "combo",
       contextWindow: 128_000,
+      detectedContextWindow: 128_000,
       maxInputTokens: 100_000,
+      metadataSource: "derived",
       inputModalities: ["text"],
       reasoningEfforts: ["low", "medium"],
       defaultReasoningEffort: "medium",
+    });
+  });
+
+  test("preserves detectedContextWindow for capped combo tooltip evidence", () => {
+    const wide = {
+      provider: "a",
+      id: "m1",
+      contextWindow: 350_000,
+      detectedContextWindow: 1_050_000,
+      contextCap: 350_000,
+      contextCapped: true,
+      maxInputTokens: 350_000,
+      inputModalities: ["text"],
+      reasoningEfforts: ["low"],
+    };
+    const narrow = {
+      provider: "b",
+      id: "m2",
+      contextWindow: 200_000,
+      detectedContextWindow: 500_000,
+      contextCap: 350_000,
+      contextCapped: true,
+      maxInputTokens: 200_000,
+      inputModalities: ["text"],
+      reasoningEfforts: ["low"],
+    };
+    const derived = deriveComboCatalogModel("capped", normalizedCombo(), [wide, narrow]);
+    expect(derived).toMatchObject({
+      contextWindow: 200_000,
+      detectedContextWindow: 500_000,
+      contextCapped: true,
+      metadataSource: "derived",
     });
   });
 
@@ -1175,6 +1209,7 @@ describe("combo catalog capability intersection", () => {
       contextWindow: 128_000,
       contextCapped: false,
       maxInputTokens: 100_000,
+      metadataSource: "derived",
       inputModalities: ["text"],
       reasoningEfforts: ["high"],
     });

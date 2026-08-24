@@ -419,6 +419,28 @@ describe("Cursor discovery bounded retry", () => {
     expect(result).toEqual({ ok: true, models: ["gpt-5.5-high"] });
   });
 
+  test("retries when the HTTP/2 stream ends before response headers", async () => {
+    const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
+      models: [create(ModelDetailsSchema, { modelId: "gpt-5.5-high" })],
+    }));
+    let requests = 0;
+    const result = await withDiscoveryServer(stream => {
+      requests += 1;
+      if (requests === 1) {
+        // A pre-header disconnect currently becomes `http/HTTP unknown`, which skips the
+        // existing transient-discovery retry.
+        stream.on("error", () => {});
+        stream.destroy();
+        return;
+      }
+      stream.respond({ ":status": 200, "content-type": "application/proto" });
+      stream.end(body);
+    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+
+    expect(requests).toBe(2);
+    expect(result).toEqual({ ok: true, models: ["gpt-5.5-high"] });
+  });
+
   test("does not retry deterministic auth failures", async () => {
     let requests = 0;
     const result = await withDiscoveryServer(stream => {

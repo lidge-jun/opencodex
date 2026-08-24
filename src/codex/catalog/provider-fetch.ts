@@ -75,6 +75,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
+import { capsFromProvider, enrichCatalogModelMetadata, persistLiveModelMetadata, type LiveSnapshotRow } from "./model-metadata";
 import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
@@ -662,9 +663,16 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const hintedWindow = discoveredWindow !== undefined
     ? (configuredCap !== undefined ? Math.min(discoveredWindow, configuredCap) : discoveredWindow)
     : (configuredCap ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined));
+  const capFilledMissingWindow = discoveredWindow === undefined && hintedWindow !== undefined;
   const hinted = {
     ...modelWithoutServiceTier,
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
+    ...(discoveredWindow !== undefined
+      ? { detectedContextWindow: model.detectedContextWindow ?? discoveredWindow }
+      : {}),
+    ...(capFilledMissingWindow && !model.metadataSource
+      ? { metadataSource: "config_fallback" as const }
+      : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(configuredMaxInput !== undefined
@@ -689,10 +697,26 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ...(prov.codexToolMode !== undefined ? { codexToolMode: prov.codexToolMode } : {}),
   };
   const capped = applyProviderContextCap(hinted.contextWindow, providerCap);
+  const detectedContextWindow = hinted.detectedContextWindow
+    ?? discoveredWindow;
+  const contextCapped = providerCap !== undefined
+    && typeof capped === "number"
+    && (
+      capped !== hinted.contextWindow
+      || (typeof detectedContextWindow === "number" && detectedContextWindow > capped)
+      || hinted.contextCapped === true
+    );
   if (providerCap !== undefined && capped !== hinted.contextWindow) {
-    return { ...hinted, contextWindow: capped, contextCap: providerCap, contextCapped: true };
+    return {
+      ...hinted,
+      contextWindow: capped,
+      contextCap: providerCap,
+      contextCapped,
+    };
   }
-  return providerCap !== undefined ? { ...hinted, contextCap: providerCap, contextCapped: false } : hinted;
+  return providerCap !== undefined
+    ? { ...hinted, contextCap: providerCap, contextCapped }
+    : hinted;
 }
 
 export function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string, contextCap?: number): Partial<CatalogModel> {
@@ -1043,15 +1067,35 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       item.context_size,
       item.max_model_len,
       item.max_context_length,
+      item.context_window,
+      item.max_context_window,
+      item.max_context_size,
+      item.n_ctx,
+      plainRecord(item.top_provider)?.max_context_length,
+      plainRecord(metadata?.top_provider)?.max_context_length,
       // llama.cpp reports the served context under `meta`: `n_ctx` is what the
       // server was actually started with, `n_ctx_train` the model's trained
       // maximum. Prefer the served value — routing must not promise a window the
       // running server will refuse. Both come LAST so no provider already
       // supplying a recognized field changes behavior (#1797).
       plainRecord(item.meta)?.n_ctx,
+      item.default_context_size,
       plainRecord(item.meta)?.n_ctx_train,
     );
-  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
+  const maxInputTokens = positiveSafeInteger(
+    limits?.max_input_tokens,
+    item.max_input_tokens,
+    item.max_input_length,
+    item.max_prompt_tokens,
+  );
+  // Output ceilings only. A top-level `max_tokens` is ambiguous (some catalogs
+  // use it as context) and generated jawcode `maxTokens` is output-only — never
+  // treat either as a context window.
+  const maxOutputTokens = positiveSafeInteger(
+    limits?.max_output_tokens,
+    item.max_output_tokens,
+    limits?.max_tokens,
+  );
   // Some OpenAI-compatible catalogs expose the selectable ladder under
   // `reasoning_parameters.efforts` instead of the older `reasoning_efforts` key.
   // Treat both as model metadata: otherwise a valid upstream capability disappears
@@ -1079,6 +1123,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
+    ...(maxOutputTokens && maxOutputTokens > 0 ? { maxOutputTokens } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
@@ -1283,9 +1328,13 @@ async function fetchProviderModelsWithAuth(
     const stale = getStaleCached(name);
     return observed(
       withConfiguredRetention(
-        stale
+        (stale
           ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
-          : failedDiscoveryConfigured,
+          : failedDiscoveryConfigured
+        ).map(model => enrichCatalogModelMetadata(model, {
+          liveFresh: false,
+          caps: capsFromProvider(prov, model.id, contextCap),
+        })),
       ),
       "degraded",
     );
@@ -1312,12 +1361,14 @@ async function fetchProviderModelsWithAuth(
     markModelsFetchFailure(name);
     markProviderDiscoveryFailed(name, failure);
     const stale = getStaleCached(name);
+    const fallbackModels = stale
+      ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
+      : failedDiscoveryConfigured;
     return {
-      models: withConfiguredRetention(
-        stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
-          : failedDiscoveryConfigured,
-      ),
+      models: withConfiguredRetention(fallbackModels.map(model => enrichCatalogModelMetadata(model, {
+        liveFresh: false,
+        caps: capsFromProvider(prov, model.id, contextCap),
+      }))),
       fallback: stale ? "stale" : "configured",
       shouldLog,
     };
@@ -1384,19 +1435,40 @@ async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     if (antigravity) {
-      const live = antigravity.map(model => applyProviderConfigHints(name, prov, {
-        id: model.id,
-        provider: name,
-        // CCA only exposes a numeric thinking budget. Until the adapter owns an exact Codex
-        // effort-to-wire mapping for a newly discovered model, do not advertise a false ladder.
-        reasoningEfforts: [],
-        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-        ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap));
+      const observedAt = new Date().toISOString();
+      const snapshotRows: LiveSnapshotRow[] = [];
+      const live = antigravity.map(model => {
+        const hints = {
+          // CCA only exposes a numeric thinking budget. Until the adapter owns an exact Codex
+          // effort-to-wire mapping for a newly discovered model, do not advertise a false ladder.
+          reasoningEfforts: [] as string[],
+          ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+          ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
+        };
+        if (model.contextWindow || model.inputModalities) {
+          snapshotRows.push({
+            id: model.id,
+            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+            ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
+            observedAt,
+          });
+        }
+        const enriched = enrichCatalogModelMetadata({
+          id: model.id,
+          provider: name,
+          ...hints,
+          ...(model.contextWindow ? { metadataSource: "live" as const, metadataObservedAt: observedAt } : {}),
+        }, {
+          liveFresh: true,
+          caps: capsFromProvider(prov, model.id, contextCap),
+        });
+        return applyProviderConfigHints(name, prov, enriched, contextCap);
+      });
       const forCache = withConfiguredRetention(live, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      persistLiveModelMetadata(name, snapshotRows, { writerGeneration: cacheGeneration, observedAt });
       registerAntigravityDiscoveredWireModels(prov.baseUrl, antigravity, {
         provider: name,
         cacheGeneration,
@@ -1421,22 +1493,30 @@ async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     const items = extracted.items;
+    const observedAt = new Date().toISOString();
+    const snapshotRows: LiveSnapshotRow[] = [];
     const live = items.map(m => {
       const ownedBy = boundedOwnedBy(m.owned_by);
-      return applyProviderConfigHints(name, prov, {
+      const hints = catalogHintsFromModelsApiItem(name, m);
+      const discovered = Boolean(hints.contextWindow || hints.maxInputTokens || hints.maxOutputTokens
+        || hints.inputModalities || hints.capabilities || hints.reasoningEfforts);
+      if (discovered) {
+        snapshotRows.push({ id: m.id, ...hints, observedAt });
+      }
+      const enriched = enrichCatalogModelMetadata({
         id: m.id,
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
-        ...catalogHintsFromModelsApiItem(name, m),
-      }, contextCap);
+        ...hints,
+        ...(discovered ? { metadataSource: "live" as const, metadataObservedAt: observedAt } : {}),
+      }, {
+        liveFresh: true,
+        caps: capsFromProvider(prov, m.id, contextCap),
+      });
+      return applyProviderConfigHints(name, prov, enriched, contextCap);
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
-    // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
-    // `live`; otherwise configured entries would be reported as discovered ones.
     const liveModelCount = live.length;
-    // Dated-release aliases + configured retention (compat allow-list, combo targets,
-    // Vertex default). Cache without combo retention so a later gather re-applies the
-    // current capture's retain set on read (warm-cache OCX-111 / #1308).
     const forCache = withConfiguredRetention(live, { retainComboTargets: false });
     const returned = withConfiguredRetention(forCache, { warnDrops: true });
     const droppedConfiguredIds = configured
@@ -1450,6 +1530,7 @@ async function fetchProviderModelsWithAuth(
     if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
+    persistLiveModelMetadata(name, snapshotRows, { writerGeneration: cacheGeneration, observedAt });
     markProviderDiscoveryOk(name, liveModelCount);
     return observed(returned, "authoritative");
   } catch (error) {
@@ -2035,7 +2116,14 @@ export function augmentRoutedModelsWithMetadata(
   providers?: Record<string, OcxProviderConfig>,
   caps?: Pick<OcxConfig, "providerContextCaps">,
 ): CatalogModel[] {
-  const out = [...models];
+  const out = models.map((model) => {
+    const provider = providers?.[model.provider];
+    const contextCap = caps ? providerContextCap(caps, model.provider) : undefined;
+    return enrichCatalogModelMetadata(model, {
+      liveFresh: model.metadataSource === "live" && model.metadataStale !== true,
+      caps: capsFromProvider(provider, model.id, contextCap),
+    });
+  });
   const seen = new Set(out.map(m => `${m.provider}/${m.id}`));
   for (const provider of providerNames) {
     if (!JAWCODE_CATALOG_AUGMENT_PROVIDERS.has(provider)) continue;
@@ -2054,10 +2142,13 @@ export function augmentRoutedModelsWithMetadata(
         ...(typeof meta.contextWindow === "number" && meta.contextWindow > 0 ? { contextWindow: meta.contextWindow } : {}),
         ...(Array.isArray(meta.input) && meta.input.length > 0 ? { inputModalities: [...meta.input] } : {}),
       };
-      out.push({
-        ...model,
-        ...(providers?.[provider] ? applyProviderConfigHints(provider, providers[provider], model, contextCap) : {}),
-      });
+      const hinted = providers?.[provider]
+        ? applyProviderConfigHints(provider, providers[provider], model, contextCap)
+        : model;
+      out.push(enrichCatalogModelMetadata(hinted, {
+        liveFresh: false,
+        caps: capsFromProvider(providers?.[provider], meta.id, contextCap),
+      }));
     }
   }
   return out;

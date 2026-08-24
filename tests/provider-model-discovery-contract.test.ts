@@ -259,6 +259,74 @@ describe("registry-owned provider model discovery", () => {
     })).toEqual({});
   });
 
+  test("reads additional context, input, and output aliases from live /models rows", () => {
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "ctx-window",
+      context_window: 262_144,
+    })).toEqual({ contextWindow: 262_144 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "max-ctx-window",
+      max_context_window: 200_000,
+    })).toEqual({ contextWindow: 200_000 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "default-ctx",
+      default_context_size: 32_768,
+    })).toEqual({ contextWindow: 32_768 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "default-and-max",
+      default_context_size: 4_096,
+      max_context_size: 128_000,
+    })).toEqual({ contextWindow: 128_000 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "default-and-meta-n-ctx",
+      default_context_size: 4_096,
+      meta: { n_ctx: 131_072 },
+    })).toEqual({ contextWindow: 131_072 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "max-ctx-size",
+      max_context_size: 16_384,
+    })).toEqual({ contextWindow: 16_384 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "top-level-n-ctx",
+      n_ctx: 8_192,
+    })).toEqual({ contextWindow: 8_192 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "input-length",
+      max_input_length: 100_000,
+    })).toEqual({ maxInputTokens: 100_000 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "prompt-tokens",
+      max_prompt_tokens: 90_000,
+    })).toEqual({ maxInputTokens: 90_000 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "nested-output",
+      metadata: { limits: { max_output_tokens: 8_192 } },
+    })).toEqual({ maxOutputTokens: 8_192 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "output-tokens",
+      max_output_tokens: 4_096,
+    })).toEqual({ maxOutputTokens: 4_096 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "nested-max-tokens",
+      metadata: { limits: { max_tokens: 2_048 } },
+    })).toEqual({ maxOutputTokens: 2_048 });
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "openrouter-top-provider",
+      top_provider: { max_context_length: 1_048_576 },
+    })).toEqual({ contextWindow: 1_048_576 });
+  });
+
+  test("does not treat a top-level max_tokens or jawcode maxTokens as context", () => {
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "ambiguous-max-tokens",
+      max_tokens: 8_192,
+    })).toEqual({});
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "jawcode-max-tokens",
+      maxTokens: 8_192,
+    })).toEqual({});
+  });
+
   test("infers Codex-safe input modalities from bounded architecture metadata", () => {
     expect(catalogHintsFromModelsApiItem("example", {
       id: "vision-chat",
