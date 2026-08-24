@@ -10,7 +10,7 @@
 
 Verification:
 
-- `bun test tests/fork/*.test.ts` — 102 passed
+- `bun test tests/fork/*.test.ts` — 103 passed
 - `bun run typecheck` — passed
 - `bun run privacy:scan` — passed
 - `git diff --check` — passed
