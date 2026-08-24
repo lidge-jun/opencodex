@@ -97,7 +97,6 @@ describe("openai-chat empty tool output annotation", () => {
     const tool = messages.find(m => m.role === "tool");
     expect(tool?.content).not.toBe(ANNOTATION);
   });
- 
   test("non-empty result stays byte-identical when enabled", () => {
     const messages = wire(providerWithFlag, toolCallTurn("real output"));
     const tool = messages.find(m => m.role === "tool");
@@ -205,6 +204,31 @@ describe("openai-responses empty tool output annotation", () => {
     ]);
     const input = body.input as Array<Record<string, unknown>>;
     expect(input[0].output).toBe(ANNOTATION);
+  });
+
+  test("whitespace-only input_text part array is annotated when enabled", async () => {
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_5b", output: [{ type: "input_text", text: "   \n" }] },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toBe(ANNOTATION);
+  });
+
+  test("whitespace-only output_text part array is annotated when enabled", async () => {
+    const { body } = await drive(responsesConfig(true), [
+      { type: "custom_tool_call_output", call_id: "call_5c", output: [{ type: "output_text", text: "\t" }] },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toBe(ANNOTATION);
+  });
+
+  test("non-empty input_text part array is never replaced when enabled", async () => {
+    const output = [{ type: "input_text", text: "real tool text" }];
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_5d", output },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0].output).toEqual(output);
   });
 
   test("image-only output is never replaced when enabled", async () => {

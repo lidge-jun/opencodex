@@ -15,6 +15,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Part types that carry wire text on either adapter (Chat uses `text`, Responses uses `input_text`/`output_text`). */
+const TEXT_PART_TYPES = new Set(["text", "input_text", "output_text"]);
+
 /**
  * True when every part is text/refusal and the joined text/refusal content trims
  * empty. An empty array is the array twin of a blank string. Any image, file,
@@ -26,7 +29,7 @@ export function isWhitespaceOnlyTextPartArray(parts: readonly unknown[]): boolea
   let joined = "";
   for (const part of parts) {
     if (!isPlainObject(part)) return false;
-    if (part.type === "text" && typeof part.text === "string") {
+    if (typeof part.type === "string" && TEXT_PART_TYPES.has(part.type) && typeof part.text === "string") {
       joined += part.text;
       continue;
     }
