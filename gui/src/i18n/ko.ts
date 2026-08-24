@@ -541,6 +541,7 @@ export const ko: Record<TKey, string> = {
   "models.contextMetadataSource": "출처",
   "models.contextMetadataLive": "감지됨",
   "models.contextMetadataRegistry": "레지스트리",
+  "models.contextMetadataCursorStatic": "Cursor 정적 큐레이션",
   "models.contextMetadataSnapshot": "저장됨",
   "models.contextMetadataFallback": "폴백",
   "models.contextMetadataDerived": "파생",

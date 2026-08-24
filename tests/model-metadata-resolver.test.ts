@@ -163,6 +163,31 @@ describe("resolveModelMetadata precedence", () => {
     expect(enriched.maxOutputTokens).toBe(500_000);
   });
 
+  test("enrich fills Cursor models from curated static registry with non-stale registry provenance", () => {
+    const enriched = enrichCatalogModelMetadata(
+      { provider: "cursor", id: "claude-opus-5" },
+      { liveFresh: false },
+    );
+    expect(enriched.contextWindow).toBe(200_000);
+    expect(enriched.metadataSource).toBe("registry");
+    expect(enriched.metadataStale).toBe(false);
+    expect(enriched.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("enrich preserves explicit Cursor capability overrides over static registry backfill", () => {
+    const enriched = enrichCatalogModelMetadata(
+      {
+        provider: "cursor",
+        id: "claude-opus-5",
+        inputModalities: ["text"],
+        reasoningEfforts: [],
+      },
+      { liveFresh: false },
+    );
+    expect(enriched.inputModalities).toEqual(["text"]);
+    expect(enriched.reasoningEfforts).toEqual([]);
+  });
+
   test("applyResolvedMetadataToCatalogModel preserves management API metadata fields", () => {
     const resolved = resolveModelMetadata({
       live: { contextWindow: 1_050_000, observedAt: "2026-08-24T10:00:00.000Z" },

@@ -5,6 +5,8 @@ import { isModelCacheGenerationCurrent } from "../model-cache";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { assertNotRealHomeUnderTest } from "../../lib/test-home-guard";
+import { CURSOR_STATIC_MODELS } from "../../adapters/cursor/discovery";
+import { cursorModelEffortLadder } from "../../adapters/cursor/effort-map";
 import { generatedModelMetadata, type CatalogModel } from "./parsing";
 
 /** Codex strict-parser placeholder; must never be treated as discovered evidence. */
@@ -470,16 +472,30 @@ export function reconcileModelMetadataSnapshot(context: GenerationContext): numb
 
 export function registryLayerForModel(provider: string, modelId: string): ModelMetadataLayer | undefined {
   const meta = generatedModelMetadata(provider, modelId);
-  if (!meta) return undefined;
-  return {
-    ...(typeof meta.contextWindow === "number" && meta.contextWindow > 0
-      ? { contextWindow: meta.contextWindow }
-      : {}),
-    ...(typeof meta.maxTokens === "number" && meta.maxTokens > 0
-      ? { maxOutputTokens: meta.maxTokens }
-      : {}),
-    ...(Array.isArray(meta.input) && meta.input.length > 0 ? { inputModalities: [...meta.input] } : {}),
-  };
+  if (meta) {
+    return {
+      ...(typeof meta.contextWindow === "number" && meta.contextWindow > 0
+        ? { contextWindow: meta.contextWindow }
+        : {}),
+      ...(typeof meta.maxTokens === "number" && meta.maxTokens > 0
+        ? { maxOutputTokens: meta.maxTokens }
+        : {}),
+      ...(Array.isArray(meta.input) && meta.input.length > 0 ? { inputModalities: [...meta.input] } : {}),
+    };
+  }
+  if (provider === "cursor") {
+    const cursorModel = CURSOR_STATIC_MODELS.find(m => m.id === modelId || m.id.toLowerCase() === modelId.toLowerCase());
+    if (cursorModel) {
+      return {
+        contextWindow: cursorModel.contextWindow,
+        ...(cursorModel.inputModalities ? { inputModalities: [...cursorModel.inputModalities] } : {}),
+        ...(cursorModel.supportsReasoningEffort
+          ? { reasoningEfforts: cursorModelEffortLadder(cursorModel.id) ?? [] }
+          : {}),
+      };
+    }
+  }
+  return undefined;
 }
 
 function layerFromCatalogModel(model: CatalogModel): ModelMetadataLayer | undefined {
@@ -547,12 +563,23 @@ export function enrichCatalogModelMetadata(
     && model.detectedContextWindow > (model.contextWindow ?? 0)
     ? { ...fromModel, contextWindow: model.detectedContextWindow }
     : fromModel;
+  const registry = registryLayerForModel(model.provider, model.id);
+  // Cursor's GetUsableModels RPC returns ids only. Any capability lists already present on a
+  // Cursor row therefore come from explicit provider configuration; keep them ahead of the static
+  // registry backfill, including an intentional empty reasoning ladder.
+  const effectiveRegistry = registry && model.provider === "cursor"
+    ? {
+      ...registry,
+      ...(Array.isArray(model.inputModalities) ? { inputModalities: undefined } : {}),
+      ...(Array.isArray(model.reasoningEfforts) ? { reasoningEfforts: undefined } : {}),
+    }
+    : registry;
   const resolved = resolveModelMetadata({
     ...(liveFresh && liveLayer ? { live: liveLayer } : {}),
     liveFresh,
     ...(snapshot ? { snapshot } : {}),
-    ...(registryLayerForModel(model.provider, model.id)
-      ? { registry: registryLayerForModel(model.provider, model.id) }
+    ...(effectiveRegistry
+      ? { registry: effectiveRegistry }
       : {}),
     ...(options?.caps ? { caps: options.caps } : {}),
   });

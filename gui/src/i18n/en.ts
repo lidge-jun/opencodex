@@ -555,6 +555,7 @@ export const en = {
   "models.contextMetadataSource": "Source",
   "models.contextMetadataLive": "detected",
   "models.contextMetadataRegistry": "registry",
+  "models.contextMetadataCursorStatic": "Cursor curated",
   "models.contextMetadataSnapshot": "saved",
   "models.contextMetadataFallback": "fallback",
   "models.contextMetadataDerived": "derived",

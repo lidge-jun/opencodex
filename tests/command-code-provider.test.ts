@@ -583,4 +583,93 @@ describe("Command Code provider", () => {
     const built = await builtRequest({ ...parsed(), stream: false });
     expect(JSON.parse(built.body).params.stream).toBe(true);
   });
+
+  test("derives a stable UUID x-session-id across turns with the same clientThreadId or context", async () => {
+    const turn1 = await builtRequest({
+      ...parsed(),
+      _clientThreadId: "thread-abc-123",
+      context: {
+        messages: [{ role: "user", content: "turn 1", timestamp: 1 }],
+      },
+    });
+    const turn2 = await builtRequest({
+      ...parsed(),
+      _clientThreadId: "thread-abc-123",
+      context: {
+        messages: [
+          { role: "user", content: "turn 1", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "reply 1" }], timestamp: 2 },
+          { role: "user", content: "turn 2", timestamp: 3 },
+        ],
+      },
+    });
+    const sessionId1 = turn1.headers["x-session-id"];
+    const sessionId2 = turn2.headers["x-session-id"];
+    expect(sessionId1).toBeDefined();
+    expect(sessionId1).toBe(sessionId2);
+    expect(sessionId1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+
+    // Without a trusted conversation identity, do not collide identical opening messages.
+    const noThreadTurn1 = await builtRequest({
+      ...parsed(),
+      context: {
+        messages: [{ role: "user", content: "stable first message", timestamp: 1 }],
+      },
+    });
+    const noThreadTurn2 = await builtRequest({
+      ...parsed(),
+      context: {
+        messages: [
+          { role: "user", content: "stable first message", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "reply" }], timestamp: 2 },
+          { role: "user", content: "followup message", timestamp: 3 },
+        ],
+      },
+    });
+    expect(noThreadTurn1.headers["x-session-id"]).not.toBe(noThreadTurn2.headers["x-session-id"]);
+  });
+
+  test("does not derive x-session-id from a shared prompt-cache cohort", async () => {
+    const first = await builtRequest({
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: "shared-cohort" },
+      context: { messages: [{ role: "user", content: "conversation one", timestamp: 1 }] },
+      _promptCacheKeyIsSharedCohort: true,
+    });
+    const second = await builtRequest({
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: "shared-cohort" },
+      context: { messages: [{ role: "user", content: "conversation two", timestamp: 1 }] },
+      _promptCacheKeyIsSharedCohort: true,
+    });
+    expect(first.headers["x-session-id"]).not.toBe(second.headers["x-session-id"]);
+  });
+
+  test("uses a per-session prompt cache key when it is not a shared cohort", async () => {
+    const first = await builtRequest({
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: "per-session-cache" },
+      context: { messages: [{ role: "user", content: "conversation one", timestamp: 1 }] },
+    });
+    const second = await builtRequest({
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: "per-session-cache" },
+      context: { messages: [{ role: "user", content: "conversation two", timestamp: 1 }] },
+    });
+    expect(first.headers["x-session-id"]).toBe(second.headers["x-session-id"]);
+  });
+
+  test("domain-separates equal values from different session identity sources", async () => {
+    const thread = await builtRequest({
+      ...parsed(),
+      _clientThreadId: "same-value",
+      context: { messages: [{ role: "user", content: "different", timestamp: 1 }] },
+    });
+    const replay = await builtRequest({
+      ...parsed(),
+      _reasoningReplayScope: { clientThreadId: "same-value" },
+      context: { messages: [{ role: "user", content: "different", timestamp: 1 }] },
+    });
+    expect(thread.headers["x-session-id"]).not.toBe(replay.headers["x-session-id"]);
+  });
 });

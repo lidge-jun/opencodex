@@ -546,6 +546,7 @@ export const tr: Record<TKey, string> = {
   "models.contextMetadataSource": "Kaynak",
   "models.contextMetadataLive": "tespit",
   "models.contextMetadataRegistry": "kayıt",
+  "models.contextMetadataCursorStatic": "Cursor seçkisi",
   "models.contextMetadataSnapshot": "kayıtlı",
   "models.contextMetadataFallback": "yedek",
   "models.contextMetadataDerived": "türetilmiş",

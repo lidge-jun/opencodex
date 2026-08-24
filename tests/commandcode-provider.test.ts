@@ -67,6 +67,7 @@ describe("Command Code provider", () => {
       preserveCustomDestination: true,
       defaultModel: "deepseek/deepseek-v4-flash",
       apiKeyValidation: "unknown",
+      promptCacheKey: true,
       reasoningEfforts: [],
       modelDiscovery: {
         path: "models",
@@ -109,6 +110,7 @@ describe("Command Code provider", () => {
       adapter: "openai-chat",
       baseUrl: "https://api.commandcode.ai/provider/v1",
       authMode: "key",
+      promptCacheKey: true,
       liveModels: true,
       reasoningEfforts: [],
       defaultModel: "deepseek/deepseek-v4-flash",
@@ -168,6 +170,23 @@ describe("Command Code provider", () => {
     expect(request.headers.Authorization).toBe("Bearer cmd-test-key");
     expect(body.model).toBe("deepseek/deepseek-v4-flash");
     expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  test("forwards prompt_cache_key to the chat completions body when present", () => {
+    const route = routeModel(
+      commandcodeConfig(),
+      "commandcode/deepseek/deepseek-v4-flash",
+    );
+    const request = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: {
+        messages: [{ role: "user", content: "ping", timestamp: 0 }],
+      },
+      stream: true,
+      options: { promptCacheKey: "cache-cohort-key" },
+    });
+    const body = JSON.parse(String(request.body)) as Record<string, unknown>;
+    expect(body.prompt_cache_key).toBe("cache-cohort-key");
   });
 
   test("discovers the live catalog with context windows and preserves slash ids", async () => {
