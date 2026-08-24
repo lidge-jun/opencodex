@@ -362,6 +362,20 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         && (typeof body.multiAgentModeHintText !== "string" || body.multiAgentModeHintText.trim().length === 0)) {
       return jsonResponse({ error: "body.multiAgentModeHintText must be a non-empty string or null" }, 400);
     }
+    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
+    const modeFlag = mode === "v2" ? true : mode === "v1" ? false : undefined;
+    if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
+      return jsonResponse({ error: `body.enabled conflicts with multiAgentMode '${mode}'` }, 400);
+    }
+    const { isMultiAgentV2Enabled: readMultiAgentV2Enabled } = await import("../../codex/features");
+    const currentUpstreamEnabled = readMultiAgentV2Enabled();
+    const prospectiveMode = mode ?? config.multiAgentMode ?? "default";
+    const prospectiveKeepNative = wantsKeepNative
+      ? body.keepNativeChatGptOnV1 === true
+      : config.keepNativeChatGptOnV1 === true;
+    const prospectiveUpstreamEnabled = wantsFlag
+      ? body.enabled as boolean
+      : modeFlag ?? currentUpstreamEnabled;
     let v2NativeParentOverride: V2NativeParentOverrideInput | undefined;
     if (wantsV2NativeParentOverride) {
       const raw = body.v2NativeParentOverride;
@@ -397,18 +411,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           return jsonResponse({ error: "body.v2NativeParentOverride.model must resolve to a noncanonical provider" }, 400);
         }
       }
-      const { isMultiAgentV2Enabled } = await import("../../codex/features");
       if (v2NativeParentOverride.enabled) {
         if (v2NativeParentOverride.model === null) {
           return jsonResponse({ error: "enabling v2NativeParentOverride requires a model" }, 400);
         }
-        if (config.multiAgentMode !== "v2") {
+        if (prospectiveMode !== "v2") {
           return jsonResponse({ error: "enabling v2NativeParentOverride requires multiAgentMode 'v2'" }, 400);
         }
-        if (!isMultiAgentV2Enabled()) {
+        if (!prospectiveUpstreamEnabled) {
           return jsonResponse({ error: "enabling v2NativeParentOverride requires the upstream V2 feature" }, 400);
         }
-        if (config.keepNativeChatGptOnV1 === true) {
+        if (prospectiveKeepNative) {
           return jsonResponse({ error: "enabling v2NativeParentOverride conflicts with keepNativeChatGptOnV1" }, 400);
         }
       }
@@ -418,13 +431,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText) {
       const persisted = persistV2NativeParentOverride(config, v2NativeParentOverride);
       if (!persisted.ok) return jsonResponse({ error: `persisting v2NativeParentOverride failed: ${persisted.reason}` }, 502);
-      const { isMultiAgentV2Enabled } = await import("../../codex/features");
-      return jsonResponse({ ok: true, v2NativeParentOverride: v2NativeParentOverrideDto(config, isMultiAgentV2Enabled()) });
-    }
-    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
-    const modeFlag = mode === "v2" ? true : mode === "v1" ? false : undefined;
-    if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
-      return jsonResponse({ error: `body.enabled conflicts with multiAgentMode '${mode}'` }, 400);
+      return jsonResponse({ ok: true, v2NativeParentOverride: v2NativeParentOverrideDto(config, readMultiAgentV2Enabled()) });
     }
     const {
       isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads, transitionMultiAgentV2,
