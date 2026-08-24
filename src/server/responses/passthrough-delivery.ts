@@ -599,6 +599,7 @@ export async function deliverPassthroughResponse(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        requestStartedAt: logCtx.requestStartedAt,
         // Request abort can reject the fetch body before the response cancel hook runs.
         clientGoneSignal: options.abortSignal
           ? AbortSignal.any([clientGone.signal, options.abortSignal])

@@ -572,6 +572,37 @@ function normalizeStreamTimeline(raw: unknown): StreamTimeline | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+export function normalizeStreamDiagnostics(raw: {
+  streamTimeline?: unknown;
+  failureSide?: unknown;
+  failureStage?: unknown;
+  transportPhase?: unknown;
+  terminalSource?: unknown;
+}): {
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
+} {
+  const streamTimeline = normalizeStreamTimeline(raw.streamTimeline);
+  return {
+    ...(streamTimeline ? { streamTimeline } : {}),
+    ...(typeof raw.failureSide === "string" && KNOWN_FAILURE_SIDES.has(raw.failureSide as FailureSide)
+      ? { failureSide: raw.failureSide as FailureSide }
+      : {}),
+    ...(typeof raw.failureStage === "string" && KNOWN_FAILURE_STAGES.has(raw.failureStage as FailureStage)
+      ? { failureStage: raw.failureStage as FailureStage }
+      : {}),
+    ...(typeof raw.transportPhase === "string" && KNOWN_TRANSPORT_PHASES.has(raw.transportPhase as TransportPhase)
+      ? { transportPhase: raw.transportPhase as TransportPhase }
+      : {}),
+    ...(typeof raw.terminalSource === "string" && KNOWN_TERMINAL_SOURCES.has(raw.terminalSource as TerminalSource)
+      ? { terminalSource: raw.terminalSource as TerminalSource }
+      : {}),
+  };
+}
+
 export function isLabRouteSubjectId(value: unknown): value is string {
   return typeof value === "string" && LAB_ROUTE_SUBJECT_ID_RE.test(value);
 }
@@ -740,19 +771,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         : { reasoningWireValue: attempt.reasoningWireValue }
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
-    ...(normalizeStreamTimeline(attempt.streamTimeline) ? { streamTimeline: normalizeStreamTimeline(attempt.streamTimeline) as StreamTimeline } : {}),
-    ...(typeof attempt.failureSide === "string" && KNOWN_FAILURE_SIDES.has(attempt.failureSide as FailureSide)
-      ? { failureSide: attempt.failureSide as FailureSide }
-      : {}),
-    ...(typeof attempt.failureStage === "string" && KNOWN_FAILURE_STAGES.has(attempt.failureStage as FailureStage)
-      ? { failureStage: attempt.failureStage as FailureStage }
-      : {}),
-    ...(typeof attempt.transportPhase === "string" && KNOWN_TRANSPORT_PHASES.has(attempt.transportPhase as TransportPhase)
-      ? { transportPhase: attempt.transportPhase as TransportPhase }
-      : {}),
-    ...(typeof attempt.terminalSource === "string" && KNOWN_TERMINAL_SOURCES.has(attempt.terminalSource as TerminalSource)
-      ? { terminalSource: attempt.terminalSource as TerminalSource }
-      : {}),
+    ...normalizeStreamDiagnostics(attempt),
     ...(codexWsStage ? { codexWsStage } : {}),
   };
 }
@@ -928,19 +947,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
-    ...(normalizeStreamTimeline(entry.streamTimeline) ? { streamTimeline: normalizeStreamTimeline(entry.streamTimeline) as StreamTimeline } : {}),
-    ...(typeof entry.failureSide === "string" && KNOWN_FAILURE_SIDES.has(entry.failureSide as FailureSide)
-      ? { failureSide: entry.failureSide as FailureSide }
-      : {}),
-    ...(typeof entry.failureStage === "string" && KNOWN_FAILURE_STAGES.has(entry.failureStage as FailureStage)
-      ? { failureStage: entry.failureStage as FailureStage }
-      : {}),
-    ...(typeof entry.transportPhase === "string" && KNOWN_TRANSPORT_PHASES.has(entry.transportPhase as TransportPhase)
-      ? { transportPhase: entry.transportPhase as TransportPhase }
-      : {}),
-    ...(typeof entry.terminalSource === "string" && KNOWN_TERMINAL_SOURCES.has(entry.terminalSource as TerminalSource)
-      ? { terminalSource: entry.terminalSource as TerminalSource }
-      : {}),
+    ...normalizeStreamDiagnostics(entry),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
   };
