@@ -57,6 +57,11 @@ describe("anthropic extended-thinking gate", () => {
     "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
+    // Vendor ids may be capitalized and/or use a dotted minor; the family parser must
+    // still classify them as adaptive or the legacy thinking.enabled wire shape goes
+    // out to a model that rejects it with a 400 (Bedrock ValidationException).
+    "Claude-Opus-4.8-joybuilder",
+    "claude-opus-4.8-joybuilder",
   ])("adaptive-thinking model %s sends thinking.adaptive + output_config.effort", async (modelId) => {
     const b = await bodyOf(parsed("xhigh", { temperature: 0.3, topP: 0.9 }, modelId));
     expect(b.thinking).toEqual({ type: "adaptive" });
@@ -275,6 +280,9 @@ describe("anthropic extended-thinking gate", () => {
     "claude-sonnet-4-5",
     "claude-opus-4-6",
     "claude-opus-4-20250514",
+    // Capitalized/dotted ids below the adaptive threshold must stay on the legacy
+    // wire shape (guard against over-broad family parsing).
+    "Claude-Opus-4.6-joybuilder",
   ])("budget-thinking model %s keeps thinking.enabled with budget_tokens", async (modelId) => {
     const b = await bodyOf(parsed("high", {}, modelId));
     const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
