@@ -64,8 +64,10 @@ export type FailureStage =
   | "downstream_write"
   | "client_cancel"
   | "terminal_delivery";
-export type TransportPhase = "pre_headers" | "mid_stream" | "terminal_sse";
-export type TerminalSource = "upstream" | "synthetic";
+/** Bounded, redacted diagnostic string describing the transport phase. */
+export type TransportPhase = string;
+/** Bounded, redacted diagnostic string describing the terminal source. */
+export type TerminalSource = string;
 
 /**
  * Accepts EITHER label family. This is the predicate the persistence writers use, so widening
@@ -551,6 +553,23 @@ const KNOWN_FAILURE_STAGES = new Set<FailureStage>([
   "client_cancel",
   "terminal_delivery",
 ]);
+const MAX_STREAM_DIAGNOSTIC_LENGTH = 64;
+const STREAM_DIAGNOSTIC_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+/**
+ * Keep bounded diagnostic values when they are safe, but drop the complete value
+ * when redaction had to rewrite it. Keeping a redacted fragment would make the
+ * field look trustworthy while still retaining attacker-controlled context next
+ * to a credential-shaped marker.
+ */
+function normalizeBoundedStreamDiagnostic(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.trim().replace(STREAM_DIAGNOSTIC_CONTROL_CHARS, "");
+  if (!cleaned) return undefined;
+  const unbounded = sanitizeLogMetadataString(cleaned, cleaned.length);
+  if (!unbounded || unbounded !== cleaned) return undefined;
+  return cleaned.slice(0, MAX_STREAM_DIAGNOSTIC_LENGTH);
+}
 
 function normalizeStreamTimeline(raw: unknown): StreamTimeline | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -586,6 +605,8 @@ export function normalizeStreamDiagnostics(raw: {
   terminalSource?: TerminalSource;
 } {
   const streamTimeline = normalizeStreamTimeline(raw.streamTimeline);
+  const transportPhase = normalizeBoundedStreamDiagnostic(raw.transportPhase);
+  const terminalSource = normalizeBoundedStreamDiagnostic(raw.terminalSource);
   return {
     ...(streamTimeline ? { streamTimeline } : {}),
     ...(typeof raw.failureSide === "string" && KNOWN_FAILURE_SIDES.has(raw.failureSide as FailureSide)
@@ -594,12 +615,8 @@ export function normalizeStreamDiagnostics(raw: {
     ...(typeof raw.failureStage === "string" && KNOWN_FAILURE_STAGES.has(raw.failureStage as FailureStage)
       ? { failureStage: raw.failureStage as FailureStage }
       : {}),
-    ...(typeof raw.transportPhase === "string" && KNOWN_TRANSPORT_PHASES.has(raw.transportPhase as TransportPhase)
-      ? { transportPhase: raw.transportPhase as TransportPhase }
-      : {}),
-    ...(typeof raw.terminalSource === "string" && KNOWN_TERMINAL_SOURCES.has(raw.terminalSource as TerminalSource)
-      ? { terminalSource: raw.terminalSource as TerminalSource }
-      : {}),
+    ...(transportPhase ? { transportPhase: transportPhase as TransportPhase } : {}),
+    ...(terminalSource ? { terminalSource: terminalSource as TerminalSource } : {}),
   };
 }
 

@@ -1056,7 +1056,7 @@ describe("usage log", () => {
     expect(row?.terminalSource).toBe("synthetic");
   });
 
-  test("drops unknown or invalid transportPhase and terminalSource (#1217)", () => {
+  test("preserves bounded diagnostics but drops invalid closed attribution (#1217)", () => {
     appendUsageEntry({
       requestId: "ocx-stream-invalid-attribution-test",
       timestamp: Date.now(),
@@ -1093,12 +1093,12 @@ describe("usage log", () => {
     expect(row).toBeDefined();
     expect(row?.failureSide).toBeUndefined();
     expect(row?.failureStage).toBeUndefined();
-    expect(row?.transportPhase).toBeUndefined();
-    expect(row?.terminalSource).toBeUndefined();
+    expect(row?.transportPhase).toBe("invalid_phase");
+    expect(row?.terminalSource).toBe("invalid_source");
     expect(row?.attempts?.[0].failureSide).toBeUndefined();
     expect(row?.attempts?.[0].failureStage).toBeUndefined();
-    expect(row?.attempts?.[0].transportPhase).toBeUndefined();
-    expect(row?.attempts?.[0].terminalSource).toBeUndefined();
+    expect(row?.attempts?.[0].transportPhase).toBe("bogus_phase");
+    expect(row?.attempts?.[0].terminalSource).toBe("bogus_source");
   });
 
   test("drops credential-shaped values from diagnostic metadata (#1217)", () => {
