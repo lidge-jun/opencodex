@@ -90,6 +90,9 @@ Routing and catalog visibility are separate controls:
   only when "apply to every routed provider" is toggled on; otherwise each provider keeps its own
   cap. Caps only lower a known context window; they never raise one or change the upstream model's
   actual limit.
+- Live `/models` metadata is authoritative for a model's window until a cap lowers it. Provider
+  `contextWindow` and `modelContextWindows` are safety caps and fallbacks for unknown windows;
+  discovery never auto-fills those fields from live catalog data.
 
 ```json
 {
