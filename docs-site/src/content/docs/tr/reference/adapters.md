@@ -286,12 +286,16 @@ başlığından Cursor OAuth/erişim belirteci.
 
 **Hedefler:** **Azure OpenAI**. `openai-responses`'ı sarar (bu nedenle
 `passthrough: true`).
-**Kimlik Doğrulama:** `api-key` başlığı aracılığıyla `key` (Bearer değil).
+**Kimlik Doğrulama:** `api-key` başlığı üzerinden API anahtarı veya
+`DefaultAzureCredential` üzerinden Azure kimliği (Bearer; `api-key` değil). Modlar birbirini dışlar.
 
 - İstek oluşturmayı Responses doğrudan geçişine devreder, `baseUrl`'in
   çözümlenmemiş şablon yer tutucusu içermediğini doğrular ve `Authorization`'ı
   `api-key` ile değiştirir. Yapılandırılan URL doğrudan Azure'un v1 Responses
   API'sini hedefler, bu nedenle adaptör `api-version` eklemez.
+- Kimlik modunda tam scope `https://cognitiveservices.azure.com/.default` kullanılır ve
+  yapılandırılmış modeller statiktir (`liveModels: false`); genel `/models` keşfi yapılmaz.
+  Tam `DefaultAzureCredential` zinciri ve yapılandırma için İngilizce sayfaya bakın.
 
 ## Görsel yardımcıları (`image.ts`)
 
@@ -302,5 +306,4 @@ Vizyon duyarlı adaptörler tarafından kullanılan paylaşılan yardımcılar:
 - `contentPartsToText(content)` — salt metin araç mesajları için içerik
   parçalarını metne düzleştirir (açıklanmayan bir görsel kısa bir `[image]`
   işaretçisi haline gelir, asla belirteç patlatan bir base64 bloğu olmaz).
-
 

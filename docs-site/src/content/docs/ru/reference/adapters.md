@@ -183,12 +183,16 @@ authorization.
 
 **Назначение:** **Azure OpenAI**. Обёртка над `openai-responses` (поэтому тоже
 `passthrough: true`).
-**Аутентификация:** `key` через заголовок `api-key` (не Bearer).
+**Аутентификация:** API-ключ через заголовок `api-key` или идентичность Azure через
+`DefaultAzureCredential` (Bearer, не `api-key`). Режимы взаимоисключающие.
 
 - Делегирует построение запроса passthrough-адаптеру Responses, проверяет, что `baseUrl` не
   содержит неразрешённых плейсхолдеров шаблона, и заменяет `Authorization` на `api-key`.
   Настроенный URL указывает напрямую на Azure v1 Responses API, поэтому адаптер не добавляет
   `api-version`.
+- В режиме идентичности используется точный scope `https://cognitiveservices.azure.com/.default`
+  и статический список настроенных моделей (`liveModels: false`); общий `/models` не запрашивается.
+  Полная цепочка и настройка `DefaultAzureCredential` описаны на английской странице.
 
 ## Утилиты для изображений (`image.ts`)
 

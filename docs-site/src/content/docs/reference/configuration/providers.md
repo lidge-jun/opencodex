@@ -77,6 +77,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
+| `azureCredential?` | `{ type: "default-azure-credential"; managedIdentityClientId?: string }` | Azure identity mode for `azure-openai`/`azure`. Mutually exclusive with `apiKey` and `apiKeyPool`; uses `DefaultAzureCredential` with scope `https://cognitiveservices.azure.com/.default`. The optional client ID is write-only and only selects the managed-identity leg. Identity providers use static configured models and must not use generic `/models` discovery. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, these are the only discovered models. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |

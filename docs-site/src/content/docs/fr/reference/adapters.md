@@ -118,9 +118,11 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 ## `azure-openai` (alias : `azure`)
 
 **Cibles :** **Azure OpenAI**. Encapsule `openai-responses` (et utilise donc également `passthrough: true`).
-**Authentification :** `key` au moyen de l’en-tête `api-key` (et non Bearer).
+**Authentification :** clé API via l’en-tête `api-key`, ou identité Azure via
+`DefaultAzureCredential` (Bearer ; pas `api-key`). Ces modes sont mutuellement exclusifs.
 
 - Délègue la construction de la requête au relais Responses, vérifie que `baseUrl` ne contient aucun espace réservé de modèle non résolu et remplace `Authorization` par `api-key`. L’URL configurée cible directement l’API Responses v1 d’Azure ; l’adaptateur n’ajoute donc pas `api-version`.
+- En mode identité, le scope exact est `https://cognitiveservices.azure.com/.default` et les modèles configurés sont utilisés statiquement (`liveModels: false`) : aucune découverte générique `/models` n’est effectuée. Voir la page anglaise pour la configuration et la chaîne complète de `DefaultAzureCredential`.
 
 ## Utilitaires d’image (`image.ts`)
 

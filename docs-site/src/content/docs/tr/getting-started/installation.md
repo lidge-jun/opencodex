@@ -13,7 +13,7 @@ duyduğunda ChatGPT oturumunuzu da kullanabilir.
 
 | Gereksinim | Neden |
 | --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx` Bun çalışma zamanı üzerinde çalışır, ancak çalışma zamanı `npm install` sırasında otomatik olarak paketlenir — Bun'ı kendiniz kurmanız **gerekmez**. |
+| **[Node](https://nodejs.org) ≥ 22** | `ocx` Bun çalışma zamanı üzerinde çalışır, ancak çalışma zamanı `npm install` sırasında otomatik olarak paketlenir — Bun'ı kendiniz kurmanız **gerekmez**. |
 | **[OpenAI Codex](https://openai.com/codex)** (CLI, App veya SDK) | opencodex'in önünde durduğu istemci. opencodex `$CODEX_HOME/config.toml` (varsayılan `~/.codex/config.toml`) dosyasına yazar. |
 | Bir sağlayıcı hesabı veya API anahtarı | Anthropic, xAI, Kimi, Ollama Cloud, OpenRouter, OpenAI uyumlu bir uç nokta veya ChatGPT oturumunuz. |
 
@@ -104,5 +104,4 @@ opencodex'in eklediği satırları kaldırır ve yerel Codex'i geri yükler.
 İlk sağlayıcınızı yapılandırmak için [Hızlı
 Başlangıç](/tr/getting-started/quickstart/) ile devam edin veya mimari için
 [Nasıl Çalışır](/tr/getting-started/how-it-works/) bölümünü okuyun.
-
 

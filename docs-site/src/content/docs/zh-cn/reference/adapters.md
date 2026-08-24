@@ -166,11 +166,15 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
 ## `azure-openai`（别名：`azure`）
 
 **目标：** **Azure OpenAI**。封装 `openai-responses`，因此同样是 `passthrough: true`。
-**认证：** 用 `api-key` header 进行 `key` 认证，而非 Bearer。
+**认证：** 通过 `api-key` header 使用 API 密钥，或通过 `DefaultAzureCredential` 使用 Azure
+身份（Bearer，而不是 `api-key`）。两种模式互斥。
 
 - 把请求构建交给 Responses passthrough，验证 `baseUrl` 不含未解析的 template placeholder，
   再用 `api-key` 替换 `Authorization`。配置的 URL 直接指向 Azure v1 Responses API，因此 adapter
   不会追加 `api-version`。
+- 身份模式使用精确 scope `https://cognitiveservices.azure.com/.default`，并静态使用已配置的模型
+  （`liveModels: false`），不会进行通用 `/models` 发现。完整的 `DefaultAzureCredential` 链和配置
+  请参阅英文页面。
 
 ## 图像工具（`image.ts`）
 

@@ -11,7 +11,7 @@ vision 和網路搜尋 sidecar 也可以使用你的 ChatGPT 登入憑證。
 
 | 要求 | 原因 |
 | --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx` 執行在 Bun 執行環境上，但執行環境會在 `npm install` 時自動打包，你**無需**自己安裝 Bun。 |
+| **[Node](https://nodejs.org) ≥ 22** | `ocx` 執行在 Bun 執行環境上，但執行環境會在 `npm install` 時自動打包，你**無需**自己安裝 Bun。 |
 | **[OpenAI Codex](https://openai.com/codex)**(CLI、App 或 SDK) | opencodex 所代理的用戶端。opencodex 會寫入 `$CODEX_HOME/config.toml`（預設 `~/.codex/config.toml`）。 |
 | 一個 provider 帳號或 API key | Anthropic、xAI、Kimi、Ollama Cloud、OpenRouter、OpenAI API key、一個 OpenAI 相容端點,或你的 ChatGPT 登入憑證。 |
 

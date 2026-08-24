@@ -150,9 +150,11 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 ## `azure-openai`（別名: `azure`）
 
 **対象:** **Azure OpenAI**。`openai-responses` を包むため、同じく `passthrough: true` です。
-**認証:** `api-key` ヘッダーの `key`（Bearer ではない）。
+**認証:** `api-key` ヘッダーの API キー、または `DefaultAzureCredential` による Azure ID
+(Bearer。`api-key` ではない)。これらのモードは相互排他的です。
 
 - リクエスト構成は Responses passthrough に任せます。`baseUrl` に未解釈のテンプレート placeholder がないか検証し、`Authorization` を `api-key` に差し替えます。設定 URL が Azure v1 Responses API を直接指すため、`api-version` は追加しません。
+- ID モードの正確な scope は `https://cognitiveservices.azure.com/.default` で、設定済みモデルを静的に使用します（`liveModels: false`）。汎用 `/models` 検出は行いません。完全な `DefaultAzureCredential` のチェーンと設定は英語ページを参照してください。
 
 ## 画像ユーティリティ（`image.ts`）
 

@@ -12,7 +12,7 @@ opencodex устанавливает два эквивалентных имен�
 
 | Требование | Зачем |
 | --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx` работает на рантайме Bun, но рантайм автоматически поставляется в комплекте при `npm install` — устанавливать Bun самостоятельно **не нужно**. |
+| **[Node](https://nodejs.org) ≥ 22** | `ocx` работает на рантайме Bun, но рантайм автоматически поставляется в комплекте при `npm install` — устанавливать Bun самостоятельно **не нужно**. |
 | **[OpenAI Codex](https://openai.com/codex)** (CLI, App или SDK) | Клиент, перед которым работает opencodex. opencodex записывает данные в `$CODEX_HOME/config.toml` (по умолчанию `~/.codex/config.toml`). |
 | Аккаунт провайдера или API-ключ | Anthropic, xAI, Kimi, Ollama Cloud, OpenRouter, OpenAI-совместимая конечная точка или ваш вход в ChatGPT. |
 

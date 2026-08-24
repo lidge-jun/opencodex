@@ -147,13 +147,13 @@ Invariants:
   (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
   lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
-  postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
+  postinstall, and `"engines": { "node": ">=22.0.0" }` (Bun is no longer a user prerequisite).
 - The plain-Node launcher owns `OPENCODEX_BUN_PATH` selection before Bun can load project dotenv and
   stamps the chosen source/path pair. `src/service.ts` and `src/codex/shim.ts` bake that already-
   selected executable (normally the bundled binary, stable under the npm global prefix) into
   launchd/systemd/Task Scheduler and the Codex autostart shim. Bun-side code never re-selects a
   durable executable from the post-dotenv environment.
-- Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 18+ as the only
+- Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 22+ as the only
   prerequisite. Do not reintroduce "install Bun first" / "bun must be on PATH" guidance for npm users.
 
 ## Release workflow

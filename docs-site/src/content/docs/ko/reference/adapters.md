@@ -182,11 +182,15 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 ## `azure-openai` (별칭: `azure`)
 
 **대상:** **Azure OpenAI**. `openai-responses`를 감싸므로 마찬가지로 `passthrough: true`입니다.
-**인증:** `api-key` 헤더의 `key`(Bearer 아님).
+**인증:** `api-key` 헤더의 API 키 또는 `DefaultAzureCredential`을 통한 Azure ID
+(Bearer이며 `api-key`가 아님). 두 모드는 상호 배타적입니다.
 
 - 요청 구성은 Responses passthrough에 맡깁니다. `baseUrl`에 해석되지 않은 템플릿 placeholder가
   없는지 검증하고 `Authorization`을 `api-key`로 바꿉니다. 설정 URL이 Azure v1 Responses API를
   직접 가리키므로 `api-version`은 덧붙이지 않습니다.
+- ID 모드의 정확한 scope는 `https://cognitiveservices.azure.com/.default`이며 설정된 모델을
+  정적으로 사용합니다(`liveModels: false`). 일반 `/models` 검색은 수행하지 않습니다. 전체
+  `DefaultAzureCredential` 체인과 설정은 영어 페이지를 참조하세요.
 
 ## 이미지 유틸리티 (`image.ts`)
 

@@ -144,11 +144,15 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 ## `azure-openai`（別名：`azure`）
 
 **目標：** **Azure OpenAI**。封裝 `openai-responses`，因此同樣是 `passthrough: true`。
-**認證：** 用 `api-key` header 進行 `key` 認證，而非 Bearer。
+**認證：** 透過 `api-key` header 使用 API 金鑰，或透過 `DefaultAzureCredential` 使用 Azure
+身分（Bearer，而非 `api-key`）。兩種模式互斥。
 
 - 把請求建置交給 Responses passthrough，驗證 `baseUrl` 不含未解析的 template placeholder，
   再用 `api-key` 替換 `Authorization`。設定的 URL 直接指向 Azure v1 Responses API，因此 adapter
   不會追加 `api-version`。
+- 身分模式使用精確 scope `https://cognitiveservices.azure.com/.default`，並靜態使用已設定的模型
+  （`liveModels: false`），不會進行一般 `/models` 探索。完整的 `DefaultAzureCredential` 鏈與設定
+  請參閱英文頁面。
 
 ## 圖像工具（`image.ts`）
 

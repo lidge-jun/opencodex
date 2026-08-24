@@ -28,7 +28,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.0.0"
   },
   "trustedDependencies": [
     "bun"
@@ -61,6 +61,7 @@
     "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.2",
     "@bufbuild/protobuf": "^2.14.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@napi-rs/keyring": "1.3.0",

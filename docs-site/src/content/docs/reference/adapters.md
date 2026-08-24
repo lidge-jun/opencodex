@@ -270,11 +270,24 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
-**Auth:** `key` via the `api-key` header (not Bearer).
+**Auth:** API key via the `api-key` header, or Azure identity via
+`DefaultAzureCredential` (Bearer; not `api-key`). These modes are mutually exclusive.
 
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
-  unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
-  targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+  unresolved template placeholder. In key mode it replaces `Authorization` with `api-key`; in
+  identity mode it obtains a token for the exact scope
+  `https://cognitiveservices.azure.com/.default` and sends only `Authorization: Bearer`. The
+  configured URL targets Azure's v1 Responses API directly, so the adapter does not append
+  `api-version`.
+- Configure identity mode with `azureCredential: { type: "default-azure-credential", managedIdentityClientId?: string }`.
+  `DefaultAzureCredential` tries `EnvironmentCredential`, `WorkloadIdentityCredential`,
+  `ManagedIdentityCredential`, `AzureCliCredential`, `AzurePowerShellCredential`, and
+  `AzureDeveloperCliCredential` in the SDK's documented order. `managedIdentityClientId` is
+  optional and is passed only to the managed-identity leg; tokens and client IDs are never
+  returned in management DTOs or error messages.
+- Identity providers use their configured `models` statically (`liveModels: false`) and do not
+  perform generic `/models` discovery. Credential failures are reported with stable, redacted
+  errors.
 
 ## Image utilities (`image.ts`)
 

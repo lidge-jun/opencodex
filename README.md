@@ -53,7 +53,7 @@ account while existing threads stay pinned to the account that started them.
 ### For humans
 
 ```bash
-npm install -g @yansigit/opencodex   # Node 18+; the Bun runtime is bundled automatically
+npm install -g @yansigit/opencodex   # Node 22+; the Bun runtime is bundled automatically
 ocx start                            # or `ocx service` to run it in the background
 ```
 
@@ -128,7 +128,7 @@ already contain an unused version.
 | Linux (x64 / arm64) | Fully supported | systemd (user unit) |
 | Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) |
 
-Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled on `npm install` — no separate
+Requires [Node](https://nodejs.org) 22+. The Bun runtime is bundled on `npm install` — no separate
 Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install scripts,
 see the [installation docs](https://opencodex.me/getting-started/installation/).
 
