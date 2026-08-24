@@ -5,6 +5,7 @@ import { handleResponses, handleResponsesCompact } from "../src/server/responses
 import type { RequestLogContext } from "../src/server/request-log";
 import { decideV2NativeParentOverride } from "../src/server/responses/v2-native-parent-override";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { codexHeaders, encryptedInput, FERNET_TASK, providerResponse } from "./helpers/agent-task-recovery";
 
 function config(target = "gw/routed-model"): OcxConfig {
   return {
@@ -291,6 +292,42 @@ describe("v2 native parent override runtime", () => {
       );
       expect(response.status).toBe(200);
       expect(bodies[0]?.model).toBe("combo-model");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("encrypted native child stays native when recovery is enabled", async () => {
+    const urls: string[] = [];
+    const bodies: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      urls.push(String(input));
+      bodies.push(typeof init?.body === "string" ? init.body : "");
+      return providerResponse();
+    }) as typeof fetch;
+    try {
+      const cfg = config();
+      cfg.providers.openai = {
+        ...cfg.providers.openai!,
+        codexAccountMode: "direct",
+      };
+      cfg.agentTaskRecovery = { enabled: true };
+      const childHeaders = codexHeaders();
+      const response = await handleResponses(responseRequest({
+        model: "gpt-5.6-luna",
+        input: encryptedInput(),
+        tools: [
+          { type: "function", name: "spawn_agent", parameters: { type: "object" } },
+          { type: "function", name: "send_message", parameters: { type: "object" } },
+        ],
+        stream: false,
+      }, Object.fromEntries(childHeaders.entries())), cfg, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("chatgpt.com/backend-api/codex");
+      expect(bodies[0]).toContain(FERNET_TASK);
+      expect(bodies[0]).not.toContain("capture_assignment");
     } finally {
       globalThis.fetch = originalFetch;
     }
