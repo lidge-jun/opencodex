@@ -212,6 +212,8 @@ export interface OcxProviderConfig {
    * so models do not silently accept an empty result or re-issue the same call.
    * Non-empty results and missing-result placeholders stay byte-identical.
    * Seeded true for DeepSeek; absent keeps legacy behavior for every other provider.
+   * Only the OpenAI-family adapters (openai-chat / openai-responses) read this option;
+   * other adapters ignore it.
    */
   annotateEmptyToolOutputs?: boolean;
   /**

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { routedProviderConfig } from "../src/router";
 import { handleResponses } from "../src/server/responses/core";
 import type { OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
@@ -17,6 +18,24 @@ describe("annotateEmptyToolOutputs (DeepSeek default ON)", () => {
   test("non-deepseek registry seed leaves the option unset", () => {
     const seed = providerConfigSeed(getProviderRegistryEntry("cerebras")!);
     expect(seed.annotateEmptyToolOutputs).toBeUndefined();
+  });
+});
+
+describe("annotateEmptyToolOutputs runtime backfill (DeepSeek)", () => {
+  const deepseekSavedConfig: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "sk-test",
+    authMode: "key",
+  };
+
+  test("a saved deepseek provider without the flag is backfilled true at routing", () => {
+    expect(routedProviderConfig("deepseek", deepseekSavedConfig).annotateEmptyToolOutputs).toBe(true);
+  });
+
+  test("an explicit false survives routing and is never overridden", () => {
+    const routed = routedProviderConfig("deepseek", { ...deepseekSavedConfig, annotateEmptyToolOutputs: false });
+    expect(routed.annotateEmptyToolOutputs).toBe(false);
   });
 });
 
@@ -285,5 +304,21 @@ describe("openai-responses empty tool output annotation", () => {
     ]);
     const input = body.input as Array<Record<string, unknown>>;
     expect(input[0].output).toBe(ANNOTATION);
+  });
+
+  test("null output is never replaced when enabled", async () => {
+    const { body } = await drive(responsesConfig(true), [
+      { type: "function_call_output", call_id: "call_12", output: null },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]).toEqual({ type: "function_call_output", call_id: "call_12", output: null });
+  });
+
+  test("missing output key is never replaced when enabled", async () => {
+    const { body } = await drive(responsesConfig(true), [
+      { type: "custom_tool_call_output", call_id: "call_13" },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]).toEqual({ type: "custom_tool_call_output", call_id: "call_13" });
   });
 });

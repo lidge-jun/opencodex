@@ -324,6 +324,21 @@ describe("provider management validation", () => {
       .toEqual(["deepseek-v4-flash", "other-model"]);
   });
 
+  test("provider management validates annotateEmptyToolOutputs as boolean", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      annotateEmptyToolOutputs: true,
+    };
+    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    for (const annotateEmptyToolOutputs of ["yes", 42, {}, []]) {
+      expect(providerManagementConfigError("relay", {
+        ...provider,
+        annotateEmptyToolOutputs,
+      })).toContain("annotateEmptyToolOutputs");
+    }
+  });
+
   test("provider management rejects modelCosts rows with extra fields", () => {
     const error = providerManagementConfigError("blsc", {
       adapter: "openai-chat",

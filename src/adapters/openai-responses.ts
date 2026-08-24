@@ -853,7 +853,11 @@ function isToolOutputEmpty(output: unknown): boolean {
     // real output and must never be replaced.
     return isWhitespaceOnlyTextPartArray(output);
   }
-  return output === undefined || output === null;
+  // A missing or null `output` is not a present-but-empty result: it is an
+  // incomplete payload. Leave it untouched so the upstream contract fails
+  // closed, and the orphan repair can surface it honestly instead of claiming
+  // the tool ran with no output.
+  return false;
 }
 
 /**
