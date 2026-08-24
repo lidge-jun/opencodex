@@ -5,9 +5,12 @@ import { isEagerRelaySseResponse } from "../src/server/relay";
 import { isWin32EagerRewrite } from "../src/lib/bun-stream-caps";
 import {
   bunSupportsBoundedCodexWsRelay,
+  CODEX_WS_CREATE_FRAME_LIMIT_BYTES,
+  codexWsCreateFrameExceedsLimit,
   codexWsUpstreamFetch as rawCodexWsUpstreamFetch,
   currentBunRuntimeIdentity,
   isCodexWsUpstreamResponse,
+  MAX_CODEX_WS_CREATE_FRAME_BYTES,
   MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
@@ -670,5 +673,104 @@ describe("codexWsUpstreamFetch", () => {
 
     await expect(response.text()).rejects.toThrow("turn cancelled");
     expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+});
+
+describe("codexWsCreateFrameExceedsLimit", () => {
+  test("measures the frame in UTF-8 bytes, not code units", () => {
+    // Two UTF-8 bytes per code unit, so half the limit in "é" is exactly the limit.
+    const halfLimit = CODEX_WS_CREATE_FRAME_LIMIT_BYTES / 2;
+    expect(codexWsCreateFrameExceedsLimit("é".repeat(halfLimit))).toBe(true);
+    expect(codexWsCreateFrameExceedsLimit("é".repeat(halfLimit - 1))).toBe(false);
+  });
+
+  test("holds the boundary at the limit itself", () => {
+    expect(codexWsCreateFrameExceedsLimit("x".repeat(CODEX_WS_CREATE_FRAME_LIMIT_BYTES))).toBe(true);
+    expect(codexWsCreateFrameExceedsLimit("x".repeat(CODEX_WS_CREATE_FRAME_LIMIT_BYTES - 1))).toBe(false);
+  });
+
+  test("keeps a margin under the backend's measured ceiling", () => {
+    // Measured against the live endpoint: 16,777,000 B completed, 16,777,300 B
+    // closed the socket. The gate has to trip below the smaller of those.
+    expect(MAX_CODEX_WS_CREATE_FRAME_BYTES).toBe(16 * 1024 * 1024);
+    expect(CODEX_WS_CREATE_FRAME_LIMIT_BYTES).toBeLessThan(16_777_000);
+  });
+});
+
+describe("oversized Codex create frames", () => {
+  test("takes the HTTP SSE path instead of dialing a socket the backend would close", async () => {
+    installFake(() => { throw new Error("WS must not be dialed for an oversized frame"); });
+    const sentinel = new Response("sse");
+    let fallbackCalls = 0;
+    const fallback = (async () => {
+      fallbackCalls += 1;
+      return sentinel;
+    }) as unknown as typeof fetch;
+
+    const oversized = streamingInit({ padding: "x".repeat(CODEX_WS_CREATE_FRAME_LIMIT_BYTES) });
+    expect(await codexWsUpstreamFetch(CODEX_URL, oversized, fallback)).toBe(sentinel);
+    expect(fallbackCalls).toBe(1);
+    // Nothing was sent, so the SSE resend cannot double-generate a turn.
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  test("keeps the provider's HTTP version pin on the fallback", async () => {
+    installFake(() => { throw new Error("WS must not be dialed for an oversized frame"); });
+    const seen: RequestInit[] = [];
+    const provider = {
+      upstreamHttpVersion: "http1.1",
+      fetch: (async (_input: unknown, init: RequestInit) => {
+        seen.push(init);
+        return new Response("sse");
+      }) as unknown as typeof fetch,
+    } as unknown as OcxProviderConfig;
+    const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
+
+    await wrapped(CODEX_URL, streamingInit({ padding: "x".repeat(CODEX_WS_CREATE_FRAME_LIMIT_BYTES) }));
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    // Falling back means serving the turn over HTTP, so the operator's pin has
+    // to survive the transport switch.
+    expect((seen[0] as { protocol?: string }).protocol).toBe("http1.1");
+  });
+
+  test("still uses WS for a frame that fits", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
+    });
+    const fallback = (() => {
+      throw new Error("fallback must not run for a frame that fits");
+    }) as unknown as typeof fetch;
+
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit({ padding: "x".repeat(1024) }), fallback);
+    expect(isCodexWsUpstreamResponse(response)).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  test("names the oversized close instead of reporting a bare drop", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("close", { code: 1009, reason: "Message Too Big" });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    await expect(response.text()).rejects.toThrow(
+      /rejected the request frame as too large \(close 1009 Message Too Big\)/,
+    );
+  });
+
+  test("carries the close code for any other pre-terminal drop", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("close", { code: 1006 });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    await expect(response.text()).rejects.toThrow("closed before a Responses terminal event (close 1006)");
   });
 });

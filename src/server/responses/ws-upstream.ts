@@ -28,6 +28,22 @@ const UPGRADE_DEADLINE_MS = 10_000;
 export const MAX_CODEX_WS_FRAME_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 export const MAX_CODEX_WS_QUEUE_BYTES = 8 * 1024 * 1024;
 export const MIN_BOUNDED_CODEX_WS_BUN_VERSION = "1.4.0";
+// The backend drops any inbound message of 16 MiB or more: it closes the socket
+// (1009) without a Responses terminal event, which reaches clients as a bare
+// 502 upstream_server_error. Measured against the live endpoint 2026-08-23:
+// 16,777,000 B completed, 16,777,300 B closed in ~1s, every time. The same
+// request body succeeds over HTTP SSE, so the ceiling belongs to this transport
+// alone (see #2426). A full-replay thread reaches it with ~11 pasted
+// screenshots, and then never recovers, because each retry resends the frame.
+export const MAX_CODEX_WS_CREATE_FRAME_BYTES = 16 * 1024 * 1024;
+// Bun frames the payload it is handed, so the send-side budget is the JSON text
+// itself. The margin only absorbs the difference between the measurement here
+// and what a future caller might append after it.
+const CODEX_WS_CREATE_FRAME_MARGIN_BYTES = 64 * 1024;
+export const CODEX_WS_CREATE_FRAME_LIMIT_BYTES =
+  MAX_CODEX_WS_CREATE_FRAME_BYTES - CODEX_WS_CREATE_FRAME_MARGIN_BYTES;
+/** Close code the backend uses for an oversized message (RFC 6455 "message too big"). */
+const WS_CLOSE_MESSAGE_TOO_BIG = 1009;
 
 export type BunRuntimeIdentity = {
   version: string;
@@ -102,6 +118,45 @@ export function shouldUseCodexWsUpstream(
   }
 }
 
+const CLOSED_BEFORE_TERMINAL = "codex websocket closed before a Responses terminal event";
+
+/**
+ * The close code is the only thing that separates "the backend refused this
+ * payload" from "the network dropped", and both used to reach the logs as the
+ * same bare 502. Naming the oversized case here is what makes it diagnosable
+ * without reading the client's own rollout files.
+ */
+function closedBeforeTerminalMessage(event: unknown): string {
+  const detail = event as { code?: unknown; reason?: unknown } | null | undefined;
+  const code = typeof detail?.code === "number" ? detail.code : null;
+  const reason = typeof detail?.reason === "string" ? detail.reason.trim() : "";
+  if (code === null) return CLOSED_BEFORE_TERMINAL;
+  const suffix = reason ? ` ${code} ${reason}` : ` ${code}`;
+  if (code === WS_CLOSE_MESSAGE_TOO_BIG) {
+    return `codex websocket rejected the request frame as too large (close${suffix});`
+      + ` requests at or above ${MAX_CODEX_WS_CREATE_FRAME_BYTES} bytes must use the HTTP SSE transport`;
+  }
+  return `${CLOSED_BEFORE_TERMINAL} (close${suffix})`;
+}
+
+/**
+ * True when the `response.create` frame is at or above the backend's inbound
+ * message ceiling, so this turn must take the HTTP SSE path instead.
+ *
+ * Sizing a 16 MiB string should not cost a 16 MiB copy. UTF-8 never encodes
+ * below one byte per UTF-16 code unit and never above three, so both tails are
+ * settled from the string length alone; only the narrow band between them pays
+ * for a real byte count, and `Buffer.byteLength` measures without allocating.
+ */
+export function codexWsCreateFrameExceedsLimit(
+  frameText: string,
+  limitBytes: number = CODEX_WS_CREATE_FRAME_LIMIT_BYTES,
+): boolean {
+  if (frameText.length >= limitBytes) return true;
+  if (frameText.length * 3 < limitBytes) return false;
+  return Buffer.byteLength(frameText, "utf8") >= limitBytes;
+}
+
 export function codexWsUpstreamFetch(
   url: string,
   init: RequestInit,
@@ -124,6 +179,14 @@ export function codexWsUpstreamFetch(
     delete body.stream;
     frameText = JSON.stringify({ ...body, type: "response.create" });
   } catch {
+    return sseFallback(url, init);
+  }
+
+  // Decide before dialing. Once the socket is open the caller already holds a
+  // streaming Response, so the oversized close can only be surfaced as a stream
+  // error — and a resend at that point could double-generate. Measuring the
+  // frame we are about to send keeps the whole failure mode unreachable.
+  if (codexWsCreateFrameExceedsLimit(frameText)) {
     return sseFallback(url, init);
   }
 
@@ -279,7 +342,7 @@ export function codexWsUpstreamFetch(
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event: unknown) => {
       signal?.removeEventListener("abort", onAbort);
       if (!opened) {
         if (settledPreOpen) return;
@@ -297,7 +360,7 @@ export function codexWsUpstreamFetch(
         // here would reach clients with no response.completed/failed at all —
         // relaySseWithFailedTail() only synthesizes a failed terminal when the
         // body read THROWS. Error the stream like a reset TCP socket.
-        try { controller.error(new Error("codex websocket closed before a Responses terminal event")); } catch { /* stream already done */ }
+        try { controller.error(new Error(closedBeforeTerminalMessage(event))); } catch { /* stream already done */ }
       }
     });
 
