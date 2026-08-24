@@ -258,6 +258,25 @@ from the live CLI store, or when an existing primary CLI database has no recogni
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
 
+## Azure OpenAI identity
+
+Azure OpenAI can use the Azure SDK's default credential chain instead of an API
+key. Configure `adapter: "azure-openai"` (or `"azure"`), a real resource
+`baseUrl`, and `azureCredential: { "type": "default-azure-credential" }`.
+For a user-assigned managed identity, add the non-secret
+`managedIdentityClientId`; it selects only that managed-identity leg. Identity
+uses the exact scope `https://cognitiveservices.azure.com/.default`, sends one
+`Authorization: Bearer` header, and reports credential/import failures only as
+`Azure identity credential unavailable` without returning SDK diagnostics or
+tokens.
+
+Set `models` and `liveModels: false` for the supported static catalog; Azure
+identity does not use generic `/models` discovery. Do not combine
+`azureCredential` with `apiKey`, `apiKeyPool`, or a non-key `authMode`. API-key
+mode remains supported separately and uses the adapter's `api-key` header.
+See the [Azure OpenAI authentication configuration reference](/reference/configuration/providers/#azure-openai-authentication)
+for copyable identity and API-key examples.
+
 ## 3. API-key catalog
 
 opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default

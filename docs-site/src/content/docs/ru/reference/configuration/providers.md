@@ -6,6 +6,12 @@ description: Записи провайдеров, аутентификация, 
 Провайдер сообщает opencodex, где живёт модель, на каком wire-adapter'е она работает и как
 аутентифицируются запросы.
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## Верхнеуровневые поля, связанные с провайдерами
 
 | Поле | Тип | По умолчанию | Значение |

@@ -5,6 +5,12 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## 供應商相關的頂層欄位
 
 | 欄位 | 型別 | 預設值 | 意義 |

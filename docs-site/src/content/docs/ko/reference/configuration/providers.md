@@ -5,6 +5,12 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 공급자는 opencodex에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## 공급자 관련 최상위 필드
 
 | 필드 | 타입 | 기본값 | 의미 |

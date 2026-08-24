@@ -6,6 +6,12 @@ description: Entrées du fournisseur, authentification, points de terminaison, c
 Un fournisseur indique à opencodex où se trouve un modèle, quel adaptateur de protocole il utilise et comment les requêtes sont
 authentifiées.
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## Champs de premier niveau liés aux fournisseurs
 
 | Champ | Type | Par défaut | Signification |

@@ -5,6 +5,12 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## 提供者相关顶级字段
 
 | 字段 | 类型 | 默认值 | 含义 |

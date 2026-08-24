@@ -6,6 +6,12 @@ description: Sağlayıcı girdileri, kimlik doğrulama, uç noktalar, model kata
 Bir sağlayıcı, opencodex'e bir modelin nerede yaşadığını, hangi hat adaptörünü
 konuştuğunu ve isteklerin nasıl doğrulandığını söyler.
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## Sağlayıcı ile ilgili üst düzey alanlar
 
 | Alan | Tip | Varsayılan | Anlamı |
@@ -483,4 +489,3 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
-

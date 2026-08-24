@@ -5,6 +5,12 @@ description: プロバイダー エントリ、認証、エンドポイント、
 
 プロバイダーは、opencodex に、モデルが存在する場所、モデルが通信するワイヤー アダプター、およびリクエストの認証方法を伝えます。
 
+Azure identity configurations use `azureCredential` and are documented in the
+[canonical English Azure OpenAI authentication reference](/reference/configuration/providers/#azure-openai-authentication),
+including `managedIdentityClientId`, the exact scope, `liveModels: false`,
+mutual exclusion with `apiKey`/`apiKeyPool`, and stable errors. API-key mode
+remains supported separately.
+
 ## プロバイダー関連のトップレベルフィールド
 
 |フィールド |タイプ |デフォルト |意味 |
