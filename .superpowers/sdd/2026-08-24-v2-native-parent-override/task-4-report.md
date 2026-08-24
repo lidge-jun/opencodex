@@ -79,3 +79,28 @@ unchanged because they have no contradictory claims. The only concern is the pre
 chunk-size warning during the successful docs build; it is unrelated to this prose change.
 
 Commit: included with this report and the documentation patch.
+
+## Fix round 1
+
+Reviewed the post-review runtime gate in `src/server/responses/v2-native-parent-override.ts`:
+execution now requires the persisted enabled target plus explicit `multiAgentMode: "v2"`, the
+upstream V2 flag, and `keepNativeChatGptOnV1 !== true`. Updated all five pages so execution is
+described as occurring only while `active` is true. Each affected explanation now states that
+changing mode, the upstream flag, or Keep ChatGPT on v1 makes subsequent requests skip the
+override while preserving the stored target/enabled selection for later reactivation.
+
+Verification:
+
+```text
+$ cd docs-site && bun install --frozen-lockfile
+Checked 368 installs across 471 packages (no changes) [64.00ms]
+
+$ bun run build
+17:24:48 [build] 401 page(s) built in 4.36s
+17:24:48 [build] Complete!
+
+$ git diff --check
+passed
+```
+
+The existing Vite chunk-size warning remains non-fatal and unrelated.

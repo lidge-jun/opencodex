@@ -75,13 +75,15 @@ provider; there is no default target. Enabling it requires `multiAgentMode: "v2"
 remain stored while the setting is disabled. A malformed hand-edited subtree disables this
 optional feature without invalidating providers or the rest of the configuration.
 
-At request time, OpenCodex checks the resolved source provider and V2 request markers, then looks
-up the configured target through normal routing. Missing, disabled, unroutable, or canonical
+When `active` is true, OpenCodex checks the resolved source provider and V2 request markers, then
+looks up the configured target through normal routing. Missing, disabled, unroutable, or canonical
 targets fail closed; an eligible request is never silently sent to ChatGPT. The target is read per
-request, so later parent turns and routed root compaction follow a changed target. Native children
-are preserved; a native child that creates a routed grandchild can still create an unreadable
-encrypted task. Nested parent override, automatic selection, fallback, per-thread pinning, and CLI
-support are not part of this setting.
+request, so later parent turns and routed root compaction follow a changed target. Changing the
+mode, upstream V2 flag, or Keep ChatGPT on v1 makes subsequent requests skip the override while
+preserving the stored target and enabled selection. Native children are preserved; a native child
+that creates a routed grandchild can still create an unreadable encrypted task. Nested parent
+override, automatic selection, fallback, per-thread pinning, and CLI support are not part of this
+setting.
 
 The Codex UI can continue to display the originally selected native model even when OpenCodex
 executes the root on the routed target. Prompts, repository context, conversation history, and tool

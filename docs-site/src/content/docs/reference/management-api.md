@@ -124,12 +124,15 @@ object is validated before any write; invalid requests return 400 and leave conf
 unchanged. Override-only writes persist this subtree without catalog restamping and return the
 fresh nested DTO.
 
-When enabled, an eligible canonical ChatGPT V2 root is rerouted per request to the configured
-provider. Missing, disabled, unroutable, or canonical targets fail closed rather than falling back
-to ChatGPT. The request's selected model can remain visible in Codex while the resolved routed model
-is executed; request logs retain requested and resolved identities separately. Native children are not rewritten, so a native child can still create a routed
-grandchild with an unreadable encrypted task. This API exposes no automatic selection, nested
-override, protocol decryption, per-thread pin, or CLI operation.
+When `active` is true, an eligible canonical ChatGPT V2 root is rerouted per request to the
+configured provider. Missing, disabled, unroutable, or canonical targets fail closed rather than
+falling back to ChatGPT. The request's selected model can remain visible in Codex while the resolved
+routed model is executed; request logs retain requested and resolved identities separately. If mode,
+the upstream V2 flag, or Keep ChatGPT on v1 changes, subsequent requests skip the override while the
+stored target and enabled selection remain available for reactivation. Native children are not
+rewritten, so a native child can still create a routed grandchild with an unreadable encrypted task.
+This API exposes no automatic selection, nested override, protocol decryption, per-thread pin, or
+CLI operation.
 
 ### Combos
 

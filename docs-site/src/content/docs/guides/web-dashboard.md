@@ -116,6 +116,9 @@ characteristics may differ. The target is looked up per request, not pinned per 
 eligible target is missing, disabled, unavailable, or canonical ChatGPT, the request fails closed;
 there is no automatic fallback to ChatGPT.
 
+If the mode, upstream V2 flag, or Keep ChatGPT on v1 changes, `active` becomes false and subsequent
+parent requests skip the override; the selected target and enabled setting remain persisted.
+
 This setting is separate from **Keep ChatGPT on v1** (which preserves the native parent on v1) and
 `agentTaskRecovery` (which preserves the native V2 parent but consumes an additional ChatGPT
 request to recover encrypted child content). Native children remain native; a native child that

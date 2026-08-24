@@ -143,12 +143,14 @@ routed provider before execution. It is default-off, requires explicit V2 plus t
 and cannot be active with Keep ChatGPT on v1.
 
 The dashboard and `/api/v2` expose the configured target and derived `active` state. The runtime
-reads the target per eligible request, resolves it through normal routing, and fails closed on a
-missing, disabled, unroutable, or canonical target; it never silently falls back to ChatGPT. The
-requested model may remain visible in Codex while the resolved provider receives prompts, repository
-context, history, and tool results. Native children are preserved, so a native child can still
-create an encrypted routed grandchild. There is no automatic target choice, protocol decryption,
-nested override, per-thread pin, or CLI surface. Public behavior details live in the
+reads the target per eligible request only while `active` is true, resolves it through normal
+routing, and fails closed on a missing, disabled, unroutable, or canonical target; it never silently
+falls back to ChatGPT. Changing mode, the upstream V2 flag, or Keep ChatGPT on v1 makes subsequent
+requests skip the override while preserving the stored target and enabled selection. The requested
+model may remain visible in Codex while the resolved provider receives prompts, repository context,
+history, and tool results. Native children are preserved, so a native child can still create an
+encrypted routed grandchild. There is no automatic target choice, protocol decryption, nested
+override, per-thread pin, or CLI surface. Public behavior details live in the
 [Sub-agent Surface guide](/guides/sub-agent-surface/) and [Agent Configuration reference](/reference/configuration/agents/).
 
 The UI must show one provider card and one Models group for Codex-login OpenAI, describe Pool and

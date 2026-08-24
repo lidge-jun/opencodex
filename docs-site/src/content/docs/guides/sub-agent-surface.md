@@ -44,6 +44,10 @@ eligible request, so changing it affects later parent turns and compaction; it i
 thread. The requested model remains the request identity in logs, while the effective/resolved
 model and provider show what OpenCodex actually executes.
 
+The target and enabled selection may remain persisted while `active` is false. Changing the mode,
+upstream V2 flag, or Keep ChatGPT on v1 makes subsequent parent requests skip the override until
+the prerequisites are restored.
+
 :::tip[Not sure?]
 Start with **base**. Choose **v1** when cross-provider delegation must work predictably. Force **v2**
 only when you specifically want its newer session model across every catalog entry.
