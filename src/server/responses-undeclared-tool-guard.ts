@@ -1,4 +1,4 @@
-import { namespacedToolName } from "../types";
+import { namespacedToolName, normalizeDeclaredToolName } from "../types";
 import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 /** Item types the client executes through a request-declared wire name. */
@@ -202,10 +202,14 @@ function undeclaredNameInItem(
   if (!CLIENT_EXECUTED_CALL_TYPES.has(item.type)) return undefined;
   const name = item.name;
   if (typeof name !== "string" || name.length === 0) return undefined;
-  if (declared.has(name)) return undefined;
-  if (typeof item.namespace === "string" && declared.has(namespacedToolName(item.namespace, name))) {
-    return undefined;
+  if (typeof item.namespace === "string") {
+    // Namespaced calls are matched by their full wire name only — never legacy-normalize
+    // them, or an undeclared namespaced `exec_command` could slip through as bare `exec`.
+    if (declared.has(namespacedToolName(item.namespace, name))) return undefined;
+    return name;
   }
+  const effectiveName = normalizeDeclaredToolName(name, declared);
+  if (declared.has(effectiveName)) return undefined;
   return name;
 }
 

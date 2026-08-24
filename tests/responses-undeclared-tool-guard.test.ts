@@ -1247,4 +1247,42 @@ describe("undeclaredToolCallNameInResponse", () => {
       new Set(["computer_call"]),
     )).toBeUndefined();
   });
+
+  test("accepts legacy shell bridge names when the catalog declares unified exec", () => {
+    // Codex 0.149 declares the code-mode shell tool as `exec`; routed models (DeepSeek)
+    // sometimes echo the nested helper name `exec_command` instead. The guard must accept
+    // it when the request catalog declares `exec` and does not itself declare the legacy
+    // name — but must still refuse it when the legacy name is a real declared tool.
+    const response = {
+      output: [
+        { type: "function_call", name: "exec_command" },
+        { type: "function_call", name: "shell_command" },
+      ],
+    };
+
+    expect(undeclaredToolCallNameInResponse(response, new Set(["exec"]))).toBeUndefined();
+    expect(undeclaredToolCallNameInResponse(response, new Set(["exec", "exec_command"]))).toBe(
+      "shell_command",
+    );
+    expect(undeclaredToolCallNameInResponse(response, new Set(["exec_command"]))).toBe(
+      "shell_command",
+    );
+    expect(undeclaredToolCallNameInResponse(response, new Set())).toBe("exec_command");
+  });
+
+  test("never legacy-normalizes a namespaced shell bridge call", () => {
+    // A namespaced call (e.g. an MCP server advertising its own exec_command) must be
+    // matched by its full wire name only — never normalized to bare `exec`.
+    const namespaced = {
+      output: [
+        { type: "function_call", name: "exec_command", namespace: "mcp__server" },
+        { type: "function_call", name: "exec_command" },
+      ],
+    };
+
+    expect(undeclaredToolCallNameInResponse(namespaced, new Set(["exec"]))).toBe(
+      "exec_command",
+    );
+    expect(undeclaredToolCallNameInResponse(namespaced, new Set(["exec", "mcp__server__exec_command"]))).toBeUndefined();
+  });
 });

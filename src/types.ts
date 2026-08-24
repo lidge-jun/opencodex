@@ -4,6 +4,7 @@
 export type { OcxTool, OcxToolChoice } from "./types/tools";
 export {
   namespacedToolName,
+  normalizeDeclaredToolName,
   toolChoiceAliases,
   createToolChoiceResolver,
   toolChoiceCandidates,
