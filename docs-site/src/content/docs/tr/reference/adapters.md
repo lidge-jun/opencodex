@@ -242,6 +242,7 @@ Cursor'ın `agent.v1.AgentService/Run` servisi.
 **Kimlik Doğrulama:** `provider.apiKey`'den veya iletilen yetkilendirme
 başlığından Cursor OAuth/erişim belirteci.
 
+- Yapılandırılmış çıktı taşımadan önce reddedilir: Cursor'ın protobuf çıktı şeması alanı yoktur, bu yüzden `text.format` / `response_format` JSON object veya schema (ve dahili structured-output bayrağı) `400 invalid_request_error` döndürür. Araçlar bu denetimi atlatamaz.
 - Sıradan getirme/ayrıştırma yolu yerine `runTurn` kullanır. İstekler, sunucu
   olayları, araç argümanları, kullanım denetim noktaları ve istemci yanıtları
   `cursor/gen/agent_pb.ts` içindeki `@bufbuild/protobuf` şemalarıyla kodlanır ve

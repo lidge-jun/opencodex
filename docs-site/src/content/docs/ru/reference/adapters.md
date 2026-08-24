@@ -149,6 +149,7 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 **Аутентификация:** Cursor OAuth/access token из `provider.apiKey` или из переданного заголовка
 authorization.
 
+- Структурированный вывод отклоняется до транспорта: у Cursor нет protobuf-поля схемы вывода, поэтому `text.format` / `response_format` JSON object или schema (и внутренний флаг structured-output) возвращают `400 invalid_request_error`. Инструменты эту проверку не обходят.
 - Использует `runTurn` вместо обычного пути fetch/parse. Запросы, серверные события, аргументы
   инструментов, контрольные точки использования и ответы клиента кодируются схемами
   `@bufbuild/protobuf` из `cursor/gen/agent_pb.ts` и оформляются как сообщения Connect.

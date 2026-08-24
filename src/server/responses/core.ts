@@ -1199,6 +1199,8 @@ export interface HandleResponsesOptions {
   admission?: DataPlaneAdmission;
   /** Called at most once after the complete client body is read and accepted for dispatch. */
   onRequestBodyRead?: () => void;
+  /** Internal combo handoff invoked after the final adapter accepts the parsed request. */
+  onRequestValidated?: () => void;
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
@@ -1834,6 +1836,7 @@ export async function handleComboResponses(
   let lastFailure: Response | null = null;
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const selectedPick = pick;
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
@@ -1855,24 +1858,31 @@ export async function handleComboResponses(
     });
     let resolvedAuth: CodexAuthContext | undefined;
     let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
-    const started = Date.now();
-    const attempt = beginRequestAttempt(
-      (logCtx.attempts?.length ?? 0) + 1,
-      pick.target.provider,
-      pick.target.model,
-      config.providers[pick.target.provider]!.adapter,
-    );
-    childLog.activeAttempt = attempt;
+    let started: number | undefined;
+    let attempt: ReturnType<typeof beginRequestAttempt> | undefined;
+    const beginAttempt = (): void => {
+      if (attempt) return;
+      started = Date.now();
+      attempt = beginRequestAttempt(
+        (logCtx.attempts?.length ?? 0) + 1,
+        selectedPick.target.provider,
+        selectedPick.target.model,
+        config.providers[selectedPick.target.provider]!.adapter,
+      );
+      childLog.activeAttempt = attempt;
+      childLog.activeAttemptStartedAt = started;
+      recordAttemptRequestedEffort(childLog);
+    };
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
-      if (attemptRetained) return;
+      if (attemptRetained || !attempt) return;
       sealRequestAttemptIdentity(
         attempt,
         childLog.provider,
         childLog.providerAdapter ?? attempt.adapter,
         childLog.accountLogLabel,
       );
-      finishRequestAttempt(attempt, 499, Date.now() - started, childLog.usage);
+      finishRequestAttempt(attempt, 499, Date.now() - (started ?? Date.now()), childLog.usage);
       (logCtx.attempts ??= []).push(attempt);
       attemptRetained = true;
     };
@@ -1892,10 +1902,11 @@ export async function handleComboResponses(
         comboAttempt: true,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
+        onRequestValidated: beginAttempt,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
-          if (attempt.firstOutputMs === undefined) {
+          if (attempt && started !== undefined && attempt.firstOutputMs === undefined) {
             attempt.firstOutputMs = Math.max(0, Date.now() - started);
           }
           options.onFirstOutput?.();
@@ -1922,6 +1933,7 @@ export async function handleComboResponses(
     }
 
     if (response.ok) {
+      if (!attempt) return response;
       sealRequestAttemptIdentity(
         attempt,
         childLog.provider,
@@ -1968,20 +1980,22 @@ export async function handleComboResponses(
       retainCancelledAttempt();
       return clientCancelledResponse();
     }
-    sealRequestAttemptIdentity(
-      attempt,
-      childLog.provider,
-      childLog.providerAdapter ?? attempt.adapter,
-      childLog.accountLogLabel,
-    );
-    finishRequestAttempt(
-      attempt,
-      response.status,
-      Date.now() - started,
-      failure.usage,
-    );
-    (logCtx.attempts ??= []).push(attempt);
-    attemptRetained = true;
+    if (attempt) {
+      sealRequestAttemptIdentity(
+        attempt,
+        childLog.provider,
+        childLog.providerAdapter ?? attempt.adapter,
+        childLog.accountLogLabel,
+      );
+      finishRequestAttempt(
+        attempt,
+        response.status,
+        Date.now() - (started ?? Date.now()),
+        failure.usage,
+      );
+      (logCtx.attempts ??= []).push(attempt);
+      attemptRetained = true;
+    }
     lastFailure = failure.response;
     if (comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
@@ -1990,7 +2004,7 @@ export async function handleComboResponses(
       return lastFailure;
     }
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
+      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${started === undefined ? 0 : Date.now() - started}ms`,
     );
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
@@ -2787,6 +2801,16 @@ async function handleResponsesInner(
     logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
   }
   logCtx.providerAdapter = adapter.name;
+  try {
+    adapter.validateRequest?.(parsed);
+  } catch (err) {
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      redactSecretString(err instanceof Error ? err.message : String(err)),
+    );
+  }
+  options.onRequestValidated?.();
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.
   if (!options.comboAttempt && !logCtx.activeAttempt) {

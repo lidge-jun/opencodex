@@ -163,24 +163,26 @@ l’effort est par défaut `reasoning.summary: "auto"`, donc la réflexion revie
 `reasoning.summary: "none"`. Un `reasoning.summary` explicite de `auto`, `concise`,
 `detailed`, ou `none` l'emporte sur `include_reasoning`.
 
-La sortie structurée fait partie de cette traduction : `response_format` avec `json_object` ou
-`json_schema` est transmis aux modèles `openai-chat` acheminés et converti en mode JSON Gemini
-(`responseMimeType` / `responseSchema`) pour les modèles Google acheminés. Sur `POST
-/v1/responses` le champ de requête équivalent est `text.format` : les routes de réponses natives
-le conservent dans le brut Corps des réponses, et il est traduit en `response_format` lorsque le
-modèle achemine vers un fournisseur `openai-chat`. Un modèle répertorié dans le
-`noStructuredOutputModels` du fournisseur omet `response_format` sur le protocole `openai-chat`
-uniquement ; les modèles apparentés conservent la traduction. Les autres services en amont non
-classés reçoivent le champ et renvoient leur propre erreur au lieu que le proxy devine sa capacité.
+La sortie structurée fait partie de cette traduction. `response_format` avec `json_object` ou
+`json_schema` est transmis aux modèles `openai-chat` acheminés, sous réserve de l'opt-out
+`noStructuredOutputModels` du fournisseur : les modèles répertoriés omettent
+`response_format`, tandis que les modèles frères le conservent. Les modèles Google acheminés
+convertissent les requêtes prises en charge en mode JSON Gemini
+(`responseMimeType` / `responseSchema`), mais ignorent cette conversion lorsque la requête
+contient des outils, que le modèle sélectionné est Claude ou que le modèle est compatible avec
+la génération d'images. Kiro rejette la sortie structurée. Cursor n'a pas de champ filaire pour la sortie structurée et refuse la requête avant le transport.
+
+Sur `POST /v1/responses`, le champ de requête équivalent est `text.format` : les routes de
+réponses natives le conservent dans le corps brut de la requête, et il est traduit en
+`response_format` lorsque le modèle est acheminé vers un fournisseur `openai-chat`. Le
+comportement dépend des capacités de l'adaptateur : selon son implémentation, une fonctionnalité
+peut être transmise, ignorée ou rejetée ; toute fonctionnalité non représentable n'échoue donc
+pas nécessairement en mode fail-closed.
 
 La sortie sans streaming a `object: "chat.completion"`. La sortie streaming utilise des objets SSE avec
 `object: "chat.completion.chunk"`, choix deltas, un choix terminal avec `finish_reason`, et
 `data: [DONE]`. Les informations d'appel d'outil et d'utilisation sont traduites là où les événements source sont transportés.
 eux.
-
-Étant donné que le chemin d'exécution interne est basé sur les réponses, un adaptateur de fournisseur peut imposer un chemin d'exécution plus étroit.
-ensemble de fonctionnalités. Par exemple, une fonctionnalité de demande qui ne peut pas être représentée par l'adaptateur sélectionné est
-renvoyé comme une erreur au lieu de changer silencieusement sa signification.
 
 ## `POST /v1/messages` et `count_tokens`
 

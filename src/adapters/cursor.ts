@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AdapterEvent, OcxProviderConfig } from "../types";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
@@ -90,9 +90,17 @@ function cursorRequestSizeContext(request: { modelId: string; system: string[]; 
   };
 }
 
+function assertCursorRequestSupported(parsed: OcxParsedRequest): void {
+  if (parsed.options.textFormat !== undefined || parsed._structuredOutput === true) {
+    throw new Error("Cursor does not support structured output");
+  }
+}
+
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
   return {
     name: "cursor",
+
+    validateRequest: assertCursorRequestSupported,
 
     buildRequest() {
       return {
@@ -111,6 +119,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
     },
 
     async runTurn(_parsed, incoming, emit) {
+      assertCursorRequestSupported(_parsed);
       if (incoming.abortSignal?.aborted) {
         emit({ type: "error", message: "Cursor turn was aborted before start." });
         return;

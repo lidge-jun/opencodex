@@ -1087,6 +1087,32 @@ describe("antigravity structured output", () => {
     });
   });
 
+  test("CCA Gemini 3.7 Flash keeps JSON schema and default thinking after compilation", async () => {
+    const request = await createGoogleAdapter(effortProvider).buildRequest(parsedWithTextFormat("gemini-3.7-flash", {
+      type: "json_schema",
+      name: "decision",
+      schema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+        additionalProperties: false,
+      },
+    }));
+    const envelope = JSON.parse(request.body);
+
+    expect(envelope.model).toBe("gemini-3.7-flash-tiered");
+    expect(envelope.request.generationConfig).toMatchObject({
+      thinkingConfig: { thinkingLevel: "medium" },
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+      },
+    });
+    expect(envelope.request.generationConfig.responseSchema.additionalProperties).toBeUndefined();
+  });
+
   test("CCA Claude suppresses json_object responseMimeType", async () => {
     const request = await createGoogleAdapter(provider).buildRequest(parsedWithTextFormat("claude-sonnet-4-6", {
       type: "json_object",
