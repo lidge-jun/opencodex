@@ -136,6 +136,25 @@ describe("requestPacingIntervalMs", () => {
     expect(clock.now()).toBe(125);
   });
 
+  test("applies model-only jitter without a provider interval and leaves unrelated models unpaced", async () => {
+    const clock = fakePacingClock(1);
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({ enabled: true, models: { slow: { jitterMs: 50 } } });
+    await waitForProviderRequestSlot("model-only-jitter", configured, "slow");
+    const second = waitForProviderRequestSlot("model-only-jitter", configured, "slow");
+    let secondSettled = false;
+    void second.then(() => { secondSettled = true; });
+    clock.advanceBy(49);
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+    clock.advanceBy(1);
+    await second;
+    expect(clock.now()).toBe(50);
+    const unrelatedAt = clock.now();
+    await waitForProviderRequestSlot("model-only-jitter", configured, "other");
+    expect(clock.now()).toBe(unrelatedAt);
+  });
+
   test.each([1, 2])("never exceeds jitterMs for injected random boundary %s", async random => {
     const clock = fakePacingClock(random);
     setProviderRequestPacingRuntimeForTest(clock.runtime);

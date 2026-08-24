@@ -223,7 +223,12 @@ export async function waitForProviderRequestSlot(
   signal?: AbortSignal,
 ): Promise<void> {
   const intervals = requestPacingIntervals(provider, modelId);
-  if (Math.max(intervals.providerIntervalMs, intervals.modelIntervalMs) <= 0) return;
+  if (Math.max(
+    intervals.providerIntervalMs,
+    intervals.modelIntervalMs,
+    intervals.providerJitterMs,
+    intervals.modelJitterMs,
+  ) <= 0) return;
   if (signal?.aborted) throw abortReason(signal);
 
   const state = pacers.get(providerName) ?? {
