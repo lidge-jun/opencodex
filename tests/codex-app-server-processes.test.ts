@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
+import { createWindowsPowerShellFixture, type WindowsPowerShellFixture } from "./helpers/windows-power-shell-fixture";
 import {
   afterCatalogWriteHandleAppServers,
   attachStaleAppServerHint,
@@ -26,30 +26,11 @@ import {
 describe("collectCodexAppServerCatalogState (#857)", () => {
 const APP_SERVER_CMD = "/usr/local/bin/codex app-server";
 
-/**
- * A stand-in for powershell.exe that stalls, prints `line`, and exits.
- *
- * Platform-shaped on purpose: `execFile` launches its target directly with no shell, so a
- * POSIX `.sh` script is not an executable on Windows — and Windows is the platform this
- * whole fix exists for, with its own CI shard running this suite. On Windows the fake is a
- * `.cmd` invoked through `cmd.exe`; elsewhere it is a shell script.
- */
-function writeStallingFakePowerShell(dir: string, line: string): string {
-  if (process.platform === "win32") {
-    const cmd = join(dir, "fake-powershell.cmd");
-    writeFileSync(cmd, [
-      "@echo off",
-      // ~200ms without depending on timeout.exe, which refuses a redirected stdin.
-      "ping -n 1 -w 200 192.0.2.1 >nul 2>&1",
-      `echo ${line.replace(/\t/g, "\t")}`,
-    ].join("\r\n"));
-    return cmd;
-  }
-  const sh = join(dir, "fake-powershell.sh");
-  writeFileSync(sh, ["#!/bin/sh", "sleep 0.2", `printf '%s\\n' '${line}'`].join("\n"));
-  chmodSync(sh, 0o755);
-  return sh;
-}
+let stallingFakePowerShell: WindowsPowerShellFixture;
+beforeAll(async () => {
+  stallingFakePowerShell = await createWindowsPowerShellFixture();
+});
+afterAll(() => stallingFakePowerShell?.cleanup());
 
   test("not_running when no app-server process exists", () => {
     const status = collectCodexAppServerCatalogState({
@@ -134,9 +115,7 @@ function writeStallingFakePowerShell(dir: string, line: string): string {
   // asynchronous one does not. That difference is the entire content of #1852.
   test("the default Windows request path keeps the event loop alive through both PowerShell calls (#1852)", async () => {
     resetCodexAppServerCatalogStateCache();
-    const dir = mkdtempSync(join(tmpdir(), "ocx-ps-fake-"));
-    const fake = writeStallingFakePowerShell(dir, `42\t${APP_SERVER_CMD}\tCONTOSO\\jun`);
-    setTrustedWindowsElevationExecutablesForTests({ powershell: fake });
+    setTrustedWindowsElevationExecutablesForTests({ powershell: stallingFakePowerShell.executable });
 
     // Phase signal instead of a timer count. A callback tally has to pick a threshold
     // between "sync" and "async" observations, and `setInterval` makes no catch-up
@@ -157,7 +136,6 @@ function writeStallingFakePowerShell(dir: string, line: string): string {
     } finally {
       clearInterval(beat);
       setTrustedWindowsElevationExecutablesForTests(null);
-      rmSync(dir, { recursive: true, force: true });
       resetCodexAppServerCatalogStateCache();
     }
 
@@ -172,9 +150,7 @@ function writeStallingFakePowerShell(dir: string, line: string): string {
   // blocking when an app-server exists, so it needs its own oracle.
   test("the default Windows start-time discovery keeps the event loop alive (#1852)", async () => {
     resetCodexAppServerCatalogStateCache();
-    const dir = mkdtempSync(join(tmpdir(), "ocx-ps-start-"));
-    const fake = writeStallingFakePowerShell(dir, `42\t${APP_SERVER_CMD}\tCONTOSO\\jun`);
-    setTrustedWindowsElevationExecutablesForTests({ powershell: fake });
+    setTrustedWindowsElevationExecutablesForTests({ powershell: stallingFakePowerShell.executable });
 
     let loopRanDuringExec = false;
     const beat = setInterval(() => { loopRanDuringExec = true; }, 5);
@@ -188,7 +164,6 @@ function writeStallingFakePowerShell(dir: string, line: string): string {
     } finally {
       clearInterval(beat);
       setTrustedWindowsElevationExecutablesForTests(null);
-      rmSync(dir, { recursive: true, force: true });
       resetCodexAppServerCatalogStateCache();
     }
 
@@ -922,14 +897,20 @@ describe("warnIfStaleCodexAppServersAfterStartupWrite (#1046)", () => {
    * invalidation is verified by reading it, not by a test that cannot fail.
    */
   test("a defaulted read is memoized, and invalidation is what clears it", () => {
-    resetCodexAppServerCatalogStateCache();
-    const first = collectCodexAppServerCatalogState();
-    const second = collectCodexAppServerCatalogState();
-    // Same object identity: the second call served the memo rather than recomputing.
-    expect(second).toBe(first);
+    const realDateNow = Date.now;
+    Date.now = () => 1_000;
+    try {
+      resetCodexAppServerCatalogStateCache();
+      const first = collectCodexAppServerCatalogState();
+      const second = collectCodexAppServerCatalogState();
+      // Same object identity: the second call served the memo rather than recomputing.
+      expect(second).toBe(first);
 
-    resetCodexAppServerCatalogStateCache();
-    expect(collectCodexAppServerCatalogState()).not.toBe(first);
+      resetCodexAppServerCatalogStateCache();
+      expect(collectCodexAppServerCatalogState()).not.toBe(first);
+    } finally {
+      Date.now = realDateNow;
+    }
   });
 
   /*

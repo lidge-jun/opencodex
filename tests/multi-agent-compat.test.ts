@@ -3,8 +3,8 @@
  * models are no longer v1-pinned by ocx, but legacy/v1-surface requests still need
  * the Proactive delegation prompt when they arrive with the synthetic top tier.
  */
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../src/server/responses";
@@ -13,6 +13,7 @@ import type { OcxParsedRequest } from "../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../src/codex/catalog";
 import { collectCodexAppServerCatalogState, resetCodexAppServerCatalogStateCache } from "../src/codex/app-server-processes";
 import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
+import { createWindowsPowerShellFixture, type WindowsPowerShellFixture } from "./helpers/windows-power-shell-fixture";
 import { clearDebugSettings, setDebugSettings } from "../src/lib/debug-settings";
 import {
   getInjectionDebugLogEntries,
@@ -38,6 +39,13 @@ afterAll(() => {
   if (savedCatalogStateOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
   else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = savedCatalogStateOverride;
 });
+
+let stallingFakePowerShell: WindowsPowerShellFixture;
+beforeAll(async () => {
+  stallingFakePowerShell = await createWindowsPowerShellFixture();
+});
+
+afterAll(() => stallingFakePowerShell?.cleanup());
 
 function codexHomeFixture(configToml: string): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-v1pin-"));
@@ -135,17 +143,7 @@ describe("multiAgentGuidanceText", () => {
     // underlying process enumeration observable through the trusted-executable seam:
     // a stalling fake stands in for a slow CIM walk. The async request collector leaves
     // the loop free; the synchronous collector parks it.
-    const fakeDir = mkdtempSync(join(tmpdir(), "ocx-collab-ps-"));
-    // Platform-shaped: execFile takes no shell, so a POSIX script is not executable on
-    // Windows — the platform this fix targets, whose CI shard runs this suite.
-    const fake = join(fakeDir, process.platform === "win32" ? "fake-powershell.cmd" : "fake-powershell.sh");
-    if (process.platform === "win32") {
-      writeFileSync(fake, ["@echo off", "ping -n 1 -w 200 192.0.2.1 >nul 2>&1"].join("\r\n"));
-    } else {
-      writeFileSync(fake, ["#!/bin/sh", "sleep 0.2", "printf ''"].join("\n"));
-      chmodSync(fake, 0o755);
-    }
-    setTrustedWindowsElevationExecutablesForTests({ powershell: fake });
+    setTrustedWindowsElevationExecutablesForTests({ powershell: stallingFakePowerShell.executable });
     const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     resetCodexAppServerCatalogStateCache();
@@ -168,7 +166,6 @@ describe("multiAgentGuidanceText", () => {
       clearInterval(beat);
       Object.defineProperty(process, "platform", realPlatform);
       setTrustedWindowsElevationExecutablesForTests(null);
-      rmSync(fakeDir, { recursive: true, force: true });
       resetCodexAppServerCatalogStateCache();
       process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
     }
