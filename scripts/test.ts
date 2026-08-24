@@ -65,6 +65,8 @@ function hasCliFlag(requested: string[], name: string): boolean {
   return wrapperArgs.some(arg => arg === name || arg.startsWith(`${name}=`));
 }
 
+const DEFAULT_TEST_PARALLELISM = 4;
+
 // Bun 1.4.0 builds `bun test` options from its test, runtime, transpiler, and base tables.
 // Only required values consume the next argument. Optional values such as `--parallel=2`
 // must stay attached so a bare option cannot hide the positional filter that follows it.
@@ -159,15 +161,18 @@ function isFullSuiteRun(requested: string[]): boolean {
  * Default `bun test` argv for this repo.
  *
  * `--isolate` keeps a fresh global per file, and is the substring the exclusive-run pgrep
- * matches. `--parallel` is what makes the suite finishable: with isolate alone Bun re-evaluates
+ * matches. Bounded parallelism is what makes the suite finishable: with isolate alone Bun re-evaluates
  * the module graph once per file on a single core, so past ~900 files the run stops looking slow
  * and starts looking hung — measured here at 1 h 29 m with zero output, ~57 % CPU and 8.5 MB RSS,
- * against ~110-190 s for the identical suite with `--parallel`. A caller-supplied `--parallel=N`
- * is left alone.
+ * against a few minutes for the identical suite with four workers. Leaving Bun to select all ten
+ * workers made deadline-sensitive tests fail under load, so the repository default is deterministic.
+ * A caller-supplied `--parallel` or `--parallel=N` is left alone.
  */
 export function resolveBunTestArgs(requested: string[]): string[] {
   const args = ["--isolate"];
-  if (!hasCliFlag(requested, "--parallel")) args.push("--parallel");
+  if (!hasCliFlag(requested, "--parallel")) {
+    args.push(`--parallel=${DEFAULT_TEST_PARALLELISM}`);
+  }
   args.push(...requested);
   if (isFullSuiteRun(requested)) args.push("./tests/");
   return args;
@@ -266,7 +271,7 @@ if (import.meta.main) {
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     if (requestedTests.length === 0 && elapsedSeconds > 600) {
       console.warn(
-        `[test] the suite took ${elapsedSeconds}s; with --parallel it should finish in a few minutes on an idle machine. `
+        `[test] the suite took ${elapsedSeconds}s; with --parallel=${DEFAULT_TEST_PARALLELISM} it should finish in a few minutes on an idle machine. `
         + "Check for another test runner, a busy CPU, or a test that started polling something real.",
       );
     }

@@ -73,19 +73,20 @@ describe("test runner isolation", () => {
 /**
  * Without `--parallel`, `--isolate` re-evaluates the module graph once per file on a single
  * core. Past ~900 files that stops reading as slow and starts reading as hung: measured at
- * 1 h 29 m with zero output, ~57 % CPU and 8.5 MB RSS, against ~110-190 s for the identical
- * suite with the flag. These pin the argv so the flag cannot be dropped again silently.
+ * 1 h 29 m with zero output, ~57 % CPU and 8.5 MB RSS. Four workers keep the suite inside a
+ * few minutes without the deadline-sensitive failures observed when Bun selected all ten cores.
+ * These pin the argv so the bound cannot be dropped again silently.
  */
 describe("bun test argv", () => {
-  test("a filter-less run gets isolate, parallel and the suite path", () => {
-    expect(resolveBunTestArgs([])).toEqual(["--isolate", "--parallel", "./tests/"]);
+  test("a filter-less run gets isolate, bounded parallelism and the suite path", () => {
+    expect(resolveBunTestArgs([])).toEqual(["--isolate", "--parallel=4", "./tests/"]);
   });
 
-  test("a file filter keeps isolate and parallel but no suite path", () => {
+  test("a file filter keeps isolate and bounded parallelism but no suite path", () => {
     expect(resolveBunTestArgs(["tests/foo.test.ts"]))
-      .toEqual(["--isolate", "--parallel", "tests/foo.test.ts"]);
+      .toEqual(["--isolate", "--parallel=4", "tests/foo.test.ts"]);
     expect(resolveBunTestArgs(["-"]))
-      .toEqual(["--isolate", "--parallel", "-"]);
+      .toEqual(["--isolate", "--parallel=4", "-"]);
   });
 
   test("a caller-supplied concurrency is left alone", () => {
@@ -101,26 +102,26 @@ describe("bun test argv", () => {
 
   test("option-only arguments still count as a full suite run", () => {
     expect(resolveBunTestArgs(["--timeout=30000"]))
-      .toEqual(["--isolate", "--parallel", "--timeout=30000", "./tests/"]);
+      .toEqual(["--isolate", "--parallel=4", "--timeout=30000", "./tests/"]);
     expect(resolveBunTestArgs(["--timeout", "30000"]))
-      .toEqual(["--isolate", "--parallel", "--timeout", "30000", "./tests/"]);
+      .toEqual(["--isolate", "--parallel=4", "--timeout", "30000", "./tests/"]);
     expect(resolveBunTestArgs(["--timeout", "30000", "tests/foo.test.ts"]))
-      .toEqual(["--isolate", "--parallel", "--timeout", "30000", "tests/foo.test.ts"]);
+      .toEqual(["--isolate", "--parallel=4", "--timeout", "30000", "tests/foo.test.ts"]);
     expect(resolveBunTestArgs(["--timings", ".bun-test-timings/current.json"]))
       .toEqual([
         "--isolate",
-        "--parallel",
+        "--parallel=4",
         "--timings",
         ".bun-test-timings/current.json",
         "./tests/",
       ]);
     for (const configFlag of ["-c", "--config"]) {
       expect(resolveBunTestArgs([configFlag, "ci.bunfig.toml"]))
-        .toEqual(["--isolate", "--parallel", configFlag, "ci.bunfig.toml", "./tests/"]);
+        .toEqual(["--isolate", "--parallel=4", configFlag, "ci.bunfig.toml", "./tests/"]);
     }
     expect(resolveBunTestArgs(["-t", "serial test"])).toEqual([
       "--isolate",
-      "--parallel",
+      "--parallel=4",
       "-t",
       "serial test",
       "./tests/",
@@ -129,7 +130,7 @@ describe("bun test argv", () => {
 
   test("arguments after the delimiter are passed through instead of parsed as wrapper flags", () => {
     expect(resolveBunTestArgs(["--", "--parallel=2"]))
-      .toEqual(["--isolate", "--parallel", "--", "--parallel=2"]);
+      .toEqual(["--isolate", "--parallel=4", "--", "--parallel=2"]);
   });
 
   test("the wrapper passes parallel execution through to bun", () => {
