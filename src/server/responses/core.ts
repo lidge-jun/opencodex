@@ -125,7 +125,7 @@ import {
   rotateCursorAccountOnAuth,
 } from "../../oauth/cursor-routing";
 import { getAccountCredential } from "../../oauth/store";
-import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
+import { buildWebSearchTool, mediaBridgeWillRun, planWebSearch, resolveCcaInTurnGrounding, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
@@ -4061,13 +4061,23 @@ async function handleResponsesInner(
   //   - non-runTurn: web-search wins over image when both eligible (documented priority)
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
-  const wsPlan = !routedCompaction
-    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
-    : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
-  const canRunWebSearch = !!wsPlan && !adapter.runTurn;
-  if ((imgPlan || vidPlan) && canRunWebSearch) {
+  const hasMediaPlan = !!(imgPlan || vidPlan);
+  // A media plan is not enough to suppress Gemini 2.x grounding: both bridges inject tools only
+  // on streaming turns. This is the potential-injection value used to resolve sidecar precedence.
+  const mediaMayInject = mediaBridgeWillRun(hasMediaPlan, false, !!adapter.runTurn, parsed.stream);
+  const wsPlan = !routedCompaction
+    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, mediaMayInject)
+    : undefined;
+  const webSearchWinsMedia = !!wsPlan && !adapter.runTurn;
+  const mediaWillRun = mediaBridgeWillRun(hasMediaPlan, !!wsPlan, !!adapter.runTurn, parsed.stream);
+  const ccaInTurnGrounding = !routedCompaction
+    ? resolveCcaInTurnGrounding(config, parsed, false, route.provider, route.modelId, mediaWillRun)
+    : undefined;
+  if (ccaInTurnGrounding) parsed._ccaInTurnGrounding = ccaInTurnGrounding;
+  const canRunWebSearch = webSearchWinsMedia && !ccaInTurnGrounding;
+  if (hasMediaPlan && webSearchWinsMedia) {
     // Web search takes priority when both are active — the media bridge cannot run
     // alongside runWithWebSearch. Surface a runtime signal so the user knows their
     // configured video/image bridge was skipped for this turn, rather than silently
@@ -4075,7 +4085,7 @@ async function handleResponsesInner(
     if (vidPlan) console.warn("[videos] video bridge skipped: web search is active for this turn");
     if (imgPlan) console.warn("[images] image bridge skipped: web search is active for this turn");
   }
-  if ((imgPlan || vidPlan) && (!wsPlan || adapter.runTurn)) {
+  if (mediaWillRun || (imgPlan && !parsed.stream && !webSearchWinsMedia)) {
     // The image bridge detects a hosted image_generation tool and requires streaming.
     // The video bridge activates from config and injects a tool — it also needs streaming
     // (the loop returns SSE). For video-only (no imgPlan) on a non-streaming request, skip

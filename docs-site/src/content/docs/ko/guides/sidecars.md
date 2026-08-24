@@ -32,6 +32,11 @@ Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 �
    **반복**합니다. 한도에 닿으면 검색 도구를 제거하고 최종 답변을 강제합니다. `apply_patch`나 shell
    같은 실제 클라이언트 도구가 나오면 턴을 끝내 해당 호출이 Codex에 전달되게 합니다.
 
+**Antigravity Gemini 3 예외:** 라우팅 프로바이더가 Google Antigravity(`google-antigravity`)이고
+와이어 모델이 Gemini 3.x이면, opencodex는 합성 사이드카 루프 대신 같은 메인 요청에 CCA `google_search`
+(턴에 `http(s)` URL이 있으면 `url_context`)를 붙입니다. Claude-on-CCA, 명시적 `openai` /
+`anthropic` / `xai` / `exa` 백엔드, Codex 함수 도구가 있는 Gemini 3 미만은 사이드카를 유지합니다.
+
 라우팅 모델의 모든 반복은 업스트림에 `stream: true`를 요청하지만, opencodex는 검색 여부나 최종
 답변을 결정하기 전에 의미 있는 event를 내부에서 전부 버퍼링합니다. 첫 번째 반복의 최종
 header/status와 429 key rotation만 미리 가져옵니다. 따라서 합성 검색 호출과 중간 출력은 클라이언트에

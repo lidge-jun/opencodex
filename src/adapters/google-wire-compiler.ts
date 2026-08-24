@@ -94,10 +94,35 @@ function compileContents(value: unknown, toWireName: (name: string) => string): 
   });
 }
 
+const GOOGLE_BUILTIN_TOOL_KEYS = new Set([
+  "googleSearch", "google_search",
+  "urlContext", "url_context",
+  "codeExecution", "code_execution",
+]);
+
+function isGoogleBuiltinToolObject(rawTool: unknown): boolean {
+  if (!isObject(rawTool)) return false;
+  const keys = Object.keys(rawTool);
+  return keys.length > 0 && keys.every(key => GOOGLE_BUILTIN_TOOL_KEYS.has(key));
+}
+
+function passthroughGoogleBuiltinTools(rawTool: unknown): unknown[] {
+  if (!isObject(rawTool) || Array.isArray(rawTool.functionDeclarations)) return [];
+  if (!isGoogleBuiltinToolObject(rawTool)) return [];
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(rawTool)) {
+    if (key === "googleSearch" || key === "google_search") out.google_search = {};
+    else if (key === "urlContext" || key === "url_context") out.url_context = {};
+    else if (key === "codeExecution" || key === "code_execution") out.code_execution = rawTool[key] ?? {};
+  }
+  return Object.keys(out).length > 0 ? [out] : [];
+}
+
 function compileTools(value: unknown, toWireName: (name: string) => string): unknown[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const tools = value.flatMap(rawTool => {
-    if (!isObject(rawTool) || !Array.isArray(rawTool.functionDeclarations)) return [];
+    const builtins = passthroughGoogleBuiltinTools(rawTool);
+    if (!isObject(rawTool) || !Array.isArray(rawTool.functionDeclarations)) return builtins;
     const functionDeclarations = rawTool.functionDeclarations.flatMap(rawDeclaration => {
       if (!isObject(rawDeclaration) || typeof rawDeclaration.name !== "string") return [];
       return [{
@@ -106,7 +131,10 @@ function compileTools(value: unknown, toWireName: (name: string) => string): unk
         parameters: sanitizeGeminiToolParameters(rawDeclaration.parameters),
       }];
     });
-    return functionDeclarations.length > 0 ? [{ functionDeclarations }] : [];
+    return [
+      ...builtins,
+      ...(functionDeclarations.length > 0 ? [{ functionDeclarations }] : []),
+    ];
   });
   return tools.length > 0 ? tools : undefined;
 }
@@ -237,4 +265,57 @@ export function repairGoogleInvalidRequestBody(body: string, errorPayload: strin
     }
   }
   return changed ? JSON.stringify(parsed) : undefined;
+}
+
+function stripBuiltinToolsFromRoot(root: JsonObject): boolean {
+  if (!Array.isArray(root.tools)) return false;
+  const before = root.tools.length;
+  const filtered = root.tools.filter(rawTool => !isGoogleBuiltinToolObject(rawTool));
+  root.tools = filtered;
+  return filtered.length !== before;
+}
+
+/** One mixed-tool 400 replay: drop known built-in siblings and keep functionDeclarations. */
+export function stripGoogleBuiltinToolsFromWireBody(body: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isObject(parsed)) return undefined;
+  const root = isObject(parsed.request) ? parsed.request : parsed;
+  if (!stripBuiltinToolsFromRoot(root)) return undefined;
+  return JSON.stringify(parsed);
+}
+
+export function isGoogleMixedBuiltinToolError(errorPayload: string): boolean {
+  const mentionsBuiltin = /\b(?:google[_ ]?search|url[_ ]?context|code[_ ]?execution|built[- ]?in(?:\s+tools?)?)\b/i.test(errorPayload);
+  if (!mentionsBuiltin) return false;
+
+  // A mixed-tool error names a builtin AND a function/tool term AND a coexistence verb.
+  // Builtin mention is gated above; each pattern below requires a coexistence verb to
+  // appear within a bounded window of a tool/function/declaration term (or the phrase
+  // itself implies coexistence, e.g. "mutually exclusive"). Bare "coexist"/"alongside"
+  // without a nearby tool/function term is NOT enough — a schema error can say fields
+  // "coexist" while merely mentioning a builtin.
+  const describesIncompatibleCoexistence = [
+    /\bmix\w*\b[^\n.!?]{0,80}\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b/i,
+    /\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b[^\n.!?]{0,80}\bmix\w*\b/i,
+    /\bcombin\w*\b[^\n.!?]{0,80}\bwith\b/i,
+    /\bcoexist\w*\b[^\n.!?]{0,80}\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b/i,
+    /\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b[^\n.!?]{0,80}\bcoexist\w*\b/i,
+    /\balongside\b[^\n.!?]{0,80}\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b/i,
+    /\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b[^\n.!?]{0,80}\balongside\b/i,
+    /\buse\w*\b[^\n.!?]{0,80}\btogether\b/i,
+    /\btogether\b[^\n.!?]{0,80}\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b/i,
+    /\buse\w*\b[^\n.!?]{0,80}\bwith\b[^\n.!?]{0,80}\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b/i,
+    /\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b[^\n.!?]{0,80}\bwith\b[^\n.!?]{0,80}\buse\w*\b/i,
+    /\bnot supported with\b[^\n.!?]{0,80}\b(?:tool\w*|function(?:[_ ]declarations?)?|declaration\w*)\b/i,
+    /\bmutually exclusive\b/i,
+    /\bincompatib\w*\b[^\n.!?]{0,80}\b(?:coexist\w*|combin\w*|alongside|used together|mutually exclusive)\b/i,
+    /\b(?:coexist\w*|combin\w*|alongside|used together|mutually exclusive)\b[^\n.!?]{0,80}\bincompatib\w*\b/i,
+  ].some(pattern => pattern.test(errorPayload));
+
+  return describesIncompatibleCoexistence;
 }

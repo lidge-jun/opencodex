@@ -1,4 +1,4 @@
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { OcxConfig, OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList, toolChoiceToolPredicate } from "../types";
 import { isModelTextOnly } from "../vision";
 import type { SidecarSettings } from "./executor";
@@ -166,6 +166,86 @@ export function resolveSidecarBackend(
   return "openai";
 }
 
+export interface CcaInTurnGrounding {
+  search: boolean;
+  urlContext: boolean;
+}
+
+const HTTP_URL_RE = /https?:\/\/[^\s<>"')\]]+/i;
+const EXPLICIT_SIDECAR_BACKENDS = new Set<WebSearchBackendId>(["openai", "anthropic", "xai", "exa"]);
+
+function isGemini3ModelId(modelId: string): boolean {
+  return /gemini-3/i.test(modelId);
+}
+
+/** Whether a planned media bridge will actually inject tools on this turn. */
+export function mediaBridgeWillRun(
+  hasMediaPlan: boolean,
+  hasWebSearchPlan: boolean,
+  adapterRunsTurn: boolean,
+  isStreaming = true,
+): boolean {
+  return hasMediaPlan && isStreaming && (!hasWebSearchPlan || adapterRunsTurn);
+}
+
+function messageTextContainsHttpUrl(content: string | OcxContentPart[]): boolean {
+  if (typeof content === "string") return HTTP_URL_RE.test(content);
+  for (const part of content) {
+    if (part.type === "image") {
+      const url = part.imageUrl;
+      if (url && !url.startsWith("data:") && /^https?:/i.test(url)) return true;
+      continue;
+    }
+    if (part.type === "text" && HTTP_URL_RE.test(part.text ?? "")) return true;
+  }
+  return false;
+}
+
+/** True when request text carries http(s) URLs that become remote-url placeholders upstream. */
+export function requestNeedsCcaUrlContext(parsed: OcxParsedRequest): boolean {
+  for (const msg of parsed.context.messages) {
+    if (msg.role === "user" || msg.role === "developer") {
+      if (messageTextContainsHttpUrl(msg.content)) return true;
+      continue;
+    }
+    if (msg.role === "toolResult" && typeof msg.content === "string" && HTTP_URL_RE.test(msg.content)) return true;
+    if (msg.role === "assistant") {
+      for (const part of msg.content) {
+        if (part.type === "text" && HTTP_URL_RE.test(part.text ?? "")) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Antigravity Gemini in-turn google_search / url_context on the main routed fetch. Returns undefined
+ * when the request should use the web-search sidecar (Claude-on-CCA, explicit sidecar backend, or
+ * Gemini &lt;3 with Codex function tools, including media bridge tools that will be injected later).
+ */
+export function resolveCcaInTurnGrounding(
+  config: OcxConfig,
+  parsed: OcxParsedRequest,
+  isPassthrough: boolean,
+  provider: OcxProviderConfig,
+  modelId: string,
+  hasMediaBridge = false,
+): CcaInTurnGrounding | undefined {
+  if (!parsed._webSearch || isPassthrough) return undefined;
+  if (provider.googleMode !== "cloud-code-assist") return undefined;
+  if (/claude/i.test(modelId)) return undefined;
+  if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return undefined;
+  const cfg = config.webSearchSidecar ?? {};
+  if (cfg.enabled === false) return undefined;
+  if (cfg.backend !== undefined && EXPLICIT_SIDECAR_BACKENDS.has(cfg.backend)) return undefined;
+  const hasCodexTools = (parsed.context.tools?.length ?? 0) > 0 || hasMediaBridge;
+  if (hasCodexTools && !isGemini3ModelId(modelId)) return undefined;
+  return {
+    search: true,
+    urlContext: requestNeedsCcaUrlContext(parsed),
+  };
+}
+
 export interface SidecarPlan {
   /** Which executor runs the search. Anthropic does not require a forward provider. */
   backend: WebSearchBackendId;
@@ -215,7 +295,11 @@ export function planWebSearch(
   provider: OcxProviderConfig,
   modelId: string,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
+  // Core passes the potential media plan here so sidecar precedence can be resolved
+  // before deciding whether the media bridge actually runs.
+  hasMediaBridge = false,
 ): SidecarPlan | undefined {
+  if (resolveCcaInTurnGrounding(config, parsed, isPassthrough, provider, modelId, hasMediaBridge)) return undefined;
   if (!parsed._webSearch || isPassthrough) return undefined;
   if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return undefined;
   const cfg = config.webSearchSidecar ?? {};

@@ -1121,4 +1121,159 @@ describe("antigravity structured output", () => {
 
     expect(envelope.request.generationConfig?.responseMimeType).toBeUndefined();
   });
+
+  test("in-turn grounding attaches google_search alongside functionDeclarations on Gemini CCA", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest({
+      ...parsed("search", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+      context: {
+        messages: [{ role: "user", content: "find news" }],
+        systemPrompt: [],
+        tools: [{ name: "shell", description: "run", parameters: { type: "object" } }],
+      },
+    } as unknown as OcxParsedRequest);
+    const envelope = JSON.parse(request.body);
+    expect(envelope.request.tools).toEqual([
+      { functionDeclarations: [{ name: "shell", description: "run", parameters: { type: "object", properties: {} } }] },
+      { google_search: {} },
+    ]);
+  });
+
+  test("Claude CCA never attaches google_search even when _ccaInTurnGrounding is set", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest({
+      ...parsed("x", false, "claude-sonnet-4-6"),
+      _ccaInTurnGrounding: { search: true, urlContext: true },
+      context: {
+        messages: [{ role: "user", content: "https://example.com" }],
+        systemPrompt: [],
+        tools: [{ name: "shell", description: "run", parameters: { type: "object" } }],
+      },
+    } as unknown as OcxParsedRequest);
+    const envelope = JSON.parse(request.body);
+    expect(envelope.request.tools).toEqual([
+      { functionDeclarations: [{ name: "shell", description: "run", parameters: { type: "object", properties: {} } }] },
+    ]);
+  });
+
+  test("parseStream appends grounding sources and drops search-suggestion HTML widgets", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest({
+      ...parsed("x", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+    } as unknown as OcxParsedRequest);
+    const sse = [
+      "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"<style>.s{}</style>\"}]}}]}}\n",
+      "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Grounded answer.\"}]},\"groundingMetadata\":{\"groundingChunks\":[{\"web\":{\"uri\":\"https://a.example\",\"title\":\"A\"}}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2}}}\n",
+    ].join("");
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      new Response(sse, { headers: { "content-type": "text/event-stream" } }),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+    const text = events.filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map(event => event.text)
+      .join("");
+    expect(text).toContain("Grounded answer.");
+    expect(text).toContain("Sources:");
+    expect(text).toContain("https://a.example");
+    expect(text).not.toContain("<style");
+    expect(events.some(event => event.type === "done")).toBe(true);
+  });
+
+  test("parseStream preserves search-suggestion-looking HTML when CCA grounding is off", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(parsed("x", true, "gemini-3.7-flash"));
+    const marker = "<style>.s{}</style><search_suggest>legitimate text</search_suggest>";
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: marker }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({ type: "text_delta", text: marker });
+  });
+
+  test("keeps grounding-source emission aligned when requests are built consecutively", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest({
+      ...parsed("grounded", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+    } as unknown as OcxParsedRequest);
+    await adapter.buildRequest(parsed("plain", true, "gemini-3.7-flash"));
+
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      sseResponse([
+        {
+          response: {
+            candidates: [{
+              content: { parts: [{ text: "grounded answer" }] },
+              groundingMetadata: {
+                groundingChunks: [{ web: { uri: "https://grounded.example", title: "Grounded" } }],
+              },
+              finishReason: "STOP",
+            }],
+          },
+        },
+      ]),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map(event => event.text)
+      .join("");
+    expect(text).toContain("grounded answer");
+    expect(text).toContain("Sources:");
+    expect(text).toContain("https://grounded.example");
+  });
+
+  test("does not emit grounding sources after a grounded request fails to build", async () => {
+    const providerThatRecovers = { ...provider, project: undefined } as OcxProviderConfig;
+    const adapter = createGoogleAdapter(providerThatRecovers);
+    await expect(adapter.buildRequest({
+      ...parsed("failed grounded request", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+    } as unknown as OcxParsedRequest)).rejects.toThrow(/project id/);
+
+    providerThatRecovers.project = provider.project;
+    await adapter.buildRequest(parsed("plain", true, "gemini-3.7-flash"));
+
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      sseResponse([
+        {
+          response: {
+            candidates: [{
+              content: { parts: [{ text: "plain answer" }] },
+              groundingMetadata: {
+                groundingChunks: [{ web: { uri: "https://stale.example", title: "Stale" } }],
+              },
+              finishReason: "STOP",
+            }],
+          },
+        },
+      ]),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map(event => event.text)
+      .join("");
+    expect(text).toContain("plain answer");
+    expect(text).not.toContain("Sources:");
+    expect(text).not.toContain("https://stale.example");
+  });
 });
