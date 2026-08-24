@@ -38,14 +38,12 @@ describe("fork sync pinning", () => {
     expect(isAllowedVendorRef("refs/heads/vendor/main")).toBe(false);
   });
 
-  test("uses ff-only merges for both allowlisted refs", async () => {
+  test("updates both allowlisted refs without moving HEAD", async () => {
     const calls: string[][] = [];
     const pinned = await pinVendorRefs(event(), {
       runner: queuedRunner([
         ok(),
-        ok(),
         ok(`${TAG_SHA}\n`),
-        ok(),
         ok(),
         ok(`${DEV_SHA}\n`),
       ], calls),
@@ -53,11 +51,9 @@ describe("fork sync pinning", () => {
     });
 
     expect(calls).toEqual([
-      ["switch", "vendor/main"],
-      ["merge", "--ff-only", TAG_SHA],
+      ["fetch", ".", TAG_SHA, "refs/heads/vendor/main"],
       ["rev-parse", "refs/heads/vendor/main"],
-      ["switch", "vendor/dev"],
-      ["merge", "--ff-only", "refs/remotes/upstream/dev"],
+      ["fetch", ".", "refs/remotes/upstream/dev", "refs/heads/vendor/dev"],
       ["rev-parse", "refs/heads/vendor/dev"],
     ]);
     expect(pinned.kind).toBe("pin-updated");
@@ -75,11 +71,10 @@ describe("fork sync pinning", () => {
     expect(unchanged.kind).toBe("already-current");
   });
 
-  test("returns pin-diverged and stops when an ff-only merge fails", async () => {
+  test("returns pin-diverged and stops when a ref-only fetch fails", async () => {
     const calls: string[][] = [];
     const diverged = await pinVendorRefs(event(), {
       runner: queuedRunner([
-        ok(),
         { exitCode: 1, stdout: "", stderr: "Not possible to fast-forward" },
       ], calls),
     });
@@ -87,8 +82,7 @@ describe("fork sync pinning", () => {
     expect(diverged.kind).toBe("pin-diverged");
     expect(diverged.error).toContain("fast-forward");
     expect(calls).toEqual([
-      ["switch", "vendor/main"],
-      ["merge", "--ff-only", TAG_SHA],
+      ["fetch", ".", TAG_SHA, "refs/heads/vendor/main"],
     ]);
   });
 
