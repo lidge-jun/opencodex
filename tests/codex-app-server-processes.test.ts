@@ -154,9 +154,10 @@ afterAll(() => stallingFakePowerShell?.cleanup());
 
     let loopRanDuringExec = false;
     const beat = setInterval(() => { loopRanDuringExec = true; }, 5);
+    let status: Awaited<ReturnType<typeof collectCodexAppServerCatalogStateForRequest>>;
     try {
       // No readStartMsBatchAsync override: the default start-time path must run for real.
-      await collectCodexAppServerCatalogStateForRequest({
+      status = await collectCodexAppServerCatalogStateForRequest({
         platform: "win32",
         listSnapshotsAsync: async () => [{ pid: 42, commandLine: APP_SERVER_CMD }],
         catalogMtimeMs: () => 1_000,
@@ -168,6 +169,10 @@ afterAll(() => stallingFakePowerShell?.cleanup());
     }
 
     expect(loopRanDuringExec).toBe(true);
+    expect(status).toMatchObject({
+      state: "stale",
+      processes: [{ pid: 42, startedAtMs: 500 }],
+    });
   });
 
   test("Windows request collection shares one in-flight refresh and its short cache (#1852)", async () => {
