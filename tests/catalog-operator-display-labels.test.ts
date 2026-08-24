@@ -282,9 +282,14 @@ describe("modelDisplayNames config contract", () => {
     expect(kept({ bad: "a/b", good: "Kimi K3" })).toEqual({ good: "Kimi K3" });
   });
 
-  test("null is an explicit clear on both paths", () => {
+  test("null is an explicit clear on both paths, per key and for the whole map", () => {
     expect(kept({ m: null })).toBeUndefined();
     expect(writeError({ m: null })).toBeNull();
+    // The whole-map form has to agree with the loader too: it accepts null and clears,
+    // so rejecting it at the write boundary made the documented way to remove every
+    // label a 400 on one path and a no-op on the other.
+    expect(kept(null)).toBeUndefined();
+    expect(writeError(null)).toBeNull();
   });
 
   test("the map is bounded, and the bound is a write error rather than silent truncation", () => {

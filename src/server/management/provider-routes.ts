@@ -617,6 +617,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
+    // Sampled alongside ownership: an explicit `null` is a request to clear, and the
+    // preservation below would otherwise merge the stored map straight back over it.
+    const clearedModelDisplayNames = prov.modelDisplayNames === null;
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -665,7 +668,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // dashboard editor to a follow-up, so the add/edit form cannot round-trip the field at
     // all. Without this, saving an unrelated setting on the provider silently erases every
     // label the operator set. Deletion goes through PATCH with an explicit null.
-    if (existing?.modelDisplayNames) {
+    if (clearedModelDisplayNames) {
+      // Canonicalize to absent, which is what "clear" means everywhere else — the same
+      // treatment `upstreamHttpVersion` gets above.
+      delete prov.modelDisplayNames;
+    } else if (existing?.modelDisplayNames) {
       prov.modelDisplayNames = submittedModelDisplayNames
         ? { ...existing.modelDisplayNames, ...(prov.modelDisplayNames ?? {}) }
         : { ...existing.modelDisplayNames };

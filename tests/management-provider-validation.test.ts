@@ -931,6 +931,31 @@ describe("provider management validation", () => {
       }
     });
 
+    test("an explicit null on POST clears the map instead of being refused or merged back", async () => {
+      // The two boundaries have to agree on what null means. The loader treats it as
+      // "clear"; the write boundary used to call it "must be a plain object", so the
+      // documented way to remove every label was a 400. And once accepted, the
+      // preservation carry-over would happily merge the stored map back over the clear.
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
+
+        const cleared = await seedProvider(server.url, { modelDisplayNames: null });
+        expect(cleared.status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toBeUndefined();
+
+        // An omitted field still means "not carried", not "cleared" — the two must not
+        // collapse into the same behaviour.
+        expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
     test("a control character PATCH is refused, including the ones trim would hide", async () => {
       freshHome();
       const server = startServer(0);

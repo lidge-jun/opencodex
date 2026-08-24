@@ -146,7 +146,11 @@ export const MAX_MODEL_DISPLAY_NAMES = 512;
  * the documented way to take a label back off.
  */
 export function displayLabelRecordConfigError(value: unknown, field = "modelDisplayNames"): string | null {
-  if (value === undefined) return null;
+  // `null` clears the whole map, the same way a per-key `null` clears one label and the same
+  // way the load schema treats it. Rejecting it here made the documented way to remove every
+  // label a 400 on POST while the loader accepted it — the two boundaries disagreed about
+  // what the operator had asked for.
+  if (value === undefined || value === null) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
