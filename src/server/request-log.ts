@@ -6,6 +6,7 @@ import {
   httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
   isClientClosedMessage,
   isCyberPolicyCode,
+  isCyberPolicyMessage,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
@@ -764,7 +765,7 @@ function captureUpstreamErrorParsed(
       last_error?: { message?: unknown };
       response?: {
         error?: { type?: unknown; code?: unknown; message?: unknown };
-        incomplete_details?: { reason?: unknown };
+        incomplete_details?: { reason?: unknown; message?: unknown };
       };
     };
     captureTerminalHttpStatus(logCtx, json);
@@ -778,7 +779,8 @@ function captureUpstreamErrorParsed(
     if (logCtx.upstreamError) return;
     const message = json?.error?.message
       ?? json?.last_error?.message
-      ?? json?.response?.error?.message;
+      ?? json?.response?.error?.message
+      ?? json?.response?.incomplete_details?.message;
     if (typeof message === "string" && message.trim()) {
       logCtx.upstreamError = redactSecretString(message).slice(0, 500);
       return;
@@ -817,25 +819,43 @@ function captureTerminalHttpStatus(
   logCtx: RequestLogContext,
   json: {
     type?: unknown;
-    response?: { error?: { type?: unknown; code?: unknown; message?: unknown } };
+    code?: unknown;
+    message?: unknown;
+    error?: { type?: unknown; code?: unknown; message?: unknown };
+    last_error?: { type?: unknown; code?: unknown; message?: unknown };
+    response?: {
+      error?: { type?: unknown; code?: unknown; message?: unknown };
+      incomplete_details?: { code?: unknown; message?: unknown };
+    };
   },
 ): void {
   if (logCtx.terminalHttpStatus !== undefined) return;
-  if (json.type !== "response.failed") return;
-  const error = json.response?.error;
-  if (!error || typeof error !== "object") return;
-  const terminalCode = error.code === null || typeof error.code === "string"
-    ? error.code
-    : undefined;
-  if (isCyberPolicyCode(terminalCode)) {
+  const type = json.type;
+  if (type !== "response.failed" && type !== "response.incomplete" && type !== "error") return;
+  const responseError = json.response?.error;
+  const responseDetails = json.response?.incomplete_details;
+  const candidates = [json.error, json.last_error, responseError, responseDetails, json];
+  const policy = candidates.some(candidate => (
+    candidate?.code === null || typeof candidate?.code === "string"
+  ) && isCyberPolicyCode(candidate.code as string | null | undefined))
+    || candidates.some(candidate => (
+      typeof candidate?.message === "string"
+      && candidate.message.trim().length > 0
+      && isCyberPolicyMessage(candidate.message)
+    ));
+  if (policy) {
     logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
-  } else {
-    delete logCtx.terminalErrorCode;
+    logCtx.terminalHttpStatus = 400;
+    return;
   }
+  if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;
+  const responseCode = responseError.code === null || typeof responseError.code === "string"
+    ? responseError.code
+    : undefined;
   logCtx.terminalHttpStatus = httpStatusFromTerminalError({
-    type: typeof error.type === "string" ? error.type : undefined,
-    code: terminalCode,
-    message: typeof error.message === "string" ? error.message : undefined,
+    type: typeof responseError.type === "string" ? responseError.type : undefined,
+    code: responseCode,
+    message: typeof responseError.message === "string" ? responseError.message : undefined,
   });
 }
 

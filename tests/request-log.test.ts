@@ -985,6 +985,134 @@ describe("request log metadata", () => {
     });
   });
 
+  test("deferred SSE logging maps policy response.incomplete to failed 400", async () => {
+    const entries: RequestLogEntry[] = [];
+    const payload = JSON.stringify({
+      type: "response.incomplete",
+      response: {
+        id: "resp-policy-incomplete",
+        status: "incomplete",
+        incomplete_details: { reason: "content_filter" },
+        error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`event: response.incomplete\ndata: ${payload}\n\n`));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cyber-policy-incomplete",
+      Date.now(),
+      { model: "gpt-5.6-sol", provider: "openai" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      upstreamError: "blocked",
+      status: 400,
+      errorCode: "cyber_policy",
+      closeReason: "terminal",
+    });
+  });
+
+  test("deferred SSE logging maps a policy top-level error to failed 400", async () => {
+    const entries: RequestLogEntry[] = [];
+    const payload = JSON.stringify({
+      type: "error",
+      error: { type: "invalid_request_error", message: "This request was flagged for possible cybersecurity risk." },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`event: error\ndata: ${payload}\n\n`));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cyber-policy-error",
+      Date.now(),
+      { model: "gpt-5.6-sol", provider: "openai" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      status: 400,
+      errorCode: "cyber_policy",
+      closeReason: "terminal",
+    });
+  });
+
+  test("deferred SSE logging checks all policy candidates, not only the first code", async () => {
+    const entries: RequestLogEntry[] = [];
+    const payload = JSON.stringify({
+      type: "response.incomplete",
+      error: { type: "upstream_error", code: "upstream_reset", message: "connection ended" },
+      response: {
+        status: "incomplete",
+        error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cyber-policy-candidates",
+      Date.now(),
+      { model: "gpt-5.6-sol", provider: "openai" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      status: 400,
+      errorCode: "cyber_policy",
+    });
+  });
+
+  test("deferred SSE logging maps ordinary failed status from response.error only", async () => {
+    const entries: RequestLogEntry[] = [];
+    const payload = JSON.stringify({
+      type: "response.failed",
+      code: "context_length_exceeded",
+      response: {
+        status: "failed",
+        error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "rate limited" },
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-ordinary-failed-authority",
+      Date.now(),
+      { model: "gpt-5.6-sol", provider: "openai" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      status: 429,
+      errorCode: "rate_limit_exceeded",
+    });
+  });
+
   test("deferred SSE logging maps web-search client closes to 499 client_cancel", async () => {
     const entries: RequestLogEntry[] = [];
     const message = "client closed request during web-search";

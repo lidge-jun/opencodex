@@ -264,7 +264,9 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     up.close();
 
     const text = await reading;
-    expect(text).toBe("data: �");
+    expect(text.startsWith("data: �")).toBe(true);
+    expect(text).toContain('"reason":"adapter_eof"');
+    expect(countOccurrences(text, "data: [DONE]")).toBe(1);
   });
 
   test("terminal framing keeps partial blocks out of the rewrite budget", async () => {
@@ -384,6 +386,478 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     expect(rec.dones).toBe(1);
   });
 
+  test("clean EOF emits one adapter_eof incomplete terminal and one DONE", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(sse(DELTA));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.incomplete/g)?.length).toBe(1);
+    expect(text).toContain('"reason":"adapter_eof"');
+    expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+    expect(rec.synthetics).toEqual(["incomplete"]);
+    expect(rec.terminals).toEqual([]);
+  });
+
+  test("unframed EOF terminals are parsed once without an adapter_eof duplicate", async () => {
+    const cases = [
+      {
+        type: "response.completed",
+        event: "response.completed",
+        payload: {
+          type: "response.completed",
+          sequence_number: 31,
+          response: { id: "resp-unframed-completed", status: "completed", output: [] },
+        },
+      },
+      {
+        type: "response.failed",
+        event: "response.failed",
+        payload: {
+          type: "response.failed",
+          sequence_number: 32,
+          response: { id: "resp-unframed-failed", status: "failed", output: [] },
+        },
+      },
+      {
+        type: "response.incomplete",
+        event: "response.incomplete",
+        payload: {
+          type: "response.incomplete",
+          sequence_number: 33,
+          response: { id: "resp-unframed-incomplete", status: "incomplete", output: [] },
+        },
+      },
+      {
+        type: "error",
+        event: "response.failed",
+        payload: {
+          type: "error",
+          sequence_number: 34,
+          response: {
+            id: "resp-unframed-policy",
+            output: [{ type: "message", id: "item-unframed-policy" }],
+            status: "failed",
+          },
+          error: {
+            type: "invalid_request_error",
+            code: "cyber_policy",
+            message: "blocked by upstream policy",
+          },
+        },
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      const { hooks, rec } = makeHooks();
+      const up = controlledUpstream();
+      const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+      up.push(enc.encode(`event: ${fixture.type}\ndata: ${JSON.stringify(fixture.payload)}`));
+      up.close();
+
+      const text = await readAll(relayed);
+      expect(text.match(/event: response\.(?:completed|failed|incomplete)/g)?.length).toBe(1);
+      expect(text).toContain(`event: ${fixture.event}`);
+      expect(text).not.toContain('"reason":"adapter_eof"');
+      expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+      expect(rec.synthetics).toEqual([]);
+    }
+  });
+
+  test("policy response.incomplete is rewritten to one failed terminal with 400 accounting", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: response.incomplete\ndata: ${JSON.stringify({
+      type: "response.incomplete",
+      sequence_number: 7,
+      response: {
+        id: "resp-policy",
+        output: [{ type: "message", id: "item-1" }],
+        status: "incomplete",
+        incomplete_details: { reason: "content_filter" },
+        error: {
+          type: "invalid_request_error",
+          code: "cyber_policy",
+          message: "blocked by upstream policy",
+        },
+      },
+    })}\n\n`));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("response.incomplete");
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).toContain('"type":"invalid_request_error"');
+    expect(text).toContain('"id":"resp-policy"');
+    expect(text).toContain('"sequence_number":7');
+    expect(text).toContain('"output":[{"type":"message","id":"item-1"}]');
+    expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+    expect(rec.terminals).toEqual([{ status: "failed", httpStatus: 400 }]);
+    expect(rec.synthetics).toEqual([]);
+  });
+
+  test("policy leading error frame is rewritten and stops a clean EOF without a duplicate", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: error\ndata: ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        code: "cyber_policy",
+        message: "policy blocked this request",
+      },
+    })}\n\n`));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("event: error");
+    expect(text).not.toContain("response.incomplete");
+    expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+    expect(rec.terminals).toEqual([{ status: "failed", httpStatus: 400 }]);
+    expect(rec.synthetics).toEqual([]);
+  });
+
+  test("structured policy response.failed stays failed, normalizes to cyber_policy, and preserves metadata", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const payload = JSON.stringify({
+      type: "response.failed",
+      sequence_number: 18,
+      model: "gpt-policy",
+      response: {
+        id: "resp-structured-policy-eager",
+        output: [{ type: "message", id: "item-structured-policy-eager" }],
+        status: "failed",
+        error: {
+          type: "server_error",
+          code: "cyber_policy",
+          message: "blocked by upstream policy",
+        },
+      },
+    });
+    const framed = enc.encode(`event: response.failed\r\ndata: ${payload}\r\n\r\n`);
+    up.push(framed.subarray(0, framed.byteLength - 1));
+    up.push(framed.subarray(framed.byteLength - 1));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).toContain('"type":"invalid_request_error"');
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).not.toContain('"type":"server_error"');
+    expect(text).toContain('"sequence_number":18');
+    expect(text).toContain('"model":"gpt-policy"');
+    expect(text).toContain('"id":"resp-structured-policy-eager"');
+    expect(text).toContain('"output":[{"type":"message","id":"item-structured-policy-eager"}]');
+    expect(rec.terminals).toEqual([{ status: "failed", httpStatus: 400 }]);
+    expect(rec.synthetics).toEqual([]);
+  });
+
+  test("ordinary response.failed remains unchanged", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: response.failed\ndata: ${JSON.stringify({
+      type: "response.failed",
+      response: {
+        id: "resp-ordinary-failed",
+        status: "failed",
+        error: { type: "server_error", code: "upstream_error", message: "provider failed" },
+      },
+    })}\n\n`));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).toContain('"code":"upstream_error"');
+    expect(text).not.toContain('"code":"cyber_policy"');
+    expect(rec.terminals).toEqual([{ status: "failed" }]);
+    expect(rec.synthetics).toEqual([]);
+  });
+
+  test("policy error survives same-chunk frame-count overflow without an upstream reset", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const policy = JSON.stringify({
+      type: "error",
+      sequence_number: 23,
+      response: {
+        id: "resp-policy-frame-count",
+        output: [{ type: "message", id: "item-policy-frame-count" }],
+        status: "failed",
+      },
+      error: {
+        type: "invalid_request_error",
+        code: "cyber_policy",
+        message: "blocked by upstream policy",
+      },
+    });
+    // The configured 4 MiB client framer admits 4096 blocks per feed. The
+    // policy terminal is first, followed by 4096 empty blocks, which used to
+    // turn the already-committed policy response into an upstream_reset 502.
+    up.push(enc.encode(`event: error\ndata: ${policy}\n\n${"\n\n".repeat(4096)}`));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("upstream_reset");
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).toContain('"sequence_number":23');
+    expect(text).toContain('"id":"resp-policy-frame-count"');
+    expect(text).toContain('"output":[{"type":"message","id":"item-policy-frame-count"}]');
+    expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+    expect(rec.terminals).toEqual([{ status: "failed", httpStatus: 400 }]);
+    expect(rec.synthetics).toEqual([]);
+  });
+
+  test("policy error also survives same-chunk oversized trailing bytes", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const policy = JSON.stringify({
+      type: "error",
+      sequence_number: 25,
+      response: { id: "resp-policy-byte-overflow", output: [], status: "failed" },
+      error: {
+        type: "invalid_request_error",
+        code: "cyber_policy",
+        message: "blocked by upstream policy",
+      },
+    });
+    const oversizedTail = new Uint8Array(4 * 1024 * 1024 + 1).fill(120);
+    up.push(joinBytes([
+      enc.encode(`event: error\ndata: ${policy}\n\n`),
+      oversizedTail,
+    ]));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("upstream_reset");
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).toContain('"id":"resp-policy-byte-overflow"');
+    expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+    expect(rec.terminals).toEqual([{ status: "failed", httpStatus: 400 }]);
+  });
+
+  test("eager preserves an unframed terminal before a reader error", async () => {
+    const cases = [
+      {
+        type: "response.completed",
+        event: "response.completed",
+        status: "completed",
+        payload: {
+          type: "response.completed",
+          sequence_number: 61,
+          response: { id: "resp-eager-read-error-completed", status: "completed", output: [] },
+        },
+      },
+      {
+        type: "response.failed",
+        event: "response.failed",
+        status: "failed",
+        payload: {
+          type: "response.failed",
+          sequence_number: 62,
+          response: { id: "resp-eager-read-error-failed", status: "failed", output: [] },
+        },
+      },
+      {
+        type: "response.incomplete",
+        event: "response.incomplete",
+        status: "incomplete",
+        payload: {
+          type: "response.incomplete",
+          sequence_number: 63,
+          response: { id: "resp-eager-read-error-incomplete", status: "incomplete", output: [] },
+        },
+      },
+      {
+        type: "error",
+        event: "response.failed",
+        status: "failed",
+        payload: {
+          type: "error",
+          sequence_number: 64,
+          response: {
+            id: "resp-eager-read-error-policy",
+            output: [{ type: "message", id: "item-eager-read-error-policy" }],
+            status: "failed",
+          },
+          error: {
+            type: "invalid_request_error",
+            code: "cyber_policy",
+            message: "blocked by upstream policy",
+          },
+        },
+        httpStatus: 400,
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      const { hooks, rec } = makeHooks();
+      const up = controlledUpstream();
+      const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+      up.push(enc.encode(`event: ${fixture.type}\ndata: ${JSON.stringify(fixture.payload)}`));
+      up.fail(new Error("socket reset after unframed terminal"));
+
+      const text = await readAll(relayed);
+      expect(text.match(/event: response\.(?:completed|failed|incomplete)/g)?.length).toBe(1);
+      expect(text).toContain(`event: ${fixture.event}`);
+      expect(text).not.toContain("upstream_reset");
+      expect(text).not.toContain('"reason":"adapter_eof"');
+      expect(countOccurrences(text, "data: [DONE]")).toBe(1);
+      expect(rec.terminals).toEqual([{ status: fixture.status, ...(fixture.httpStatus ? { httpStatus: fixture.httpStatus } : {}) }]);
+      expect(rec.synthetics).toEqual([]);
+      if (fixture.type === "error") {
+        expect(text).toContain('"sequence_number":64');
+        expect(text).toContain('"id":"resp-eager-read-error-policy"');
+        expect(text).toContain('"output":[{"type":"message","id":"item-eager-read-error-policy"}]');
+      }
+    }
+  });
+
+  test("eager keeps an ordinary top-level error fail-closed on reader error", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: error\ndata: ${JSON.stringify({
+      type: "error",
+      error: { type: "server_error", code: "upstream_error", message: "provider failed" },
+    })}`));
+    up.fail(new Error("socket reset after ordinary error"));
+
+    const text = await readAll(relayed);
+    expect(text).toContain("event: error");
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).toContain('"code":"upstream_reset"');
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).not.toContain('"code":"cyber_policy"');
+    expect(rec.terminals).toEqual([]);
+    expect(rec.synthetics).toEqual(["failed"]);
+  });
+
+  test("eager read-error terminal flushes the active rewrite tail", async () => {
+    const { hooks, rec } = makeHooks();
+    hooks.rewritePayload = payload => payload.replace("rewrite-me", "rewritten");
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: response.completed\ndata: ${JSON.stringify({
+      type: "response.completed",
+      response: { id: "resp-read-error-rewrite", status: "completed", output: [{ type: "message", text: "rewrite-me" }] },
+    })}`));
+    up.fail(new Error("socket reset after rewritten terminal"));
+
+    const text = await readAll(relayed);
+    expect(text).toContain("rewritten");
+    expect(text).not.toContain("rewrite-me");
+    expect(text.match(/event: response\.completed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).not.toContain("upstream_reset");
+    expect(rec.terminals).toEqual([{ status: "completed" }]);
+    expect(rec.synthetics).toEqual([]);
+  });
+
+  test("eager rewriteBlocks failure emits one safe failed envelope without a second outcome", async () => {
+    const { hooks, rec } = makeHooks();
+    hooks.rewriteBlocks = () => { throw new Error("rewrite callback failed"); };
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: response.completed\ndata: ${JSON.stringify({
+      type: "response.completed",
+      sequence_number: 71,
+      response: {
+        id: "resp-rewrite-failure-secret",
+        status: "completed",
+        output: [{ type: "message", text: "raw-secret-content" }],
+      },
+    })}`));
+    up.fail(new Error("socket reset after rewrite failure"));
+
+    const text = await readAll(relayed);
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).toContain('"code":"upstream_reset"');
+    expect(text).not.toContain("resp-rewrite-failure-secret");
+    expect(text).not.toContain("raw-secret-content");
+    expect(text).not.toContain('"sequence_number":71');
+    expect(rec.terminals).toEqual([{ status: "completed" }]);
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("eager rewrite-budget exhaustion emits one bounded failed envelope and releases the budget", async () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 1 });
+    const { hooks, rec } = makeHooks();
+    hooks.rewritePayload = payload => payload;
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks, { rewriteBudget: budget });
+    up.push(enc.encode(`event: response.completed\ndata: ${JSON.stringify({
+      type: "response.completed",
+      sequence_number: 72,
+      response: {
+        id: "resp-budget-failure-secret",
+        status: "completed",
+        output: [{ type: "message", text: "raw-budget-secret" }],
+      },
+    })}`));
+    up.fail(new Error("socket reset after budget failure"));
+
+    const text = await readAll(relayed);
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).toContain('"code":"translation_buffer_limit"');
+    expect(text).not.toContain("resp-budget-failure-secret");
+    expect(text).not.toContain("raw-budget-secret");
+    expect(text).not.toContain('"sequence_number":72');
+    expect(rec.terminals).toEqual([{ status: "completed" }]);
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.dones).toBe(1);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+  });
+
+  test("eager clean EOF rewrite failure emits one safe failed envelope", async () => {
+    const { hooks, rec } = makeHooks();
+    hooks.rewriteBlocks = () => { throw new Error("clean EOF rewrite callback failed"); };
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(`event: response.completed\ndata: ${JSON.stringify({
+      type: "response.completed",
+      sequence_number: 73,
+      response: {
+        id: "resp-clean-eof-rewrite-secret",
+        status: "completed",
+        output: [{ type: "message", text: "clean-eof-raw-secret" }],
+      },
+    })}`));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).toContain('"code":"upstream_reset"');
+    expect(text).not.toContain("resp-clean-eof-rewrite-secret");
+    expect(text).not.toContain("clean-eof-raw-secret");
+    expect(text).not.toContain('"sequence_number":73');
+    expect(rec.terminals).toEqual([{ status: "completed" }]);
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.dones).toBe(1);
+  });
+
   test("eager relay backfills missing completed output before passthrough persistence (#334)", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();
@@ -464,7 +938,9 @@ describe("relaySseEagerBounded — bounded queue", () => {
       if (done) break;
       total += value.byteLength;
     }
-    expect(total).toBe(36);
+    // Clean EOF now carries the explicit adapter_eof incomplete terminal and
+    // one [DONE] sentinel in addition to the relayed bytes.
+    expect(total).toBeGreaterThan(36);
   });
 
   test("(f) cancel while paused wakes the gate — onDone fires, no deadlock", async () => {
