@@ -223,6 +223,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
+    if (provider === "google-antigravity") {
+      const { clearAntigravityRoutingState } = await import("../../oauth/antigravity-routing");
+      clearAntigravityRoutingState();
+    }
     reconcileLiveStateStores();
     clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");
@@ -474,6 +478,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
       clearAnthropicAccountCooldown(id);
       clearAnthropicSessionAffinityForAccount(id);
+    }
+    if (provider === "google-antigravity") {
+      const { clearAntigravityAccountCooldown, clearAntigravitySessionAffinityForAccount } = await import("../../oauth/antigravity-routing");
+      clearAntigravityAccountCooldown(id);
+      clearAntigravitySessionAffinityForAccount(id);
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");

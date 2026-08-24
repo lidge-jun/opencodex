@@ -143,6 +143,25 @@ describe("antigravity refresh", () => {
     expect(caught!.message).toContain("400");
     expect(caught!.message).not.toContain("secret-detail");
   });
+
+  test("refresh preserves an existing project id without another CCA discovery request", async () => {
+    const calls: string[] = [];
+    routeFetch((url) => {
+      calls.push(url);
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh-access", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ cloudaicompanionProject: "unexpected" }), { status: 200 });
+    });
+    const credential = await refreshAntigravityToken("refresh-tok", undefined, {
+      access: "old-access",
+      refresh: "refresh-tok",
+      expires: 0,
+      projectId: "existing-project",
+    });
+    expect(credential.projectId).toBe("existing-project");
+    expect(calls.filter(url => url.includes(":loadCodeAssist")).length).toBe(0);
+  });
 });
 
 describe("antigravity credential persistence (projectId survives the store)", () => {

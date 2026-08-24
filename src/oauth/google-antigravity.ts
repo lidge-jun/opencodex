@@ -221,7 +221,11 @@ export async function loginAntigravity(ctrl: OAuthController, opts?: { forceAcco
   return new AntigravityOAuthFlow(ctrl, opts).login();
 }
 
-export async function refreshAntigravityToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials> {
+export async function refreshAntigravityToken(
+  refreshToken: string,
+  signal?: AbortSignal,
+  previousCredential?: OAuthCredentials,
+): Promise<OAuthCredentials> {
   if (!refreshToken) throw new Error("Antigravity credentials are expired and do not include a refresh token");
   const payload = await postToken({
     grant_type: "refresh_token",
@@ -230,8 +234,10 @@ export async function refreshAntigravityToken(refreshToken: string, signal?: Abo
     refresh_token: refreshToken,
   }, signal);
   const creds = credentialsFromPayload(payload, refreshToken);
-  // Re-discover the project on refresh so a newly-onboarded account fills in projectId.
-  const projectId = await discoverAntigravityProject(creds.access, signal).catch(() => undefined);
+  // Project discovery is onboarding work, not ordinary token renewal. Preserve the existing
+  // account-scoped project id and avoid an extra authenticated CCA call when it is present.
+  const projectId = previousCredential?.projectId
+    ?? await discoverAntigravityProject(creds.access, signal).catch(() => undefined);
   return projectId ? { ...creds, projectId } : creds;
 }
 
