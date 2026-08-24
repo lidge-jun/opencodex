@@ -160,12 +160,14 @@ export function claimedContextWindow(row: ContextRow): number | undefined {
   return window;
 }
 
-export function modelContextSourceChipKey(row: Pick<ModelRow, "metadataSource">): TKey | undefined {
+export function modelContextSourceChipKey(
+  row: Pick<ModelRow, "metadataSource"> & Partial<Pick<ModelRow, "provider">>,
+): TKey | undefined {
   switch (row.metadataSource) {
     case "live":
       return "models.contextMetadataLive";
     case "registry":
-      return "models.contextMetadataRegistry";
+      return row.provider === "cursor" ? "models.contextMetadataCursorStatic" : "models.contextMetadataRegistry";
     case "snapshot":
       return "models.contextMetadataSnapshot";
     case "config_fallback":

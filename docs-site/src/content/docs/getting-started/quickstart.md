@@ -30,7 +30,8 @@ The current stable release seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough,
 OpenRouter, and
 the experimental Cursor adapter. They work only when that upstream account has access. The OpenAI
 API-key and OpenRouter presets advertise a 922,000-token usable context window; Cursor keeps its own
-adapter metadata.
+adapter metadata. In the dashboard, these curated capability values are labeled **Cursor curated**
+because Cursor's model-discovery endpoint returns model IDs without capability specifications.
 :::
 
 ## 2. Start the proxy

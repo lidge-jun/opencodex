@@ -120,6 +120,17 @@ async function sidecarSettings(config: OcxConfig, init?: { method: string; body:
   return response;
 }
 
+async function claudeCodeSettings(config: OcxConfig, body: unknown): Promise<Response> {
+  const url = new URL("http://localhost/api/claude-code");
+  const response = await handleManagementAPI(
+    new Request(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    url,
+    config,
+  );
+  if (!response) throw new Error("claude-code route did not handle the request");
+  return response;
+}
+
 describe("HTTP contract on /api/sidecar-settings", () => {
   test("GET always carries webSearchModels — [] when nothing is runnable", async () => {
     const body = await (await sidecarSettings(config())).json() as { webSearchModels: unknown };
@@ -165,6 +176,122 @@ describe("HTTP contract on /api/sidecar-settings", () => {
     });
     expect(response.status).toBe(200);
     expect(cfg.webSearchSidecar).toMatchObject({ backend: "anthropic", model: "claude-haiku-4-5" });
+  });
+
+  test("PUT persists gemini backend and runnable candidate model", async () => {
+    accountSets["google-antigravity"] = {
+      accounts: [{ id: "acc-gemini", credential: { projectId: "test-proj" } } as never],
+      activeAccountId: "acc-gemini",
+    };
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    const cfg = config({
+      providers: {
+        openai: forward,
+        "google-antigravity": { adapter: "google-gemini", baseUrl: "https://cloudcodeassist.googleapis.com/v1", authMode: "oauth" },
+      },
+    });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "gemini", model: "gemini-3.7-flash" } },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.webSearchSidecar).toMatchObject({
+      backend: "gemini",
+      model: "gemini-3.7-flash",
+    });
+  });
+
+  test("PUT persists xai backend and runnable candidate model", async () => {
+    accountSets["xai"] = {
+      accounts: [{ id: "acc-xai" }],
+      activeAccountId: "acc-xai",
+    };
+    managementRows = [{ provider: "xai", id: "grok-4.6", disabled: false }];
+    const cfg = config({
+      providers: {
+        openai: forward,
+        xai: { adapter: "xai", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+      },
+    });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "xai", model: "grok-4.6" } },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.webSearchSidecar).toMatchObject({
+      backend: "xai",
+      model: "grok-4.6",
+    });
+  });
+
+  test("Claude override persists a gemini backend/model pair", async () => {
+    accountSets["google-antigravity"] = {
+      accounts: [{ id: "acc-gemini", credential: { projectId: "test-proj" } } as never],
+      activeAccountId: "acc-gemini",
+    };
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    const cfg = config({
+      providers: {
+        openai: forward,
+        "google-antigravity": { adapter: "google-gemini", baseUrl: "https://cloudcodeassist.googleapis.com/v1", authMode: "oauth" },
+      },
+    });
+    const response = await claudeCodeSettings(cfg, {
+      webSearchSidecar: { backend: "gemini", model: "gemini-3.7-flash" },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.claudeCode?.webSearchSidecar).toEqual({
+      backend: "gemini",
+      model: "gemini-3.7-flash",
+    });
+  });
+
+  test("model-only global update preserves the selected gemini backend", async () => {
+    accountSets["google-antigravity"] = {
+      accounts: [{ id: "acc-gemini", credential: { projectId: "test-proj" } } as never],
+      activeAccountId: "acc-gemini",
+    };
+    const cfg = config({
+      providers: {
+        openai: forward,
+        "google-antigravity": { adapter: "google-gemini", baseUrl: "https://cloudcodeassist.googleapis.com/v1", authMode: "oauth" },
+      },
+      webSearchSidecar: { backend: "gemini", model: "old-gemini-model" },
+    });
+    managementRows = [{ provider: "google-antigravity", id: "new-gemini-model", disabled: false }];
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { model: "new-gemini-model" } },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.webSearchSidecar).toEqual({
+      backend: "gemini",
+      model: "new-gemini-model",
+    });
+  });
+
+  test("model-only Claude override update preserves the selected gemini backend", async () => {
+    accountSets["google-antigravity"] = {
+      accounts: [{ id: "acc-gemini", credential: { projectId: "test-proj" } } as never],
+      activeAccountId: "acc-gemini",
+    };
+    const cfg = config({
+      providers: {
+        openai: forward,
+        "google-antigravity": { adapter: "google-gemini", baseUrl: "https://cloudcodeassist.googleapis.com/v1", authMode: "oauth" },
+      },
+      webSearchSidecar: { backend: "gemini", model: "global-gemini-model" },
+      claudeCode: { webSearchSidecar: { backend: "gemini", model: "old-gemini-model" } },
+    });
+    managementRows = [{ provider: "google-antigravity", id: "new-gemini-model", disabled: false }];
+    const response = await claudeCodeSettings(cfg, {
+      webSearchSidecar: { model: "new-gemini-model" },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.claudeCode?.webSearchSidecar).toEqual({
+      backend: "gemini",
+      model: "new-gemini-model",
+    });
   });
 
   test("PUT accepts a runnable candidate and ECHOES webSearchModels (GUI rebuilds from this body)", async () => {

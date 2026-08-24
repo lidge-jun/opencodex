@@ -411,6 +411,7 @@ export const zhTW: Record<TKey, string> = {
   "models.contextMetadataSource": "來源",
   "models.contextMetadataLive": "已偵測",
   "models.contextMetadataRegistry": "登錄檔",
+  "models.contextMetadataCursorStatic": "Cursor 精選",
   "models.contextMetadataSnapshot": "已儲存",
   "models.contextMetadataFallback": "回退",
   "models.contextMetadataDerived": "衍生",

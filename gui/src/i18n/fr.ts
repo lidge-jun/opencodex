@@ -540,6 +540,7 @@ export const fr: Record<TKey, string> = {
   "models.contextMetadataSource": "Origine",
   "models.contextMetadataLive": "détecté",
   "models.contextMetadataRegistry": "registre",
+  "models.contextMetadataCursorStatic": "sélectionné par Cursor",
   "models.contextMetadataSnapshot": "enregistré",
   "models.contextMetadataFallback": "repli",
   "models.contextMetadataDerived": "dérivé",
