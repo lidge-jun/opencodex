@@ -409,4 +409,35 @@ describe("web-search timeout runtime contracts", () => {
       },
     });
   }, 1_000);
+
+  test("validates a rotated adapter before the second web-search build", async () => {
+    let builds = 0;
+    const firstAdapter: ProviderAdapter = {
+      name: "first",
+      buildRequest: () => {
+        builds += 1;
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("rate limited", { status: 429 }),
+      async *parseStream() { yield { type: "done" }; },
+      async parseResponse() { return [{ type: "done" }]; },
+    };
+    const rotatedAdapter: ProviderAdapter = {
+      ...firstAdapter,
+      name: "rotated",
+      buildRequest: () => {
+        builds += 1;
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("ok", { status: 200 }),
+    };
+    const response = await runWithWebSearch(deps(firstAdapter, {
+      on429: () => rotatedAdapter,
+      validateAdapter: (_parsed, adapter) => {
+        if (adapter === rotatedAdapter) throw new Error("provider options route changed");
+      },
+    }));
+    await response.text();
+    expect(builds).toBe(1);
+  });
 });

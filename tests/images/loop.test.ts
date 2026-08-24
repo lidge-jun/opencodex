@@ -658,6 +658,35 @@ describe("runWithImageBridge", () => {
     expect(seen).toEqual({ inputTokens: 1, outputTokens: 2 });
   });
 
+  test("validates a rotated adapter before the second image-bridge build", async () => {
+    let builds = 0;
+    const firstAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest: async () => {
+        builds += 1;
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("rate limited", { status: 429 }),
+    };
+    const rotatedAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest: async () => {
+        builds += 1;
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+    };
+    streamQueue = [[{ type: "done" }]];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), adapter: firstAdapter, plan, maxRounds: 0,
+      on429: () => rotatedAdapter,
+      validateAdapter: (_parsed, adapter) => {
+        if (adapter === rotatedAdapter) throw new Error("provider options route changed");
+      },
+    });
+    await response.text();
+    expect(builds).toBe(1);
+  });
+
   test("onUsage does not double-count hiddenUsage across image iterations", async () => {
     let seen: unknown = "unset";
     streamQueue = [

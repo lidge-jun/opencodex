@@ -245,6 +245,8 @@ export interface ImageBridgeDeps {
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /** Called after each upstream request is built (parity with web-search / normal path). */
   onRequestBuilt?: (request: AdapterRequest) => void;
+  /** Validate the final adapter before every cached replay or request build. */
+  validateAdapter?: (parsed: OcxParsedRequest, adapter: ProviderAdapter) => void;
   abortSignal?: AbortSignal;
   onFirstOutput?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
@@ -489,6 +491,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
        * header deadline. The caller owns same-target 429 replays and key rotation around it.
        */
       const fetchOnce = async (requestAdapter: ProviderAdapter, recovery?: AttemptRecoveryKind): Promise<IterationResponse> => {
+        deps.validateAdapter?.(iterParsed, requestAdapter);
         let request: AdapterRequest;
         if (cachedRequest !== undefined && cachedAdapter === requestAdapter) {
           request = cachedRequest;
