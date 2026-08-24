@@ -318,6 +318,42 @@ describe("fork sync CLI", () => {
     });
   });
 
+  test("prepare reads an event from stdin and prints its result", async () => {
+    const output: string[] = [];
+    const calls: string[][] = [];
+    const prepareEvent: SyncEvent = {
+      kind: "pin-updated",
+      upstreamRepo: "upstream",
+      latestTag: "v2.29.0",
+      latestTagSha: TAG_SHA,
+      vendorMainSha: MAIN_SHA,
+      vendorDevSha: DEV_SHA,
+      detectedAt: "2026-08-24T12:00:00.000Z",
+      recommendedLane: "daily-merge",
+    };
+    const results = [result(""), result("")];
+    await runCli(["prepare"], {
+      env: {},
+      stdin: JSON.stringify(prepareEvent),
+      runner: async args => {
+        calls.push([...args]);
+        return results.shift() ?? result("", 1, "unexpected command");
+      },
+      write: value => output.push(value),
+    });
+
+    expect(JSON.parse(output[0]!)).toEqual({
+      status: "merged",
+      branch: "sync/upstream-20260824",
+      resolutions: [],
+      unresolved: [],
+    });
+    expect(calls).toEqual([
+      ["switch", "-c", "sync/upstream-20260824"],
+      ["merge", "--no-ff", "vendor/main"],
+    ]);
+  });
+
   test("emit still starts coordinators when a notifier fails", async () => {
     const started: string[] = [];
     registerNotifier({

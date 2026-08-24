@@ -12,6 +12,18 @@ export type PathClass =
   | "shared-hotspot"
   | "recipe";
 
+export interface PrepareResult {
+  status: "merged" | "hotspot-handoff" | "history-diverged" | "skipped";
+  branch?: string;
+  resolutions: Array<{
+    path: string;
+    classification: PathClass;
+    action: string;
+  }>;
+  unresolved: string[];
+  pullRequestNumber?: number;
+}
+
 export interface SyncEvent {
   kind: SyncEventKind;
   upstreamRepo: string;

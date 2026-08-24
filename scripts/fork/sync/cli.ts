@@ -1,6 +1,7 @@
 import { detectLatestVTag } from "./detect";
 import { annotateMainLane } from "./lane";
 import { pinVendorRefs } from "./pin";
+import { prepareSync } from "./prepare";
 import { enabledCoordinators, enabledNotifiers, registerCoordinator, registerNotifier } from "./registry";
 import { createCliCoordinator } from "./coordinators/cli";
 import { createCursorWebhookCoordinator } from "./coordinators/cursor-webhook";
@@ -16,7 +17,7 @@ import type {
 } from "./types";
 
 const DEFAULT_UPSTREAM_REPO = "https://github.com/lidge-jun/opencodex.git";
-const usage = "usage: bun scripts/fork/sync/cli.ts detect|pin|emit";
+const usage = "usage: bun scripts/fork/sync/cli.ts detect|pin|prepare|emit";
 
 export interface CliOptions {
   env?: Record<string, string | undefined>;
@@ -29,6 +30,19 @@ export interface CliOptions {
 }
 
 async function commandRunner(args: readonly string[]): Promise<CommandResult> {
+  if (args[0] === "write-file") {
+    const [, path, content] = args;
+    if (
+      !path
+      || content === undefined
+      || path.startsWith("/")
+      || path.split("/").includes("..")
+    ) {
+      return { exitCode: 1, stdout: "", stderr: "unsafe write-file path" };
+    }
+    await Bun.write(path, content);
+    return { exitCode: 0, stdout: "", stderr: "" };
+  }
   const process = Bun.spawn(["git", ...args], {
     stdout: "pipe",
     stderr: "pipe",
@@ -155,11 +169,17 @@ export async function runCli(
   options: CliOptions = {},
 ): Promise<void> {
   const command = args[0];
-  if (command !== "detect" && command !== "pin" && command !== "emit") {
+  if (
+    command !== "detect"
+    && command !== "pin"
+    && command !== "prepare"
+    && command !== "emit"
+  ) {
     throw new Error(usage);
   }
   const env = options.env ?? process.env;
   const write = options.write ?? (value => process.stdout.write(`${value}\n`));
+  const runner = options.runner ?? commandRunner;
   if (command === "emit") {
     registerBuiltins(env, options);
     const input = options.stdin ?? await readStdin();
@@ -184,9 +204,15 @@ export async function runCli(
     }
     return;
   }
+  if (command === "prepare") {
+    const input = options.stdin ?? await readStdin();
+    const event = JSON.parse(input) as SyncEvent;
+    const result = await prepareSync(event, { runner });
+    write(JSON.stringify(result));
+    return;
+  }
 
   const upstreamRepo = env.FORK_SYNC_UPSTREAM_REPO ?? DEFAULT_UPSTREAM_REPO;
-  const runner = options.runner ?? commandRunner;
   const detected = await detectLatestVTag({ upstreamRepo, runner });
   const mainRef = command === "pin" && detected.vendorMainSha
     ? await currentHead(runner)
