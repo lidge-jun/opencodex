@@ -1563,7 +1563,18 @@ export function filterCatalogVisibleModels(
     // Keyed the way `sync.ts` keys the same list, so a slash-bearing native id and
     // the encoded slug the Codex picker displays are one entry rather than two. A
     // bare `Set(sel)` matched only the native form, so an allowlist written from the
-    // displayed slug hid every model it was meant to keep.
+    // displayed slug — which `ocx models remove` also accepts — hid every model it
+    // was meant to keep.
+    //
+    // The key is deliberately lossy: `p/a/b` and `p/a-b` collapse to one entry, so a
+    // provider publishing both spellings has them selected together. That is a real
+    // limitation, pinned by the tests below and tracked as a follow-up; it is NOT
+    // fixed here. Resolving selections against the current roster instead was tried
+    // and rejected — the roster is an incomplete dictionary (live discovery can omit
+    // a published id), so it produces the same over-grant while additionally
+    // disagreeing with the `slugEquivalenceKey` contract `sync.ts` uses at merge time.
+    // Two catalog stages with different equivalence relations is the exact bug class
+    // this change exists to remove.
     if (Array.isArray(sel) && sel.length > 0) {
       allowByProvider.set(name, new Set(sel.map(model => slugEquivalenceKey(routedSlug(name, model)))));
     }
