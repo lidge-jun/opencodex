@@ -491,14 +491,16 @@ configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick) closes th
 `response.incomplete` / `upstream_stall_timeout` and cancels the upstream request if no real
 adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
 
-Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when a
-successful upstream completion contains neither output text nor a tool call. The default is off
-because the replay may be billable; `OCX_EMPTY_COMPLETION_RETRY=0` is a disable-only emergency
-override. Streaming and buffered HTTP adapters plus `runTurn` transports share the same guard,
-while combo attempts and routed compaction stay excluded. Pre-content reasoning is retained under
-named event-count and byte caps and emits liveness heartbeats while held. A second empty result or
-retry failure becomes typed 502 `empty_completion_retry_failed`; usage is merged across sends, and
-the Logs attempt records recovery kind `empty-completion`.
+Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when an
+upstream turn produces neither output text nor a tool call, including a stream that ends before a
+terminal event. A terminal-less stream is replayed only before actionable output; post-output EOF
+remains incomplete so text or tool calls cannot be duplicated. The default is off because the replay
+may be billable; `OCX_EMPTY_COMPLETION_RETRY=0` is a disable-only emergency override. Streaming and
+buffered HTTP adapters plus `runTurn` transports share the same guard, while combo attempts and
+routed compaction stay excluded. Pre-content reasoning is retained under named event-count and byte
+caps and emits liveness heartbeats while held. A second empty result or retry failure becomes typed
+502 `empty_completion_retry_failed`; usage is merged across sends, and the Logs attempt records
+recovery kind `empty-completion`.
 
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as

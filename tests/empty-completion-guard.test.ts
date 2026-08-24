@@ -322,17 +322,57 @@ describe("empty-completion guard retry", () => {
     ]);
   });
 
-  test("a truncated first source (no terminal) releases held events and ends", async () => {
+  test("a pre-output EOF retries once and succeeds", async () => {
     let continuations = 0;
     const events = await collect(guardEmptyCompletionEventStream({
       firstEvents: eventsOf({ type: "thinking_delta", thinking: "..." }),
       continuation: () => {
         continuations += 1;
-        return eventsOf();
+        return eventsOf(
+          { type: "text_delta", text: "recovered" },
+          { type: "done" },
+        );
+      },
+    }));
+
+    expect(continuations).toBe(1);
+    expect(withoutHeartbeats(events)).toEqual([
+      { type: "thinking_delta", thinking: "..." },
+      { type: "text_delta", text: "recovered" },
+      { type: "done" },
+    ]);
+  });
+
+  test("a second pre-output EOF surfaces empty_completion_retry_failed", async () => {
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "thinking_delta", thinking: "first" }),
+      continuation: () => {
+        continuations += 1;
+        return eventsOf({ type: "thinking_delta", thinking: "second" });
+      },
+    }));
+
+    expect(continuations).toBe(1);
+    expect(withoutHeartbeats(events)).toEqual([
+      expect.objectContaining({
+        type: "error",
+        code: EMPTY_COMPLETION_RETRY_FAILED_CODE,
+      }),
+    ]);
+  });
+
+  test("a post-output EOF is not retried", async () => {
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "text_delta", text: "partial" }),
+      continuation: () => {
+        continuations += 1;
+        return eventsOf({ type: "text_delta", text: "duplicate" }, { type: "done" });
       },
     }));
 
     expect(continuations).toBe(0);
-    expect(withoutHeartbeats(events)).toEqual([{ type: "thinking_delta", thinking: "..." }]);
+    expect(events).toEqual([{ type: "text_delta", text: "partial" }]);
   });
 });
