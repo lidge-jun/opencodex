@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_COMPACT_WINDOW_DEFAULT, boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv, resolveAutoContext, shouldMarkOneMillion, withOneMillionMarker } from "../src/claude/context-windows";
 import { desktop3pAlias } from "../src/claude/desktop-3p";
+import type { CatalogModel } from "../src/codex/catalog";
 
 describe("claude context-window map (devlog 260712 B2)", () => {
   const routed = [
@@ -130,6 +131,42 @@ describe("auto-context (devlog 260712 020 + audit 021)", () => {
     expect(map["gpt-5.6-luna"]).toBe(400_000);
     expect(map["shared-model"]).toBeUndefined();
     expect(map["gpt-5.6-sol"]).toBe(272_000); // native default, not 999k
+  });
+
+  test("a row that registers nothing does not make a bare id ambiguous", () => {
+    // Only one of these two rows can claim the bare key, so there is nothing to
+    // be ambiguous about — withholding it left a 1M model with no window, and a
+    // slot set to the bare id lost its [1m] marker.
+    const noWindow = buildClaudeContextWindows([], [
+      { provider: "a", id: "shared-model", contextWindow: 1_000_000 },
+      { provider: "b", id: "shared-model" } as CatalogModel,
+    ]);
+    expect(noWindow["shared-model"]).toBe(1_000_000);
+
+    // Same for a row the anthropic sub-1M guard skips.
+    const anthropicSkipped = buildClaudeContextWindows([], [
+      { provider: "openrouter", id: "claude-x", contextWindow: 1_000_000 },
+      { provider: "anthropic", id: "claude-x", contextWindow: 200_000 },
+    ]);
+    expect(anthropicSkipped["claude-x"]).toBe(1_000_000);
+    expect(anthropicSkipped["anthropic/claude-x"]).toBeUndefined();
+
+    // A zero or negative window is not a claim either.
+    const zeroWindow = buildClaudeContextWindows([], [
+      { provider: "a", id: "shared-model", contextWindow: 400_000 },
+      { provider: "b", id: "shared-model", contextWindow: 0 },
+    ]);
+    expect(zeroWindow["shared-model"]).toBe(400_000);
+  });
+
+  test("two providers that both register keep the bare id withheld", () => {
+    const map = buildClaudeContextWindows([], [
+      { provider: "a", id: "shared-model", contextWindow: 300_000 },
+      { provider: "b", id: "shared-model", contextWindow: 900_000 },
+    ]);
+    expect(map["shared-model"]).toBeUndefined();
+    expect(map["a/shared-model"]).toBe(300_000);
+    expect(map["b/shared-model"]).toBe(900_000);
   });
 
   test("auto-context marks a wide native slot, and turning it off unmarks anything under 1M", () => {
