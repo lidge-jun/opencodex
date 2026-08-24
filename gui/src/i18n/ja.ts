@@ -622,7 +622,7 @@ export const ja: Record<TKey, string> = {
   "sub.nativeParentOverrideModel": "ネイティブ親の対象モデル",
   "sub.nativeParentOverrideV2Required": "明示的な V2、上流の V2 フラグ、「ChatGPT を v1 に保持」の無効化が必要です。",
   "sub.nativeParentOverrideSaveFail": "ネイティブ親ルーティングの保存に失敗しました",
-  "sub.nativeParentOverrideSaved": "ネイティブ親ルーティングを保存しました。新しい Codex セッションに適用されます。",
+  "sub.nativeParentOverrideSaved": "ネイティブ親ルーティングを保存しました。以降の親ターンとコンパクションに適用されます。",
   "sub.roles": "ロール",
   "sub.roles.hint": "親が spawn できる名前付きスペシャリストです。各ロールはモデルと子プロンプトを固定します。委譲するかどうかは親が決めます。",
   "sub.roles.add": "ロールを追加",

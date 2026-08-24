@@ -665,7 +665,7 @@ export const ko: Record<TKey, string> = {
   "sub.nativeParentOverrideModel": "네이티브 부모 대상 모델",
   "sub.nativeParentOverrideV2Required": "명시적 V2, 업스트림 V2 플래그, 그리고 ‘ChatGPT를 v1에 유지’ 끄기가 필요합니다.",
   "sub.nativeParentOverrideSaveFail": "네이티브 부모 라우팅을 저장하지 못했습니다",
-  "sub.nativeParentOverrideSaved": "네이티브 부모 라우팅이 저장되었습니다. 새 Codex 세션부터 적용됩니다.",
+  "sub.nativeParentOverrideSaved": "네이티브 부모 라우팅이 저장되었습니다. 이후 부모 턴과 컴팩션에 적용됩니다.",
   "sub.roles": "역할",
   "sub.roles.hint": "부모가 spawn할 수 있는 이름 있는 전문가입니다. 각 역할은 모델과 자식 프롬프트를 고정합니다. 위임 여부는 부모가 결정합니다.",
   "sub.roles.add": "역할 추가",

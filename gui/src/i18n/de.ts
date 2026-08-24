@@ -648,7 +648,7 @@ export const de: Record<TKey, string> = {
   "sub.nativeParentOverrideModel": "Zielmodell für native Eltern",
   "sub.nativeParentOverrideV2Required": "Erfordert explizites V2, das Upstream-V2-Flag und deaktiviertes „ChatGPT auf v1 behalten“.",
   "sub.nativeParentOverrideSaveFail": "Native Elternweiterleitung konnte nicht gespeichert werden",
-  "sub.nativeParentOverrideSaved": "Native Elternweiterleitung gespeichert. Gilt für neue Codex-Sitzungen.",
+  "sub.nativeParentOverrideSaved": "Native Elternweiterleitung gespeichert. Gilt für nachfolgende Elternrunden und die Komprimierung.",
   "sub.roles": "Rollen",
   "sub.roles.hint": "Benannte Spezialisten, die das Eltern-Agent spawnen kann. Jede Rolle legt ein Modell und den Kind-Prompt fest. Das Eltern-Agent entscheidet weiterhin, wann delegiert wird.",
   "sub.roles.add": "Rolle hinzufügen",

@@ -658,7 +658,7 @@ export const zh: Record<TKey, string> = {
   "sub.nativeParentOverrideModel": "原生父代理目标模型",
   "sub.nativeParentOverrideV2Required": "需要显式 V2、上游 V2 标志，并关闭“将 ChatGPT 保持在 v1”。",
   "sub.nativeParentOverrideSaveFail": "保存原生父代理路由失败",
-  "sub.nativeParentOverrideSaved": "原生父代理路由已保存。适用于新的 Codex 会话。",
+  "sub.nativeParentOverrideSaved": "原生父代理路由已保存。适用于后续父代理轮次和压缩。",
   "sub.roles": "角色",
   "sub.roles.hint": "父代理可以 spawn 的具名专家。每个角色固定模型和子代理提示。是否委派仍由父代理决定。",
   "sub.roles.add": "添加角色",

@@ -658,7 +658,7 @@ export const fr: Record<TKey, string> = {
   "sub.nativeParentOverrideModel": "Modèle cible du parent natif",
   "sub.nativeParentOverrideV2Required": "Nécessite V2 explicite, le flag V2 amont et la désactivation de « garder ChatGPT sur v1 ».",
   "sub.nativeParentOverrideSaveFail": "Impossible d’enregistrer le routage du parent natif",
-  "sub.nativeParentOverrideSaved": "Routage du parent natif enregistré. S’applique aux nouvelles sessions Codex.",
+  "sub.nativeParentOverrideSaved": "Routage du parent natif enregistré. S’applique aux tours suivants du parent et à la compaction.",
   "sub.roles": "Rôles",
   "sub.roles.hint": "Spécialistes nommés que le parent peut lancer. Chaque rôle fixe un modèle et le prompt de l’enfant. Le parent décide toujours quand déléguer.",
   "sub.roles.add": "Ajouter un rôle",

@@ -675,7 +675,7 @@ export const en = {
   "sub.nativeParentOverrideModel": "Native parent target model",
   "sub.nativeParentOverrideV2Required": "Requires explicit V2, the upstream V2 flag, and Keep ChatGPT on v1 turned off.",
   "sub.nativeParentOverrideSaveFail": "Failed to save native parent routing",
-  "sub.nativeParentOverrideSaved": "Native parent routing saved. Applies to new Codex sessions.",
+  "sub.nativeParentOverrideSaved": "Native parent routing saved. Applies to subsequent parent turns and compaction.",
   "sub.roles": "Roles",
   "sub.roles.hint": "Named specialists the parent can spawn. Each role pins a model and the child's prompt. The parent still decides when to delegate.",
   "sub.roles.add": "Add role",

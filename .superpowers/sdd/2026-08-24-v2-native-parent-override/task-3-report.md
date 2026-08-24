@@ -155,3 +155,20 @@ cd gui && bun test tests/subagents-ultra-mode.test.tsx
 0 fail
 38 expect() calls
 ```
+
+## Review fix round 3
+
+### Changes
+
+- Updated only `sub.nativeParentOverrideSaved` in English and every locale.
+- The save toast now correctly says the choice applies to subsequent parent turns and compaction, rather than only new Codex sessions.
+- No component or new translation key changes were needed; this copy-only correction needs no artificial unit test.
+
+### Verification
+
+- `cd gui && bun test tests/locale-parity.test.ts` — 3/3 passing.
+- `cd gui && bun run lint:i18n` — passed.
+- `cd gui && bun test tests/subagents-ultra-mode.test.tsx` — 14/14 passing.
+- `cd gui && bun run lint` — passed.
+- `cd gui && bun run build` — passed; Vite emitted only the existing chunk-size advisory.
+- `git diff --check` — passed.

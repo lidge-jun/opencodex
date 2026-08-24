@@ -670,7 +670,7 @@ export const tr: Record<TKey, string> = {
   "sub.nativeParentOverrideModel": "Yerel üst ajan hedef modeli",
   "sub.nativeParentOverrideV2Required": "Açık V2, üst akış V2 bayrağı ve ‘ChatGPT’yi v1’de tut’ seçeneğinin kapalı olması gerekir.",
   "sub.nativeParentOverrideSaveFail": "Yerel üst ajan yönlendirmesi kaydedilemedi",
-  "sub.nativeParentOverrideSaved": "Yerel üst ajan yönlendirmesi kaydedildi. Yeni Codex oturumlarına uygulanır.",
+  "sub.nativeParentOverrideSaved": "Yerel üst ajan yönlendirmesi kaydedildi. Sonraki üst ajan turlarına ve sıkıştırmaya uygulanır.",
   "sub.roles": "Roller",
   "sub.roles.hint": "Ebeveynin spawn edebileceği adlı uzmanlar. Her rol bir model ve çocuk istemini sabitler. Yetki devrine ebeveyn karar verir.",
   "sub.roles.add": "Rol ekle",
