@@ -2256,6 +2256,7 @@ async function handleResponsesInner(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort === true;
     toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
     const providerContinuationCandidate = options.comboReplaySnapshot
@@ -2504,6 +2505,7 @@ async function handleResponsesInner(
             "_providerContinuationOwner",
             "_cursorConversationId",
             "_clientThreadId",
+            "_promptCacheKeyIsSharedCohort",
             "_reasoningReplayScope",
             "_cursorIsolateConversation",
           ];
