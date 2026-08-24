@@ -1,14 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAzureAdapter as createAzureAdapterProduction } from "../src/adapters/azure";
+import { __resetAzureCredentialCache, setAzureCredentialFactoryForTests } from "../src/lib/azure-identity";
 import { getConfigPath, loadConfig, readConfigDiagnostics } from "../src/config";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createAzureAdapter = (...args: Parameters<typeof createAzureAdapterProduction>) =>
   withTestTranslatorBudget(createAzureAdapterProduction(...args));
+
+afterEach(() => {
+  __resetAzureCredentialCache();
+});
 
 const parsed: OcxParsedRequest = {
   modelId: "gpt-5.5",
@@ -35,6 +40,59 @@ describe("Azure OpenAI adapter hardening", () => {
     expect(new URL(request.url).searchParams.has("api-version")).toBe(false);
     expect(request.headers["api-key"]).toBe("azure-key");
     expect(request.headers.Authorization).toBeUndefined();
+  });
+
+  test("identity mode emits one Bearer header and strips hostile auth headers", async () => {
+    setAzureCredentialFactoryForTests(() => ({ getToken: async () => ({ token: "identity-token" }) }));
+    const request = await createAzureAdapter(provider({
+      apiKey: undefined,
+      azureCredential: { type: "default-azure-credential" },
+      headers: {
+        authorization: "bad-1",
+        AUTHORIZATION: "bad-2",
+        "api-key": "bad-3",
+        "API-KEY": "bad-4",
+        "X-API-KEY": "bad-5",
+        "X-Unrelated": "kept",
+      },
+    })).buildRequest(parsed);
+    const headers = new Headers(request.headers);
+    expect(headers.get("authorization")).toBe("Bearer identity-token");
+    expect(headers.get("api-key")).toBeNull();
+    expect(headers.get("x-api-key")).toBeNull();
+    expect(headers.get("x-unrelated")).toBe("kept");
+  });
+
+  test("API-key mode strips hostile authorization and API-key spellings before selecting api-key", async () => {
+    const request = await createAzureAdapter(provider({
+      headers: {
+        authorization: "bad-1",
+        AUTHORIZATION: "bad-2",
+        "api-key": "bad-3",
+        "API-KEY": "bad-4",
+        "X-API-KEY": "bad-5",
+        "X-Unrelated": "kept",
+      },
+    })).buildRequest(parsed);
+    const headers = new Headers(request.headers);
+    expect(headers.get("api-key")).toBe("azure-key");
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("x-api-key")).toBeNull();
+    expect(headers.get("x-unrelated")).toBe("kept");
+  });
+
+  test("identity placeholder rejection happens before credential acquisition", async () => {
+    let calls = 0;
+    setAzureCredentialFactoryForTests(() => {
+      calls++;
+      return { getToken: async () => ({ token: "should-not-be-requested" }) };
+    });
+    await expect(createAzureAdapter(provider({
+      apiKey: undefined,
+      baseUrl: "https://{resource}.openai.azure.com/openai",
+      azureCredential: { type: "default-azure-credential" },
+    })).buildRequest(parsed)).rejects.toThrow("unresolved {resource}");
+    expect(calls).toBe(0);
   });
 
   test("lowers the private image_gen namespace on the inherited API-key path", async () => {
