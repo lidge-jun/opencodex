@@ -963,6 +963,7 @@ export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, R
   ]),
   xai: new Set([
     "grok-4.3",
+    "grok-4.20-multi-agent-0309",
     "grok-4.20-0309-reasoning",
     "grok-4.20-0309-non-reasoning",
     "grok-build-0.1",

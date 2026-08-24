@@ -454,6 +454,7 @@ const XAI_MODELS = [
   "grok-4.6",
   "grok-4.5",
   "grok-4.3",
+  "grok-4.20-multi-agent-0309",
   "grok-4.20-0309-reasoning",
   "grok-4.20-0309-non-reasoning",
   "grok-build-0.1",
@@ -1148,26 +1149,29 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // 260709 refresh: lineup + metadata from official docs.x.ai (grok-4.5 announced 07-08);
     // grok-composer-2.5-fast kept as account-verified (absent from public docs). Evidence:
     // devlog/model_update/260709_model_refresh/001_xai_lineup.md.
-    // grok-4.20-multi-agent-0309 is intentionally absent: the OAuth chat-completions
-    // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
+    // 260823: grok-4.20-multi-agent-0309 still returns 400 on Chat Completions, but works
+    // on Responses. The server reports this dated id for both it and the floating
+    // grok-4.20-multi-agent-beta-latest alias, so expose only the dated deployment id.
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
     // Measured only on grok-4.6 against cli-chat-proxy.grok.com: even an invalid
-    // `text.verbosity` value is accepted and low/high/omitted output length is non-monotonic.
-    // Apply the resulting opt-out to the whole xAI lineup because `text.verbosity` is an OpenAI
+    //  value is accepted and low/high/omitted output length is non-monotonic.
+    // Apply the resulting opt-out to the whole xAI lineup because  is an OpenAI
     // Responses parameter absent from xAI's documented API, not because every model was probed.
     // Keep this separate from reasoning-summary support: that bit gates Codex's
     // entire Responses reasoning object, including reasoning.effort.
     modelSupportsVerbosity: Object.fromEntries(XAI_MODELS.map(id => [id, false])),
-    // Provider-wide, not merely per-model: `text.verbosity` is an OpenAI Responses parameter
+    // Provider-wide, not merely per-model:  is an OpenAI Responses parameter
     // absent from xAI's documented API, so a model discovered later has no more support for it
     // than the seeded ones do.
     supportsVerbosity: false,
     defaultModel: "grok-4.5",
-    // Keep Codex Responses callers on the compatibility Chat wire until xAI can replay
-    // opaque reasoning continuation and compaction state across later turns. The scoped
-    // declaration also keeps caller-owned service tiers off the OAuth subscription route.
+    // Keep 4.6/4.5 Responses callers on the compatibility Chat wire until xAI can replay
+    // opaque reasoning continuation and compaction state across later turns. Multi-agent has
+    // no Chat wire, so Responses callers use its only working wire under both auth modes.
+    // Caller-owned service tiers stay off the unclassified OAuth subscription route; key-auth
+    // Fast remains proxy-owned and is still selected through keyAuthServiceTier above.
     modelWireDefaults: {
       "grok-4.6": {
         wire: "openai-chat",
@@ -1181,6 +1185,15 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         authModes: ["oauth"],
         forwardCallerServiceTier: false,
       },
+      "grok-4.20-multi-agent-0309": {
+        // Even at high effort it emits no reasoning-summary deltas or encrypted replay
+        // material. Do not encode that as modelSupportsReasoningSummaries:false: through
+        // Codex #1100 that suppresses the entire reasoning object, including the effort
+        // that controls this model's agent count. An empty summary pane is harmless.
+        wire: "openai-responses",
+        inbound: ["responses"],
+        forwardCallerServiceTier: false,
+      },
     },
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
     // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves
@@ -1192,6 +1205,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "grok-4.6": ["text", "image"],
       "grok-4.5": ["text", "image"],
       "grok-4.3": ["text", "image"],
+      "grok-4.20-multi-agent-0309": ["text", "image"],
       "grok-4.20-0309-reasoning": ["text", "image"],
       "grok-4.20-0309-non-reasoning": ["text", "image"],
     },
@@ -1210,6 +1224,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "grok-4.6": 500_000,
       "grok-4.5": 500_000,
       "grok-4.3": 1_000_000,
+      "grok-4.20-multi-agent-0309": 1_000_000,
       "grok-4.20-0309-reasoning": 1_000_000,
       "grok-4.20-0309-non-reasoning": 1_000_000,
       "grok-build-0.1": 256_000,

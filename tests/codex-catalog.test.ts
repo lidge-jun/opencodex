@@ -3755,13 +3755,25 @@ describe("Codex catalog routed normalization", () => {
         "kimi/kimi-k2.7-code-highspeed",
         "xai/grok-4.20-0309-non-reasoning",
         "xai/grok-4.20-0309-reasoning",
+        "xai/grok-4.20-multi-agent-0309",
         "xai/grok-4.3",
         "xai/grok-4.5",
         "xai/grok-build-0.1",
         "xai/grok-composer-2.5-fast",
       ]);
       expect(models.find(model => model.provider === "kimi" && model.id === "k3[1m]")?.contextWindow).toBe(1_048_576);
-      expect(models.some(model => model.id === "grok-4.20-multi-agent-0309")).toBe(false);
+      expect(models.find(model => model.provider === "xai" && model.id === "grok-4.20-multi-agent-0309"))
+        .toMatchObject({
+          contextWindow: 1_000_000,
+          inputModalities: ["text", "image"],
+        });
+      expect(getModelMetadata("xai", "grok-4.20-multi-agent-0309")).toMatchObject({
+        contextWindow: 1_000_000,
+        maxTokens: 30_000,
+        input: ["text", "image"],
+        reasoning: true,
+        cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+      });
       expect(models.some(model => model.id === "configured-ghost")).toBe(false);
       expect(warning.mock.calls.flat().join(" ")).not.toContain("omitted configured model ids");
     } finally {
