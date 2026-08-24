@@ -36,7 +36,7 @@ describe("google claude prefill guard", () => {
       { role: "assistant", content: [{ type: "text", text: "partial answer" }], model: "claude", timestamp: 0 },
     ]));
 
-    expect(contents.at(-1)).toEqual({ role: "user", parts: [{ text: "start" }, { text: "(continue)" }] });
+    expect(contents.at(-1)).toEqual({ role: "user", parts: [{ text: "(continue)" }] });
   });
 
   test("leaves context ending with user unchanged", async () => {

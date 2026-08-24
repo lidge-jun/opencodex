@@ -272,4 +272,17 @@ describe("google adapter — empty content part guard (#420)", () => {
       { role: "user", parts: [{ text: "after" }] },
     ]);
   });
+
+  test("does not merge user contents across a skipped model turn", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "user", content: "before", timestamp: 0 },
+      { role: "assistant", content: [{ type: "thinking", thinking: "internal", signature: "sig" }], timestamp: 0 },
+      { role: "user", content: "after", timestamp: 0 },
+    ]));
+
+    expect(contents).toEqual([
+      { role: "user", parts: [{ text: "before" }] },
+      { role: "user", parts: [{ text: "after" }] },
+    ]);
+  });
 });
