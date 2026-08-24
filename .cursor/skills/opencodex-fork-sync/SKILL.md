@@ -121,8 +121,8 @@ recommendation, just like Cursor.
 
 ## Cursor Automation stages 3–8
 
-The webhook-triggered Cursor Automation starts only for `hotspot-handoff` or
-`history-diverged`. The Action already creates `sync/upstream-YYYYMMDD` from
+The webhook-triggered Cursor Automation starts only when `prepareStatus` is
+`hotspot-handoff` or the event `kind` is `history-diverged`. The Action already creates `sync/upstream-YYYYMMDD` from
 the checked-out default branch, merges `vendor/main`, resolves fork-owned and
 upstream-owned files, applies recipes, pushes the sync branch, and opens or
 updates a draft PR.

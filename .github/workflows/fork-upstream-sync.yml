@@ -128,7 +128,15 @@ jobs:
         run: |
           set -eu
           event_file="$(cat "$RUNNER_TEMP/fork-sync-event-path")"
-          bun scripts/fork/sync/cli.ts emit < "$event_file"
+          handoff_status="$(jq -r '.status // empty' "$RUNNER_TEMP/fork-sync-prepare.json" 2>/dev/null || true)"
+          if [ -z "$handoff_status" ]; then
+            handoff_status="$(jq -r '.kind' "$event_file")"
+          fi
+          handoff_file="$RUNNER_TEMP/fork-sync-handoff.json"
+          jq --arg prepareStatus "$handoff_status" \
+            '. + {prepareStatus: $prepareStatus}' \
+            "$event_file" > "$handoff_file"
+          bun scripts/fork/sync/cli.ts emit < "$handoff_file"
 
       # Cursor handles only conflicts the Action could not resolve or
       # disconnected histories; ordinary daily merges stop at a draft PR.

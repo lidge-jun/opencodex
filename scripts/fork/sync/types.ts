@@ -34,6 +34,7 @@ export interface SyncEvent {
   vendorContainedInMain?: boolean;
   mergeBaseCount?: number;
   recommendedLane?: "noop" | "daily-merge" | "emergency-rebuild";
+  prepareStatus?: PrepareResult["status"];
   detectedAt: string;
   error?: string;
 }

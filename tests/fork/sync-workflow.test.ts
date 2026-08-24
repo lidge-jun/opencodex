@@ -54,6 +54,11 @@ describe("fork upstream sync workflow contract", () => {
     expect(workflow).toContain("FORK_SYNC_COORDINATORS: cursor-webhook");
   });
 
+  test("passes the prepare status into the Cursor handoff event", () => {
+    expect(workflow).toContain("prepareStatus");
+    expect(workflow).toContain("jq --arg prepareStatus");
+  });
+
   test("asserts pinning did not move the default branch HEAD", () => {
     expect(workflow).toContain("git rev-parse --abbrev-ref HEAD");
     expect(workflow).toContain("github.event.repository.default_branch");
