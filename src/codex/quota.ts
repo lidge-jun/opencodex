@@ -296,7 +296,7 @@ export function setAccountQuotaFromParsed(
     // while silently dropping `monthlyIsPrimaryWindow` would look like tertiary-only data to
     // any future reader, and that failure would be invisible.
     if (quota.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
-  } else if ((snapshotHasWeekly(quota) || snapshotHasShort(quota))
+  } else if ((snapshotHasWeekly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota))
       && existing?.monthlyPercent !== undefined) {
     next.monthlyPercent = existing.monthlyPercent;
     if (existing.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
