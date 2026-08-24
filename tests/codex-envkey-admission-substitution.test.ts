@@ -109,6 +109,14 @@ async function postResponses(url: string | URL, authorization: string): Promise<
   });
 }
 
+async function postCompact(url: string | URL, authorization: string): Promise<Response> {
+  return originalFetch(new URL("/v1/responses/compact", url), {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization },
+    body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+  });
+}
+
 describe("#1686 env_key bearer admission reaches Direct with substitution", () => {
   test("an admission bearer is served and the stored main credential goes upstream", async () => {
     setDebugSettings({ debug: true });
@@ -152,6 +160,24 @@ describe("#1686 env_key bearer admission reaches Direct with substitution", () =
       expect(response.status).toBe(401);
       // Falling through would have forwarded the admission secret, which is the leak the
       // forward guard exists to prevent. Nothing may reach an upstream on this path.
+      expect(upstreamAuth).toHaveLength(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("compact reports missing substitution credentials as authentication failure", async () => {
+    saveConfig(directConfig());
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+    const server = startServer(0);
+    try {
+      const response = await postCompact(server.url, `Bearer ${ADMISSION_SECRET}`);
+      const body = await response.json() as { error?: { type?: string; message?: string } };
+
+      expect(response.status).toBe(401);
+      expect(body.error?.type).toBe("authentication_error");
+      expect(body.error?.message).toBe("No usable Codex main credential to serve this request");
       expect(upstreamAuth).toHaveLength(0);
     } finally {
       await server.stop(true);

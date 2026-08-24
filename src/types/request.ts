@@ -30,6 +30,11 @@ export interface OcxReasoningReplayIdentity {
  * the holder, so late tool-call cache writes see the active physical identity.
  */
 export interface OcxReasoningReplayScopeRef {
+  /**
+   * Conversation namespace for replay state. Historically this was always the Codex parent-thread
+   * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
+   * hashed request-log conversation id.
+   */
   readonly clientThreadId: string;
   current?: Readonly<OcxReasoningReplayIdentity>;
 }
@@ -63,7 +68,7 @@ export interface OcxParsedRequest {
   _cursorConversationId?: string;
   /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
   _clientThreadId?: string;
-  /** Provider/account/model-bound namespace for process-local raw-reasoning replay. */
+  /** Conversation/provider/account/model-bound namespace for reasoning replay state. */
   _reasoningReplayScope?: OcxReasoningReplayScopeRef;
   /**
    * Set by bindRouteReasoningReplayScope after a proven serving-identity change, or by

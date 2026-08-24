@@ -931,6 +931,10 @@ async function readUsageEntriesIncrementally(
     // A shrink means truncation or replacement-in-place; the retained rows may no
     // longer correspond to file contents, so refuse to extend them.
     if (size < retained.coveredThroughBytes) return null;
+    // Retained-state reuse is only an optimization. A burst larger than the configured
+    // window must re-anchor through the bounded full-tail reader instead of reading and
+    // parsing every byte appended since the previous poll.
+    if (size - retained.coveredThroughBytes > maxReadBytes) return null;
     // Verify the retained REGION is unchanged before anything is reused. Identity keeps
     // dev/ino/birthtime, and an append and an in-place rewrite both move mtime/ctime
     // forward, so only the bytes themselves settle it.
@@ -1142,6 +1146,14 @@ export async function readUsageEntriesForManagement(): Promise<PersistedUsageEnt
   return (await readUsageSnapshotForManagement()).entries;
 }
 
+/** Keep legacy optional fields permissive, but reject rows that cannot be safely attributed. */
+function normalizePersistedUsageRow(value: unknown): PersistedUsageEntry | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.requestId !== "string" || typeof row.provider !== "string") return undefined;
+  return normalizeUsageEntry(row as unknown as PersistedUsageEntry);
+}
+
 export function readUsageEntries(): PersistedUsageEntry[] {
   const path = usageLogPath();
   if (!existsSync(path)) return [];
@@ -1150,10 +1162,8 @@ export function readUsageEntries(): PersistedUsageEntry[] {
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
-      const parsed = JSON.parse(line) as PersistedUsageEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-        entries.push(normalizeUsageEntry(parsed));
-      }
+      const parsed = normalizePersistedUsageRow(JSON.parse(line));
+      if (parsed) entries.push(parsed);
     } catch {
       /* keep reading after a partially written or hand-edited line */
     }
@@ -1166,10 +1176,8 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
-      const parsed = JSON.parse(line) as PersistedUsageEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-        entries.push(normalizeUsageEntry(parsed));
-      }
+      const parsed = normalizePersistedUsageRow(JSON.parse(line));
+      if (parsed) entries.push(parsed);
     } catch {
       /* skip partial / hand-edited lines */
     }

@@ -259,3 +259,201 @@ describe("bare-integer-for-string tool argument repair (#1938)", () => {
   });
 });
 
+
+/**
+ * The multi_agent wait shape from the #2316 report. Codex advertises `timeout_ms` as a
+ * JSON Schema `number` while its Rust runtime deserializes it as `u64`, so an integral
+ * float that is perfectly valid JSON is rejected before the tool runs.
+ */
+const MULTI_AGENT_WAIT_SCHEMA = {
+  type: "object",
+  properties: {
+    targets: { type: "array", items: { type: "string" } },
+    timeout_ms: { type: "number" },
+    temperature: { type: "number" },
+  },
+};
+
+describe("native u64 fields advertised as number (#2316)", () => {
+  test("repairs the exact wait_agent call from the report", () => {
+    expect(coerceIntegerToolArguments('{"targets":["a"],"timeout_ms":120000.0}', MULTI_AGENT_WAIT_SCHEMA))
+      .toBe('{"targets":["a"],"timeout_ms":120000}');
+    expect(coerceIntegerToolArguments('{"timeout_ms":60000.0}', MULTI_AGENT_WAIT_SCHEMA))
+      .toBe('{"timeout_ms":60000}');
+  });
+
+  test("a fractional timeout is a real disagreement and still fails upstream", () => {
+    const raw = '{"timeout_ms":1.5}';
+    expect(coerceIntegerToolArguments(raw, MULTI_AGENT_WAIT_SCHEMA)).toBe(raw);
+  });
+
+  test("an ordinary number field beside it is still never touched", () => {
+    const raw = '{"temperature":1.0}';
+    expect(coerceIntegerToolArguments(raw, MULTI_AGENT_WAIT_SCHEMA)).toBe(raw);
+  });
+
+  test("an already-integral payload keeps its original bytes", () => {
+    const clean = '{"targets":["a"],"timeout_ms":120000}';
+    expect(coerceIntegerToolArguments(clean, MULTI_AGENT_WAIT_SCHEMA)).toBe(clean);
+  });
+
+  test("the allowlist reaches a nested object, not just the top level", () => {
+    const nested = {
+      type: "object",
+      properties: { opts: { type: "object", properties: { timeout_ms: { type: "number" } } } },
+    };
+    expect(coerceIntegerToolArguments('{"opts":{"timeout_ms":120000.0}}', nested))
+      .toBe('{"opts":{"timeout_ms":120000}}');
+  });
+
+  test("an array named like the allowlist does not inherit it", () => {
+    // Array items have no property name of their own, so the element is judged by its
+    // own schema. A fractional element stays fractional rather than being rewritten.
+    const arrayed = {
+      type: "object",
+      properties: { timeout_ms: { type: "array", items: { type: "number" } } },
+    };
+    const raw = '{"timeout_ms":[1.5]}';
+    expect(coerceIntegerToolArguments(raw, arrayed)).toBe(raw);
+  });
+
+  test("an allowlisted name over a string field is a disagreement, not a repair", () => {
+    // `number` is what authorizes the repair. A string-typed timeout_ms carrying a bare
+    // integer falls to the #1938 rule instead, which stringifies it.
+    const stringy = { type: "object", properties: { timeout_ms: { type: "string" } } };
+    expect(coerceIntegerToolArguments('{"timeout_ms":120000}', stringy))
+      .toBe('{"timeout_ms":"120000"}');
+  });
+
+  test("bare wait repairs yield_time_ms and leaves unrelated number fields alone", () => {
+    // Live Codex Desktop wait uses the underscore form (#2451). Wait identity
+    // repairs that field and max_tokens, but never a generic number field.
+    const schema = {
+      type: "object",
+      properties: {
+        yield_time_ms: { type: "number" },
+        max_tokens: { type: "number" },
+        priority: { type: "number" },
+      },
+    };
+    expect(coerceIntegerToolArguments(
+      '{"yield_time_ms":20000.0,"max_tokens":5000.0,"priority":2.0}',
+      schema,
+      "wait",
+    )).toBe('{"yield_time_ms":20000,"max_tokens":5000,"priority":2}');
+    const priorityOnly = '{"priority":2.0}';
+    expect(coerceIntegerToolArguments(
+      priorityOnly,
+      schema,
+      "wait",
+    )).toBe(priorityOnly);
+    const other = {
+      type: "object",
+      properties: { yield_time_ms: { type: "number" }, priority: { type: "number" } },
+    };
+    const raw = '{"yield_time_ms":60000.0,"priority":2.0}';
+    expect(coerceIntegerToolArguments(raw, other, "other_tool")).toBe(raw);
+  });
+
+  test("the namespaced wait_agent call is repaired through the real bridge", async () => {
+    const schemas = new Map<string, Record<string, unknown>>([
+      ["multi_agent_v1__wait_agent", MULTI_AGENT_WAIT_SCHEMA],
+    ]);
+    const frames = await collectSse(bridgeToResponsesSSE(
+      replay([
+        { type: "tool_call_start", id: "call_1", name: "multi_agent_v1__wait_agent" },
+        { type: "tool_call_delta", arguments: '{"timeout_ms":120000.0}' },
+        { type: "tool_call_end", id: "call_1" },
+        { type: "done" },
+      ]),
+      "grok-4.6", undefined, undefined, undefined, undefined, 2_000, { toolParameterSchemas: schemas },
+    ));
+    const done = frames.find(f => f.event === "response.function_call_arguments.done");
+    expect(done?.data.arguments).toBe('{"timeout_ms":120000}');
+
+    // The non-streaming path is the same contract; Codex parses the completed item.
+    const body = buildResponseJSON([
+      { type: "tool_call_start", id: "call_1", name: "multi_agent_v1__wait_agent" },
+      { type: "tool_call_delta", arguments: '{"timeout_ms":120000.0}' },
+      { type: "tool_call_end", id: "call_1" },
+      { type: "done" },
+    ], "grok-4.6", { toolParameterSchemas: schemas }) as Record<string, unknown>;
+    const call = (body.output as Record<string, unknown>[]).find(i => i.type === "function_call");
+    expect(call?.arguments).toBe('{"timeout_ms":120000}');
+  });
+});
+
+const CODEX_DESKTOP_WAIT_SCHEMA = {
+  type: "object",
+  properties: {
+    "yield_time_ms": { type: "number" },
+    max_tokens: { type: "number" },
+  },
+};
+
+const WAIT_SCOPE_SCHEMAS = new Map<string, Record<string, unknown>>([
+  ["wait", CODEX_DESKTOP_WAIT_SCHEMA],
+  ["other_tool", CODEX_DESKTOP_WAIT_SCHEMA],
+  ["cursor_wait", CODEX_DESKTOP_WAIT_SCHEMA],
+]);
+
+const WAIT_SCOPE_NAMESPACE_MAP = new Map([
+  ["cursor_wait", { namespace: "cursor", name: "wait" }],
+]);
+
+const WAIT_SCOPE_EVENTS: AdapterEvent[] = [
+  { type: "tool_call_start", id: "call_wait", name: "wait" },
+  { type: "tool_call_delta", arguments: '{"yield_time_ms":120000.0,"max_tokens":8000.0}' },
+  { type: "tool_call_end", id: "call_wait" },
+  { type: "tool_call_start", id: "call_fractional", name: "wait" },
+  { type: "tool_call_delta", arguments: '{"yield_time_ms":1.5,"max_tokens":1.5}' },
+  { type: "tool_call_end", id: "call_fractional" },
+  { type: "tool_call_start", id: "call_other", name: "other_tool" },
+  { type: "tool_call_delta", arguments: '{"yield_time_ms":120000.0,"max_tokens":8000.0}' },
+  { type: "tool_call_end", id: "call_other" },
+  { type: "tool_call_start", id: "call_namespaced", name: "cursor_wait" },
+  { type: "tool_call_delta", arguments: '{"yield_time_ms":120000.0,"max_tokens":8000.0}' },
+  { type: "tool_call_end", id: "call_namespaced" },
+  { type: "done" },
+];
+
+describe("Codex Desktop wait native integers (#2443 / #2451)", () => {
+  const expectedCalls = [
+    { name: "wait", namespace: undefined, arguments: '{"yield_time_ms":120000,"max_tokens":8000}' },
+    { name: "wait", namespace: undefined, arguments: '{"yield_time_ms":1.5,"max_tokens":1.5}' },
+    { name: "other_tool", namespace: undefined, arguments: '{"yield_time_ms":120000.0,"max_tokens":8000.0}' },
+    { name: "wait", namespace: "cursor", arguments: '{"yield_time_ms":120000.0,"max_tokens":8000.0}' },
+  ];
+
+  test("streaming bridge scopes the repair to the bare wait tool", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(
+      replay(WAIT_SCOPE_EVENTS),
+      "grok-4.6",
+      WAIT_SCOPE_NAMESPACE_MAP,
+      undefined,
+      undefined,
+      undefined,
+      2_000,
+      { toolParameterSchemas: WAIT_SCOPE_SCHEMAS },
+    ));
+    const calls = frames
+      .filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>)
+      .filter(item => item.type === "function_call")
+      .map(item => ({ name: item.name, namespace: item.namespace, arguments: item.arguments }));
+
+    expect(calls).toEqual(expectedCalls);
+  });
+
+  test("non-streaming bridge scopes the repair to the bare wait tool", () => {
+    const body = buildResponseJSON(WAIT_SCOPE_EVENTS, "grok-4.6", {
+      toolNsMap: WAIT_SCOPE_NAMESPACE_MAP,
+      toolParameterSchemas: WAIT_SCOPE_SCHEMAS,
+    }) as Record<string, unknown>;
+    const calls = (body.output as Record<string, unknown>[])
+      .filter(item => item.type === "function_call")
+      .map(item => ({ name: item.name, namespace: item.namespace, arguments: item.arguments }));
+
+    expect(calls).toEqual(expectedCalls);
+  });
+});

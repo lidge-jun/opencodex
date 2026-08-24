@@ -14,6 +14,16 @@ export const CODEX_REASONING_LEVELS: { effort: string; description: string }[] =
 const CODEX_REASONING_ORDER = CODEX_REASONING_LEVELS.map(l => l.effort);
 const CODEX_REASONING_SET = new Set(CODEX_REASONING_ORDER);
 
+/**
+ * Sentinel wire value in reasoningEffortMap / modelReasoningEffortMap to explicitly
+ * omit the reasoning_effort field from the upstream wire request (issue #2356).
+ */
+export const REASONING_EFFORT_OMIT_SENTINEL = "__omit__";
+
+export function isReasoningEffortOmitted(wireEffort: string | undefined): boolean {
+  return wireEffort === REASONING_EFFORT_OMIT_SENTINEL;
+}
+
 /** True when `effort` is a member of the Codex reasoning ladder (low..ultra). */
 export function isCodexReasoningEffort(effort: string): boolean {
   return CODEX_REASONING_SET.has(effort);
@@ -170,7 +180,10 @@ export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string,
   const boundary = requested === "ultra" ? "max" : requested;
 
   const wireMap = reasoningEffortMapFor(provider, modelId);
-  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, boundary)) return wireMap[boundary];
+  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, boundary)) {
+    const mapped = wireMap[boundary];
+    return mapped === REASONING_EFFORT_OMIT_SENTINEL ? undefined : mapped;
+  }
 
   const supported = configuredReasoningEfforts(provider, modelId);
   const codexEffort = supported !== undefined ? clampToSupportedCodexEffort(boundary, supported) : requestToCodexEffort(boundary);
@@ -178,6 +191,10 @@ export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string,
 
   // Belt for the odd config where the supported ladder is ultra-only and the clamp lands on it.
   const wire = codexEffort === "ultra" ? "max" : codexEffort;
-  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, wire)) return wireMap[wire];
+  if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, wire)) {
+    const mapped = wireMap[wire];
+    return mapped === REASONING_EFFORT_OMIT_SENTINEL ? undefined : mapped;
+  }
+  if (wire === REASONING_EFFORT_OMIT_SENTINEL) return undefined;
   return wire;
 }

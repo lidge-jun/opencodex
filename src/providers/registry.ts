@@ -442,7 +442,7 @@ const THINKING_TOGGLE_MAP: Record<string, string> = {
   max: "enabled",
 };
 const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
-  "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-omni", "mimo-v2-pro", "glm-5", "glm-5.1",
+  "mimo-v2.5", "mimo-v2.5-pro", "glm-5", "glm-5.1",
 ];
 /**
  * Zhipu's domestic BigModel platform. Text families first, then the vision member: modalities are

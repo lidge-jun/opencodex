@@ -623,7 +623,7 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
 
   test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
     const syncCase = dispatchSource.slice(dispatchSource.indexOf("sync: async"), dispatchSource.indexOf("v2: async"));
-    expect(syncCase).toContain('deps.args.slice(1).includes("--restart-codex")');
+    expect(syncCase).toContain('includes("--restart-codex")');
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
     expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCase).toContain("restart: restartCodex");
@@ -633,6 +633,21 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     const gatedBlock = syncCase.slice(syncCase.indexOf("if (synced.catalogWritten"));
     expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
+  });
+
+  test("--restart-desktop-app is a separate opt-in that --restart-codex never implies (#2292)", () => {
+    for (const [name, endMarker] of [["sync: async", "v2: async"], ['"sync-cache": async', "gui: async"]] as const) {
+      const handler = dispatchSource.slice(dispatchSource.indexOf(name), dispatchSource.indexOf(endMarker));
+      // Two independent flag reads. If the desktop restart were derived from
+      // restartCodex, quitting the user's app would ride along on a flag whose
+      // documented contract is app-server-only.
+      expect(handler).toContain('includes("--restart-desktop-app")');
+      expect(handler).toContain("if (restartDesktopApp) await handleDesktopAppRestart(console)");
+      expect(handler).not.toContain("restartDesktopApp = restartCodex");
+      // Gated behind the same real-write condition as the app-server handling.
+      const desktopAt = handler.indexOf("restartDesktopApp) await handleDesktopAppRestart");
+      expect(handler.indexOf("afterCatalogWriteHandleAppServers")).toBeLessThan(desktopAt);
+    }
   });
 
   test("ocx sync-cache only handles app-servers after a successful models_cache write", () => {

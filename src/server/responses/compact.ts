@@ -42,17 +42,9 @@ import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSide
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
-  CodexAccountCooldownError,
-  codexMainProfileDrainingResponse,
-  cooldownErrorResponse,
-  CodexAuthContextError,
-  CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
-  CodexPoolAuthenticationError,
-  CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
   materializeCodexUpstreamAuth,
-  CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   codexProbeLeaseId,
@@ -134,6 +126,7 @@ import {
   usesCodexForwardPoolAuth,
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -395,19 +388,11 @@ export async function handleResponsesCompact(
         }
       }
     } catch (err) {
-      if (err instanceof CodexAccountCooldownError) {
-        return cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace);
-      }
-      if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
-      if (err instanceof CodexThreadAffinityExpiredError) {
-        return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
-      }
-      if (err instanceof CodexAuthContextError) {
-        return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
-      }
-      if (err instanceof CodexPoolAuthenticationError || err instanceof CodexDirectAuthenticationError) {
-        return formatErrorResponse(401, "authentication_error", err.message);
-      }
+      const response = mapCodexAuthContextErrorToResponse(err, {
+        accountSelector: route.codexAccountNamespace,
+        now: Date.now(),
+      });
+      if (response) return response;
       throw err;
     }
     const base = isCanonicalOpenAiForwardProvider(compactProvider)

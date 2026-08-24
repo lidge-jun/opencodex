@@ -186,11 +186,16 @@ le proxy renvoie `426` et Codex se rabat sur HTTP/SSE.
 ## Identité et historique du fil de discussion
 
 La configuration de bouclage par défaut conserve l'étiquette du fournisseur natif `openai` de Codex sur les
-nouveaux fils ; la reprise normale de l'historique ne nécessite donc aucun remappage. Lors de la première
-synchronisation, elle remplace également par `openai` les étiquettes créées par d'anciennes versions
-d'opencodex. Hors bouclage, le mode fournisseur dédié continue de refléter l'historique sous le fournisseur
-`opencodex` tant qu'il est actif, puis restaure les métadonnées sauvegardées lorsqu'il prend fin. Définissez
-`syncResumeHistory: false` pour ne pas modifier l'historique.
+nouveaux fils ; la reprise normale de l'historique ne nécessite donc aucun remappage. La synchronisation et la
+restauration n'appliquent qu'un manifeste de sauvegarde correspondant et rétablissent exactement le fournisseur,
+la source et l'indicateur d'événement d'origine. Une ligne `opencodex` sans manifeste reste inchangée ; utilisez
+`ocx recover-history --legacy-openai --yes` uniquement pour forcer explicitement ce réétiquetage hérité. Cette commande
+est volontairement large : elle réétiquette en `openai` chaque fil contenant un message utilisateur et actuellement
+marqué `opencodex`, normalise `exec` en `cli` et active l'indicateur d'événement — y compris l'historique légitime
+d'un fournisseur dédié. Sauvegardez l'état et ne l'utilisez que si vous souhaitez cette portée complète. Hors bouclage,
+le mode fournisseur dédié continue de refléter l'historique sous le fournisseur `opencodex` tant qu'il est actif,
+puis restaure les métadonnées sauvegardées lorsqu'il prend fin. Définissez `syncResumeHistory: false` pour ne pas
+modifier l'historique.
 
 ## Synchronisation du catalogue de modèles
 
@@ -282,7 +287,7 @@ d'affichage personnalisé.
 
 Si `config.toml` sélectionne déjà un fournisseur autre que `openai` ou `opencodex`, OpenCodex ne modifie pas le
 fichier. Il ignore également l'écriture des profils, l'actualisation du catalogue et du cache, ainsi que la
-migration immédiate ou en arrière-plan de l'historique Codex. Les outils qui gèrent un fournisseur personnalisé
+restauration immédiate ou en arrière-plan des métadonnées de l'historique Codex. Les outils qui gèrent un fournisseur personnalisé
 étiquettent souvent les sessions existantes avec son identifiant ; remplacer l'identifiant actif peut faire
 disparaître ces sessions pourtant intactes de la vue d'historique de Codex. La même protection s'applique à un
 fournisseur externe sélectionné par un ancien profil racine.

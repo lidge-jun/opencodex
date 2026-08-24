@@ -39,6 +39,22 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+### Fetch-helper import boundary
+
+`src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
+Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
+the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
+It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
+modules merely because those imports existed in the pre-split `responses.ts` monolith.
+
+[Decision Log]
+- 목적과 의도: Keep transport helpers reusable without making every consumer evaluate the full routed Responses and sidecar graph at module load.
+- 기존 구현 및 제약 조건: The original `responses.ts` split copied the monolith import header into `fetch-helpers.ts`; seven helper exports therefore retained 39 distinct runtime import specifiers and reached 326 modules even though the implementations used only three runtime dependencies.
+- 검토한 주요 대안: Leave the imports because current modules have limited top-level side effects; move the helpers again; prune the copied imports and lock the direct runtime boundary.
+- 선택한 방식: Preserve the file and all public exports, remove unused runtime edges, and enforce an explicit three-specifier allowlist with a source-level regression that also proves type-only imports are ignored.
+- 다른 대안 대신 이 방식을 선택한 이유: Relying on unrelated modules to remain side-effect-free makes startup ownership accidental, while another move adds churn without changing the responsibility boundary.
+- 장점, 단점 및 영향: Ordinary native Chat and compact consumers no longer load unrelated routing, combo, OAuth, web-search, vision, and relay modules through this leaf. The allowlist is intentionally strict, so a future helper that needs a new runtime dependency must make that ownership decision explicit in code, tests, and this document.
+
 [Decision Log]
 - 목적과 의도: Prevent routed models from turning invented or neighboring-agent tool names into client-executable Responses calls.
 - 기존 구현 및 제약 조건: The request catalog already controlled custom-tool restoration and the non-OpenAI prompt nudge, but an undeclared upstream name still fell through as an ordinary `function_call`; Codex then reduced the mismatch to a bare `aborted` result.
@@ -47,6 +63,14 @@ Responses-compatible streaming output.
 - 보완된 경계: Key-auth Responses passthrough restores a routed custom call only when the adapter actually lowered that name after request normalization and the caller's `tool_choice` still authorizes it. Native `apply_patch` stays in its upstream function-call form unless the destination explicitly denies Responses custom tools; tools replaced by hosted-provider policy also stay in their upstream function-call form.
 - 다른 대안 대신 이 방식을 선택한 이유: Model guidance is not an enforcement boundary, while automatic translation would invent executable caller intent and arguments after generation.
 - 장점, 단점 및 영향: Streaming and non-streaming routed responses now fail closed with an actionable provider-contract error; providers that emit aliases they never advertised must correct their adapter mapping instead of relying on client abort behavior.
+
+[Decision Log]
+- 목적과 의도: Accept a routed model's decorated outer `apply_patch` delimiter lines without changing the executable meaning of any provider-returned program.
+- 기존 구현 및 제약 조건: Routed custom tools arrive through a public function wrapper and are restored at the response boundary, but arbitrary `exec` JavaScript is caller-executable source whose strings, comments, templates, and helper arguments cannot be safely rewritten with text patterns.
+- 검토한 주요 대안: Regex-rewrite nested helper calls in `exec`; wrap a raw `exec` patch body as a helper call; reject every decorated patch; or normalize only the outer lines of a complete top-level `apply_patch` custom-tool payload.
+- 선택한 방식: After unwrapping the request-authorized custom-tool function shape, normalize only exact decorated Begin/End lines when the entire `apply_patch` input is one structurally recognizable patch with a file operation. Keep `exec` and all other freeform bodies byte-identical.
+- 다른 대안 대신 이 방식을 선택한 이유: A top-level `apply_patch` call already carries explicit executable intent, so its unambiguous outer-line spelling can be repaired without inventing a call or parsing JavaScript. Every broader rewrite could reinterpret ordinary data as code.
+- 장점, 단점 및 영향: Decorated top-level patches regain compatibility while strings, comments, generated source, raw `exec` text, incomplete envelopes, and patch-file content remain untouched. Nested malformed helper source must be corrected by the provider instead of being guessed at the response boundary.
 
 [Decision Log]
 - 목적과 의도: Keep Codex client-side deferred tool discovery usable through third-party Responses-compatible gateways that implement public function tools but reject the private `tool_search` declaration.
@@ -633,6 +657,15 @@ switch therefore costs one extra upstream round trip and one turn of degraded re
 wedging the thread; unrelated 4xx responses and requests whose outbound body carries no blob never
 enter this recovery.
 
+After a self-identified opaque-blob rejection, the proxy also keeps a five-minute rejection memo.
+The memo key is the resolved conversation identity plus the durable serving identity: provider,
+destination, adapter, model, and credential. It is recorded only when the blobless recovery resend
+succeeds. A missing durable destination or credential prevents memo creation and lookup. On a later
+request with the same key, pre-flight sanitation removes opaque reasoning `encrypted_content` and
+degrades compaction blobs before the first upstream send. This skips the rejected first send and
+the recovery round trip. A different serving identity does not match the memo. Route changes still
+follow the normal pre-flight stripping rule. Memo expiry returns to the fail-soft recovery path.
+
 A combo target rotation between turns legitimately changes that serving identity, so the following
 turn drops blobs minted by the prior target. This is correct because the new target cannot decode
 them, but it is intentionally unobvious to the client: `pickComboTarget` keys selection state only by
@@ -871,6 +904,22 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   compatibility profile const for the Grok client version (`src/providers/xai-transport.ts`);
   `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
   timeout race.
+
+## Kiro client parallel-tool hint
+
+Kiro's wire remains serialized even when an OpenAI Responses client sends
+`parallel_tool_calls: true`. That request field is permissive: it allows parallel calls but does not
+require the routed transport to expose a matching flag. The Kiro catalog therefore continues to
+advertise `supports_parallel_tool_calls: false`, and the adapter emits no parallel-control field,
+while accepting the client hint and translating the ordinary tool catalog normally.
+
+[Decision Log]
+- 목적과 의도: Keep current Codex clients usable with Kiro without claiming or inventing parallel execution on the CodeWhisperer wire.
+- 기존 구현 및 제약 조건: Codex can send `parallel_tool_calls: true` even for catalog rows that advertise false; Kiro has no verified parallel-control request field and serializes tool execution.
+- 검토한 주요 대안: Reject the client hint, rewrite it to false before routing, or accept it as permission while leaving the Kiro wire unchanged.
+- 선택한 방식: Accept either request value, preserve the parsed client intent internally, and omit all parallel-control fields from the Kiro payload.
+- 다른 대안 대신 이 방식을 선택한 이유: Rejection interprets permission as a requirement and blocks valid turns, while rewriting shared request state hides caller intent and can affect later policy or diagnostics.
+- 장점, 단점 및 영향: Codex tool turns reach Kiro again and the adapter contract stays honest; Kiro still cannot produce true parallel tool batches through this transport.
 
 ## Kiro reasoning round-trip (`redactedContent`)
 
@@ -1136,6 +1185,39 @@ is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.co
 `cloudcode-pa.googleapis.com`) is eligible for a single retry after a first-host transport
 failure, empty stream, 404, or `UNAVAILABLE`. Authentication, geoblock, invalid-request, and
 exhausted-quota responses do not trigger host failover.
+
+## Combo streaming commit boundary
+
+An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's
+downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts`, which owns one
+reader and buffers only until one of these boundaries:
+
+- a non-control Responses event begins client-visible output or a tool/action item, after which the
+  target is committed and cross-target replay is forbidden;
+- a `response.failed` terminal arrives first, in which case the terminal is converted back through
+  the ordinary bounded combo-failure classifier and may advance to the next declared target;
+- a completed/incomplete terminal or the aggregate preflight byte cap is reached, in which case the
+  current target is committed conservatively.
+
+The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
+relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
+logging retain their existing owners. A failed child keeps its physical attempt receipt and usage,
+while the successful child remains the logical request result.
+
+HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
+structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
+deprecated, sunset, decommissioned, or no longer available). An unrelated application-level 410 is
+not retried.
+
+```text
+[Decision Log]
+- 목적과 의도: Recover a failover combo from a provider-local SSE or model-lifecycle failure only while replay is provably free of duplicate client output and tool calls.
+- 기존 구현 및 제약 조건: The parent committed every HTTP-200 child before reading its SSE body, while terminal stream errors were classified only later by logging; generic 410 responses stopped the chain.
+- 검토한 주요 대안: Retry every failed stream, buffer the complete turn, inspect only HTTP status, or preflight a bounded prefix until an explicit output/terminal boundary.
+- 선택한 방식: Put the one-reader bounded preflight in a dedicated module, commit on any non-control event, and treat only explicit model-lifecycle 410 evidence as target-local.
+- 다른 대안 대신 이 방식을 선택한 이유: Replaying after output can duplicate text or tools, full-turn buffering destroys streaming and grows memory, and making every 410 retryable hides caller/application errors.
+- 장점, 단점 및 영향: Zero-output provider failures can reach a healthy target with ordered receipts and cooldown; ambiguous or oversized pre-output streams keep the current fail-closed behavior instead of consuming unbounded memory.
+```
 
 ## Transport inventory
 

@@ -24,8 +24,8 @@ Usage:
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
-  ocx recover-history --legacy-openai
-                               Explicitly recover pre-backup syncResumeHistory rows
+  ocx recover-history --legacy-openai --yes
+                               Force all user-message opencodex rows to OpenAI (legacy recovery)
   ocx uninstall               Remove service/shim/config and restore native Codex (alias: remove)
   ocx service [sub]           Run as a background service (default: install/update/start)
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall|remove)
@@ -57,7 +57,8 @@ Usage:
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx route <sub>             Routing features (combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
-  ocx usage [--range <7d|30d|all>]  Alias of ocx observe usage
+  ocx usage [--range <today|1d|7d|30d|all>] [--provider <name>] [--model <id>]
+                              Token and estimated-cost report (alias of ocx observe usage)
   ocx storage [--json]        Alias of ocx observe storage
   ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key

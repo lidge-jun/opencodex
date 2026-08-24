@@ -3,6 +3,7 @@ import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
   probeNativeProfileRecoveryState,
+  resolveNativeProfileContext,
   type NativeProfileRecoveryState,
 } from "./native-profile-store";
 import {
@@ -43,12 +44,19 @@ export interface NativeMainStartupGateDeps {
   probeRecoveryState?: typeof probeNativeProfileRecoveryState;
   owner?: NativeMainOwnerOptions;
   stageSweepIntervalMs?: number;
+  /** Test seam / activation-time revalidation for the ambient physical auth home. */
+  currentHomeId?: () => string | null;
 }
 
 export interface NativeMainStartupLifecycle {
   readonly homeId: string | null;
   readonly settled: Promise<NativeMainStartupGateSnapshot>;
   release(): Promise<void>;
+}
+
+export interface PreparedNativeMainStartupLifecycle {
+  readonly homeId: string;
+  start(): NativeMainStartupLifecycle;
 }
 
 let epoch = 0;
@@ -75,6 +83,7 @@ interface StartupEntry {
 }
 const startupEntries = new Map<string, StartupEntry>();
 const serverLifecycles = new WeakMap<object, NativeMainStartupLifecycle>();
+const serverLifecycleReleases = new WeakMap<object, Promise<void>>();
 
 function ready(homeId: string | null): NativeMainStartupGateSnapshot {
   return { status: "ready", homeId };
@@ -311,14 +320,48 @@ export function startNativeMainStartupLifecycle(
   };
 }
 
+/** Resolve and pin the owned lifecycle target without acquiring ownership or creating artifacts. */
+export function prepareNativeMainStartupLifecycle(
+  deps: NativeMainStartupGateDeps = {},
+  homes?: { codexHome: string; configDir: string },
+): PreparedNativeMainStartupLifecycle | null {
+  let manager: NativeProfileManager;
+  try {
+    manager = deps.manager ?? new NativeProfileManager(homes);
+    if (homes) {
+      const expected = resolveNativeProfileContext(homes);
+      if (
+        manager.context.homeId !== expected.homeId
+        || manager.context.instanceId !== expected.instanceId
+      ) return null;
+    }
+  } catch {
+    return null;
+  }
+  const currentHomeId = deps.currentHomeId ?? (() => {
+      try { return resolveNativeProfileContext().homeId; } catch { return null; }
+    });
+  const pinnedDeps = { ...deps, manager };
+  return {
+    homeId: manager.context.homeId,
+    start: () => {
+      if (currentHomeId() !== manager.context.homeId) {
+        throw new Error("The native-main startup home changed after ownership inspection.");
+      }
+      return startNativeMainStartupLifecycle(pinnedDeps);
+    },
+  };
+}
+
 /**
  * How many times a service-ownership fence will re-ask before it stops asking (#2108).
  *
  * A host that is permanently unaskable must not re-probe on every request forever, and a
  * host that recovers usually does so within the first few. The budget belongs to the
- * REASON, not to an individual fence: raising a second fence deliberately does not hand
- * out a fresh allowance, or a caller looping over fences could spin the probe forever.
- * It is dropped when the last fence for that reason releases.
+ * live hook owner, not to an individual fence: raising a second fence deliberately does
+ * not hand out a fresh allowance, or a caller looping over fences could spin the probe
+ * forever. Spending or releasing that hook owner ends its budget generation; a later
+ * fence can install a new owner even if an older hookless fence is still draining.
  */
 export const NATIVE_MAIN_OWNERSHIP_RETRY_LIMIT = 5;
 
@@ -327,11 +370,20 @@ const serviceOwnershipReprobes = new Map<NativeMainServiceOwnershipBlockReason, 
 
 interface ServiceOwnershipReprobe {
   readonly probe: () => NativeCodexOwnership;
+  readonly expectedHomeId: () => string | null;
+  readonly activate: () => NativeMainStartupLifecycle;
+  readonly adopt: (lifecycle: NativeMainStartupLifecycle) => boolean;
+  readonly discard: (lifecycle: NativeMainStartupLifecycle) => void;
+  activating: boolean;
   attempts: number;
   /** The fence that installed this hook; only its own release may drop the entry. */
   readonly owner: NativeMainStartupLifecycle;
   /** Releases the fence that installed this hook, exactly once. */
   readonly spend: () => void;
+}
+
+function releaseUnadoptedLifecycle(lifecycle: NativeMainStartupLifecycle): Promise<void> {
+  try { return Promise.resolve(lifecycle.release()).catch(() => {}); } catch { return Promise.resolve(); }
 }
 
 /** Test-only: the retry budget is module state and would otherwise leak across tests. */
@@ -359,23 +411,53 @@ function reprobeServiceOwnership(reason: NativeMainServiceOwnershipBlockReason):
   if (reason !== "ownership-unknown") return false;
   const entry = serviceOwnershipReprobes.get(reason);
   if (!entry) return false;
+  if (entry.activating) return false;
   if (entry.attempts >= NATIVE_MAIN_OWNERSHIP_RETRY_LIMIT) return false;
   entry.attempts += 1;
-  let answer: NativeCodexOwnership;
+  let activated: NativeMainStartupLifecycle | undefined;
+  let expectedHomeId: string | null = null;
+  entry.activating = true;
   try {
-    answer = entry.probe();
+    const answer = entry.probe();
+    if (answer !== "owned") return false;
+    expectedHomeId = entry.expectedHomeId();
+    if (expectedHomeId === null) return false;
+    // Ownership becoming knowable is not itself startup completion. Install the
+    // normal owner/recovery lifecycle while this fence is still held, so native
+    // traffic cannot get ahead of owner registration, journal recovery, auth-temp
+    // scrubbing, or the initial stage sweep.
+    activated = entry.activate();
   } catch {
-    // An inspection that throws is not evidence the host became ownable.
+    // Neither a failed inspection nor a failed activation is evidence that
+    // native-main is safe to admit. Keep the fence and retry hook intact.
+    return false;
+  } finally {
+    entry.activating = false;
+  }
+  if (
+    !activated
+    || activated.homeId === null
+    || activated.homeId !== expectedHomeId
+    || typeof activated.release !== "function"
+  ) {
+    if (activated && typeof activated.release === "function") entry.discard(activated);
     return false;
   }
-  if (answer !== "owned") return false;
+  if (serviceOwnershipReprobes.get(reason) !== entry || !entry.adopt(activated)) {
+    // Shutdown or a re-entrant release can retire this fence while activation
+    // runs. A lifecycle that was never attached to the server must not retain
+    // another owner reference in the background.
+    entry.discard(activated);
+    return false;
+  }
   // Release through the fence that installed this hook, and only that one.
   //
   // Several servers can hold a fence for the same reason while only one carries a hook, so
   // clearing the shared refcount here would unblock fences this probe never spoke for.
   // Decrementing here directly is just as wrong the other way: that fence's own release()
-  // would then pay a second time for one fence, leaving the count short. Delegating to the
-  // fence's idempotent release keeps exactly one payment per fence.
+  // would then pay a second time for one fence, leaving the count short. The
+  // fence's idempotent spend hook keeps exactly one payment per fence while the
+  // transitioned owned lifecycle remains attached until server shutdown.
   entry.spend();
   return true;
 }
@@ -395,22 +477,44 @@ function serviceOwnershipSnapshot(
 /** Close native-main admission without resolving or creating any CODEX_HOME artifacts. */
 export function blockNativeMainStartupForUnownedServiceHome(
   reason: NativeMainServiceOwnershipBlockReason,
-  options?: { reprobe?: () => NativeCodexOwnership },
+  options?: {
+    reprobe: () => NativeCodexOwnership;
+    expectedHomeId: string | (() => string | null);
+    startOwnedLifecycle: () => NativeMainStartupLifecycle;
+  },
 ): NativeMainStartupLifecycle {
   serviceOwnershipRefs.set(reason, (serviceOwnershipRefs.get(reason) ?? 0) + 1);
-  let released = false;
-  const lifecycle: NativeMainStartupLifecycle = {
-    homeId: null,
-    settled: Promise.resolve(serviceOwnershipSnapshot(reason)),
-    async release() {
-      if (released) return;
-      released = true;
-      const remaining = Math.max(0, (serviceOwnershipRefs.get(reason) ?? 0) - 1);
-      if (remaining === 0) serviceOwnershipRefs.delete(reason);
-      else serviceOwnershipRefs.set(reason, remaining);
-      if (serviceOwnershipReprobes.get(reason)?.owner === lifecycle) {
-        serviceOwnershipReprobes.delete(reason);
-      }
+  let fenceSpent = false;
+  let ownedLifecycle: NativeMainStartupLifecycle | undefined;
+  let releaseFlight: Promise<void> | undefined;
+  const orphanReleaseFlights = new Set<Promise<void>>();
+  let lifecycle!: NativeMainStartupLifecycle;
+  const blockedSettled = Promise.resolve(serviceOwnershipSnapshot(reason));
+  const spendFence = () => {
+    if (fenceSpent) return;
+    fenceSpent = true;
+    const remaining = Math.max(0, (serviceOwnershipRefs.get(reason) ?? 0) - 1);
+    if (remaining === 0) serviceOwnershipRefs.delete(reason);
+    else serviceOwnershipRefs.set(reason, remaining);
+    if (serviceOwnershipReprobes.get(reason)?.owner === lifecycle) {
+      serviceOwnershipReprobes.delete(reason);
+    }
+  };
+  lifecycle = {
+    get homeId() { return ownedLifecycle?.homeId ?? null; },
+    get settled() { return ownedLifecycle?.settled ?? blockedSettled; },
+    release() {
+      return releaseFlight ??= (async () => {
+        spendFence();
+        // A synchronous activator can re-enter release before its returned
+        // lifecycle is adopted or discarded. Let that call stack finish so the
+        // cleanup set is complete before this shared release flight drains it.
+        await Promise.resolve();
+        await ownedLifecycle?.release();
+        if (orphanReleaseFlights.size > 0) {
+          await Promise.allSettled([...orphanReleaseFlights]);
+        }
+      })();
     },
   };
   // Do NOT reset an existing budget: keying the reprobe by reason means a caller raising
@@ -418,12 +522,28 @@ export function blockNativeMainStartupForUnownedServiceHome(
   // the probe forever. But once the holder is gone its entry is removed above, so a LATER
   // fence installs its own hook — a server started after an earlier probe must not be left
   // needing `ocx restart`, which is the very symptom this exists to remove.
-  if (options?.reprobe && reason === "ownership-unknown" && !serviceOwnershipReprobes.has(reason)) {
+  if (options && reason === "ownership-unknown" && !serviceOwnershipReprobes.has(reason)) {
+    const expectedHomeId = options.expectedHomeId;
     serviceOwnershipReprobes.set(reason, {
       probe: options.reprobe,
+      expectedHomeId: typeof expectedHomeId === "function"
+        ? expectedHomeId
+        : () => expectedHomeId,
+      activate: options.startOwnedLifecycle,
+      adopt: activated => {
+        if (releaseFlight !== undefined || fenceSpent || ownedLifecycle !== undefined) return false;
+        ownedLifecycle = activated;
+        return true;
+      },
+      discard: activated => {
+        const flight = releaseUnadoptedLifecycle(activated);
+        orphanReleaseFlights.add(flight);
+        void flight.finally(() => orphanReleaseFlights.delete(flight));
+      },
+      activating: false,
       attempts: 0,
       owner: lifecycle,
-      spend: () => { void lifecycle.release(); },
+      spend: spendFence,
     });
   }
   return lifecycle;
@@ -434,10 +554,20 @@ export function bindNativeMainStartupLifecycle(server: object, lifecycle: Native
 }
 
 export async function releaseNativeMainStartupLifecycle(server: object): Promise<void> {
+  const existing = serverLifecycleReleases.get(server);
+  if (existing) return existing;
   const lifecycle = serverLifecycles.get(server);
   if (!lifecycle) return;
-  serverLifecycles.delete(server);
-  await lifecycle.release();
+  const flight = Promise.resolve().then(() => lifecycle.release());
+  serverLifecycleReleases.set(server, flight);
+  try {
+    await flight;
+  } finally {
+    if (serverLifecycleReleases.get(server) === flight) {
+      serverLifecycleReleases.delete(server);
+      serverLifecycles.delete(server);
+    }
+  }
 }
 
 export function isNativeMainTrafficBlocked(): boolean {

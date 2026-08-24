@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { loadConfig, readRuntimePort } from "../config";
+import { loadConfig } from "../config";
+import { readRuntimePort } from "../config/process-state";
 import { configuredAdminToken } from "./admin-secrets";
 
 export function isProcessAlive(pid: number): boolean {

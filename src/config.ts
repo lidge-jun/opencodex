@@ -1,11 +1,22 @@
-import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
+import {
+  apiKeyTransportConfigError,
+  booleanRecordConfigError,
+  modelAdapterRecordConfigError,
+  nonBlankStringArrayConfigError,
+  normalizeNonBlankStringArray,
+  positiveIntegerConfigError,
+  positiveIntegerRecordConfigError,
+  providerBaseUrlConfigError,
+  providerHeadersConfigError,
+  reasoningSummaryDeliveryRecordConfigError,
+  upstreamHttpVersionConfigError,
+} from "./config/provider-validation";
 import {
   bumpConfigGenerationAtPath,
   bumpCurrentConfigGeneration,
@@ -42,25 +53,17 @@ import {
   forgetEphemeralSecretPath,
   hardenSecretDir,
   hardenSecretPath,
-  hardenSecretPathAsync,
   windowsSecretAclApplies,
 } from "./lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
-import { isLocalAttestationSecret } from "./lib/local-management-attestation";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
-import {
-  resolveTrustedWindowsPowerShellExe,
-  resolveTrustedWindowsSystemDirectory,
-} from "./lib/windows-elevation";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import {
-  isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
   pinnedWireAdapter,
-  REASONING_SUMMARY_DELIVERY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxClaudeCodeConfig,
   type OcxConfig,
@@ -69,7 +72,7 @@ import {
   type FastWire,
   type ProviderCostOverlay,
 } from "./types";
-import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import { OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { fastWireDeclarationError, hasFastWireCapabilityConflict } from "./providers/fastwire";
 import {
   getProviderRegistryEntry,
@@ -79,7 +82,7 @@ import {
 } from "./providers/registry";
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
-import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
+import { isCodexReasoningEffort } from "./reasoning-effort";
 import { parseSubagentRoles, salvageSubagentRoles } from "./codex/agent-roles";
 import {
   COST4_RATE_KEYS,
@@ -95,244 +98,49 @@ import {
   MIN_APP_OWNED_MEMORY_BUDGET_MB,
 } from "./lib/app-owned-memory";
 import { isHostedToolUnsupportedForModel } from "./responses/hosted-tool-policy";
-
-let _atomicSeq = 0;
-
-// The Windows-tolerant replace lives in lib/windows-atomic-replace: config-ownership
-// is one of its callers and this module already imports config-ownership, so
-// exporting it from here would close an import cycle. Re-exported because these
-// names are part of this module's public surface and its callers.
-export type { AtomicRenameIO } from "./lib/windows-atomic-replace";
-export { renameAtomicFile } from "./lib/windows-atomic-replace";
-import { renameAtomicFile, renameAtomicFileAsync } from "./lib/windows-atomic-replace";
-
-/**
- * Write a file atomically (temp + rename) so concurrent writers — e.g. `ocx stop` and the
- * proxy's own shutdown handler both restoring Codex — can never leave a half-written file.
- */
-export interface AtomicWriteIO {
-  write: (path: string, content: string) => void;
-  harden: (path: string) => void;
-  rename: (source: string, destination: string) => void;
-  truncate: (path: string) => void;
-  unlink: (path: string) => void;
-}
-
-export class AtomicWriteResidualTempError extends Error {
-  constructor(readonly tempPath: string, readonly hardened = true, options?: ErrorOptions) {
-    super(`Atomic config write left a ${hardened ? "hardened " : ""}zero-byte temporary file`, options);
-    this.name = "AtomicWriteResidualTempError";
-  }
-}
-
-export class AtomicWriteSecretResidualError extends Error {
-  constructor(readonly tempPath: string, options?: ErrorOptions) {
-    super("Atomic config write could not scrub or remove a secret-bearing temporary file", options);
-    this.name = "AtomicWriteSecretResidualError";
-  }
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-}
-
-/**
- * Resolve a write target through any symlink before the temp+rename dance.
- *
- * rename(2) replaces a directory ENTRY. When the entry is itself a symlink
- * (a dotfiles-managed `~/.codex/config.toml` -> `~/dotfiles/.codex/config.toml`,
- * say), renaming a sibling temp file over it destroys the link and leaves a plain
- * file behind — the repo silently stops receiving writes. Resolving first puts both
- * the temp file and the rename target inside the link's real directory, so the entry
- * being replaced is the real file and the symlink survives.
- *
- * Same-filesystem atomicity is preserved because the temp file stays beside its
- * resolved target. A genuinely absent destination (not yet created) falls back to
- * the literal path, which is the correct target for a first write.
- *
- * An EXISTING symlink that cannot be resolved — dangling because its target volume
- * is unmounted, an ELOOP chain, an EACCES parent — is refused instead. Falling back
- * to the literal path there would let the rename replace the link, recreating the
- * exact dotfiles-divergence failure this helper exists to prevent (audit: wt4 wp2).
- */
-export function resolveWriteTarget(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch (cause) {
-    let entry;
-    try {
-      entry = lstatSync(path);
-    } catch (error) {
-      if (isMissingPathError(error)) return path; // no entry at all — first write
-      throw error;
-    }
-    if (entry.isSymbolicLink()) {
-      throw new Error(`refusing to replace unresolvable symlinked write target: ${path}`, { cause });
-    }
-    return path;
-  }
-}
-
-/**
- * Re-apply the real-home guard to a RESOLVED write target.
- *
- * Callers such as saveConfig check only their logical config dir, which passes when
- * OPENCODEX_HOME points at a temp fixture. Following a symlink out of that fixture
- * would land on the protected home the caller's own check just cleared, so the guard
- * has to run again on wherever the write actually terminates. Inert in production,
- * where the guard is disarmed.
- */
-function assertResolvedTargetAllowed(path: string, target: string): void {
-  // The file itself may resolve literally while its PARENT is a symlink out
-  // of the fixture (a first write beneath a symlinked config dir). Guard the
-  // directory the write actually lands in either way.
-  if (target === path) {
-    let realParent: string;
-    try {
-      realParent = realpathSync(dirname(target));
-    } catch {
-      return; // unresolvable parent: resolveWriteTarget already owns that refusal
-    }
-    if (realParent !== dirname(target)) assertNotRealHomeUnderTest(realParent);
-    return;
-  }
-  assertNotRealHomeUnderTest(dirname(target));
-}
-
-export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO = {
-  write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
-  harden: target => {
-    try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
-    // Timeout memo keyed by the stable destination (matches the async writer):
-    // a failed temp harden must not mint a new unique-temp key on every write.
-    if (process.platform === "win32") hardenSecretPath(target, { required: true, timeoutMemoKey: path });
-  },
-  rename: renameAtomicFile,
-  truncate: target => truncateSync(target, 0),
-  unlink: unlinkSync,
-}): void {
-  recordOwnedConfigPath(resolveConfigDir(), path);
-  const target = resolveWriteTarget(path);
-  assertResolvedTargetAllowed(path, target);
-  const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
-  let hardened = false;
-  try {
-    io.write(tmp, content);
-    io.harden(tmp);
-    hardened = true;
-    io.rename(tmp, target);
-    forgetEphemeralSecretPath(tmp);
-  } catch (cause) {
-    let scrubbed = false;
-    try {
-      io.truncate(tmp);
-      scrubbed = true;
-    } catch (error) {
-      if (isMissingPathError(error)) scrubbed = true;
-      else {
-        try { io.write(tmp, ""); scrubbed = true; } catch { /* removal may still succeed */ }
-      }
-    }
-    let removed = false;
-    try {
-      io.unlink(tmp);
-      removed = true;
-    } catch (error) {
-      if (isMissingPathError(error)) removed = true;
-      else {
-        try { io.unlink(tmp); removed = true; }
-        catch (retryError) { if (isMissingPathError(retryError)) removed = true; }
-      }
-    }
-    if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
-    if (!removed && !hardened) {
-      try { io.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
-    }
-    if (removed) forgetEphemeralSecretPath(tmp);
-    if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
-    throw cause;
-  }
-}
-
-/** Async atomic-write I/O: harden may await icacls without blocking the event loop (#612). */
-export interface AtomicWriteAsyncIO {
-  write: (path: string, content: string) => void | Promise<void>;
-  harden: (path: string) => void | Promise<void>;
-  rename: (source: string, destination: string) => void | Promise<void>;
-  truncate: (path: string) => void | Promise<void>;
-  unlink: (path: string) => void | Promise<void>;
-}
-
-/** Test-only crash seam. Production callers leave this undefined. */
-export interface AtomicWriteAsyncTestSeam {
-  afterTempWrite?: (tempPath: string) => void | Promise<void>;
-}
-
-/**
- * Async atomic write (#612): same temp+harden+rename and residual-temp policy as
- * atomicWriteFile, but Windows ACL harden yields the event loop. Timeout memo is keyed
- * by the final destination path (not the unique temp, not the parent directory).
- */
-export async function atomicWriteFileAsync(
-  path: string,
-  content: string,
-  io?: AtomicWriteAsyncIO,
-  testSeam?: AtomicWriteAsyncTestSeam,
-): Promise<void> {
-  const effective: AtomicWriteAsyncIO = io ?? {
-    write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
-    harden: async target => {
-      try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
-      if (process.platform === "win32") {
-        await hardenSecretPathAsync(target, { required: true, timeoutMemoKey: path });
-      }
-    },
-    rename: renameAtomicFileAsync,
-    truncate: target => truncateSync(target, 0),
-    unlink: unlinkSync,
-  };
-  const target = resolveWriteTarget(path);
-  assertResolvedTargetAllowed(path, target);
-  const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
-  let hardened = false;
-  try {
-    await effective.write(tmp, content);
-    await testSeam?.afterTempWrite?.(tmp);
-    await effective.harden(tmp);
-    hardened = true;
-    await effective.rename(tmp, target);
-    forgetEphemeralSecretPath(tmp);
-  } catch (cause) {
-    let scrubbed = false;
-    try {
-      await effective.truncate(tmp);
-      scrubbed = true;
-    } catch (error) {
-      if (isMissingPathError(error)) scrubbed = true;
-      else {
-        try { await effective.write(tmp, ""); scrubbed = true; } catch { /* removal may still succeed */ }
-      }
-    }
-    let removed = false;
-    try {
-      await effective.unlink(tmp);
-      removed = true;
-    } catch (error) {
-      if (isMissingPathError(error)) removed = true;
-      else {
-        try { await effective.unlink(tmp); removed = true; }
-        catch (retryError) { if (isMissingPathError(retryError)) removed = true; }
-      }
-    }
-    if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
-    if (!removed && !hardened) {
-      try { await effective.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
-    }
-    if (removed) forgetEphemeralSecretPath(tmp);
-    if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
-    throw cause;
-  }
-}
+import {
+  atomicWriteFile,
+  isMissingPathError,
+  nextAtomicTempSequence,
+} from "./config/atomic-write";
+export {
+  AtomicWriteResidualTempError,
+  AtomicWriteSecretResidualError,
+  atomicWriteFile,
+  atomicWriteFileAsync,
+  renameAtomicFile,
+  resolveWriteTarget,
+  type AtomicRenameIO,
+  type AtomicWriteAsyncIO,
+  type AtomicWriteAsyncTestSeam,
+  type AtomicWriteIO,
+} from "./config/atomic-write";
+import { getConfigDir, getConfigPath, hardenConfigDir } from "./config/paths";
+export { expandUserPath, getConfigDir, getConfigPath, hardenConfigDir } from "./config/paths";
+export {
+  getPidPath,
+  getRuntimePortPath,
+  isOcxStartCommandLine,
+  ocxStartProcessCacheSizeForTests,
+  parsePidFile,
+  readAlivePid,
+  readPid,
+  readPidFileValue,
+  readRuntimePort,
+  removePid,
+  removePidIfValueIs,
+  removeRuntimePort,
+  removeRuntimePortIfPidIs,
+  setOcxStartProcessCacheForTests,
+  setOcxStartProcessProbeForTests,
+  setProcessCommandLineExecForTests,
+  setProcessCommandLinePlatformForTests,
+  sweepDeadOcxStartProcessCache,
+  verifyPidIdentity,
+  writePid,
+  writeRuntimePort,
+  type RuntimePortState,
+} from "./config/process-state";
 
 export class OpenAiTierBackupCleanupError extends Error {
   constructor() { super("OpenAI tier backup temporary cleanup failed"); this.name = "OpenAiTierBackupCleanupError"; }
@@ -453,7 +261,7 @@ export function backupConfigBeforeOpenAiTierMigration(
       return "reused";
     }
   }
-  const temp = `${backup}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  const temp = `${backup}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let published = false;
   let cleanupAttempted = false;
 
@@ -597,39 +405,6 @@ export function preserveOpenAiTierRollbackSnapshot(
   throw new OpenAiTierRollbackPreserveError("Unable to find a unique rollback snapshot path", { code: "exhausted" });
 }
 
-/**
- * Expand a leading `~` to the home directory in user-supplied paths
- * (OPENCODEX_HOME/CODEX_HOME set from GUIs/service files where no shell expanded it).
- * `~user` and `%VAR%`/`$VAR` forms pass through untouched — those belong to the shell.
- */
-export function expandUserPath(raw: string): string {
-  if (raw === "~") return homedir();
-  if (raw.startsWith("~/") || raw.startsWith("~\\")) return join(homedir(), raw.slice(2));
-  return raw;
-}
-
-let resolvedConfigDirCache: { raw: string | undefined; path: string } | null = null;
-
-function resolveConfigDir(): string {
-  const raw = process.env["OPENCODEX_HOME"]?.trim() || undefined;
-  if (resolvedConfigDirCache && resolvedConfigDirCache.raw === raw) return resolvedConfigDirCache.path;
-  const path = raw ? resolve(expandUserPath(raw)) : join(homedir(), ".opencodex");
-  resolvedConfigDirCache = { raw, path };
-  return path;
-}
-
-function resolveConfigPath(): string {
-  return join(resolveConfigDir(), "config.json");
-}
-
-function resolvePidPath(): string {
-  return join(resolveConfigDir(), "ocx.pid");
-}
-
-function resolveRuntimePortPath(): string {
-  return join(resolveConfigDir(), "runtime-port.json");
-}
-
 const warnedConfigFallbacks = new Set<string>();
 const warnedInheritedFastWireConflicts = new Set<string>();
 let lastWarningReconciledGeneration = 0;
@@ -746,30 +521,20 @@ const providerConfigSchema = z.object({
   responsesSnapshotRepair: z.boolean().optional(),
 }).passthrough();
 
-const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const SENSITIVE_PROVIDER_HEADERS = new Set([
-  "authorization",
-  "cookie",
-  "set-cookie",
-  "proxy-authorization",
-  "x-api-key",
-  "x-goog-api-key",
-  "x-amz-security-token",
-]);
-
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
-
-export function providerBaseUrlConfigError(baseUrl: string): string | null {
-  try {
-    const parsed = new URL(baseUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "baseUrl must be an http(s) URL";
-    if (parsed.username || parsed.password) return "baseUrl must not include embedded credentials";
-    if (parsed.search || parsed.hash) return "baseUrl must not include query strings or fragments";
-  } catch {
-    return "baseUrl must be a valid URL";
-  }
-  return null;
-}
+export {
+  apiKeyTransportConfigError,
+  booleanRecordConfigError,
+  modelAdapterRecordConfigError,
+  nonBlankStringArrayConfigError,
+  normalizeNonBlankStringArray,
+  positiveIntegerConfigError,
+  positiveIntegerRecordConfigError,
+  providerBaseUrlConfigError,
+  providerHeadersConfigError,
+  reasoningSummaryDeliveryRecordConfigError,
+  upstreamHttpVersionConfigError,
+} from "./config/provider-validation";
 
 function providerResponsesPathConfigError(responsesPath: string | undefined): string | null {
   if (responsesPath === undefined) return null;
@@ -779,19 +544,6 @@ function providerResponsesPathConfigError(responsesPath: string | undefined): st
   if (!responsesPath.startsWith("/")) return "responsesPath must start with /";
   if (responsesPath.includes("?") || responsesPath.includes("#")) {
     return "responsesPath must not include query strings or fragments";
-  }
-  return null;
-}
-
-export function providerHeadersConfigError(headers: unknown): string | null {
-  if (headers === undefined) return null;
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return "headers must be an object";
-  for (const [name, value] of Object.entries(headers)) {
-    const normalized = name.trim().toLowerCase();
-    if (!normalized || !HEADER_NAME_PATTERN.test(name)) return "headers must use valid HTTP header names";
-    if (SENSITIVE_PROVIDER_HEADERS.has(normalized)) return `headers must not include sensitive header "${name}"; use apiKey/authMode instead`;
-    if (typeof value !== "string") return `header "${name}" value must be a string`;
-    if (/[\r\n]/.test(value)) return `header "${name}" value must not include line breaks`;
   }
   return null;
 }
@@ -863,119 +615,6 @@ export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, Pro
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
-}
-
-/** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
-export function apiKeyTransportConfigError(
-  provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "apiKeyTransport">,
-): string | null {
-  if (provider.apiKeyTransport === undefined) return null;
-  if (provider.apiKeyTransport !== "x-api-key" && provider.apiKeyTransport !== "bearer") {
-    return 'apiKeyTransport must be "x-api-key" or "bearer"';
-  }
-  if (provider.adapter !== "anthropic") {
-    return "apiKeyTransport is supported only by the anthropic adapter";
-  }
-  if (provider.authMode === "oauth" || provider.authMode === "forward" || provider.authMode === "local") {
-    return "apiKeyTransport requires Anthropic API-key authentication";
-  }
-  return null;
-}
-
-/**
- * Shared runtime boundary for the per-provider upstream HTTP-version pin (#1668). Used by
- * the management write path (providerManagementConfigError / PATCH) so it can never disagree
- * with the strict zod load schema: a value that survives POST/PATCH is always loadable, and
- * a value the loader rejects is rejected at write time too.
- */
-export function upstreamHttpVersionConfigError(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !(UPSTREAM_HTTP_VERSION_VALUES as readonly string[]).includes(value)) {
-    return 'upstreamHttpVersion must be one of "auto", "http1.1", "h1", "http2", "h2", or null to clear';
-  }
-  return null;
-}
-
-export function positiveIntegerRecordConfigError(value: unknown, field: string): string | null {
-  if (value === undefined) return null;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
-  for (const [key, entry] of Object.entries(value)) {
-    if (!key.trim()) return `${field} keys must be nonblank model ids`;
-    if (typeof entry !== "number" || !Number.isFinite(entry) || !Number.isInteger(entry) || entry <= 0) {
-      return `${field}.${key} must be a positive finite integer`;
-    }
-  }
-  return null;
-}
-
-export function positiveIntegerConfigError(value: unknown, field: string): string | null {
-  if (value === undefined) return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    return `${field} must be a positive finite integer`;
-  }
-  return null;
-}
-
-export function nonBlankStringArrayConfigError(value: unknown, field: string): string | null {
-  if (value === undefined) return null;
-  if (!Array.isArray(value)) return `${field} must be an array`;
-  for (const [index, entry] of value.entries()) {
-    if (typeof entry !== "string" || !entry.trim()) {
-      return `${field}.${index} must be a nonblank model id`;
-    }
-  }
-  return null;
-}
-
-/**
- * Keep hand-edited config and management writes on one canonical model-id list.
- * Validation happens separately so an all-whitespace value is rejected rather than
- * normalized into a model id that can never match at runtime.
- */
-export function normalizeNonBlankStringArray(value: readonly string[]): string[] {
-  return [...new Set(value.map(entry => entry.trim()))];
-}
-
-export function booleanRecordConfigError(value: unknown, field: string): string | null {
-  if (value === undefined) return null;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
-  for (const [key, entry] of Object.entries(value)) {
-    if (!key.trim()) return `${field} keys must be nonblank model ids`;
-    if (typeof entry !== "boolean") return `${field}.${key} must be a boolean`;
-  }
-  return null;
-}
-
-const REASONING_SUMMARY_DELIVERY_SET = new Set<string>(REASONING_SUMMARY_DELIVERY_VALUES);
-
-export function reasoningSummaryDeliveryRecordConfigError(
-  value: unknown,
-  supportsReasoningSummaries: unknown,
-  field = "modelReasoningSummaryDelivery",
-): string | null {
-  if (value === undefined) return null;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
-
-  const supports = booleanRecordConfigError(supportsReasoningSummaries, "modelSupportsReasoningSummaries") === null
-    && supportsReasoningSummaries && typeof supportsReasoningSummaries === "object"
-    ? supportsReasoningSummaries as Record<string, boolean>
-    : undefined;
-  for (const [key, entry] of Object.entries(value)) {
-    if (!key.trim()) return `${field} keys must be nonblank model ids`;
-    if (typeof entry !== "string" || !REASONING_SUMMARY_DELIVERY_SET.has(entry)) {
-      return `${field}.${key} must be one of: ${REASONING_SUMMARY_DELIVERY_VALUES.join(", ")}`;
-    }
-    if (modelRecordValue(supports, key) === false) {
-      return `${field}.${key} conflicts with modelSupportsReasoningSummaries=false`;
-    }
-  }
-  return null;
 }
 
 const SUPPORTED_PREFERRED_HOSTED_TOOLS = new Set(["image_generation"]);
@@ -1067,41 +706,6 @@ export function modelPreferHostedToolsConfigError(
     }
     if (effectiveWire !== "openai-responses") {
       return `${field}.${key} requires the openai-responses wire`;
-    }
-  }
-  return null;
-}
-
-/**
- * Validate a provider's per-model wire override map (#404).
- *
- * Rejects, rather than silently ignoring, configurations the resolver would refuse:
- * a value outside the allowed wires, a model the upstream pins to one wire, and any
- * override on a canonical forward provider (where switching wires would drop the
- * caller's forwarded credential). Silently dropping them would leave the user
- * believing an override is in effect.
- */
-export function modelAdapterRecordConfigError(
-  value: unknown,
-  field: string,
-  providerName: string,
-  provider: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
-): string | null {
-  if (value === undefined) return null;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
-  const entries = Object.entries(value);
-  if (entries.length > 0 && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
-    return `${field} is not supported on the canonical ChatGPT forward provider`;
-  }
-  for (const [key, entry] of entries) {
-    if (!key.trim()) return `${field} keys must be nonblank model ids`;
-    if (typeof entry !== "string" || !MODEL_ADAPTER_OVERRIDE_ALLOWED.has(entry)) {
-      return `${field}.${key} must be one of: ${[...MODEL_ADAPTER_OVERRIDE_ALLOWED].join(", ")}`;
-    }
-    if (isWirePinnedModel(providerName, key.trim())) {
-      return `${field}.${key} cannot be overridden: the upstream only speaks one wire for this model`;
     }
   }
   return null;
@@ -1657,35 +1261,6 @@ const configSchema = z.object({
  * live catalog's native slugs.
  */
 export const DEFAULT_SUBAGENT_MODELS = ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"];
-
-export function getConfigDir(): string {
-  return resolveConfigDir();
-}
-
-export function getConfigPath(): string {
-  return resolveConfigPath();
-}
-
-export function getPidPath(): string {
-  return resolvePidPath();
-}
-
-export function getRuntimePortPath(): string {
-  return resolveRuntimePortPath();
-}
-
-export function hardenConfigDir(): void {
-  const dir = getConfigDir();
-  // The guard runs BEFORE any mutation: refusing the write after chmod/ACL
-  // would already have changed the protected directory (review round 2).
-  assertNotRealHomeUnderTest(dir);
-  if (existsSync(dir)) {
-    try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
-    if (process.platform === "win32") {
-      hardenSecretDir(dir, { required: false });
-    }
-  }
-}
 
 export function hardenExistingSecret(path: string): void {
   if (existsSync(path)) {
@@ -3511,91 +3086,6 @@ export function applyProxyEnv(config: OcxConfig): void {
   process.env.NO_PROXY = entries.join(",");
 }
 
-export function writePid(pid: number): void {
-  const dir = getConfigDir();
-  // Guard before ANY directory mutation (mkdir or chmod), not just the write.
-  assertNotRealHomeUnderTest(dir);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  } else {
-    hardenConfigDir();
-  }
-  atomicWriteFile(getPidPath(), String(pid));
-}
-
-export type RuntimePortState = {
-  pid: number;
-  port: number;
-  hostname?: string;
-  /** Per-process proof key; protected by the config directory and never served. */
-  attestationSecret?: string;
-};
-
-function isValidRuntimePortState(value: unknown): value is RuntimePortState {
-  if (!value || typeof value !== "object") return false;
-  const state = value as Record<string, unknown>;
-  const hostnameOk = state.hostname === undefined || typeof state.hostname === "string";
-  const attestationOk = state.attestationSecret === undefined || isLocalAttestationSecret(state.attestationSecret);
-  return Number.isSafeInteger(state.pid)
-    && Number(state.pid) > 0
-    && Number.isInteger(state.port)
-    && Number(state.port) > 0
-    && Number(state.port) <= 65535
-    && hostnameOk
-    && attestationOk;
-}
-
-export function writeRuntimePort(state: RuntimePortState): void {
-  const dir = getConfigDir();
-  // Guard before ANY directory mutation (mkdir or chmod), not just the write.
-  assertNotRealHomeUnderTest(dir);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  } else {
-    hardenConfigDir();
-  }
-  atomicWriteFile(getRuntimePortPath(), JSON.stringify(state, null, 2) + "\n");
-}
-
-export function readPid(): number | null {
-  const pidPath = getPidPath();
-  if (!existsSync(pidPath)) return null;
-  try {
-    const raw = readFileSync(pidPath, "utf-8").trim();
-    const pid = parsePidFile(raw);
-    if (pid === null) return null;
-    try {
-      process.kill(pid, 0);
-      return isLikelyOcxStartProcess(pid) ? pid : null;
-    } catch (e: unknown) {
-      if ((e as NodeJS.ErrnoException).code === "EPERM") {
-        return isLikelyOcxStartProcess(pid) ? pid : null;
-      }
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-
-export function readRuntimePort(expectedPid?: number): RuntimePortState | null {
-  try {
-    const parsed = JSON.parse(readFileSync(getRuntimePortPath(), "utf-8"));
-    if (!isValidRuntimePortState(parsed)) return null;
-    if (expectedPid !== undefined && parsed.pid !== expectedPid) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-export function removePid(expectedPid?: number): void {
-  if (expectedPid !== undefined && readPidFileValue() !== expectedPid) return;
-  try {
-    unlinkSync(getPidPath());
-  } catch { /* ignore */ }
-}
-
 function warnConfigRepaired(configPath: string, error: z.ZodError): void {
   if (warnedConfigFallbacks.has(configPath)) return;
   warnedConfigFallbacks.add(configPath);
@@ -3789,233 +3279,6 @@ function warnDroppedConfigSections(configPath: string, dropped: string[], issues
     `opencodex config at ${configPath}: dropped [${dropped.map(redactEntryPath).join(", ")}] and loaded the rest — ${reasons}. `
     + "Everything else in your config, including providers and modelCosts, is preserved.",
   );
-}
-
-export function readPidFileValue(): number | null {
-  try {
-    return parsePidFile(readFileSync(getPidPath(), "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-export function removeRuntimePort(expectedPid?: number): void {
-  if (expectedPid !== undefined && readRuntimePort(expectedPid) === null) return;
-  try {
-    unlinkSync(getRuntimePortPath());
-  } catch { /* ignore */ }
-}
-
-/**
- * Snapshot-guarded stale-state purge: remove the pid/runtime files only when their content
- * still matches what the caller saw BEFORE its liveness probe. A concurrent `ocx start` can
- * write fresh records mid-probe; an unconditional purge would erase the new proxy's state.
- */
-export function removePidIfValueIs(snapshot: number | null): void {
-  if (!existsSync(getPidPath())) return;
-  if (readPidFileValue() !== snapshot) return;
-  try {
-    unlinkSync(getPidPath());
-  } catch { /* ignore */ }
-}
-
-export function removeRuntimePortIfPidIs(snapshotPid: number | null): void {
-  const current = readRuntimePort();
-  if ((current?.pid ?? null) !== snapshotPid) return;
-  try {
-    unlinkSync(getRuntimePortPath());
-  } catch { /* ignore */ }
-}
-
-export function parsePidFile(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  const pid = Number.parseInt(trimmed, 10);
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-}
-
-export function isOcxStartCommandLine(commandLine: string): boolean {
-  const normalized = commandLine.toLowerCase().replace(/\\/g, "/");
-  // "src/cli.ts" matches pre-restructure installs still running; "src/cli/index.ts" is current.
-  // `@bitkyc08/.opencodex-*` is npm's in-place rename of the global package during
-  // `npm install -g` — a Windows service wrapper can respawn from that temp tree
-  // mid-update, and must still count as ocx for port reclaim.
-  const hasOcxEntrypoint = normalized.includes("src/cli.ts")
-    || normalized.includes("src/cli/index.ts")
-    || /@[a-z0-9._-]+\/opencodex(?:[/'"\s]|$)/.test(normalized)
-    || /@[a-z0-9._-]+\/\.opencodex-/.test(normalized)
-    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd)?(?:$|[\s"'])/.test(normalized);
-  return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
-}
-
-/** Per-process memo: waitForProxy/findLiveProxy used to spawn powershell on every 150ms poll. */
-const ocxStartProcessCache = new Map<number, boolean>();
-let ocxStartProcessSweepCursor = 0;
-let ocxStartProcessProbe: (pid: number) => void = pid => { process.kill(pid, 0); };
-
-export function setOcxStartProcessProbeForTests(probe: ((pid: number) => void) | null): void {
-  ocxStartProcessProbe = probe ?? (pid => { process.kill(pid, 0); });
-}
-
-export function setOcxStartProcessCacheForTests(entries: Iterable<readonly [number, boolean]>): void {
-  ocxStartProcessCache.clear();
-  for (const [pid, value] of entries) ocxStartProcessCache.set(pid, value);
-  ocxStartProcessSweepCursor = 0;
-}
-
-export function sweepDeadOcxStartProcessCache(maxProbes = 64): number {
-  const pids: number[] = [];
-  let removed = 0;
-  for (const pid of ocxStartProcessCache.keys()) {
-    if (Number.isSafeInteger(pid) && pid > 0) pids.push(pid);
-    else if (ocxStartProcessCache.delete(pid)) removed += 1;
-  }
-  if (pids.length === 0 || maxProbes <= 0) {
-    ocxStartProcessSweepCursor = 0;
-    return removed;
-  }
-  const probeCount = Math.min(Math.floor(maxProbes), pids.length);
-  const start = ocxStartProcessSweepCursor % pids.length;
-  for (let offset = 0; offset < probeCount; offset += 1) {
-    const pid = pids[(start + offset) % pids.length]!;
-    try {
-      ocxStartProcessProbe(pid);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
-      if (ocxStartProcessCache.delete(pid)) removed += 1;
-    }
-  }
-  ocxStartProcessSweepCursor = (start + probeCount) % pids.length;
-  return removed;
-}
-
-export function ocxStartProcessCacheSizeForTests(): number {
-  return ocxStartProcessCache.size;
-}
-
-function isLikelyOcxStartProcess(pid: number): boolean {
-  const cached = ocxStartProcessCache.get(pid);
-  if (cached !== undefined) return cached;
-  const commandLine = readProcessCommandLine(pid);
-  if (commandLine === undefined) return false;
-  const ok = isOcxStartCommandLine(commandLine);
-  ocxStartProcessCache.set(pid, ok);
-  return ok;
-}
-
-/**
- * Alive pid from the pid file without the expensive Windows command-line probe.
- * Safe for liveness polls: callers still identity-check /healthz before trusting the proxy.
- * Destructive stop/kill paths should keep using {@link readPid}, which verifies the cmdline.
- */
-export function readAlivePid(): number | null {
-  const pid = readPidFileValue();
-  if (pid === null) return null;
-  try {
-    process.kill(pid, 0);
-    return pid;
-  } catch (e: unknown) {
-    if ((e as NodeJS.ErrnoException).code === "EPERM") return pid;
-    return null;
-  }
-}
-
-/**
- * Full identity check of a KNOWN candidate pid (alive + ocx-start command line).
- * Companion to {@link readAlivePid}: liveness discovery may be cheap, but any pid
- * handed to a destructive caller must pass this check — and must equal the candidate
- * it was asked about, so a pidfile rewrite between discovery and verification can
- * never swap in a different process (TOCTOU guard).
- */
-export function verifyPidIdentity(candidatePid: number): number | null {
-  try {
-    process.kill(candidatePid, 0);
-  } catch (e: unknown) {
-    if ((e as NodeJS.ErrnoException).code !== "EPERM") return null;
-  }
-  return isLikelyOcxStartProcess(candidatePid) ? candidatePid : null;
-}
-
-type ProcessCommandLineExec = (
-  executable: string,
-  args: string[],
-  options: {
-    encoding: BufferEncoding;
-    stdio: ["ignore", "pipe", "ignore"];
-    timeout: number;
-    windowsHide: boolean;
-  },
-) => string;
-
-const defaultProcessCommandLineExec: ProcessCommandLineExec = (executable, args, options) =>
-  execFileSync(executable, args, options);
-let processCommandLineExec = defaultProcessCommandLineExec;
-let processCommandLinePlatformForTests: NodeJS.Platform | null = null;
-
-/** Test-only seam for verifying the exact system executable selected by pid identity probes. */
-export function setProcessCommandLineExecForTests(next: ProcessCommandLineExec | null): void {
-  processCommandLineExec = next ?? defaultProcessCommandLineExec;
-}
-
-/** Test-only seam so cross-platform tests do not mutate process.platform. */
-export function setProcessCommandLinePlatformForTests(next: NodeJS.Platform | null): void {
-  processCommandLinePlatformForTests = next;
-}
-
-function readProcessCommandLine(pid: number): string | undefined {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
-  const platform = processCommandLinePlatformForTests ?? process.platform;
-  try {
-    if (platform === "linux") {
-      try {
-        const output = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
-        const value = output.replace(/\0/g, " ").trim();
-        if (value) return value;
-      } catch {
-        /* procfs unavailable — use the fixed ps fallback below */
-      }
-    }
-    if (platform === "win32") {
-      // Prefer WMIC over PowerShell: much faster cold start, and windowsHide avoids console flash.
-      // Fall back to PowerShell when WMIC is absent (newer Windows images).
-      const wmic = join(resolveTrustedWindowsSystemDirectory(), "wbem", "WMIC.exe");
-      try {
-        const output = processCommandLineExec(wmic, [
-          "process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/VALUE",
-        ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-        const match = /^CommandLine=(.*)$/m.exec(output.replace(/\r/g, ""));
-        const value = match?.[1]?.trim();
-        if (value) return value;
-      } catch {
-        /* WMIC missing or failed — fall through */
-      }
-      const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-      return output.trim() || undefined;
-    }
-    for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
-      try {
-        const output = processCommandLineExec(ps, ["-p", String(pid), "-o", "command="], {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1000,
-          windowsHide: true,
-        });
-        const value = output.trim();
-        if (value) return value;
-      } catch {
-        /* try the other fixed system path */
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function warnAndBackupInvalidConfig(configPath: string, error: unknown): void {

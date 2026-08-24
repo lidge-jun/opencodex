@@ -12,6 +12,7 @@ import { saveCredential } from "../src/oauth/store";
 import { normalizeKiroModelId } from "../src/providers/kiro-models";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../src/reasoning-effort";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 const origHome = process.env.HOME;
@@ -835,7 +836,6 @@ describe("kiro adapter — buildRequest", () => {
     for (const options of [
       { toolChoice: "required" },
       { toolChoice: { name: "bash" } },
-      { parallelToolCalls: true },
       { serviceTier: "priority" },
     ]) {
       await expect(createKiroAdapter(provider).buildRequest({
@@ -852,6 +852,48 @@ describe("kiro adapter — buildRequest", () => {
     const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as OcxParsedRequest;
     const current = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body).conversationState.currentMessage.userInputMessage;
     expect(current.userInputMessageContext?.tools).toBeUndefined();
+  });
+
+  test("accepts Codex's permissive parallel-tool hint while keeping the Kiro wire serialized", async () => {
+    const parsed = parseRequest({
+      model: "kiro/claude-haiku-4.5",
+      input: "test",
+      stream: true,
+      parallel_tool_calls: true,
+      tools: [{
+        type: "function",
+        name: "bash",
+        description: "Run a shell command",
+        parameters: { type: "object" },
+      }],
+    });
+    expect(parsed.options.parallelToolCalls).toBe(true);
+
+    const payload = JSON.parse((await createKiroAdapter(provider).buildRequest(parsed)).body) as {
+      parallel_tool_calls?: boolean;
+      parallelToolCalls?: boolean;
+      conversationState: {
+        parallel_tool_calls?: boolean;
+        parallelToolCalls?: boolean;
+        currentMessage: {
+          userInputMessage: {
+            userInputMessageContext?: {
+              parallel_tool_calls?: boolean;
+              parallelToolCalls?: boolean;
+              tools?: Array<{ toolSpecification?: { name?: string } }>;
+            };
+          };
+        };
+      };
+    };
+    const context = payload.conversationState.currentMessage.userInputMessage.userInputMessageContext;
+    expect(context?.tools?.some(tool => tool.toolSpecification?.name === "bash")).toBe(true);
+    expect(payload.parallel_tool_calls).toBeUndefined();
+    expect(payload.parallelToolCalls).toBeUndefined();
+    expect(payload.conversationState.parallel_tool_calls).toBeUndefined();
+    expect(payload.conversationState.parallelToolCalls).toBeUndefined();
+    expect(context?.parallel_tool_calls).toBeUndefined();
+    expect(context?.parallelToolCalls).toBeUndefined();
   });
 });
 

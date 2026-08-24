@@ -208,11 +208,18 @@ sağlayıcısı önce WebSocket'i deneyebilir ve devre dışı bırakılmış bi
 
 Varsayılan geri döngü formu yeni iş parçacıklarının Codex'in yerel `openai`
 sağlayıcısıyla etiketlenmesini sağlar, böylece normal devam etme geçmişinin
-yeniden eşlenmesi gerekmez. İlk senkronizasyonda daha eski opencodex derlemeleri
-tarafından etiketlenen iş parçacıklarını da `openai`'ye geri geçirir. Geri döngü
-olmayan özel sağlayıcı modu etkinken geçmişi yine de `opencodex` sağlayıcısı
-altında yansıtır ve çıkışta yedeklenen meta verileri geri yükler. Geçmişe
-dokunulmadan bırakmak için `syncResumeHistory: false` ayarlayın.
+yeniden eşlenmesi gerekmez. Sync ve restore yalnızca eşleşen bir yedek manifestini
+uygular ve her iş parçacığının özgün provider, source ve event marker değerlerini
+tam olarak geri yükler. Manifesti olmayan bir `opencodex` satırı değişmeden kalır;
+legacy yeniden etiketlemeyi açıkça zorlamak istediğinizde yalnızca
+`ocx recover-history --legacy-openai --yes` kullanın. Bu komut bilinçli olarak geniş kapsamlıdır:
+kullanıcı iletisi bulunan ve şu anda `opencodex` olarak etiketlenmiş her thread'i `openai`
+olarak yeniden etiketler, `exec` değerini `cli` olarak normalleştirir ve event marker'ı ayarlar;
+geçerli dedicated-provider geçmişi de buna dahildir. Durumu yedekleyin ve yalnızca bu kapsamın
+tamamını istiyorsanız kullanın. Geri döngü olmayan özel sağlayıcı
+modu etkinken geçmişi yine de `opencodex` sağlayıcısı altında yansıtır ve çıkışta
+yedeklenen meta verileri geri yükler. Geçmişe dokunulmadan bırakmak için
+`syncResumeHistory: false` ayarlayın.
 
 ## Model kataloğu senkronizasyonu
 
@@ -316,7 +323,7 @@ tarafından asla geçersiz kılınmaz.
 
 `config.toml` zaten `openai` veya `opencodex` dışında bir sağlayıcı seçiyorsa
 OpenCodex dosyayı değiştirmeden bırakır ve profil yazmalarını, katalog/önbellek
-yenilemesini ve hem anlık hem de arka plan Codex geçmiş geçişini atlar. Özel bir
+yenilemesini ve Codex geçmiş meta verilerinin hem anlık hem de arka planda geri yüklenmesini atlar. Özel bir
 sağlayıcıyı yöneten araçlar genellikle mevcut oturumları bu sağlayıcı kimliğiyle
 etiketler; etkin kimliği değiştirmek bu bozulmamış oturumların Codex'in geçmiş
 görünümünden kaybolmasına neden olabilir. Aynı koruma eski bir kök profil
@@ -430,5 +437,3 @@ opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/#ocx-service)
 olarak çalıştığında `OCX_SERVICE=1` ayarlar, böylece servis odaklı bir yeniden
 başlatma Codex yapılandırmasını **bozmaz** — yalnızca açık bir `ocx stop` / `ocx
 service stop` yerel Codex'i geri yükler.
-
-

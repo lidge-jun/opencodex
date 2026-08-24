@@ -30,6 +30,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import type { OcxConfig } from "../src/types";
+import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "./helpers/codex-history-manifest-fixtures";
 
 let codexHome = "";
 let opencodexHome = "";
@@ -167,11 +168,6 @@ const residueFixtures: Array<{
     })),
   },
   {
-    name: "history database row",
-    surface: "history",
-    arrange: () => createHistoryDatabase("opencodex"),
-  },
-  {
     name: "history backup entry",
     surface: "history-backup",
     arrange: () => {
@@ -202,6 +198,16 @@ for (const fixture of residueFixtures) {
     });
   });
 }
+
+test("a bare routed history row and its matching rollout are not managed residue", () => {
+  createHistoryDatabase("opencodex");
+
+  expect(classifyNativeRoutedResidue()).toEqual({ kind: "clean" });
+  expect(readCodexTransitionState()).toMatchObject({
+    kind: "ready",
+    state: { nativeGeneration: 0, currentTxId: null },
+  });
+});
 
 test("an OpenCodex atomic-write artifact is indeterminate", () => {
   writeFileSync(pathInCodexHome("config.toml.ocx.123.1.tmp"), "partial");
@@ -829,6 +835,51 @@ test("a missing manifest-referenced rollout is indeterminate", () => {
     path: pathInCodexHome("missing-rollout.jsonl"),
   });
 });
+
+test("history backup schema diagnostics preserve entry shape and provenance distinctions", () => {
+  const stateDbPath = join(realpathSync.native(codexHome), "state_5.sqlite");
+  const rolloutPath = pathInCodexHome("rollout.jsonl");
+  writeFileSync(historyBackupPath(), JSON.stringify({
+    version: 1,
+    stateDbPath,
+    entries: { "thread-1": null },
+  }));
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history-backup",
+    reason: "history backup entry has an unknown shape",
+  });
+
+  const invalidProvenance = validHistoryBackupFixture(stateDbPath, rolloutPath);
+  invalidProvenance.entries["thread-1"].id = "thread-2";
+  writeFileSync(historyBackupPath(), JSON.stringify(invalidProvenance));
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history-backup",
+    reason: "history backup entry has invalid provenance metadata",
+  });
+});
+
+for (const fixture of INVALID_HISTORY_BACKUP_FIXTURES) {
+  test(`a history backup with ${fixture.name} is indeterminate and not adopted`, () => {
+    writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "opencodex") + "\n");
+    const manifest = validHistoryBackupFixture(
+      join(realpathSync.native(codexHome), "state_5.sqlite"),
+      pathInCodexHome("rollout.jsonl"),
+    );
+    fixture.mutate(manifest);
+    writeFileSync(historyBackupPath(), JSON.stringify(manifest));
+
+    expect(classifyNativeRoutedResidue()).toMatchObject({
+      kind: "indeterminate",
+      surface: "history-backup",
+    });
+    expect(readCodexTransitionState()).toEqual({
+      kind: "legacy-ambiguous",
+      message: "A missing coordinator row cannot be initialized while native Codex routing residue exists.",
+    });
+  });
+}
 
 const indeterminateFixtures: Array<{
   name: string;

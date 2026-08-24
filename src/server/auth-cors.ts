@@ -1,23 +1,25 @@
 import { timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
+  codexAutoStartEnabled,
+  modelPreferHostedToolsConfigError,
+  providerModelCostsConfigError,
+  requestPacingConfigError,
+  retryOn429PolicyConfigError,
+  sanitizeModelCostsForDisplay,
+} from "../config";
+import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
-  modelPreferHostedToolsConfigError,
-  codexAutoStartEnabled,
   nonBlankStringArrayConfigError,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
-  providerModelCostsConfigError,
   reasoningSummaryDeliveryRecordConfigError,
-  retryOn429PolicyConfigError,
-  requestPacingConfigError,
-  sanitizeModelCostsForDisplay,
   upstreamHttpVersionConfigError,
-} from "../config";
+} from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";

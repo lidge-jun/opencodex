@@ -177,6 +177,7 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | Result | Behavior |
 | --- | --- |
 | HTTP 401, 403, 404, 408, 429, or any 5xx | Cool the target and hop to the next eligible target. |
+| HTTP 410 with an explicit model end-of-life, retired, deprecated, sunset, decommissioned, or no-longer-available signal | Cool that target and hop. Unrelated 410 responses remain terminal. |
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or invalid request | Stop and return the error; another target would not make the request valid. |
 | Any other unclassified error | Stop and return the error. |
@@ -193,6 +194,15 @@ cooldown expires. If no eligible target remains, the proxy returns HTTP 503 with
 Failover is intentionally bounded. It helps with target-specific availability, authentication,
 quota, and overload failures; it does not hide caller errors or policy refusals.
 :::
+
+For streaming requests, the upstream HTTP status is not the final decision. OpenCodex buffers a
+bounded pre-output prefix of the selected child's Responses SSE. If the stream reports a retryable
+`response.failed` terminal before any text, reasoning, tool call, or other output event, the child
+is recorded as failed and the combo may try its next eligible target. Once any output event begins,
+the target is committed: a later stream failure is returned to the client and is never replayed on
+another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
+its safety cap without a terminal or output boundary, OpenCodex also commits the current target
+instead of growing memory without a bound.
 
 ## Default reasoning effort
 
@@ -257,6 +267,11 @@ task workflow.
 
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
 combos, and its target picker excludes disabled models and nested combos.
+
+Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. Save and
+Create are disabled only when every enabled target has fresh, complete evidence that its quota is exhausted.
+Missing, stale, malformed, or incomplete aggregate evidence stays unknown and never locks a control. Polling
+continues while the workspace is visible, so recovery automatically restores the action.
 
 ### CLI
 

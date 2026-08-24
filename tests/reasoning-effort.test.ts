@@ -973,4 +973,66 @@ describe("stale reasoning-ladder self-heal", () => {
     };
     expect(configuredReasoningEfforts(prov, "model")).toEqual([]);
   });
+
+  test("per-effort omission sentinel (__omit__) drops reasoning_effort from the wire (#2356)", () => {
+    const ollamaProv: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "http://localhost:11434/v1",
+      modelReasoningEfforts: {
+        "qwen3.8-uncensored:27b-q4": ["low", "medium", "high", "xhigh", "max"],
+      },
+      modelReasoningEffortMap: {
+        "qwen3.8-uncensored:27b-q4": {
+          low: "low",
+          medium: "medium",
+          high: "__omit__",
+          xhigh: "__omit__",
+          max: "__omit__",
+        },
+      },
+    };
+
+    // High/xhigh/max/ultra map to undefined (omitted on wire)
+    expect(mapReasoningEffort(ollamaProv, "qwen3.8-uncensored:27b-q4", "high")).toBeUndefined();
+    expect(mapReasoningEffort(ollamaProv, "qwen3.8-uncensored:27b-q4", "xhigh")).toBeUndefined();
+    expect(mapReasoningEffort(ollamaProv, "qwen3.8-uncensored:27b-q4", "max")).toBeUndefined();
+    expect(mapReasoningEffort(ollamaProv, "qwen3.8-uncensored:27b-q4", "ultra")).toBeUndefined();
+
+    // Low and medium map to explicit wire values
+    expect(mapReasoningEffort(ollamaProv, "qwen3.8-uncensored:27b-q4", "low")).toBe("low");
+    expect(mapReasoningEffort(ollamaProv, "qwen3.8-uncensored:27b-q4", "medium")).toBe("medium");
+
+    const fallbackProv: OcxProviderConfig = {
+      ...ollamaProv,
+      modelReasoningEfforts: {
+        "qwen3.8-uncensored:27b-q4": ["low", "high"],
+      },
+      modelReasoningEffortMap: {
+        "qwen3.8-uncensored:27b-q4": { high: "__omit__" },
+      },
+    };
+    expect(mapReasoningEffort(fallbackProv, "qwen3.8-uncensored:27b-q4", "xhigh")).toBeUndefined();
+
+    // Verify in openai-chat adapter buildRequest: field is completely omitted when mapped to __omit__
+    const adapter = createOpenAIChatAdapter(ollamaProv);
+    const reqMax = adapter.buildRequest({
+      modelId: "qwen3.8-uncensored:27b-q4",
+      stream: false,
+      context: { messages: [{ role: "user", content: "deep thinking" }] },
+      options: { reasoning: "max" },
+    } as OcxParsedRequest);
+    const bodyMax = JSON.parse(reqMax.body as string);
+    expect(bodyMax.reasoning_effort).toBeUndefined();
+    expect(bodyMax).not.toHaveProperty("reasoning_effort");
+
+    // Field is present when mapped to a real string
+    const reqLow = adapter.buildRequest({
+      modelId: "qwen3.8-uncensored:27b-q4",
+      stream: false,
+      context: { messages: [{ role: "user", content: "fast turn" }] },
+      options: { reasoning: "low" },
+    } as OcxParsedRequest);
+    const bodyLow = JSON.parse(reqLow.body as string);
+    expect(bodyLow.reasoning_effort).toBe("low");
+  });
 });

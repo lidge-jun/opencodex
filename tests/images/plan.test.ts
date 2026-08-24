@@ -116,8 +116,14 @@ describe("planImageBridge", () => {
     parsed.options.toolChoice = { name: "generate_image" };
     const aliasPlan = await planImageBridge(cfg, parsed, routed);
     expect(aliasPlan).toBeDefined();
-    expect(aliasPlan!.toolNames.has("image_gen")).toBe(false);
+    expect(aliasPlan!.toolNames.has("image_gen")).toBe(true);
     expect(aliasPlan!.toolNames.has("generate_image")).toBe(true);
+
+    parsed.options.toolChoice = { allowedTools: ["generate_image"], mode: "required" };
+    const allowedAliasPlan = await planImageBridge(cfg, parsed, routed);
+    expect(allowedAliasPlan).toBeDefined();
+    expect(allowedAliasPlan!.toolNames.has("image_gen")).toBe(true);
+    expect(allowedAliasPlan!.toolNames.has("generate_image")).toBe(true);
   });
 
   test("xAI provider with OAuth only (no API key) → undefined (API-key-only bridge)", async () => {

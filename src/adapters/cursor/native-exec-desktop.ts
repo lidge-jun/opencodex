@@ -122,6 +122,10 @@ function recordScreenFailure(error: string): RecordScreenResult {
   });
 }
 
+function isBrokenPipe(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "EPIPE");
+}
+
 /**
  * Spawn `command` via the platform shell (sh -c on POSIX, cmd.exe /d /s /c on win32 —
  * the configured command is platform-native shell syntax; devlog
@@ -170,10 +174,22 @@ function runExternalJson(command: string, payload: unknown, config: DesktopExecu
       }
     });
 
+    // A child that prints and exits without reading stdin (echo, exit N) closes
+    // the pipe under the write. The async EPIPE is expected; wait for `close`
+    // and parse whatever stdout we got. An unhandled stdin error event would
+    // otherwise escape the Promise and fail the caller as an uncaught exception.
+    child.stdin.on("error", err => {
+      if (isBrokenPipe(err)) return;
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
     try {
       child.stdin.write(JSON.stringify(payload));
       child.stdin.end();
     } catch (err) {
+      if (isBrokenPipe(err)) return;
       if (!settled) {
         settled = true;
         clearTimeout(timer);

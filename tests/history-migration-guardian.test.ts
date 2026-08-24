@@ -52,7 +52,7 @@ describe("history migration guardian", () => {
         attempts++;
         return attempts < 3
           ? { rows: 0, files: 0, failed: true as const }
-          : { rows: 2, files: 2, ejectedRows: 1 };
+          : { rows: 2, files: 2 };
       },
       log: { log: (msg: string) => logs.push(msg) },
       scheduleFn: sched.scheduleFn,
@@ -62,7 +62,7 @@ describe("history migration guardian", () => {
     expect(await sched.runNext()).toBe(true); // tick 2: locked
     expect(await sched.runNext()).toBe(true); // tick 3: success
     expect(attempts).toBe(3);
-    expect(logs.some(l => l.includes("3 legacy opencodex thread(s) migrated"))).toBe(true);
+    expect(logs.some(l => l.includes("restored original provider metadata for 2 manifest-backed thread(s)"))).toBe(true);
     expect(sched.size).toBe(0); // stopped after success
   });
 
@@ -80,6 +80,7 @@ describe("history migration guardian", () => {
     expect(await sched.runNext()).toBe(true);
     expect(sched.size).toBe(0); // budget exhausted — no reschedule
     expect(logs.some(l => l.includes("Could not verify"))).toBe(true);
+    expect(logs.some(l => l.includes("backed-up provider metadata"))).toBe(true);
     expect(logs.some(l => l.includes("stayed locked"))).toBe(false);
   });
 

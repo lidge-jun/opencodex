@@ -179,9 +179,14 @@ HTTP/SSE.
 ## Thread identity and history
 
 The default loopback form keeps new threads tagged with Codex's native `openai` provider, so normal
-resume history needs no remapping. On first sync it also migrates threads tagged by older opencodex
-builds back to `openai`. Non-loopback dedicated-provider mode still mirrors history under the
-`opencodex` provider while active and restores the backed-up metadata on exit. Set
+resume history needs no remapping. Sync and restore apply only a matching backup manifest and
+restore each thread's exact original provider, source, and event marker. A bare `opencodex` row with
+no manifest is left unchanged; use `ocx recover-history --legacy-openai --yes` only when you explicitly
+intend to force that legacy relabel. The command is intentionally broad: it rewrites every thread
+with a user message currently tagged `opencodex` to `openai`, normalizes `exec` to `cli`, and sets
+the event marker—including legitimate dedicated-provider history. Back up the state and use it only
+when that full scope is intended. Non-loopback dedicated-provider mode still mirrors history
+under the `opencodex` provider while active and restores the backed-up metadata on exit. Set
 `syncResumeHistory: false` to leave history untouched.
 
 ## Model catalog sync
@@ -293,7 +298,7 @@ name.
 
 If `config.toml` already selects a provider other than `openai` or `opencodex`, OpenCodex leaves the
 file unchanged and skips profile writes, catalog/cache refresh, and both immediate and background
-Codex history migration. Tools that manage a custom provider often tag existing sessions with that
+Codex history metadata restoration. Tools that manage a custom provider often tag existing sessions with that
 provider id; replacing the active id can make those intact sessions disappear from Codex's history
 view. The same protection applies to an external provider selected by a legacy root profile.
 

@@ -6,12 +6,14 @@ import {
   atomicWriteFile,
   getConfigDir,
   loadConfig,
+} from "../config";
+import {
   readPid,
   readRuntimePort,
   removePid,
   removeRuntimePort,
   verifyPidIdentity,
-} from "../config";
+} from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
