@@ -288,8 +288,10 @@ shapes. High-confidence policy errors carried as `response.incomplete`, `respons
 top-level `error` are normalized to one `response.failed / cyber_policy` event without changing the
 refusal outcome; later bytes cannot create a second terminal. A clean HTTP 200 EOF with no terminal
 instead emits one `response.incomplete` with `adapter_eof`, followed by one `[DONE]`. Delimiter-less
-EOF terminals are parsed through the same bounded frame path, so pull/tee and eager relays agree on
-terminal, sentinel, and request-log accounting.
+EOF candidates follow the owning repair policy: the native boundary accepts a structurally valid
+terminal tail, while an opted-in terminal repair keeps its unframed suffix tainted and emits
+`missing_terminal_event`. Pull/tee and eager relays therefore agree on terminal, sentinel, and
+request-log accounting without promoting a truncated repair candidate.
 
 [Decision Log]
 - 목적과 의도: Turn upstream terminal variants and bare EOF into one deterministic Responses
@@ -299,8 +301,8 @@ terminal, sentinel, and request-log accounting.
 - 검토한 주요 대안: Forward every byte unchanged; classify only request logs; synthesize a failure
   after every EOF or read error; normalize the bounded terminal at the client output boundary.
 - 선택한 방식: Rewrite only high-confidence policy terminal shapes, preserve their bounded metadata,
-  flush an unterminated terminal before transport-error classification, and synthesize `adapter_eof`
-  only when no real terminal exists.
+  flush native terminal candidates before transport-error classification, keep repair-owned
+  delimiter-less candidates tainted, and synthesize `adapter_eof` only when no real terminal exists.
 - 다른 대안 대신 이 방식을 선택한 이유: Log-only classification leaves Codex retry behavior
   unchanged, while unconditional synthesis can create two contradictory outcomes for one turn.
 - 장점, 단점 및 영향: Both native relay shapes expose exactly one terminal and one sentinel with
