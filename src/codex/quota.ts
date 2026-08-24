@@ -23,6 +23,7 @@ export type StoredAccountQuota = {
   shortPercent?: number;
   shortResetAt?: number;
   shortWindowSeconds?: number;
+  customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
   /**
    * True when `monthlyPercent` came from an explicitly-monthly PRIMARY window —
@@ -60,6 +61,16 @@ export type WhamUsageResponse = {
   };
   rate_limit_reset_credits?: {
     available_count: number;
+  } | null;
+  additional_rate_limits?: WhamAdditionalRateLimit[] | null;
+};
+
+type WhamAdditionalRateLimit = {
+  limit_name?: unknown;
+  metered_feature?: unknown;
+  rate_limit?: {
+    primary_window?: WhamUsageWindow | null;
+    secondary_window?: WhamUsageWindow | null;
   } | null;
 };
 
@@ -187,7 +198,8 @@ function normalizeResetAt(value: unknown): number | undefined {
 
 function hasKnownQuotaValue(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return [quota.weeklyPercent, quota.monthlyPercent, quota.shortPercent]
-    .some(value => typeof value === "number" && Number.isFinite(value));
+    .some(value => typeof value === "number" && Number.isFinite(value))
+    || !!quota.customWindows?.some(window => Number.isFinite(window.percent));
 }
 
 /** True only for a window that DECLARES a duration shorter than a day. */
@@ -232,8 +244,12 @@ function snapshotHasShort(quota: Omit<StoredAccountQuota, "updatedAt">): boolean
     || quota.shortWindowSeconds !== undefined;
 }
 
+function snapshotHasCustom(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.customWindows !== undefined;
+}
+
 function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
-  return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota);
+  return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota);
 }
 export function setAccountQuotaFromParsed(
   accountId: string,
@@ -255,6 +271,7 @@ export function setAccountQuotaFromParsed(
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
+    if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
     next.resetCredits = quota.resetCredits;
     accountQuota.set(accountId, next);
     schedulePersistAccountQuotas();
@@ -297,6 +314,8 @@ export function setAccountQuotaFromParsed(
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
   }
+
+  if (snapshotHasCustom(quota)) next.customWindows = quota.customWindows;
 
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
@@ -394,6 +413,7 @@ export function updateAccountQuota(
     ...(existing?.shortPercent !== undefined ? { shortPercent: existing.shortPercent } : {}),
     ...(existing?.shortResetAt !== undefined ? { shortResetAt: existing.shortResetAt } : {}),
     ...(existing?.shortWindowSeconds !== undefined ? { shortWindowSeconds: existing.shortWindowSeconds } : {}),
+    ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
     ...(existing?.resetCredits !== undefined ? { resetCredits: existing.resetCredits } : {}),
     updatedAt: Date.now(),
   };
@@ -506,6 +526,9 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
     : undefined;
 
   if (!data.rate_limit) {
+    if (data.additional_rate_limits?.length) {
+      return parseUsageQuota({ ...data, rate_limit: {} });
+    }
     return resetCredits !== undefined ? { resetCredits } : null;
   }
 
@@ -566,6 +589,32 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
     // account's governing quota; a tertiary window lands in the same field but describes a
     // different period, so recovery must not treat the two as interchangeable.
     if (primaryIsMonthly && primaryPercent !== undefined) quota.monthlyIsPrimaryWindow = true;
+  }
+
+  const spark = data.additional_rate_limits?.find(additional => {
+    const name = String(additional.limit_name ?? "").toLowerCase();
+    const feature = String(additional.metered_feature ?? "").toLowerCase();
+    return feature === "codex_bengalfox" || name.includes("gpt-5.3-codex-spark");
+  });
+  const sparkWindows = [spark?.rate_limit?.primary_window, spark?.rate_limit?.secondary_window]
+    .filter((window): window is WhamUsageWindow => !!window);
+  const sparkWeekly = sparkWindows.find(window => {
+    const percent = normalizeUsagePercent(window.used_percent);
+    const seconds = window.limit_window_seconds;
+    return percent !== undefined
+      && !isExplicitShortWindow(window)
+      && !isExplicitMonthlyWindow(window)
+      && (seconds === undefined || seconds >= WEEKLY_WINDOW_MIN_SECONDS);
+  });
+  const sparkPercent = normalizeUsagePercent(sparkWeekly?.used_percent);
+  if (sparkPercent !== undefined) {
+    const sparkWindow: { label: string; percent: number; resetAt?: number } = {
+      label: "GPT-5.3-Codex-Spark Weekly",
+      percent: sparkPercent,
+    };
+    const resetAt = normalizeResetAt(sparkWeekly?.reset_at);
+    if (resetAt !== undefined) sparkWindow.resetAt = resetAt;
+    quota.customWindows = [sparkWindow];
   }
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 

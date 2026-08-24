@@ -222,6 +222,7 @@ function quotaForPlan<T extends Omit<StoredAccountQuota, "updatedAt"> | StoredAc
     ...(quota.shortPercent !== undefined ? { shortPercent: quota.shortPercent } : {}),
     ...(quota.shortResetAt !== undefined ? { shortResetAt: quota.shortResetAt } : {}),
     ...(quota.shortWindowSeconds !== undefined ? { shortWindowSeconds: quota.shortWindowSeconds } : {}),
+    ...(quota.customWindows !== undefined ? { customWindows: quota.customWindows } : {}),
     ...(quota.resetCredits !== undefined ? { resetCredits: quota.resetCredits } : {}),
     ...("updatedAt" in quota ? { updatedAt: quota.updatedAt } : {}),
   } as T;
