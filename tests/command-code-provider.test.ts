@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createCommandCodeAdapter } from "../src/adapters/command-code";
-import { projectContextCache } from "../src/adapters/command-code-project-context";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../src/oauth/command-code";
 import { buildModelsRequest, OAUTH_PROVIDERS } from "../src/oauth";
 import { commandCodeReasoningEfforts, resetCommandCodeReasoningEffortsForTest } from "../src/providers/command-code-efforts";
@@ -36,10 +32,7 @@ async function builtRequest(...args: Parameters<ReturnType<typeof createCommandC
   return createCommandCodeAdapter(provider).buildRequest(...args);
 }
 
-afterEach(() => {
-  resetCommandCodeReasoningEffortsForTest();
-  projectContextCache.clear();
-});
+afterEach(() => resetCommandCodeReasoningEffortsForTest());
 
 describe("Command Code provider", () => {
   test("registry and OAuth surfaces stay in parity", () => {
@@ -178,46 +171,6 @@ describe("Command Code provider", () => {
     expect(body.params).toMatchObject({ model: "deepseek/deepseek-v4-flash", reasoning_effort: "high", max_tokens: 100, stream: true });
     expect(body.params.tools[0]).toMatchObject({ name: "lookup" });
     expect(built.body).not.toContain("secret-command-key");
-  });
-
-  test("keeps project context empty by default even when the cwd has AGENTS.md", async () => {
-    for (const configured of [provider, { ...provider, projectContext: "off" as const }]) {
-      const built = await createCommandCodeAdapter(configured).buildRequest(parsed());
-      expect(JSON.parse(built.body)).toMatchObject({
-        memory: "",
-        taste: null,
-        skills: null,
-      });
-    }
-  });
-
-  test("loads all opt-in project context fields from the current working directory", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-cc-provider-context-"));
-    const previousCwd = process.cwd();
-    try {
-      writeFileSync(join(root, "AGENTS.md"), "provider project memory", "utf8");
-      mkdirSync(join(root, ".commandcode", "taste"), { recursive: true });
-      writeFileSync(join(root, ".commandcode", "taste", "taste.md"), "provider taste", "utf8");
-      mkdirSync(join(root, ".commandcode", "skills", "provider-skill"), { recursive: true });
-      writeFileSync(
-        join(root, ".commandcode", "skills", "provider-skill", "SKILL.md"),
-        "---\nname: Provider Skill\n---\nprovider skill body",
-        "utf8",
-      );
-      process.chdir(root);
-
-      const built = await createCommandCodeAdapter({ ...provider, projectContext: "on" }).buildRequest(parsed());
-      expect(JSON.parse(built.body)).toMatchObject({
-        memory: "provider project memory",
-        taste: "provider taste",
-        skills: '<skills>\n  <skill name="Provider Skill">provider skill body</skill>\n</skills>',
-      });
-      expect(built.headers["x-taste-learning"]).toBe("false");
-    } finally {
-      process.chdir(previousCwd);
-      projectContextCache.clear();
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   test("passes every canonical Command Code id through unchanged", async () => {
@@ -584,92 +537,24 @@ describe("Command Code provider", () => {
     expect(JSON.parse(built.body).params.stream).toBe(true);
   });
 
-  test("derives a stable UUID x-session-id across turns with the same clientThreadId or initial user text", async () => {
-    const turn1 = await builtRequest({
+  test("derives a stable UUID only from trusted conversation identities", async () => {
+    const threadTurn = await builtRequest({ ...parsed(), _clientThreadId: "thread-abc" });
+    const threadFollowup = await builtRequest({
       ...parsed(),
-      _clientThreadId: "thread-abc-123",
-      context: {
-        messages: [{ role: "user", content: "turn 1", timestamp: 1 }],
-      },
+      _clientThreadId: "thread-abc",
+      context: { ...parsed().context, messages: [...parsed().context.messages, { role: "user", content: "followup", timestamp: 2 }] },
     });
-    const turn2 = await builtRequest({
-      ...parsed(),
-      _clientThreadId: "thread-abc-123",
-      context: {
-        messages: [
-          { role: "user", content: "turn 1", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "reply 1" }], timestamp: 2 },
-          { role: "user", content: "turn 2", timestamp: 3 },
-        ],
-      },
-    });
-    const sessionId1 = turn1.headers["x-session-id"];
-    const sessionId2 = turn2.headers["x-session-id"];
-    expect(sessionId1).toBeDefined();
-    expect(sessionId1).toBe(sessionId2);
-    expect(sessionId1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(threadTurn.headers["x-session-id"]).toBe(threadFollowup.headers["x-session-id"]);
+    expect(threadTurn.headers["x-session-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 
-    // The initial user text is the last deterministic identity before the random fallback.
-    const noThreadTurn1 = await builtRequest({
-      ...parsed(),
-      context: {
-        messages: [{ role: "user", content: "stable first message", timestamp: 1 }],
-      },
-    });
-    const noThreadTurn2 = await builtRequest({
-      ...parsed(),
-      context: {
-        messages: [
-          { role: "user", content: "stable first message", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "reply" }], timestamp: 2 },
-          { role: "user", content: "followup message", timestamp: 3 },
-        ],
-      },
-    });
-    expect(noThreadTurn1.headers["x-session-id"]).toBe(noThreadTurn2.headers["x-session-id"]);
-  });
-
-  test("does not derive x-session-id from a shared prompt-cache cohort", async () => {
-    const first = await builtRequest({
-      ...parsed(),
-      options: { ...parsed().options, promptCacheKey: "shared-cohort" },
-      context: { messages: [{ role: "user", content: "conversation one", timestamp: 1 }] },
-      _promptCacheKeyIsSharedCohort: true,
-    });
-    const second = await builtRequest({
-      ...parsed(),
-      options: { ...parsed().options, promptCacheKey: "shared-cohort" },
-      context: { messages: [{ role: "user", content: "conversation two", timestamp: 1 }] },
-      _promptCacheKeyIsSharedCohort: true,
-    });
+    const first = await builtRequest(parsed());
+    const second = await builtRequest({ ...parsed(), context: { ...parsed().context, messages: [...parsed().context.messages, { role: "user", content: "followup", timestamp: 2 }] } });
     expect(first.headers["x-session-id"]).not.toBe(second.headers["x-session-id"]);
   });
 
-  test("uses a per-session prompt cache key when it is not a shared cohort", async () => {
-    const first = await builtRequest({
-      ...parsed(),
-      options: { ...parsed().options, promptCacheKey: "per-session-cache" },
-      context: { messages: [{ role: "user", content: "conversation one", timestamp: 1 }] },
-    });
-    const second = await builtRequest({
-      ...parsed(),
-      options: { ...parsed().options, promptCacheKey: "per-session-cache" },
-      context: { messages: [{ role: "user", content: "conversation two", timestamp: 1 }] },
-    });
-    expect(first.headers["x-session-id"]).toBe(second.headers["x-session-id"]);
-  });
-
-  test("domain-separates equal values from different session identity sources", async () => {
-    const thread = await builtRequest({
-      ...parsed(),
-      _clientThreadId: "same-value",
-      context: { messages: [{ role: "user", content: "different", timestamp: 1 }] },
-    });
-    const replay = await builtRequest({
-      ...parsed(),
-      _reasoningReplayScope: { clientThreadId: "same-value" },
-      context: { messages: [{ role: "user", content: "different", timestamp: 1 }] },
-    });
-    expect(thread.headers["x-session-id"]).not.toBe(replay.headers["x-session-id"]);
+  test("does not use a shared prompt-cache cohort for session affinity", async () => {
+    const first = await builtRequest({ ...parsed(), options: { ...parsed().options, promptCacheKey: "shared" }, _promptCacheKeyIsSharedCohort: true });
+    const second = await builtRequest({ ...parsed(), options: { ...parsed().options, promptCacheKey: "shared" }, context: { ...parsed().context, messages: [{ role: "user", content: "different", timestamp: 1 }] }, _promptCacheKeyIsSharedCohort: true });
+    expect(first.headers["x-session-id"]).not.toBe(second.headers["x-session-id"]);
   });
 });

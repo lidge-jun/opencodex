@@ -12,7 +12,6 @@ import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from 
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
-import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
 // Retain the short ids emitted by the first local integration. New requests use the live catalog's
 // provider-native IDs directly; this map is compatibility-only and is not a model fallback list.
@@ -216,24 +215,15 @@ export function commandCodeSessionId(parsed: OcxParsedRequest): string {
   const threadId = parsed._clientThreadId?.trim();
   const replayId = parsed._reasoningReplayScope?.clientThreadId?.trim();
   const cacheKey = !parsed._promptCacheKeyIsSharedCohort ? parsed.options.promptCacheKey?.trim() : undefined;
-  const firstUserText = parsed.context.messages
-    .find(message => message.role === "user")?.content;
-  const userText = typeof firstUserText === "string"
-    ? firstUserText.trim()
-    : firstUserText?.filter(part => part.type === "text").map(part => part.text).join(" ").trim();
   const identity = threadId
     ? ["thread", threadId]
     : replayId
       ? ["replay", replayId]
       : cacheKey
         ? ["cache", cacheKey]
-        : userText
-          ? ["first-user", userText]
-          : undefined;
+        : undefined;
   if (!identity) return randomUUID();
-  const hex = createHash("sha256")
-    .update(`command-code:${identity[0]}\0${identity[1]}`)
-    .digest("hex");
+  const hex = createHash("sha256").update(`command-code:${identity[0]}\0${identity[1]}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -490,11 +480,8 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         ...(choiceInstruction ? [choiceInstruction] : []),
       ].join("\n\n"), parsed.modelId);
       const reasoningEffort = supportedCommandCodeEffort(provider, parsed.modelId, parsed.options.reasoning);
-      const projectContext = provider.projectContext === "on"
-        ? await loadCommandCodeProjectContext(cwd)
-        : EMPTY_COMMAND_CODE_PROJECT_CONTEXT;
       const body = {
-        config: await commandCodeConfig(cwd), ...projectContext,
+        config: await commandCodeConfig(cwd), memory: "", taste: null, skills: null,
         permissionMode: "standard", mode: "agent",
         params: {
           model: canonicalCommandCodeModelId(parsed.modelId),
