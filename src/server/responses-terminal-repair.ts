@@ -293,10 +293,13 @@ export function relayResponsesSseWithTerminalRepair(
           appendBuffer(decoder.decode());
           if (buffer.length > 0) {
             // A delimiter-less suffix is not a complete SSE event. Preserve the
-            // upstream bytes for passthrough compatibility, but never let a
-            // truncated lifecycle frame establish synthetic success.
+            // upstream bytes for passthrough compatibility, but terminate the
+            // preserved block before emitting the synthetic terminal. Without
+            // this delimiter the boundary relay sees both JSON payloads as one
+            // malformed SSE block and appends a second adapter_eof terminal.
             tainted = true;
             controller.enqueue(encoder.encode(buffer));
+            controller.enqueue(encoder.encode(buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n"));
           }
           if (!realTerminalSeen) {
             emitSynthetic(completeCandidate() ? "completed" : "incomplete", controller);
