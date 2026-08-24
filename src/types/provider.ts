@@ -245,6 +245,11 @@ export interface OcxProviderConfig {
    */
   codexAccountMode?: CodexAccountMode;
   apiKey?: string;
+  /** Azure OpenAI identity authentication; mutually exclusive with API-key fields. */
+  azureCredential?: {
+    type: "default-azure-credential";
+    managedIdentityClientId?: string;
+  };
   /**
    * Key-auth header style for Anthropic-compatible providers.
    * Defaults to the native Anthropic `x-api-key`; gateways may require

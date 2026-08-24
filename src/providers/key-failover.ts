@@ -9,6 +9,7 @@
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
 import { saveConfigPreservingClaudeCode } from "../config";
+import { isAzureIdentityProvider } from "../config/provider-validation";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy } from "../types";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
@@ -84,6 +85,7 @@ function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()):
  * Returns true only for key-auth providers with 2+ pool entries.
  */
 export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
+  if (isAzureIdentityProvider(provider)) return false;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return false;
   return (provider.apiKeyPool?.length ?? 0) >= 2;
 }
@@ -96,7 +98,7 @@ export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
  * callers never re-check fields.
  */
 export function rateLimitRetryPolicyFor(
-  provider: Pick<OcxProviderConfig, "retryOn429" | "authMode">,
+  provider: Pick<OcxProviderConfig, "retryOn429" | "authMode" | "adapter" | "azureCredential">,
 ): Required<RateLimitRetryPolicy> | null {
   const policy = provider.retryOn429;
   if (!policy || policy.enabled === false) return null;
@@ -105,6 +107,7 @@ export function rateLimitRetryPolicyFor(
   // same token, local runtimes have no remote key to preserve, and unknown/custom values are
   // rejected rather than guessed at.
   if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  if (isAzureIdentityProvider(provider)) return null;
   return {
     enabled: policy.enabled ?? DEFAULT_RATE_LIMIT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_RATE_LIMIT_RETRY.attempts,
@@ -153,6 +156,7 @@ export function rotateKeyOn429(
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
+  if (isAzureIdentityProvider(provider)) return null;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
 
   const pool = provider.apiKeyPool;

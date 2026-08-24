@@ -20,6 +20,7 @@ import {
   upstreamHttpVersionConfigError,
   withConfigMutationLockSync,
 } from "../../config";
+import { isAzureIdentityProvider } from "../../config/provider-validation";
 import {
   clearLoginState,
   getLoginStatus,
@@ -156,6 +157,20 @@ function applyProviderPatchFields(
     } else {
       return { error: "authMode must be key, forward, oauth, or local" };
     }
+  }
+  if (Object.hasOwn(rawBody, "azureCredential")) {
+    const value = rawBody.azureCredential;
+    if (value === null) {
+      delete next.azureCredential;
+    } else {
+      if (!isPlainRecord(value)) return { error: "azureCredential must be an object or null" };
+      const credential = structuredClone(value) as Record<string, unknown>;
+      if (typeof credential.managedIdentityClientId === "string") {
+        credential.managedIdentityClientId = credential.managedIdentityClientId.trim();
+      }
+      next.azureCredential = credential as OcxProviderConfig["azureCredential"];
+    }
+    touched = true;
   }
   if (Object.hasOwn(rawBody, "apiKeyTransport")) {
     const transport = rawBody.apiKeyTransport;
@@ -397,6 +412,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
       hasApiKey: !!p.apiKey,
+      hasAzureCredential: isAzureIdentityProvider(p),
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
@@ -501,6 +517,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const serviceTierError = providerServiceTierConfigError(name, body.provider);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
     const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
+    if (prov?.azureCredential?.managedIdentityClientId !== undefined) {
+      prov.azureCredential.managedIdentityClientId = prov.azureCredential.managedIdentityClientId.trim();
+    }
     // PATCH already clears on null; POST persisted the body as submitted, so a `null` here
     // reached disk and the next loadConfig() refused it. Canonicalize to absent, which is what
     // "clear" means everywhere else.
@@ -542,7 +561,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
     // let the (possibly new) apiKey join the pool as the active entry.
     const existingPool = config.providers[name]?.apiKeyPool;
-    if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
+    if (existingPool && !prov.apiKeyPool && !prov.azureCredential) prov.apiKeyPool = existingPool;
     // The same rule applies to user-configured price overlays: the dashboard's
     // add/edit form does not send modelCosts, so an overwrite must not silently
     // erase hand-edited per-model prices from Logs/Usage estimates.
@@ -568,6 +587,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
         : { ...existing.modelContextWindows };
     }
+    const mergedProviderError = providerManagementConfigError(name, prov);
+    if (mergedProviderError) return jsonResponse({ error: mergedProviderError }, 400);
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
@@ -713,6 +734,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+      hasAzureCredential: isAzureIdentityProvider(config.providers[name]!),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
         : {}),

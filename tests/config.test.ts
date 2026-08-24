@@ -112,6 +112,33 @@ function writeAccountNamespaceConfig(
 }
 
 describe("opencodex config defaults", () => {
+  test("config candidate validates and preserves strict Azure identity", () => {
+    const base = getDefaultConfig();
+    const valid = validateConfigCandidate({
+      ...base,
+      defaultProvider: "azure",
+      providers: {
+        azure: {
+          adapter: "azure-openai",
+          baseUrl: "https://resource.openai.azure.com/openai",
+          azureCredential: { type: "default-azure-credential", managedIdentityClientId: "  client-123  " },
+        },
+      },
+    });
+    expect(valid.ok).toBe(true);
+    if (valid.ok) expect(valid.config.providers.azure?.azureCredential?.managedIdentityClientId).toBe("client-123");
+
+    expect(validateConfigCandidate({
+      ...base,
+      defaultProvider: "azure",
+      providers: { azure: { adapter: "openai-chat", baseUrl: "https://example.test/v1", azureCredential: { type: "default-azure-credential" } } },
+    }).ok).toBe(false);
+    expect(validateConfigCandidate({
+      ...base,
+      defaultProvider: "azure",
+      providers: { azure: { adapter: "azure-openai", baseUrl: "https://resource.openai.azure.com/openai", azureCredential: { type: "default-azure-credential", unknown: "x" } } },
+    }).ok).toBe(false);
+  });
   test("malformed classifier config is normalized at load, even with subagentEffort absent (#1697)", () => {
     // normalizePersistedClaudeCode used to be reached only through a subagentEffort short-circuit,
     // so a config whose ONLY defect was elsewhere in claudeCode was never normalized. These

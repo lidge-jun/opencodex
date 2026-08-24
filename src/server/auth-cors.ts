@@ -10,6 +10,7 @@ import {
 } from "../config";
 import {
   apiKeyTransportConfigError,
+  azureCredentialConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
@@ -19,6 +20,7 @@ import {
   providerHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
+  isAzureIdentityProvider,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
@@ -605,6 +607,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
+  const azureCredentialError = azureCredentialConfigError(raw);
+  if (azureCredentialError) return `provider ${name} ${azureCredentialError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
@@ -689,6 +693,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       adapter: provider.adapter,
       baseUrl: publicProviderBaseUrl(provider.baseUrl),
       hasApiKey: !!provider.apiKey,
+      hasAzureCredential: isAzureIdentityProvider(provider),
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
     };
     if (name === "xai") {

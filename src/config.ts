@@ -6,6 +6,7 @@ import * as z from "zod/v4";
 import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 import {
   apiKeyTransportConfigError,
+  azureCredentialConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
@@ -479,6 +480,12 @@ const fastWireSchema = z.object({
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  azureCredential: z.object({
+    type: z.literal("default-azure-credential"),
+    managedIdentityClientId: z.string().trim().min(1).optional(),
+  }).strict().transform(value => value.managedIdentityClientId === undefined
+    ? value
+    : { ...value, managedIdentityClientId: value.managedIdentityClientId.trim() }).optional(),
   requestPacing: requestPacingSchema.optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
@@ -524,6 +531,8 @@ const providerConfigSchema = z.object({
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 export {
   apiKeyTransportConfigError,
+  azureCredentialConfigError,
+  isAzureIdentityProvider,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
@@ -1075,6 +1084,14 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "apiKeyTransport"],
         message: apiKeyTransportError,
+      });
+    }
+    const azureCredentialError = azureCredentialConfigError(provider);
+    if (azureCredentialError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "azureCredential"],
+        message: azureCredentialError,
       });
     }
     const modelAdaptersError = modelAdapterRecordConfigError(

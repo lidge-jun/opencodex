@@ -4,6 +4,23 @@ import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 describe("routeModel registry effort defaults", () => {
+  test("routes Azure identity without generic keyOptional or an API-key sentinel", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "azure-openai",
+      providers: {
+        "azure-openai": {
+          adapter: "azure-openai",
+          baseUrl: "https://resource.openai.azure.com/openai",
+          azureCredential: { type: "default-azure-credential" },
+        },
+      },
+    };
+    const routed = routeModel(config, "azure-openai/gpt-4o").provider;
+    expect(routed.azureCredential).toEqual({ type: "default-azure-credential" });
+    expect(routed.apiKey).toBeUndefined();
+    expect(routed.keyOptional).toBeUndefined();
+  });
   test("allows only opted-in OAuth presets to use explicit API-key billing", () => {
     const xaiKey: OcxConfig = {
       port: 10100,

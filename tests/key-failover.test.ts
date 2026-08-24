@@ -57,6 +57,12 @@ describe("hasKeyPoolFailover", () => {
     expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x" } as OcxProviderConfig)).toBe(false);
     expect(hasKeyPoolFailover({ adapter: "anthropic", baseUrl: "x", authMode: "oauth", apiKeyPool: pool3() } as OcxProviderConfig)).toBe(false);
     expect(hasKeyPoolFailover({ adapter: "openai-responses", baseUrl: "x", authMode: "forward", apiKeyPool: pool3() } as OcxProviderConfig)).toBe(false);
+    expect(hasKeyPoolFailover({
+      adapter: "azure-openai",
+      baseUrl: "https://resource.openai.azure.com/openai",
+      azureCredential: { type: "default-azure-credential" },
+      apiKeyPool: pool3(),
+    } as OcxProviderConfig)).toBe(false);
   });
 });
 
@@ -102,6 +108,13 @@ describe("rotateKeyOn429", () => {
     const single = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: [pool3()![0]] });
     expect(rotateKeyOn429(single, "p", null)).toBeNull();
     expect(rotateKeyOn429(makeConfig({}), "missing", null)).toBeNull();
+    const identity = makeConfig({
+      adapter: "azure-openai",
+      baseUrl: "https://resource.openai.azure.com/openai",
+      azureCredential: { type: "default-azure-credential" },
+      apiKeyPool: pool3(),
+    });
+    expect(rotateKeyOn429(identity, "p", null)).toBeNull();
   });
 
   test("clearKeyCooldowns scoped to a provider", () => {

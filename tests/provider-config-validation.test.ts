@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   apiKeyTransportConfigError,
+  azureCredentialConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
@@ -14,6 +15,22 @@ import {
 } from "../src/config/provider-validation";
 
 describe("provider config validation leaf", () => {
+  test("validates the exact Azure identity shape and auth conflicts", () => {
+    const identity = {
+      adapter: "azure-openai",
+      azureCredential: { type: "default-azure-credential", managedIdentityClientId: "  client-123  " },
+    };
+    expect(azureCredentialConfigError(identity)).toBeNull();
+    expect(azureCredentialConfigError({ ...identity, adapter: "openai-chat" })).toContain("azure adapters");
+    expect(azureCredentialConfigError({ ...identity, azureCredential: { type: "default-azure-credential", managedIdentityClientId: "   " } })).toContain("non-empty");
+    expect(azureCredentialConfigError({ ...identity, azureCredential: { type: "default-azure-credential", unknown: "x" } })).toContain("unrecognized");
+    expect(azureCredentialConfigError({ ...identity, apiKey: "${AZURE_KEY}" })).toContain("apiKey");
+    expect(azureCredentialConfigError({ ...identity, apiKeyPool: [] })).toContain("apiKeyPool");
+    for (const authMode of ["forward", "oauth", "local"] as const) {
+      expect(azureCredentialConfigError({ ...identity, authMode })).toContain("authMode");
+    }
+    expect(azureCredentialConfigError({ ...identity, authMode: "key" })).toBeNull();
+  });
   test("accepts only credential-free HTTP(S) base URLs", () => {
     expect(providerBaseUrlConfigError("https://example.test/v1")).toBeNull();
     expect(providerBaseUrlConfigError("file:///tmp/provider")).toBe("baseUrl must be an http(s) URL");
