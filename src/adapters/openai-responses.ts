@@ -2061,11 +2061,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // pair from its own storage either, so it needs the same repair the forward
       // backend gets — dropping previous_response_id is not much use if the body that
       // reaches the wire is unparseable.
-      if (forward || stateless) {
-        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
-      }
       if (provider.annotateEmptyToolOutputs === true) {
         outBody = annotateEmptyResponsesToolOutputs(outBody, true);
+      }
+      if (forward || stateless) {
+        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
       }
       if (provider.requiresAdjacentResponsesToolResults === true) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);

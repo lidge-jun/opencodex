@@ -184,4 +184,23 @@ describe("stateless Responses wire repairs orphaned tool calls", () => {
     expect(input[0]).toMatchObject({ type: "message", role: "user" });
     expect(JSON.stringify(input[0])).toContain("orphan result");
   });
+
+  test("annotates an empty orphan output before repairing it into a user message (regression)", async () => {
+    const { body } = await drive([
+      { type: "function_call_output", call_id: "call_unknown", output: "" },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]).toMatchObject({ type: "message", role: "user" });
+    expect(JSON.stringify(input[0])).toContain("[ocx] empty tool output");
+  });
+
+  test("preserves synthetic missing-result placeholders when annotation is enabled (regression)", async () => {
+    const { body } = await drive([
+      { type: "function_call", id: "fc_dangling", call_id: "call_dangling", name: "exec_command", arguments: "{}" },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[1]).toMatchObject({ type: "function_call_output", call_id: "call_dangling" });
+    expect(String((input[1] as { output: unknown }).output)).toContain("no tool result was recorded");
+    expect(JSON.stringify(input[1])).not.toContain("[ocx] empty tool output");
+  });
 });
