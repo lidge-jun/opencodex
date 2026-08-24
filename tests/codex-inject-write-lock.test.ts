@@ -192,7 +192,14 @@ describe("the lock is on the production path", () => {
         ...process.env,
         CODEX_HOME: codexHome,
         OPENCODEX_HOME: opencodexHome,
-        OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 5_000, holdMarker, releaseMarker }),
+        OCX_LOCK_CHILD_PAYLOAD: JSON.stringify({
+          timeoutMs: 5_000,
+          holdMarker,
+          releaseMarker,
+          // Keep a slow Windows contender from outliving the hold, while staying
+          // below the 40s child bound and the 45s test budget.
+          holdMs: SPAWN_TIMEOUT_MS - 5_000,
+        }),
       },
       stdout: "pipe",
       stderr: "pipe",
