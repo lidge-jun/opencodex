@@ -46,6 +46,15 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
+/**
+ * Sanitize reasoning input by field policy, not by preserving each item's shape. Retaining a
+ * native `encrypted_content` guarantees only that blob value: `status` is always removed;
+ * proxy-owned `ocxr1:` envelopes are always removed; and native blobs are removed when the caller
+ * requests stripping after a route-identity change or opaque-blob recovery. On routed/non-OpenAI
+ * destinations, a present non-array `content` field is omitted. Otherwise non-empty array content
+ * is blanked unless raw reasoning preservation is enabled; removing an `ocxr1:` envelope selects
+ * the same blanking path when non-array omission is not active.
+ */
 export function sanitizeReasoningInputContent(
   body: unknown,
   opts?: {
@@ -77,12 +86,11 @@ export function sanitizeReasoningInputContent(
     // rather than the field it actually refused, which is why this reads as a blob failure. Drop the
     // key so the item matches the shape the upstream issued.
     //
-    // Gated to routed destinations. An OpenAI-operated backend binds the blob to the item's exact
-    // shape, so deleting a field there invalidates it (`The encrypted content ... could not be
-    // verified`); the two requirements are exactly opposed, and a live regression proved it. That
-    // gate is also why this drop may touch an item that keeps its blob: xAI demonstrably accepts its
-    // own blob without the null channel, and the destinations that bind blobs to item shape never
-    // reach this branch. This is independent of the output-only status removal below.
+    // Gated to routed destinations. An OpenAI-operated backend rejects a blob-bearing item when its
+    // null `content` channel is deleted (`The encrypted content ... could not be verified`); that
+    // live result establishes this channel constraint, not whole-item shape preservation. The gate
+    // is also why this drop may touch an item that keeps its blob: xAI demonstrably accepts its own
+    // blob without the null channel. This is independent of the output-only status removal below.
     const dropNullContentChannel = opts?.dropNullContentChannel === true
       && "content" in rec && !Array.isArray(rec.content);
     // `status` is output-only. Measured OpenAI reasoning items never contain it, and Grok accepts

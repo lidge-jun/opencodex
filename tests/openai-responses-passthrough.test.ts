@@ -3156,14 +3156,17 @@ describe("reasoning input content channel", () => {
       summary: [{ type: "summary_text", text: "thinking" }],
       encrypted_content: "upstream-issued-blob",
     });
-    expect(out).not.toHaveProperty("content");
-    expect(out.encrypted_content).toBe("upstream-issued-blob");
-    expect(out.summary).toEqual([{ type: "summary_text", text: "thinking" }]);
+    expect(out).toEqual({
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "thinking" }],
+      encrypted_content: "upstream-issued-blob",
+    });
   });
 
-  // An OpenAI-operated backend binds the blob to the item's exact shape, so deleting a field there
-  // invalidates it: `The encrypted content ... could not be verified`. Caught in live traffic after
-  // an ungated first version of this fix shipped locally — the two backends want opposite things.
+  // An OpenAI-operated backend rejects a blob-bearing item when its null `content` channel is
+  // deleted: `The encrypted content ... could not be verified`. Caught in live traffic after an
+  // ungated first version of this fix shipped locally — the two backends want opposite things for
+  // this channel.
   test("keeps a null content channel on OpenAI-operated destinations", () => {
     const item = {
       type: "reasoning",
@@ -3184,9 +3187,7 @@ describe("reasoning input content channel", () => {
         _rawBody: { model: "gpt-5.6-sol", store: false, input: [item] },
       }, { headers: new Headers({ authorization: "Bearer token" }) });
       const out = (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input[0];
-      expect(out).toHaveProperty("content");
-      expect(out.content).toBeNull();
-      expect(out.encrypted_content).toBe("openai-issued-blob");
+      expect(out).toEqual(item);
     }
   });
 
