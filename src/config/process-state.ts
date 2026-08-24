@@ -116,8 +116,8 @@ export function isOcxStartCommandLine(commandLine: string): boolean {
   // a service wrapper may respawn from `.opencodex-*` during a global update.
   const hasOcxEntrypoint = normalized.includes("src/cli.ts")
     || normalized.includes("src/cli/index.ts")
-    || normalized.includes("@bitkyc08/opencodex")
-    || /@bitkyc08\/\.opencodex-/.test(normalized)
+    || /@[a-z0-9._-]+\/opencodex(?:[/'"\s]|$)/.test(normalized)
+    || /@[a-z0-9._-]+\/\.opencodex-/.test(normalized)
     || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd)?(?:$|[\s"'])/.test(normalized);
   return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
 }
