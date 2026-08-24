@@ -16,6 +16,7 @@ import { handleImages, IMAGES_RESPONSE_MAX_BYTES, readImageResponseBytes } from 
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire";
+import { resetProviderTlsProfileForTests, setProviderTlsRuntimeForTest } from "../src/lib/provider-tls-profile";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -55,6 +56,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
+  resetProviderTlsProfileForTests();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
@@ -1169,6 +1171,61 @@ const CCA_CREDENTIAL = {
   expires: Date.now() + 3_600_000,
   projectId: "cca-project-123",
 } as const;
+
+test("CCA image generation uses the opted-in profiled executor", async () => {
+  let nativeCalls = 0;
+  let bunCalls = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    bunCalls += 1;
+    return new Response(null, { status: 500 });
+  }) as typeof fetch;
+  setProviderTlsRuntimeForTest({
+    importWreq: async () => ({
+      createTransport: async () => ({ close: async () => undefined }),
+      fetch: async () => {
+        nativeCalls += 1;
+        return Response.json({
+          response: {
+            candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] } }],
+          },
+        });
+      },
+    }),
+  });
+  const config = {
+    ...ccaConfig(),
+    providers: {
+      ...ccaConfig().providers,
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
+        tlsProfile: "antigravity-browser",
+      },
+    },
+  } as OcxConfig;
+  saveConfig(config);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+  try {
+    const response = await handleImages(
+      new Request("http://127.0.0.1/v1/images/generations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "a neon cat" }),
+      }),
+      config,
+      "generations",
+      { model: "", provider: "" },
+    );
+    expect(response.status).toBe(200);
+    expect(nativeCalls).toBe(1);
+    expect(bunCalls).toBe(0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 
 test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
   const registryHits: CcaFetchRequest[] = [];

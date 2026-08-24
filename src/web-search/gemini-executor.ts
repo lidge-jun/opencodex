@@ -20,6 +20,7 @@ import { resolveAntigravityEffortWireModel } from "../providers/antigravity-mode
 import { getProviderRegistryEntry } from "../providers/registry";
 import { MAX_SIDECAR_RESPONSE_BYTES, type WebSearchSource } from "./parse";
 import { BASE_INSTRUCTION, IMAGE_INSTRUCTION, type SidecarOutcome, type SidecarSettings } from "./executor";
+import { providerFetch } from "../server/responses/fetch-helpers";
 
 const CCA_FALLBACK_BASE = "https://daily-cloudcode-pa.googleapis.com";
 
@@ -30,7 +31,7 @@ function isRec(v: unknown): v is Record<string, unknown> {
 export async function runGeminiWebSearch(
   query: string,
   providerName: string,
-  _provider: OcxProviderConfig,
+  provider: OcxProviderConfig,
   settings: SidecarSettings,
   abortSignal?: AbortSignal,
 ): Promise<SidecarOutcome> {
@@ -67,9 +68,10 @@ export async function runGeminiWebSearch(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
   const t0 = Date.now();
+  const executor = providerFetch(provider, undefined, { providerName, modelId: settings.model });
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${base}/v1internal:generateContent`, {
+      () => executor(`${base}/v1internal:generateContent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

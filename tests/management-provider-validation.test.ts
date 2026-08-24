@@ -2919,6 +2919,35 @@ describe("provider management validation", () => {
     expect(raw).not.toContain(sentinelName);
     expect(raw).not.toContain(sentinelValue);
   });
+
+  test("GET /api/providers exposes only redacted Antigravity TLS profile state", async () => {
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          authMode: "oauth",
+          googleMode: "cloud-code-assist",
+          tlsProfile: "antigravity-browser",
+          apiKey: "must-not-leak",
+        },
+      },
+    };
+    const req = new Request("http://127.0.0.1/api/providers", { method: "GET" });
+    const res = await handleManagementAPI(req, new URL(req.url), liveConfig, {});
+    expect(res?.status).toBe(200);
+    const raw = await res!.text();
+    const row = (JSON.parse(raw) as { name: string; tlsProfile?: string; tlsProfileStatus?: string }[])
+      .find(item => item.name === "google-antigravity");
+    expect(row).toMatchObject({ tlsProfile: "antigravity-browser", tlsProfileStatus: "disabled" });
+    expect(raw).not.toContain("must-not-leak");
+  });
+
   test("provider PATCH merges headers case-insensitively", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

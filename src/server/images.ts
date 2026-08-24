@@ -40,6 +40,7 @@ import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
+import { providerFetch } from "./responses/fetch-helpers";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -226,7 +227,11 @@ async function tryCcaImageGeneration(
   let upstream: Response;
   try {
     try {
-      upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
+      const executor = providerFetch(provider, undefined, {
+        providerName: "google-antigravity",
+        modelId: CCA_IMAGE_MODEL,
+      });
+      upstream = await executor(`${baseUrl}/v1internal:generateContent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

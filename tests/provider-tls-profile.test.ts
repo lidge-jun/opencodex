@@ -19,6 +19,9 @@ const canonicalProvider = {
   baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   tlsProfile: "antigravity-browser" as const,
 };
+const userInfoUrl = new URL("https://daily-cloudcode-pa.googleapis.com/v1internal");
+userInfoUrl.username = "user";
+userInfoUrl.password = "secret";
 
 afterEach(() => {
   resetProviderTlsProfileForTests();
@@ -34,7 +37,7 @@ describe("provider TLS profile validation", () => {
     })).toBeNull();
     expect(providerTlsProfileConfigError("google-antigravity", {
       ...canonicalProvider,
-      baseUrl: "https://user:secret@daily-cloudcode-pa.googleapis.com",
+      baseUrl: userInfoUrl.toString(),
     })).toContain("canonical");
     expect(providerTlsProfileConfigError("google", canonicalProvider)).toContain("google-antigravity");
     expect(providerTlsProfileConfigError("google-antigravity", {
@@ -77,7 +80,7 @@ describe("Antigravity TLS transport gate", () => {
     ]));
     expect(isCanonicalAntigravityUrl("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent")).toBe(true);
     expect(isCanonicalAntigravityUrl("https://cloudcode-pa.googleapis.com:443/v1internal")).toBe(true);
-    expect(isCanonicalAntigravityUrl("https://user:secret@daily-cloudcode-pa.googleapis.com/v1internal")).toBe(false);
+    expect(isCanonicalAntigravityUrl(userInfoUrl)).toBe(false);
     expect(isCanonicalAntigravityUrl("http://daily-cloudcode-pa.googleapis.com/v1internal")).toBe(false);
     expect(isCanonicalAntigravityUrl("https://evil.example/v1internal")).toBe(false);
     expect(isCanonicalAntigravityUrl("https://daily-cloudcode-pa.googleapis.com:8443/v1internal")).toBe(false);
@@ -178,9 +181,31 @@ describe("Antigravity TLS transport gate", () => {
       baseUrl: "https://attacker.example",
     }, bunFetch);
     await executor("https://daily-cloudcode-pa.googleapis.com/v1internal");
-    await executor("https://user:secret@daily-cloudcode-pa.googleapis.com/v1internal");
+    await executor(userInfoUrl);
     expect(wreqCalls).toBe(0);
     expect(bunCalls).toBe(2);
+  });
+
+  test("keeps OAuth token destinations on Bun fetch", async () => {
+    let wreqCalls = 0;
+    let bunCalls = 0;
+    const bunFetch = mock(async () => {
+      bunCalls += 1;
+      return new Response("bun");
+    }) as typeof globalThis.fetch;
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          wreqCalls += 1;
+          return new Response("wreq");
+        },
+      }),
+    });
+    const executor = providerTlsFetch("google-antigravity", canonicalProvider, bunFetch);
+    await executor("https://oauth2.googleapis.com/token", { method: "POST" });
+    expect(bunCalls).toBe(1);
+    expect(wreqCalls).toBe(0);
   });
 
   test("caches one successful module initialization and falls back if a later import would fail", async () => {

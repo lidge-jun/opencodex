@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderOutboundDependencies } from "../src/lib/provider-outbound";
 import { PROXY_ENV_KEYS } from "../src/lib/proxy-env";
+import { resetProviderTlsProfileForTests, setProviderTlsRuntimeForTest } from "../src/lib/provider-tls-profile";
 
 const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
 const originalProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
@@ -14,6 +15,7 @@ afterEach(() => {
     if (previous === undefined) delete process.env[key];
     else process.env[key] = previous;
   }
+  resetProviderTlsProfileForTests();
 });
 
 function directDependencies(
@@ -51,6 +53,46 @@ function directDependencies(
 }
 
 describe("provider outbound GET transport", () => {
+  test("Antigravity model discovery uses the opted-in profiled executor", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    let nativeCalls = 0;
+    let bunCalls = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      bunCalls += 1;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          nativeCalls += 1;
+          return new Response(null, { status: 200 });
+        },
+      }),
+    });
+    try {
+      const { providerOutboundPost } = await import("../src/lib/provider-outbound");
+      const response = await providerOutboundPost(
+        "google-antigravity",
+        {
+          adapter: "google",
+          authMode: "oauth",
+          googleMode: "cloud-code-assist",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          tlsProfile: "antigravity-browser",
+        },
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        { headers: { authorization: "Bearer redacted" }, body: "{}" },
+      );
+      expect(response.status).toBe(200);
+      expect(nativeCalls).toBe(1);
+      expect(bunCalls).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("direct HTTPS connects only to the validated address with TLS verification", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../src/lib/provider-outbound");

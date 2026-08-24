@@ -18,6 +18,7 @@ import {
   setProviderQuotaBeforePublishForTests,
 } from "../src/providers/quota";
 import type { OcxConfig } from "../src/types";
+import { resetProviderTlsProfileForTests, setProviderTlsRuntimeForTest } from "../src/lib/provider-tls-profile";
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
@@ -87,6 +88,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  resetProviderTlsProfileForTests();
   clearAccountQuota();
   clearProviderQuotaCache();
   setProviderQuotaBeforePublishForTests(null);
@@ -99,6 +101,53 @@ afterEach(() => {
 });
 
 describe("fetchProviderQuotaReports", () => {
+  test("Antigravity quota probes use the opt-in profiled executor", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-access-secret",
+      refresh: "agy-refresh-secret",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-project-secret",
+    });
+    let nativeCalls = 0;
+    let bunCalls = 0;
+    globalThis.fetch = (async () => {
+      bunCalls += 1;
+      return new Response(null, { status: 500 });
+    }) as typeof fetch;
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          nativeCalls += 1;
+          return new Response(JSON.stringify({
+            models: {
+              "gemini-3.6-flash-medium": {
+                displayName: "Gemini 3.6 Flash",
+                quotaInfo: { remainingFraction: 0.64 },
+              },
+            },
+          }), { status: 200, headers: { "content-type": "application/json" } });
+        },
+      }),
+    });
+    const config: OcxConfig = {
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          googleMode: "cloud-code-assist",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          tlsProfile: "antigravity-browser",
+        },
+      },
+    } as OcxConfig;
+    const result = await fetchProviderQuotaReports(config, true);
+    expect(result.reports[0]?.provider).toBe("google-antigravity");
+    expect(nativeCalls).toBe(1);
+    expect(bunCalls).toBe(0);
+  });
+
   test("provider quota probes have no direct Response.json calls", () => {
     const source = readFileSync(join(import.meta.dir, "../src/providers/quota.ts"), "utf8");
     expect(source).not.toMatch(/\.\s*json\s*\(/);

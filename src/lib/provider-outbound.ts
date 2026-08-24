@@ -9,10 +9,12 @@ import {
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
 import { outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
+import { isCanonicalAntigravityUrl, providerTlsFetch } from "./provider-tls-profile";
+import { waitForProviderRequestSlot } from "../providers/request-pacing";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
 type ProviderPostInit = ProviderGetInit & { body: string };
-type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
+type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode" | "tlsProfile">> & {
   fetch?: typeof globalThis.fetch;
 };
 export interface ProviderOutboundDependencies {
@@ -72,6 +74,28 @@ function noProxyMatches(url: URL): boolean {
   return false;
 }
 
+function antigravityProfileFetch(
+  name: string,
+  provider: ProviderOutboundConfig,
+  url: string,
+): typeof globalThis.fetch | undefined {
+  if (name !== "google-antigravity"
+    || provider.fetch
+    || provider.tlsProfile !== "antigravity-browser"
+    || provider.adapter !== "google"
+    || provider.authMode !== "oauth"
+    || provider.googleMode !== "cloud-code-assist"
+    || !isCanonicalAntigravityUrl(provider.baseUrl)
+    || !isCanonicalAntigravityUrl(url)) {
+    return undefined;
+  }
+  const nativeFetch = providerTlsFetch(name, provider as Parameters<typeof providerTlsFetch>[1], globalThis.fetch);
+  return (async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit): Promise<Response> => {
+    await waitForProviderRequestSlot(name, provider as OcxProviderConfig, undefined, init?.signal ?? undefined);
+    return nativeFetch(input, init);
+  }) as typeof globalThis.fetch;
+}
+
 let proxyBoundaryWarned = false;
 let proxyDnsDegradationWarned = false;
 
@@ -116,7 +140,9 @@ async function providerOutboundRequest(
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
   }
-  if (provider.fetch) {
+  const profiledFetch = antigravityProfileFetch(name, provider, url);
+  const fetchOverride = provider.fetch ?? profiledFetch;
+  if (fetchOverride) {
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
     // the built-in transport. Main-request migration must define that executor contract first.
@@ -135,7 +161,7 @@ async function providerOutboundRequest(
       });
       if (destinationError) throw new ProviderOutboundPolicyError(destinationError);
     }
-    return provider.fetch(url, { ...init, method, redirect: "manual" });
+    return fetchOverride(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
   const proxyConfigured = configuredProxyFor();

@@ -98,6 +98,10 @@ describe("planWebSearch gemini arm (L8)", () => {
 });
 
 import { runGeminiWebSearch } from "../src/web-search/gemini-executor";
+import {
+  resetProviderTlsProfileForTests,
+  setProviderTlsRuntimeForTest,
+} from "../src/lib/provider-tls-profile";
 import * as oauthModule from "../src/oauth";
 mock.module("../src/oauth", () => ({
   ...oauthModule,
@@ -112,6 +116,40 @@ import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import type { AdapterEvent, ProviderAdapter } from "../src/adapters/base";
 
 describe("runGeminiWebSearch request shape (review P1)", () => {
+  test("uses the opt-in Antigravity executor for Gemini grounding", async () => {
+    accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
+    let nativeCalls = 0;
+    let bunCalls = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      bunCalls += 1;
+      return new Response(JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "bun" }] } }] } }), { status: 200 });
+    }) as typeof fetch;
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          nativeCalls += 1;
+          return new Response(JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "native" }] } }] } }), { status: 200 });
+        },
+      }),
+    });
+    try {
+      const out = await runGeminiWebSearch("q", "google-antigravity", {
+        ...cca,
+        googleMode: "cloud-code-assist",
+        tlsProfile: "antigravity-browser",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      }, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 });
+      expect(out.text).toBe("native");
+      expect(nativeCalls).toBe(1);
+      expect(bunCalls).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+      resetProviderTlsProfileForTests();
+    }
+  });
+
   test("malicious baseUrl ignored: registry destination, manual redirect, bearer + IDE UA, full envelope, thinkingConfig", async () => {
     accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
     const captured: Array<{ url: string; init: RequestInit }> = [];

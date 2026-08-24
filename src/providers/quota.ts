@@ -10,6 +10,7 @@ import { codexPlanKey } from "../codex/plan";
 import { resolveEnvValue } from "../config";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
+import { providerFetch } from "../server/responses/fetch-helpers";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
@@ -2081,7 +2082,8 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     return null;
   }
   const baseUrl = (config.baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
+  const executor = providerFetch(config, undefined, { providerName: "google-antigravity" });
+  const response = await executor(`${baseUrl}/v1internal:fetchAvailableModels`, {
     method: "POST",
     headers: {
       Accept: "application/json",
