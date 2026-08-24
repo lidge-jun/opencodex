@@ -290,6 +290,7 @@ import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from ".
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
+import { decideV2NativeParentOverride } from "./v2-native-parent-override";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
@@ -2380,6 +2381,27 @@ async function handleResponsesInner(
       logCtx.routeDecision = err.trace;
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+  }
+
+  const parentOverride = decideV2NativeParentOverride({
+    kind: "responses",
+    config,
+    headers: req.headers,
+    parsed,
+    sourceRoute: route,
+    comboAttempt: options.comboAttempt,
+    targetEvidence: evidenceFromBody(parsed._rawBody),
+  });
+  if (parentOverride.kind === "reject") {
+    if (parentOverride.trace) logCtx.routeDecision = parentOverride.trace as typeof logCtx.routeDecision;
+    return formatErrorResponse(404, "invalid_request_error", parentOverride.message);
+  }
+  if (parentOverride.kind === "override") {
+    route = parentOverride.route;
+    parsed.modelId = route.modelId;
+    if (parsed._rawBody && typeof parsed._rawBody === "object") {
+      (parsed._rawBody as { model?: string }).model = route.modelId;
+    }
   }
 
   const hasUnexpandedPreviousResponse = !!parsed.previousResponseId

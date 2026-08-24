@@ -127,6 +127,7 @@ import {
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
+import { decideV2NativeParentOverride } from "./v2-native-parent-override";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -297,6 +298,22 @@ export async function handleResponsesCompact(
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  const requestedModel = raw.model;
+  const parentOverride = decideV2NativeParentOverride({
+    kind: "compact",
+    config,
+    headers: req.headers,
+    sourceRoute: route,
+    targetEvidence: evidenceFromBody(raw),
+  });
+  if (parentOverride.kind === "reject") {
+    if (parentOverride.trace) logCtx.routeDecision = parentOverride.trace as typeof logCtx.routeDecision;
+    return formatErrorResponse(404, "invalid_request_error", parentOverride.message);
+  }
+  if (parentOverride.kind === "override") {
+    route = parentOverride.route;
+    raw.model = route.modelId;
+  }
   const selectedModelId = route.modelId;
   // Derive from the RESOLVED route model, not the caller's raw string. An account-qualified
   // selector like `side/gpt-daybreak-blue-latest` does not match the gated map — `slugsEquivalent`
@@ -304,7 +321,7 @@ export async function handleResponsesCompact(
   // exactly the selector form back down the native compact endpoint this guard exists to avoid.
   // `route.modelId` is the same value `applyCodexAccountGatedWireNormalization` uses in core.ts.
   const accountGatedCompactWireModel = codexAccountGatedCanonicalWireModel(selectedModelId);
-  logCtx.requestedModel = raw.model;
+  logCtx.requestedModel = requestedModel;
   logCtx.model = selectedModelId;
   logCtx.routeDecision = route.routeDecision;
   logCtx.provider = route.codexAccountNamespace
@@ -677,6 +694,9 @@ export async function handleResponsesCompact(
     body: JSON.stringify(internalBody),
   });
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
+  // The internal summarizer is a routed Responses turn, but compact logs retain the
+  // caller's selector just like the native compact branch above.
+  logCtx.requestedModel = requestedModel;
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {
