@@ -41,7 +41,7 @@ import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
-import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
+import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -1560,7 +1560,13 @@ export function filterCatalogVisibleModels(
   const allowByProvider = new Map<string, Set<string>>();
   for (const [name, prov] of Object.entries(config.providers)) {
     const sel = prov.selectedModels;
-    if (Array.isArray(sel) && sel.length > 0) allowByProvider.set(name, new Set(sel));
+    // Keyed the way `sync.ts` keys the same list, so a slash-bearing native id and
+    // the encoded slug the Codex picker displays are one entry rather than two. A
+    // bare `Set(sel)` matched only the native form, so an allowlist written from the
+    // displayed slug hid every model it was meant to keep.
+    if (Array.isArray(sel) && sel.length > 0) {
+      allowByProvider.set(name, new Set(sel.map(model => slugEquivalenceKey(routedSlug(name, model)))));
+    }
   }
   return models.filter(m => {
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
@@ -1572,7 +1578,7 @@ export function filterCatalogVisibleModels(
       if (slugEquals(stored, m.provider, m.id)) return false;
     }
     const allow = allowByProvider.get(m.provider);
-    return !allow || allow.has(m.id);
+    return !allow || allow.has(slugEquivalenceKey(routedSlug(m.provider, m.id)));
   });
 }
 

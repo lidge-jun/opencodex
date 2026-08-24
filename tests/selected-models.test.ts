@@ -47,3 +47,42 @@ describe("filterCatalogVisibleModels — per-provider allowlist", () => {
     expect(out.map(x => x.id).sort()).toEqual(["model-1999", "model-7"]);
   });
 });
+
+describe("filterCatalogVisibleModels — slash-bearing ids", () => {
+  // `sync.ts` keys this same list through `slugEquivalenceKey(routedSlug(...))`, so
+  // the native id and the encoded slug the Codex picker displays are one entry there.
+  // A bare `Set(selectedModels)` here matched only the native form, so an allowlist
+  // written from the displayed slug — which `ocx models remove` also accepts — hid
+  // every model it was meant to keep.
+  const native = "moonshotai/kimi-k3-free";
+  const encoded = "moonshotai-kimi-k3-free";
+  const rows = [m("zenmux", native), m("zenmux", "openai/gpt-5.5")];
+
+  test("an allowlist written with the encoded slug keeps the model", () => {
+    const visible = filterCatalogVisibleModels(rows, cfg({
+      zenmux: { selectedModels: [encoded] },
+    }));
+    expect(visible.map(v => v.id)).toEqual([native]);
+  });
+
+  test("the native form keeps working", () => {
+    const visible = filterCatalogVisibleModels(rows, cfg({
+      zenmux: { selectedModels: [native] },
+    }));
+    expect(visible.map(v => v.id)).toEqual([native]);
+  });
+
+  test("a mixed allowlist keeps both, without duplicating either", () => {
+    const visible = filterCatalogVisibleModels(rows, cfg({
+      zenmux: { selectedModels: [encoded, "openai/gpt-5.5"] },
+    }));
+    expect(visible.map(v => v.id).sort()).toEqual([native, "openai/gpt-5.5"].sort());
+  });
+
+  test("a model outside the allowlist is still hidden", () => {
+    const visible = filterCatalogVisibleModels(rows, cfg({
+      zenmux: { selectedModels: [encoded] },
+    }));
+    expect(visible.map(v => v.id)).not.toContain("openai/gpt-5.5");
+  });
+});
