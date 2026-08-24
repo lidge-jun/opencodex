@@ -6,6 +6,12 @@ export type SyncEventKind =
   | "main-behind"
   | "history-diverged";
 
+export type PathClass =
+  | "fork-owned"
+  | "upstream-owned"
+  | "shared-hotspot"
+  | "recipe";
+
 export interface SyncEvent {
   kind: SyncEventKind;
   upstreamRepo: string;

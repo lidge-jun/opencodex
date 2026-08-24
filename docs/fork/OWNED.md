@@ -44,6 +44,12 @@ The established shared-hotspot defaults are:
 
 Everything not listed above. Re-apply fork intent as a **new small commit** only if still needed after taking upstream.
 
+### `recipe` — resolve with a named merge recipe
+
+| Path | Recipe |
+|---|---|
+| `package.json` | Take `version` and every remaining field from upstream, but preserve our `name` as `@yansigit/opencodex`; write valid formatted JSON |
+
 ## Conflict defaults
 
 | Class | Default | Notes |
@@ -51,6 +57,7 @@ Everything not listed above. Re-apply fork intent as a **new small commit** only
 | `upstream-owned` | Take theirs | Re-apply fork intent as a new small commit only if still needed |
 | `fork-owned` | Take ours | Files only the fork added |
 | `shared-hotspot` | Manual / agent report | Keep upstream control flow; re-fit fork behavior; never “accept all ours” |
+| `recipe` | Run the named recipe | `package.json` keeps fork identity while taking upstream metadata |
 | Lockfiles | Take theirs | Regenerate if the fork added deps |
 | File deleted by them, edited by us | Decide restore vs abandon | Record in merge message |
 | Rename | Follow new path | `--find-renames`; do not keep a zombie old path |
