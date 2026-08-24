@@ -46,8 +46,10 @@ Do not apply the example blindly over an existing table; delete or replace only 
 Bootstrap the first administrator offline by passing the password over stdin, then start the independent listener:
 
 ```bash
-bun run bootstrap-admin -- --email admin@example.invalid
+bun run bootstrap-admin -- --email ADMIN_EMAIL
 bun run start
 ```
+
+Replace `ADMIN_EMAIL` with the administrator address before running the offline bootstrap command.
 
 The account and admin portal is served from `/hub/`. The admin dashboard is available at `/hub/#admin`; `/hub/#proxy` is a proxy workbench with the exact allowlisted endpoints, the current browser-visible Base URL, an authenticated and bounded view of the private `/v1/models` catalog, and copyable OpenAI SDK, Codex CLI, and Claude Code setup recipes. Recipes contain only a key placeholder: create the real one-time key on `/hub/#keys` and keep it out of browser storage. Administrators can set batch expiry, inspect only masked user-key/card inventory and user ledgers, revoke active user keys, and never recover a complete secret.
