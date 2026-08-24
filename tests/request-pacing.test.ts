@@ -90,6 +90,11 @@ describe("requestPacingIntervalMs", () => {
   test("validates jitter and keeps model jitter as an additional delay", async () => {
     expect(requestPacingConfigError({ enabled: true, minIntervalMs: 100, jitterMs: 60_001 })).not.toBeNull();
     expect(requestPacingConfigError({ enabled: true, minIntervalMs: 100, jitterMs: 25 })).toBeNull();
+    expect(requestPacingConfigError({
+      enabled: true,
+      minIntervalMs: 100,
+      models: { slow: { jitterMs: 25 } },
+    })).toBeNull();
 
     const clock = fakePacingClock();
     setProviderRequestPacingRuntimeForTest(clock.runtime);
@@ -109,6 +114,37 @@ describe("requestPacingIntervalMs", () => {
     clock.advanceBy(1);
     await second;
     expect(clock.now()).toBe(225);
+  });
+
+  test("tracks a model-only jitter lane without weakening the provider interval", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({
+      enabled: true,
+      minIntervalMs: 100,
+      models: { slow: { jitterMs: 50 } },
+    });
+    await waitForProviderRequestSlot("model-jitter", configured, "slow");
+    const second = waitForProviderRequestSlot("model-jitter", configured, "slow");
+    let settled = false;
+    void second.then(() => { settled = true; });
+    clock.advanceBy(124);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    clock.advanceBy(1);
+    await second;
+    expect(clock.now()).toBe(125);
+  });
+
+  test.each([1, 2])("never exceeds jitterMs for injected random boundary %s", async random => {
+    const clock = fakePacingClock(random);
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({ enabled: true, minIntervalMs: 100, jitterMs: 50 });
+    await waitForProviderRequestSlot(`jitter-boundary-${random}`, configured, "model");
+    const second = waitForProviderRequestSlot(`jitter-boundary-${random}`, configured, "model");
+    clock.advanceBy(150);
+    await second;
+    expect(clock.now()).toBe(150);
   });
 
   test("clamps injected randomness so jitter never accelerates a slot", async () => {
@@ -148,11 +184,18 @@ describe("requestPacingIntervalMs", () => {
     const explicit = { adapter: "google", baseUrl: entry.baseUrl, requestPacing: { enabled: false, minIntervalMs: 1 } } as OcxProviderConfig;
     enrichProviderFromRegistry("google-antigravity", explicit);
     expect(explicit.requestPacing).toEqual({ enabled: false, minIntervalMs: 1 });
+
+    const custom = { adapter: "google", baseUrl: entry.baseUrl, requestPacing: { enabled: true, minIntervalMs: 9_000, jitterMs: 7 } } as OcxProviderConfig;
+    enrichProviderFromRegistry("google-antigravity", custom);
+    expect(custom.requestPacing).toEqual({ enabled: true, minIntervalMs: 9_000, jitterMs: 7 });
   });
 
   test("Antigravity explicitly opts into lazy-only refresh", () => {
     expect((OAUTH_PROVIDERS["google-antigravity"] as unknown as { defaultRefreshPolicy?: string }).defaultRefreshPolicy).toBe("lazy-only");
     expect(resolveRefreshPolicy("google-antigravity", { providers: {} } as never)).toBe("lazy-only");
+    expect(resolveRefreshPolicy("google-antigravity", {
+      providers: { "google-antigravity": { refreshPolicy: "proactive" } },
+    } as never)).toBe("proactive");
   });
 });
 

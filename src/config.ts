@@ -439,8 +439,8 @@ const requestPacingRuleSchema = z.object({
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
   jitterMs: z.number().int().min(0).max(60_000).optional(),
-}).strict().refine(value => value.requestsPerMinute !== undefined || value.minIntervalMs !== undefined, {
-  message: "request pacing rules need requestsPerMinute or minIntervalMs",
+}).strict().refine(value => value.requestsPerMinute !== undefined || value.minIntervalMs !== undefined || value.jitterMs !== undefined, {
+  message: "request pacing rules need requestsPerMinute, minIntervalMs, or jitterMs",
 });
 
 const requestPacingSchema = z.object({

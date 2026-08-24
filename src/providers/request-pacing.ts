@@ -104,7 +104,7 @@ function jitterDelay(jitterMs: number): number {
   if (jitterMs <= 0) return 0;
   const sample = runtime.random();
   if (!Number.isFinite(sample)) return 0;
-  return Math.floor(Math.min(1, Math.max(0, sample)) * (jitterMs + 1));
+  return Math.min(jitterMs, Math.floor(Math.max(0, sample) * jitterMs));
 }
 
 export function requestPacingIntervalMs(provider: OcxProviderConfig, modelId?: string): number {
@@ -209,7 +209,7 @@ function runQueue(providerName: string, state: ProviderPacer): void {
   state.lastStartedAt = startedAt;
   state.lastModelId = waiter.modelId;
   state.providerNextStartAt = startedAt + waiter.providerIntervalMs + jitterDelay(waiter.providerJitterMs);
-  if (waiter.modelId && waiter.modelIntervalMs > 0) {
+  if (waiter.modelId && (waiter.modelIntervalMs > 0 || waiter.modelJitterMs > 0)) {
     state.modelNextStartAt.set(waiter.modelId, startedAt + waiter.modelIntervalMs + jitterDelay(waiter.modelJitterMs));
   }
   waiter.resolve();
