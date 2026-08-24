@@ -160,8 +160,9 @@ describe("multiAgentGuidanceText", () => {
     // loop, so the flag cannot flip regardless of machine speed.
     let loopRanDuringExec = false;
     const beat = setInterval(() => { loopRanDuringExec = true; }, 5);
+    let guidance: Awaited<ReturnType<typeof multiAgentGuidanceText>>;
     try {
-      await multiAgentGuidanceText(parsed, { injectionModel: "anthropic/claude-sonnet-5" });
+      guidance = await multiAgentGuidanceText(parsed, { injectionModel: "anthropic/claude-sonnet-5" });
     } finally {
       clearInterval(beat);
       Object.defineProperty(process, "platform", realPlatform);
@@ -171,6 +172,9 @@ describe("multiAgentGuidanceText", () => {
     }
 
     expect(loopRanDuringExec).toBe(true);
+    // The fixture's second child invocation returns a pre-catalog start time; the
+    // default request collector must parse it as stale and suppress positive guidance.
+    expect(guidance).toBeNull();
   });
 
   test("v2 guidance suppresses positive model claims while the app-server catalog is stale or unknown (#857)", async () => {

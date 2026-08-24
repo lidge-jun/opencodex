@@ -35,7 +35,7 @@ async function buildWindowsExecutableFixture(): Promise<WindowsPowerShellFixture
     "const command = process.argv.slice(2).join(' ');",
     "await new Promise(resolve => setTimeout(resolve, 200));",
     "if (command.includes('CreationDate')) {",
-    "  process.stdout.write('42\\t2020-01-01T00:00:00.000Z\\n');",
+    "  process.stdout.write('42\\t1970-01-01T00:00:00.500Z\\n');",
     "} else {",
     "  process.stdout.write('42\\t/usr/local/bin/codex app-server\\tCONTOSO\\\\jun\\n');",
     "}",
@@ -62,7 +62,10 @@ function createPosixShellFixture(): WindowsPowerShellFixture {
   writeFileSync(executable, [
     "#!/bin/sh",
     "sleep 0.2",
-    "printf '42\\t/usr/local/bin/codex app-server\\tCONTOSO\\\\jun\\n'",
+    "case \"$*\" in",
+    "  *CreationDate*) printf '42\\t1970-01-01T00:00:00.500Z\\n' ;;",
+    "  *) printf '42\\t/usr/local/bin/codex app-server\\tCONTOSO\\\\jun\\n' ;;",
+    "esac",
   ].join("\n"), { mode: 0o755 });
   return {
     executable,
@@ -74,6 +77,8 @@ async function removeFixtureDirectory(dir: string): Promise<void> {
   // Windows can keep a just-exited compiled child image open for a short interval.
   // Retry the temp cleanup so an antivirus/file-close race does not turn an otherwise
   // passing test file into an unnamed afterAll failure.
+  const retryableCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
+  let lastError: unknown;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -82,8 +87,11 @@ async function removeFixtureDirectory(dir: string): Promise<void> {
       const code = error && typeof error === "object" && "code" in error
         ? (error as { code?: unknown }).code
         : undefined;
-      if (code !== "EBUSY") throw error;
+      if (typeof code !== "string" || !retryableCodes.has(code)) throw error;
+      lastError = error;
       await Bun.sleep(50);
     }
   }
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`Could not remove Windows PowerShell test fixture after 2s: ${detail}`);
 }
