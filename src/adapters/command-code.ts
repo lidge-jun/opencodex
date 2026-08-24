@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { opendir } from "node:fs/promises";
@@ -207,6 +207,30 @@ export const MAX_WORKSPACE_METADATA_ENTRIES = 128;
 /** Derive a bounded project slug from the working directory for the `x-project-slug` header. */
 function projectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase().slice(0, 64) || "workspace";
+}
+
+export function commandCodeSessionId(parsed: OcxParsedRequest): string {
+  // Shared prompt-cache cohorts intentionally do not identify one conversation. Keep them out
+  // of upstream session affinity or unrelated conversations can pin to the same worker.
+  const threadId = parsed._clientThreadId?.trim();
+  const replayId = parsed._reasoningReplayScope?.clientThreadId?.trim();
+  const cacheKey = !parsed._promptCacheKeyIsSharedCohort ? parsed.options.promptCacheKey?.trim() : undefined;
+  const firstUserContent = parsed.context.messages.find(message => message.role === "user")?.content;
+  const userText = typeof firstUserContent === "string"
+    ? firstUserContent.trim()
+    : firstUserContent?.filter(part => part.type === "text").map(part => part.text).join(" ").trim();
+  const identity = threadId
+    ? ["thread", threadId]
+    : replayId
+      ? ["replay", replayId]
+      : cacheKey
+        ? ["cache", cacheKey]
+        : userText
+          ? ["first-user", userText]
+          : undefined;
+  if (!identity) return randomUUID();
+  const hex = createHash("sha256").update(`command-code:${identity[0]}\0${identity[1]}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 interface GitWorkspaceInfo {
@@ -486,7 +510,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         "x-cli-environment": "production",
         "x-taste-learning": "false",
         "x-co-flag": "false",
-        "x-session-id": randomUUID(),
+        "x-session-id": commandCodeSessionId(parsed),
       };
       if (cwd) headers["x-project-slug"] = projectSlug(cwd);
       return {

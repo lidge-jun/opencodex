@@ -68,6 +68,8 @@ export interface OcxParsedRequest {
   _cursorConversationId?: string;
   /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
   _clientThreadId?: string;
+  /** True when promptCacheKey is a shared cache cohort rather than a conversation identity. */
+  _promptCacheKeyIsSharedCohort?: boolean;
   /** Conversation/provider/account/model-bound namespace for reasoning replay state. */
   _reasoningReplayScope?: OcxReasoningReplayScopeRef;
   /**
