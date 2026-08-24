@@ -216,13 +216,20 @@ export function commandCodeSessionId(parsed: OcxParsedRequest): string {
   const threadId = parsed._clientThreadId?.trim();
   const replayId = parsed._reasoningReplayScope?.clientThreadId?.trim();
   const cacheKey = !parsed._promptCacheKeyIsSharedCohort ? parsed.options.promptCacheKey?.trim() : undefined;
+  const firstUserText = parsed.context.messages
+    .find(message => message.role === "user")?.content;
+  const userText = typeof firstUserText === "string"
+    ? firstUserText.trim()
+    : firstUserText?.filter(part => part.type === "text").map(part => part.text).join(" ").trim();
   const identity = threadId
     ? ["thread", threadId]
     : replayId
       ? ["replay", replayId]
       : cacheKey
         ? ["cache", cacheKey]
-        : undefined;
+        : userText
+          ? ["first-user", userText]
+          : undefined;
   if (!identity) return randomUUID();
   const hex = createHash("sha256")
     .update(`command-code:${identity[0]}\0${identity[1]}`)

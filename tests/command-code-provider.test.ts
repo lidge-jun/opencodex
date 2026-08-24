@@ -584,7 +584,7 @@ describe("Command Code provider", () => {
     expect(JSON.parse(built.body).params.stream).toBe(true);
   });
 
-  test("derives a stable UUID x-session-id across turns with the same clientThreadId or context", async () => {
+  test("derives a stable UUID x-session-id across turns with the same clientThreadId or initial user text", async () => {
     const turn1 = await builtRequest({
       ...parsed(),
       _clientThreadId: "thread-abc-123",
@@ -609,7 +609,7 @@ describe("Command Code provider", () => {
     expect(sessionId1).toBe(sessionId2);
     expect(sessionId1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 
-    // Without a trusted conversation identity, do not collide identical opening messages.
+    // The initial user text is the last deterministic identity before the random fallback.
     const noThreadTurn1 = await builtRequest({
       ...parsed(),
       context: {
@@ -626,7 +626,7 @@ describe("Command Code provider", () => {
         ],
       },
     });
-    expect(noThreadTurn1.headers["x-session-id"]).not.toBe(noThreadTurn2.headers["x-session-id"]);
+    expect(noThreadTurn1.headers["x-session-id"]).toBe(noThreadTurn2.headers["x-session-id"]);
   });
 
   test("does not derive x-session-id from a shared prompt-cache cohort", async () => {
