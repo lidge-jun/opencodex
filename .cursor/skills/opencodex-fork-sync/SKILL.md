@@ -127,9 +127,10 @@ the checked-out default branch, merges `vendor/main`, resolves fork-owned and
 upstream-owned files, applies recipes, pushes the sync branch, and opens or
 updates a draft PR.
 
-For a hotspot handoff, start at the aborted Action branch context and read
-`docs/fork/OWNED.md` before resolving conflicts. For `history-diverged`, use
-the disconnected `run/main` rebuild only.
+For a hotspot handoff, recreate the sync branch from current `origin/main`,
+merge `origin/vendor/main`, and read `docs/fork/OWNED.md` before resolving
+conflicts. The Action never pushes a conflicted branch. For
+`history-diverged`, use the disconnected `run/main` rebuild only.
 Replay `fork:` commits on `origin/main` or feature patches only when they are not already contained,
 using `scripts/fork/sync/contained.ts` or
 `git merge-base --is-ancestor`; do not rely on patch-id alone. Run the exact
