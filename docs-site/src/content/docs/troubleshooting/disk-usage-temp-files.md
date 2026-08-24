@@ -63,9 +63,11 @@ entirely.
 Together these keep the write rate roughly flat as the cache grows, instead of
 re-serializing and replacing the whole file every two seconds.
 
-A graceful shutdown always flushes, so the longer wait only widens the window in
-which a hard kill loses the most recent continuation entries — which are cache,
-as above.
+A graceful shutdown flushes immediately rather than waiting out the timer, so the
+longer wait mainly widens the window in which a hard kill loses the most recent
+continuation entries — which are cache, as above. That flush is still a disk
+write and can fail like any other, so a shutdown on a full or read-only volume
+can lose the same entries.
 
 ## Reclaiming files that already accumulated
 

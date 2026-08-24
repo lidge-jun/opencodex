@@ -8,7 +8,7 @@
  * of the snapshot actually being written.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -108,6 +108,31 @@ describe("responses-state snapshot write amplification (#2460)", () => {
     expect(existsSync(snapshot)).toBe(true);
   });
 
+  // Deletion is the easy half. The cached digest describes what THIS process last
+  // wrote, which is not the same claim as "that is what is on disk now" — a second
+  // proxy sharing the home, or anything rewriting the file in place, leaves the
+  // digest describing bytes that are gone. Before the skip existed, every flush
+  // rewrote and so repaired that silently; skipping on the digest alone would turn
+  // a self-healing snapshot into a permanently corrupt one, discovered only at the
+  // next restart when the continuation state fails to load.
+  //
+  // Same-length replacement is the case that defeats a size-only check, so that is
+  // what this drives.
+  test("a snapshot replaced with different bytes of the same length is rewritten", async () => {
+    remember("resp_amp_replaced", "kept");
+    await flushResponseState();
+
+    const original = readFileSync(snapshot, "utf-8");
+    writeFileSync(snapshot, "X".repeat(Buffer.byteLength(original, "utf8")));
+
+    // A mutation whose bounded payload is byte-identical to the last write: the
+    // oversized entry is dropped by the per-entry bound, so the digest still matches.
+    remember("resp_amp_replaced_oversized", "y".repeat(3 * 1024 * 1024));
+    await flushResponseState();
+
+    expect(readFileSync(snapshot, "utf-8")).toBe(original);
+  });
+
   test("the scheduled debounce stays at its base value for a small snapshot", async () => {
     remember("resp_amp_tiny", "tiny");
     await flushResponseState();
@@ -131,6 +156,50 @@ describe("responses-state snapshot write amplification (#2460)", () => {
     expect(delay).toBeLessThanOrEqual(30_000);
     // Roughly proportional to size: ~3.2 MiB of payload is ~6 s, not ~2 s.
     expect(delay).toBeGreaterThanOrEqual(5_000);
+  });
+
+  // The ceiling is the half of the scaling rule that a proportional formula gets
+  // wrong silently: `<= 30_000` passes for any well-behaved input, so it proves
+  // the clamp exists only when something actually reaches it. A snapshot at the
+  // byte cap is the case that does.
+  test("the scheduled debounce clamps to exactly 30s at the snapshot cap", async () => {
+    // The scaling rule is 2s per MiB, so a payload at or past 15 MiB computes above
+    // the ceiling. 900 KB of text per entry matters: the entry is serialized with the
+    // input echoed alongside the output, so ~1.5 MB of text lands past the 2 MiB
+    // per-entry bound and is skipped entirely, leaving an empty snapshot.
+    for (let i = 0; i < 20; i += 1) remember(`resp_amp_cap_${i}`, "c".repeat(900 * 1024));
+    await flushResponseState();
+    // Guard the premise: if the snapshot did not actually get large, a passing
+    // clamp assertion below would be proving nothing.
+    expect(statSync(snapshot).size).toBeGreaterThan(15 * 1024 * 1024);
+
+    const delay = scheduledDelay(() => remember("resp_amp_cap_next", "next"));
+    await flushResponseState();
+
+    expect(delay).toBe(30_000);
+  });
+
+  // Shutdown is the one moment the debounce must not apply: a pending write that
+  // waits out a 30s timer during a graceful stop is a lost turn, and the longer
+  // the debounce grows the more there is to lose. The existing tests all flush
+  // immediately after each change, so none of them proves the pending case.
+  test("a graceful flush writes changes still sitting behind the debounce", async () => {
+    remember("resp_amp_drain_seed", "seed");
+    await flushResponseState();
+
+    // Two changes with NO flush between them: the debounce timer is pending and
+    // neither has reached disk when the graceful flush arrives.
+    remember("resp_amp_drain_late", "late");
+    remember("resp_amp_drain_late2", "late2");
+
+    await flushResponseState();
+
+    const parsed = JSON.parse(await Bun.file(snapshot).text()) as {
+      states: [string, Record<string, unknown>][];
+    };
+    const ids = parsed.states.map(([id]) => id);
+    expect(ids).toContain("resp_amp_drain_late");
+    expect(ids).toContain("resp_amp_drain_late2");
   });
 
   test("the snapshot still round-trips after a skipped write", async () => {

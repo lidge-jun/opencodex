@@ -101,6 +101,27 @@ let stateRevision = 0;
  *  retained: at the 24 MiB bound that would double the snapshot's memory cost. */
 let lastSnapshotBytes = 0;
 let lastSnapshotDigest: string | null = null;
+// The resolved file the digest above describes. Keeping it means a config-dir
+// change or a retargeted symlink is a miss rather than a false "unchanged".
+let lastSnapshotTarget: string | null = null;
+
+/**
+ * Is the snapshot on disk still byte-for-byte what we last wrote?
+ *
+ * The cached digest proves what this process wrote, not what is there now. Size is
+ * checked first so the common mismatch costs a `stat`, and the content comparison
+ * only runs when the size already agrees. Any read failure answers "no" and the
+ * caller rewrites — the safe direction.
+ */
+async function snapshotOnDiskMatches(path: string, payload: string, payloadBytes: number): Promise<boolean> {
+  try {
+    const file = Bun.file(path);
+    if (file.size !== payloadBytes) return false;
+    return await file.text() === payload;
+  } catch {
+    return false;
+  }
+}
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
 /**
  * Admission-boundary observability (test-visible). directSpills: oversized
@@ -805,18 +826,31 @@ async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome>
       // A mutation does not always change what gets persisted: entries past the
       // per-entry or total byte bound are dropped from the selection, and spill
       // demotion moves bytes out of it. Re-writing a byte-identical 24 MiB file
-      // buys nothing, so compare first — but only skip while the file we would be
-      // reproducing is still there.
+      // buys nothing, so compare first — but the cached digest describes what THIS
+      // process last wrote, which is not the same claim as "that is what is on disk
+      // now". A second proxy sharing the home, or anything that rewrites the file
+      // in place, leaves the digest describing bytes that are gone. Before every
+      // release-of-a-write, the previous behaviour rewrote unconditionally and so
+      // repaired that silently; skipping without checking would turn a repaired
+      // snapshot into a lost one at the next restart.
+      //
+      // Verify against the file itself, keyed to the resolved target so a retargeted
+      // symlink is also a miss. Reading back a matching-size file costs far less
+      // than the atomic replace it avoids, and only happens when the digest already
+      // matched — the amplification this fixes is the repeated WRITE, not the read.
       const unchanged = lastSnapshotDigest !== null
         && payloadDigest === lastSnapshotDigest
         && payloadBytes === lastSnapshotBytes
-        && existsSync(path);
+        && lastSnapshotTarget === resolveWriteTarget(path)
+        && existsSync(path)
+        && await snapshotOnDiskMatches(path, payload, payloadBytes);
       if (!unchanged) {
         mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
         try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
         await atomicWriteFileAsync(path, payload);
         lastSnapshotDigest = payloadDigest;
         lastSnapshotBytes = payloadBytes;
+        lastSnapshotTarget = resolveWriteTarget(path);
       }
       persistAttemptHookForTests?.();
       if (revision === stateRevision) return "stable";
@@ -1462,6 +1496,7 @@ export function clearResponseStateMemoryForTests(): void {
   persistAttemptHookForTests = null;
   lastSnapshotBytes = 0;
   lastSnapshotDigest = null;
+  lastSnapshotTarget = null;
   loaded = false;
 }
 
