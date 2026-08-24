@@ -171,6 +171,14 @@ describe("fetchProviderQuotaReports", () => {
       if (url === "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
         return new Response(JSON.stringify({
           models: {
+            "gemini-3.1-pro": {
+              displayName: "Gemini 3.1 Pro",
+              quotaInfo: { remainingFraction: 0.05, resetTime: "2026-07-05T13:00:00Z" },
+            },
+            "gemini-3.7-flash": {
+              displayName: "Gemini 3.7 Flash",
+              quotaInfo: { remainingFraction: 0.99, resetTime: "2026-07-05T13:30:00Z" },
+            },
             "gemini-3.6-flash-medium": {
               displayName: "Gemini 3.6 Flash (Medium)",
               quotaInfo: { remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
@@ -221,7 +229,7 @@ describe("fetchProviderQuotaReports", () => {
       { label: "Sonnet", percent: 19 },
     ]);
     expect(byProvider["google-antigravity"]?.quota.customWindows).toEqual([
-      { label: "Gem", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },
+      { label: "Gem", percent: 1, resetAt: Date.parse("2026-07-05T13:30:00Z") },
       { label: "Cla", percent: 79, resetAt: Date.parse("2026-07-05T15:00:00Z") },
     ]);
     expect(byProvider.cursor?.source).toBe("cursor:period-usage");
