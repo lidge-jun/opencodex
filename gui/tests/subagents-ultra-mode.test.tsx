@@ -395,9 +395,9 @@ test("ignores rapid native parent mutations while one save is pending", async ()
     { provider: "relay", model: "second-model", namespaced: "relay/second-model" },
   ];
   v2Responses = [{ ok: true, body: {
-    enabled: false,
-    multiAgentMode: "default",
-    keepNativeChatGptOnV1: true,
+    enabled: true,
+    multiAgentMode: "v2",
+    keepNativeChatGptOnV1: false,
     v2NativeParentOverride: { enabled: false, model: "relay/first-model", active: false },
   } }];
   await mount();

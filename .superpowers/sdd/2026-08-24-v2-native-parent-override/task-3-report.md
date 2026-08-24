@@ -120,3 +120,38 @@ cd gui && bun test tests/subagents-ultra-mode.test.tsx
 ```
 
 After the fix: `14 pass`, `0 fail`, `38 expect() calls`.
+
+## Review fix round 2
+
+### Changes
+
+- Corrected the rapid-mutation fixture to hydrate explicit V2, upstream enabled, Keep ChatGPT on v1 off, and a selected routed model, so both controls are actionable.
+- The test now triggers model selection and activation in one same-render act before the pending state can commit.
+
+### TDD evidence
+
+GREEN before guard bypass:
+
+```text
+cd gui && bun test tests/subagents-ultra-mode.test.tsx
+14 pass
+0 fail
+```
+
+Temporary RED proof (uncommitted production-only mutation replaced the ref check with the old React-state check):
+
+```text
+cd gui && bun test tests/subagents-ultra-mode.test.tsx
+13 pass
+1 fail
+Received: [{ enabled: false, model: "relay/second-model" }, { enabled: true, model: "relay/first-model" }]
+```
+
+The ref guard was restored immediately. Final GREEN:
+
+```text
+cd gui && bun test tests/subagents-ultra-mode.test.tsx
+14 pass
+0 fail
+38 expect() calls
+```
