@@ -125,7 +125,7 @@ echo "started=$(date -Is) name=$name limit=$limit cmd=$*" > "$status"
 
 # setsid gives the job its own process group so a timeout kills the children too;
 # --kill-after upgrades to SIGKILL for a process that ignores SIGTERM.
-setsid timeout --signal=TERM --kill-after=60s "$limit" "$@" > "$log" 2>&1 &
+(CDPATH= cd -- "$workdir" && exec setsid timeout --signal=TERM --kill-after=60s "$limit" "$@") > "$log" 2>&1 &
 job=$!
 echo "$job" > "$pidf"
 
