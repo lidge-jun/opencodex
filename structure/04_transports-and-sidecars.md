@@ -283,6 +283,30 @@ terminal observer. Native Responses, Chat Completions, Claude Messages, and WebS
 request logs must therefore finalize through the context-aware terminal mapper; recognized
 `cyber_policy` terminals stay `400 / cyber_policy` rather than collapsing to a generic 502.
 
+The client-facing boundary treats the first Responses terminal as authoritative in both relay
+shapes. High-confidence policy errors carried as `response.incomplete`, `response.failed`, or a
+top-level `error` are normalized to one `response.failed / cyber_policy` event without changing the
+refusal outcome; later bytes cannot create a second terminal. A clean HTTP 200 EOF with no terminal
+instead emits one `response.incomplete` with `adapter_eof`, followed by one `[DONE]`. Delimiter-less
+EOF terminals are parsed through the same bounded frame path, so pull/tee and eager relays agree on
+terminal, sentinel, and request-log accounting.
+
+[Decision Log]
+- 목적과 의도: Turn upstream terminal variants and bare EOF into one deterministic Responses
+  outcome instead of a retryable disconnect or duplicate terminal.
+- 기존 구현 및 제약 조건: Policy refusals can arrive in several SSE envelopes, while a clean EOF,
+  an unterminated final frame, and a read error exercise different pull/tee and eager cleanup paths.
+- 검토한 주요 대안: Forward every byte unchanged; classify only request logs; synthesize a failure
+  after every EOF or read error; normalize the bounded terminal at the client output boundary.
+- 선택한 방식: Rewrite only high-confidence policy terminal shapes, preserve their bounded metadata,
+  flush an unterminated terminal before transport-error classification, and synthesize `adapter_eof`
+  only when no real terminal exists.
+- 다른 대안 대신 이 방식을 선택한 이유: Log-only classification leaves Codex retry behavior
+  unchanged, while unconditional synthesis can create two contradictory outcomes for one turn.
+- 장점, 단점 및 영향: Both native relay shapes expose exactly one terminal and one sentinel with
+  matching accounting. Ordinary upstream errors remain fail-closed, and policy refusals remain
+  refusals rather than becoming successful model output.
+
 ## Standalone Search and exact account selectors
 
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an
