@@ -90,6 +90,22 @@ describe("hub public data-plane admission", () => {
     context.database.close();
   });
 
+  test("fails a hostile oversized model catalog without awaiting its cancel hook", async () => {
+    const context = await fixture();
+    const admission = new HubAdmission(context.config, context.billing, async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(512 * 1024 + 1)); },
+      cancel() { return new Promise<void>(() => {}); },
+    }), { headers: { "content-type": "application/json" } }));
+
+    const result = await Promise.race([
+      admission.modelCatalog(),
+      new Promise<"timed_out">(resolve => setTimeout(() => resolve("timed_out"), 50)),
+    ]);
+    expect(result).not.toBe("timed_out");
+    expect(result).toMatchObject({ status: "unavailable", models: [] });
+    context.database.close();
+  });
+
   test("rejects insufficient credit before contacting private OpenCodex", async () => {
     const context = await fixture();
     let calls = 0;
@@ -167,6 +183,22 @@ describe("hub public data-plane admission", () => {
         terminalReason: "upstream_status_503",
       }),
     ]));
+    context.database.close();
+  });
+
+  test("cancels the private upstream even when terminal accounting fails", async () => {
+    const context = await fixture();
+    context.billing.redeem(context.user.id, context.rechargeCode, "fund-account-cancel-failure-0001");
+    let upstreamCancelled = false;
+    const admission = new HubAdmission(context.config, context.billing, async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new TextEncoder().encode("partial")); },
+      cancel() { upstreamCancelled = true; },
+    })));
+    const response = await admission.handle(request(context.apiKey.key, "cancel-accounting-failure-0001"));
+    context.billing.settleRequest = (() => { throw new Error("simulated_accounting_failure"); }) as typeof context.billing.settleRequest;
+
+    await expect(response.body!.cancel("client disconnected")).rejects.toThrow("simulated_accounting_failure");
+    expect(upstreamCancelled).toBe(true);
     context.database.close();
   });
 
@@ -255,6 +287,45 @@ describe("hub public data-plane admission", () => {
     text.headers.set("Content-Type", "text/plain");
     expect((await admission.handle(text)).status).toBe(415);
     expect(calls).toBe(0);
+    expect(context.billing.balance(context.user.id).reservedUnits).toBe(0);
+    context.database.close();
+  });
+
+  test("cancels an oversized streamed request before buffering the remaining body", async () => {
+    const context = await fixture();
+    context.billing.redeem(context.user.id, context.rechargeCode, "fund-account-oversized-0001");
+    let pulls = 0;
+    let cancelled = false;
+    let upstreamCalls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 10) controller.enqueue(new Uint8Array(1024 * 1024));
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const oversized = new Request("http://hub.example/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${context.apiKey.key}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "oversized-stream-attempt-0001",
+      },
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const admission = new HubAdmission(context.config, context.billing, async () => {
+      upstreamCalls += 1;
+      return new Response("unexpected");
+    });
+
+    const response = await admission.handle(oversized);
+
+    expect(response.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThanOrEqual(9);
+    expect(upstreamCalls).toBe(0);
     expect(context.billing.balance(context.user.id).reservedUnits).toBe(0);
     context.database.close();
   });

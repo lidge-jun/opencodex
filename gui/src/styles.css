@@ -2299,7 +2299,7 @@ button.prov-account-row.active { cursor: default; }
 /* responsive: compact sticky top bar (menu + brand + stop) with the desktop sidebar
    reused as an off-canvas drawer — 10 destinations no longer fit an always-visible
    strip or chip grid without eating half the viewport. */
-@media (max-width: 760px) {
+@media (max-width: 1023px) {
   /* rows: topbar auto + main fills — without this, align-content stretch splits the
      leftover viewport height between the two rows and inflates the top bar */
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }

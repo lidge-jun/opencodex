@@ -39,6 +39,16 @@ describe("hub trusted reverse-proxy boundary", () => {
     expect(() => validateHubConfig({ ...config(), trustLoopbackProxy: true })).toThrow("production-only");
   });
 
+  test("rejects a plaintext public Bun listener in production", () => {
+    expect(() => validateHubConfig({
+      ...config(),
+      development: false,
+      publicOrigin: "https://hubapi.example.test",
+      hostname: "0.0.0.0",
+      trustLoopbackProxy: false,
+    })).toThrow("requires a trusted loopback TLS proxy");
+  });
+
   test("loads proxy trust only from an explicit environment switch", () => {
     const base = config();
     const loaded = loadHubConfig({

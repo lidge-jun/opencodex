@@ -32,9 +32,10 @@ loopback OpenCodex。
 - `HUB_SESSION_TTL_SECONDS`：300–2,592,000 秒，默认 7 天；
 - `HUB_UPSTREAM_TIMEOUT_MS`：1,000–600,000 毫秒，默认 120,000 毫秒。
 
-生产 TLS 反向代理模式设置 `HUB_HOSTNAME=127.0.0.1` 与 `HUB_TRUST_LOOPBACK_PROXY=1`。此模式只信任
+生产环境必须设置 `HUB_HOSTNAME=127.0.0.1` 与 `HUB_TRUST_LOOPBACK_PROXY=1`，通过 TLS 反向代理公开服务；
+Bun 监听器本身不终止 TLS，因此会拒绝生产公网直绑。此模式只信任
 loopback 直连代理写入的单个合法 `X-Hubapi-Client-IP`；非 loopback 对端、缺失 Header、IP 链或畸形 IP
-都会在路由前被拒绝。直连模式完全忽略该转发 Header。
+都会在路由前被拒绝。仅限 loopback 的开发直连模式完全忽略该转发 Header。
 
 摘要密钥与内部准入密钥必须不同；占位值、带账号密码或路径的 Origin、非安全生产绑定都会让启动失败。
 
@@ -44,6 +45,8 @@ loopback 直连代理写入的单个合法 `X-Hubapi-Client-IP`；非 loopback �
 printf '%s' "$HUB_ADMIN_PASSWORD" | bun run hub:bootstrap-admin -- --email admin@example.com
 bun run hub:start
 ```
+
+引导命令会在整个操作期间持有与托管服务相同的数据库独占租约；服务仍占有租约或已存在管理员时都会拒绝执行。
 
 打开 `HUB_PUBLIC_ORIGIN/hub/`。管理员生成卡密批次时，完整卡密只在本次响应显示；用户兑换后
 创建 `hub_live_` Key，并以公网 Origin 作为兼容 Base URL。当前按私有 OpenCodex 返回 2xx 接受请求的时点
@@ -65,7 +68,7 @@ hubapi 不建立第二套路由器。先在私有路由核心中把 `coding`、`
 诚实的边缘/上游状态，并提供 OpenAI 兼容客户端、Codex CLI 与 Claude Code 的可复制接入配置；配置只含密钥占位符，不读取或保留真实 API Key。`/hub/#admin` 仅管理员可见，集中呈现用户状态、整数额度聚合指标、脱敏请求活动、批次到期时间、掩码用户 Key、掩码卡密库存、用户账本、Key 撤销、代理安全与审计记录；完整 Key 与卡密不会由支持视图返回。管理员列表使用非邮箱操作代号，固定管理动作 URL 不在浏览器地址中携带可复用用户标识。
 `/hub/#security` 展示只读账户资料和不含 Session Token 的活跃会话，可在验证当前密码后修改密码，也可一次撤销全部浏览器会话。
 
-登录、注册与卡密兑换使用持久化且经过 HMAC 的账户/网络限流；敏感管理员写操作使用独立限流，并审计被拒绝的操作。
+登录、注册、修改密码与卡密兑换使用持久化且经过 HMAC 的账户/网络限流；敏感管理员写操作和详情查询使用独立限流，并审计被拒绝的操作。
 进程重启后会在接收流量前释放尚未被上游接受的 pending 预留，并保守结算已被上游接受的 pending 请求。
 公开请求只接受未压缩 JSON；正文只在受限临时内存中用于指纹与转发，不写日志或数据库，响应保持流式而不整段缓冲。
 私有 OpenCodex 调用也受超时约束。

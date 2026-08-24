@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { BodyTooLargeError, readBoundedBody } from "./body";
 import type { HubConfig } from "./config";
 import type { HubBilling } from "./billing";
 import { hmacDigest, securityHeaders } from "./security";
@@ -92,7 +93,7 @@ async function readBoundedJson(response: Response, maxBytes: number): Promise<un
       chunks.push(value);
     }
   } catch (error) {
-    await reader.cancel(error).catch(() => undefined);
+    void reader.cancel(error).catch(() => undefined);
     throw error;
   }
   const bytes = new Uint8Array(total);
@@ -156,8 +157,11 @@ function wrapSettledBody(
       }
     },
     async cancel(reason) {
-      finish(() => interrupt("cancel"));
-      await reader.cancel(reason);
+      try {
+        finish(() => interrupt("cancel"));
+      } finally {
+        await reader.cancel(reason);
+      }
     },
   });
 }
@@ -248,11 +252,11 @@ export class HubAdmission {
     if (!Number.isFinite(declared) || declared < 0 || declared > BODY_MAX_BYTES) return json({ error: "request_too_large" }, 413);
     let body: ArrayBuffer;
     try {
-      body = await req.arrayBuffer();
-    } catch {
+      body = await readBoundedBody(req.body, BODY_MAX_BYTES);
+    } catch (error) {
+      if (error instanceof BodyTooLargeError) return json({ error: "request_too_large" }, 413);
       return json({ error: "invalid_request_body" }, 400);
     }
-    if (body.byteLength > BODY_MAX_BYTES) return json({ error: "request_too_large" }, 413);
     const bodyHash = createHash("sha256").update(new Uint8Array(body)).digest("base64url");
     const fingerprint = hmacDigest(this.config.digestSecret, "request-fingerprint", `${req.method}\n${url.pathname}${url.search}\n${bodyHash}`);
     try {

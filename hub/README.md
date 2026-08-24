@@ -30,7 +30,7 @@ Optional policy settings include `HUB_ALLOW_REGISTRATION=1`, `HUB_SESSION_TTL_SE
 
 ## Network firewall
 
-For an HTTPS reverse-proxy deployment, set `HUB_HOSTNAME=127.0.0.1` and `HUB_TRUST_LOOPBACK_PROXY=1`. In this mode the server fails closed unless the direct socket peer is loopback and Caddy supplies one valid `X-Hubapi-Client-IP`; direct mode ignores that header. Use [`deploy/Caddyfile.example`](./deploy/Caddyfile.example) as the route-default-deny TLS gateway.
+Production requires an HTTPS reverse proxy: set `HUB_HOSTNAME=127.0.0.1` and `HUB_TRUST_LOOPBACK_PROXY=1`. The Bun listener does not terminate TLS, so a production public direct bind is rejected. In proxy mode the server fails closed unless the direct socket peer is loopback and Caddy supplies one valid `X-Hubapi-Client-IP`; loopback-only development direct mode ignores that header. Use [`deploy/Caddyfile.example`](./deploy/Caddyfile.example) as the route-default-deny TLS gateway.
 
 [`deploy/hubapi-guard.nft`](./deploy/hubapi-guard.nft) is a service-scoped nftables guard. It accepts loopback first, then drops non-loopback access to the default private OpenCodex and hub ports without flushing or replacing the host's existing firewall. Review any custom ports, validate, apply, and read back the exact table on the Linux host:
 
@@ -43,7 +43,7 @@ caddy validate --config hub/deploy/Caddyfile.example --adapter caddyfile
 
 Do not apply the example blindly over an existing table; delete or replace only the named `inet hubapi_guard` table during a controlled maintenance window. Host firewall activation is intentionally not automatic from the application.
 
-Bootstrap the first administrator offline by passing the password over stdin, then start the independent listener:
+Bootstrap the first administrator offline by passing the password over stdin, then start the independent listener. The bootstrap command holds the same exclusive database lease as the hosted runtime for the complete operation, so a concurrent start fails closed:
 
 ```bash
 bun run bootstrap-admin -- --email ADMIN_EMAIL

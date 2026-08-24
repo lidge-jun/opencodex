@@ -1,11 +1,22 @@
-import { HubAuth } from "./auth";
-import { loadHubConfig } from "./config";
+import { HubAuth, type HubUser } from "./auth";
+import { type HubConfig, loadHubConfig } from "./config";
 import { HubDatabase } from "./database";
 import { HubService } from "./server";
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+export async function bootstrapAdminOffline(config: HubConfig, email: unknown, password: unknown): Promise<HubUser> {
+  const database = new HubDatabase(config.databasePath);
+  try {
+    database.acquireSingleNodeLock();
+    const auth = new HubAuth(database.db, config.digestSecret, config.sessionTtlSeconds);
+    return await auth.bootstrapAdmin(email, password);
+  } finally {
+    database.close();
+  }
 }
 
 async function main(): Promise<void> {
@@ -27,18 +38,11 @@ async function main(): Promise<void> {
     if (!process.argv.includes("--password-stdin")) throw new Error("bootstrap requires --password-stdin; passwords are never accepted in process arguments");
     const email = option("--email");
     const password = (await Bun.stdin.text()).replace(/[\r\n]+$/, "");
-    const database = new HubDatabase(config.databasePath);
-    try {
-      database.assertNoActiveRuntimeLock();
-      const auth = new HubAuth(database.db, config.digestSecret, config.sessionTtlSeconds);
-      const user = await auth.bootstrapAdmin(email, password);
-      console.log(`hubapi administrator bootstrapped: ${user.id}`);
-    } finally {
-      database.close();
-    }
+    await bootstrapAdminOffline(config, email, password);
+    console.log("hubapi administrator bootstrapped");
     return;
   }
   throw new Error("usage: bun hub/src/cli.ts <start|bootstrap-admin>");
 }
 
-await main();
+if (import.meta.main) await main();

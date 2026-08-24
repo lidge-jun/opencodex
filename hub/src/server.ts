@@ -1,5 +1,6 @@
 import type { Server } from "bun";
 import { HubAuth, type AuthenticatedSession, type IssuedSession } from "./auth";
+import { readBoundedBody } from "./body";
 import { HubBilling } from "./billing";
 import { HUB_PUBLIC_PROXY_PATHS, HubAdmission } from "./admission";
 import { type HubConfig, validateHubConfig } from "./config";
@@ -29,6 +30,9 @@ const RECHARGE_NETWORK_LIMIT = 30;
 const RECHARGE_RATE_WINDOW_MS = 15 * 60_000;
 const ADMIN_ACTION_LIMIT = 20;
 const ADMIN_ACTION_WINDOW_MS = 60_000;
+const PASSWORD_CHANGE_USER_LIMIT = 5;
+const PASSWORD_CHANGE_NETWORK_LIMIT = 15;
+const PASSWORD_CHANGE_WINDOW_MS = 15 * 60_000;
 type HubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 function json(data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
@@ -79,8 +83,12 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
   if (contentType !== "application/json") throw new Error("unsupported_media_type");
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (!Number.isFinite(declared) || declared < 0 || declared > JSON_BODY_MAX_BYTES) throw new Error("invalid_body");
-  const bytes = new Uint8Array(await req.arrayBuffer());
-  if (bytes.byteLength > JSON_BODY_MAX_BYTES) throw new Error("invalid_body");
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await readBoundedBody(req.body, JSON_BODY_MAX_BYTES));
+  } catch {
+    throw new Error("invalid_body");
+  }
   try {
     const value = JSON.parse(new TextDecoder().decode(bytes));
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
@@ -251,6 +259,9 @@ export class HubService {
         if (session instanceof Response) return session;
         const rejection = this.requireMutationEvidence(req, session);
         if (rejection) return rejection;
+        const userLimited = this.consumeRateLimit("auth.password.user", session.user.id, PASSWORD_CHANGE_USER_LIMIT, PASSWORD_CHANGE_WINDOW_MS);
+        const networkLimited = this.consumeRateLimit("auth.password.network", clientAddress, PASSWORD_CHANGE_NETWORK_LIMIT, PASSWORD_CHANGE_WINDOW_MS);
+        if (userLimited || networkLimited) return userLimited ?? networkLimited!;
         const body = await readJson(req);
         try {
           await this.auth.changePassword(session.user.id, body.currentPassword, body.newPassword);
@@ -390,7 +401,7 @@ export class HubService {
       if (req.method === "POST" && url.pathname === "/hub/admin/recharge-code-inventory") {
         const session = this.requireSession(req);
         if (session instanceof Response) return session;
-        const rejection = this.requireMutationEvidence(req, session) ?? this.requireAdmin(session, true);
+        const rejection = this.requireAdminMutation(req, session, "recharge_code_inventory");
         if (rejection) return rejection;
         const body = await readJson(req);
         const batchId = typeof body.batchId === "string" ? body.batchId : "";
@@ -423,7 +434,7 @@ export class HubService {
       if (req.method === "POST" && url.pathname === "/hub/admin/user-details") {
         const session = this.requireSession(req);
         if (session instanceof Response) return session;
-        const rejection = this.requireMutationEvidence(req, session) ?? this.requireAdmin(session, true);
+        const rejection = this.requireAdminMutation(req, session, "user_details");
         if (rejection) return rejection;
         try {
           const body = await readJson(req);

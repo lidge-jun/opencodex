@@ -123,11 +123,52 @@ test("Dashboard workspace pane is a labelled section, not a nested main landmark
 
 test("Dashboard recent routes use persisted history and preserve unknown traces", async () => {
   const src = await Bun.file(new URL("../src/pages/dashboard-recent-routes.tsx", import.meta.url)).text();
+  const data = await Bun.file(new URL("../src/pages/dashboard-recent-routes-data.ts", import.meta.url)).text();
   const panels = await Bun.file(new URL("../src/pages/dashboard-overview-panels.tsx", import.meta.url)).text();
-  expect(src).toContain("/api/request-history?limit=5");
+  expect(data).toContain("/api/request-history?limit=5");
   expect(src).toContain("dash.routes.unknown");
-  expect(src).not.toContain("routeDecision:");
+  expect(data).toContain("const route = record(row.routeDecision)");
+  expect(data).not.toContain("routeDecision: {");
   expect(panels).toContain("DashboardRecentRoutes");
+});
+
+test("Dashboard recent routes degrade to validated legacy rows during a rolling upgrade", async () => {
+  const module = await import("../src/pages/dashboard-recent-routes-data") as unknown as {
+    fetchRecentRoutes?: (apiBase: string, signal: AbortSignal) => Promise<{ entries: Array<Record<string, unknown>> }>;
+  };
+  expect(typeof module.fetchRecentRoutes).toBe("function");
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async input => {
+    const url = String(input);
+    calls.push(url);
+    if (url.includes("/api/request-history")) return new Response(null, { status: 404 });
+    return Response.json([{ requestId: "legacy-1", timestamp: 1, model: "coding", provider: "local", status: 200 }]);
+  }) as typeof fetch;
+  try {
+    const page = await module.fetchRecentRoutes!("http://127.0.0.1:11435", new AbortController().signal);
+    expect(page.entries).toEqual([expect.objectContaining({ requestId: "legacy-1", model: "coding" })]);
+    expect(calls).toEqual([
+      "http://127.0.0.1:11435/api/request-history?limit=5",
+      "http://127.0.0.1:11435/api/logs?limit=5",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Dashboard recent routes reject malformed or unbounded nested attempts", async () => {
+  const { fetchRecentRoutes } = await import("../src/pages/dashboard-recent-routes-data");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({
+    entries: [{ timestamp: 1, model: "coding", provider: "local", status: 200, attempts: [{}] }],
+  })) as typeof fetch;
+  try {
+    await expect(fetchRecentRoutes("http://127.0.0.1:11435", new AbortController().signal))
+      .rejects.toThrow("invalid_recent_route_entry");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("native Codex subagent defaults stay separate from hubapi guidance", async () => {

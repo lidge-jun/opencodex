@@ -1,5 +1,3 @@
-import { isIP } from "node:net";
-
 export interface HubConfig {
   databasePath: string;
   digestSecret: string;
@@ -44,12 +42,9 @@ export function validateHubConfig(config: HubConfig): HubConfig {
   }
   if (!config.development && isLoopback(origin.hostname)) throw new Error("production HUB_PUBLIC_ORIGIN must not be loopback");
   if (config.trustLoopbackProxy && config.development) throw new Error("loopback proxy trust is a production-only mode");
+  if (!config.development && !config.trustLoopbackProxy) throw new Error("production hub requires a trusted loopback TLS proxy");
   if (config.trustLoopbackProxy && !isLoopback(config.hostname)) throw new Error("trusted proxy mode requires a loopback hub bind");
-  if (!config.development && !config.trustLoopbackProxy && isLoopback(config.hostname)) throw new Error("production hub hostname must be an explicit public bind");
   if (config.development && !isLoopback(config.hostname)) throw new Error("development hub may bind only to loopback");
-  if (!config.development && !config.trustLoopbackProxy && isIP(config.hostname) === 0 && config.hostname !== "0.0.0.0" && config.hostname !== "::") {
-    throw new Error("hub hostname must be an IP bind address");
-  }
   const target = new URL(config.opencodexOrigin);
   if (target.protocol !== "http:" || !isLoopback(target.hostname) || target.username || target.password || target.pathname !== "/" || target.search || target.hash) {
     throw new Error("HUB_OPENCODEX_ORIGIN must be a loopback http origin without credentials, path, query, or hash");

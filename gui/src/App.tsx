@@ -133,7 +133,7 @@ export default function App() {
   const { locale, setLocale } = useI18n();
   const t = useT();
 
-  // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
+  // Tablet and narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -195,7 +195,7 @@ export default function App() {
 
   // Growing the window past the breakpoint dismisses the drawer state.
   useEffect(() => {
-    const mq = window.matchMedia("(min-width: 761px)");
+    const mq = window.matchMedia("(min-width: 1024px)");
     const onChange = () => { if (mq.matches) setNavOpen(false); };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);

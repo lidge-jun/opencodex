@@ -2,37 +2,14 @@ import { useDataSurface } from "../data-surface";
 import { navigateHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
 import { EmptyState } from "../ui";
-
-interface RecentRouteEntry {
-  requestId?: string;
-  timestamp: number;
-  model: string;
-  requestedModel?: string;
-  resolvedModel?: string;
-  provider: string;
-  status: number;
-  attempts?: Array<{ ordinal: number }>;
-  routeDecision?: {
-    routeKind?: string;
-    profile?: { id?: string; revision?: string };
-    selected?: { provider?: string; model?: string };
-  };
-}
-
-interface RecentRoutePage {
-  entries: RecentRouteEntry[];
-}
+import { fetchRecentRoutes, type RecentRoutePage } from "./dashboard-recent-routes-data";
 
 export function DashboardRecentRoutes({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const resource = useDataSurface<RecentRoutePage>(
     `dashboard-recent-routes:${apiBase}`,
     [apiBase],
-    async signal => {
-      const response = await fetch(`${apiBase}/api/request-history?limit=5`, { signal });
-      if (!response.ok) throw new Error(String(response.status));
-      return response.json() as Promise<RecentRoutePage>;
-    },
+    signal => fetchRecentRoutes(apiBase, signal),
     { isEmpty: page => page.entries.length === 0, pollMs: 10_000 },
   );
 

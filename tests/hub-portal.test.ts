@@ -101,6 +101,8 @@ describe("hub hosted portal", () => {
     expect(source).toContain('api("/hub/auth/status")');
     expect(source).toContain('api("/hub/auth/password"');
     expect(source).toContain('api("/hub/auth/logout-all"');
+    expect(source).toContain('await api("/hub/auth/logout", { method: "POST" });\n      user = null;');
+    expect(source).not.toContain('catch { /* session is cleared locally below */ }');
     expect(source).toContain('api("/hub/account/requests?limit=6")');
     expect(source).toContain('api("/hub/admin/metrics")');
     expect(source).toContain('api("/hub/admin/requests?limit=20")');

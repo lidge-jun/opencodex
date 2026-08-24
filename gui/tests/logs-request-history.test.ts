@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { requestHistoryUrl, type RequestHistoryFilters } from "../src/pages/logs-request-history";
+import { requestHistoryFiltersActive, requestHistoryUrl, type RequestHistoryFilters } from "../src/pages/logs-request-history";
 
 const emptyFilters: RequestHistoryFilters = {
   provider: "",
@@ -31,6 +31,13 @@ test("request history URL uses server filters and an opaque encoded cursor", () 
   expect(url.searchParams.get("fallback")).toBe("true");
   expect(url.searchParams.get("cursor")).toBe("cursor + / =");
   expect(url.searchParams.has("model")).toBe(false);
+});
+
+test("history filters never silently degrade to an unfiltered legacy response", () => {
+  expect(requestHistoryFiltersActive(emptyFilters)).toBe(false);
+  expect(requestHistoryFiltersActive({ ...emptyFilters, provider: "openai" })).toBe(true);
+  const source = readFileSync(join(import.meta.dir, "..", "src", "pages", "Logs.tsx"), "utf8");
+  expect(source).toContain("res.status === 404 && !requestHistoryFiltersActive(historyFilters)");
 });
 
 test("Logs reads route evidence from the per-request explanation endpoint", () => {

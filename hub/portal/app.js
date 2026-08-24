@@ -272,10 +272,14 @@ function renderConsole() {
     loadView();
   }));
   app.querySelector("#logout")?.addEventListener("click", async () => {
-    try { await api("/hub/auth/logout", { method: "POST" }); } catch { /* session is cleared locally below */ }
-    user = null;
-    authMode = "login";
-    renderAuth();
+    try {
+      await api("/hub/auth/logout", { method: "POST" });
+      user = null;
+      authMode = "login";
+      renderAuth();
+    } catch {
+      if (user) toast(t("genericError"), true);
+    }
   });
 }
 

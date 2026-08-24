@@ -20,6 +20,10 @@ export const EMPTY_HISTORY_FILTERS: RequestHistoryFilters = {
   fallback: "",
 };
 
+export function requestHistoryFiltersActive(filters: RequestHistoryFilters): boolean {
+  return Object.values(filters).some(Boolean);
+}
+
 export function requestHistoryUrl(apiBase: string, filters: RequestHistoryFilters, cursor?: string): string {
   const query = new URLSearchParams({ limit: "200" });
   for (const [key, value] of Object.entries(filters)) {

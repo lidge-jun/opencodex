@@ -63,6 +63,17 @@ test("mobile orbs keep a 44px touch target", () => {
   expect(block).toContain("44px");
 });
 
+test("the app shell becomes a drawer throughout the PRD tablet range", () => {
+  const shellMedia = css.slice(
+    css.indexOf("/* responsive: compact sticky top bar"),
+    css.indexOf(".usage-cards {", css.indexOf("/* responsive: compact sticky top bar")),
+  );
+  expect(shellMedia).toContain("@media (max-width: 1023px)");
+  expect(shellMedia).toContain("grid-template-columns: 1fr");
+  expect(shellMedia).toMatch(/\.sidebar\s*\{[^}]*position:\s*fixed/s);
+  expect(src).toContain('window.matchMedia("(min-width: 1024px)")');
+});
+
 
 /**
  * Outcome-message and consent assertions. Kept here rather than in a second file so
@@ -117,4 +128,3 @@ test("every restart string exists in the English source with its slots intact", 
   expect(en["dash.codexRestartPartial"]).toContain("{count}");
   expect(en["dash.codexRestartFailed"]).toContain("{status}");
 });
-

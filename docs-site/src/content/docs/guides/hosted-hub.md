@@ -36,8 +36,8 @@ Hosted startup fails closed when any security-critical value is missing. Configu
 | `HUB_DATABASE_PATH` | Private local SQLite path; do not place it on a shared/network filesystem. |
 | `HUB_DIGEST_SECRET` | At least 32 random bytes for domain-separated credential digests. |
 | `HUB_PUBLIC_ORIGIN` | Exact HTTPS browser origin, without a path. |
-| `HUB_HOSTNAME`, `HUB_PORT` | Explicit bind and port. Use loopback only with trusted reverse-proxy mode. |
-| `HUB_TRUST_LOOPBACK_PROXY` | Set to `1` only when the hub binds to loopback behind the checked reverse proxy. |
+| `HUB_HOSTNAME`, `HUB_PORT` | Explicit bind and port. Production requires a loopback bind behind the trusted TLS reverse proxy. |
+| `HUB_TRUST_LOOPBACK_PROXY` | Set to `1` in production when the hub binds to loopback behind the checked TLS reverse proxy. |
 | `HUB_OPENCODEX_ORIGIN` | Private loopback OpenCodex origin, for example `http://127.0.0.1:10100`. |
 | `HUB_INTERNAL_ADMISSION_TOKEN` | At least 32 random bytes; use the same value as OpenCodex `OPENCODEX_API_AUTH_TOKEN`. |
 | `HUB_REQUEST_COST_UNITS` | Positive integer charged when private OpenCodex accepts the request with a 2xx response. |
@@ -55,8 +55,9 @@ For production TLS termination, bind the hub to `127.0.0.1` and set
 `HUB_TRUST_LOOPBACK_PROXY=1`. The checked-in `hub/deploy/Caddyfile.example` overwrites
 `X-Hubapi-Client-IP` from the direct remote address, proxies only `/hub`, `/hub/*`, and the four
 allowlisted inference routes, then returns `404` for every other path. Trusted-proxy mode rejects a
-non-loopback peer, a missing header, an IP chain, or a malformed IP before route dispatch. Direct
-mode ignores the forwarded header.
+non-loopback peer, a missing header, an IP chain, or a malformed IP before route dispatch. Because
+the Bun listener does not terminate TLS, production refuses a public direct bind. Development direct
+mode remains loopback-only and ignores the forwarded header.
 
 The service-scoped `hub/deploy/hubapi-guard.nft` accepts loopback and drops non-loopback access to
 the default private OpenCodex and hub ports. It does not flush the machine's firewall or install
@@ -74,8 +75,8 @@ standard input so it does not appear in process arguments:
 printf '%s' "$HUB_ADMIN_PASSWORD" | bun run hub:bootstrap-admin -- --email admin@example.com
 ```
 
-The command refuses to run while the database has an active hosted-service lease and refuses to
-create a second bootstrap administrator.
+The command holds the same exclusive database lease for the entire bootstrap operation. It refuses
+to run while the hosted service owns that lease and refuses to create a second administrator.
 
 ## Start and use
 
@@ -120,8 +121,8 @@ or process recovery after acceptance is conservatively charged because upstream 
 been consumed. An optional `Idempotency-Key` prevents a retry from forwarding or settling twice; an
 accepted response is not replayed, so that retry receives `409`.
 
-Login, registration, and recharge redemption have persistent, keyed account/network rate limits; sensitive administrator
-mutations have a separate per-admin limit and audit denied attempts. A clean restart releases any
+Login, registration, password change, and recharge redemption have persistent, keyed account/network rate limits;
+sensitive administrator mutations and detail lookups have a separate per-admin limit and audit denied attempts. A clean restart releases any
 reservation that was never accepted upstream and conservatively settles an accepted pending request
 before taking traffic. Request bodies must be uncompressed JSON and are held only in bounded, ephemeral
 memory for fingerprinting and forwarding; they are never logged or persisted. Responses remain streamed

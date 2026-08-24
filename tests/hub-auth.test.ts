@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HubAuth } from "../hub/src/auth";
+import { bootstrapAdminOffline } from "../hub/src/cli";
 import { type HubConfig, loadHubConfig, validateHubConfig } from "../hub/src/config";
 import { HubDatabase } from "../hub/src/database";
 import { HubRateLimiter } from "../hub/src/rate-limit";
@@ -135,6 +136,27 @@ describe("hub authentication store", () => {
     database.close();
   });
 
+  test("holds the single-node lock for the complete offline administrator bootstrap", async () => {
+    const { path } = tempDatabase();
+    const runtime = new HubDatabase(path);
+    runtime.acquireSingleNodeLock();
+
+    await expect(bootstrapAdminOffline(config(path), "admin@example.com", "a sufficiently long admin password"))
+      .rejects.toThrow("already owned");
+    expect(runtime.db.query("SELECT count(*) AS count FROM hub_users").get()).toEqual({ count: 0 });
+    runtime.close();
+
+    const admin = await bootstrapAdminOffline(config(path), "admin@example.com", "a sufficiently long admin password");
+    expect(admin.role).toBe("admin");
+    const reopened = new HubDatabase(path);
+    expect(reopened.db.query("SELECT count(*) AS count FROM hub_users WHERE role = 'admin'").get()).toEqual({ count: 1 });
+    reopened.close();
+
+    const cliSource = readFileSync("hub/src/cli.ts", "utf8");
+    expect(cliSource).not.toContain("user.id");
+    expect(cliSource).not.toContain("assertNoActiveRuntimeLock");
+  });
+
   test("stores only session and CSRF digests and revokes all sessions after password change", async () => {
     const { path } = tempDatabase();
     const database = new HubDatabase(path);
@@ -238,6 +260,87 @@ describe("hub browser session boundary", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).not.toBeNull();
     expect(await limited.json()).toEqual({ error: "rate_limited" });
+    service.stop();
+  });
+
+  test("rate limits current-password guessing by both account and network subject", async () => {
+    const { path } = tempDatabase();
+    const service = new HubService(config(path));
+    const issued = await service.auth.register("password-rate@example.com", "correct horse battery staple");
+    const headers = {
+      "content-type": "application/json",
+      Cookie: `hubapi_session=${issued.token}; hubapi_csrf=${issued.csrfToken}`,
+      Origin: service.config.publicOrigin,
+      "x-hubapi-csrf-token": issued.csrfToken,
+    };
+    const attempt = () => service.fetch(new Request("http://127.0.0.1:10400/hub/auth/password", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ currentPassword: "wrong current password", newPassword: "a new correct horse battery staple" }),
+    }), "203.0.113.44");
+
+    for (let index = 0; index < 5; index += 1) expect((await attempt()).status).toBe(400);
+    const limited = await attempt();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).not.toBeNull();
+    expect(await limited.json()).toEqual({ error: "rate_limited" });
+    expect(service.database.db.query("SELECT scope FROM hub_rate_limits WHERE scope LIKE 'auth.password.%' ORDER BY scope").all())
+      .toEqual([{ scope: "auth.password.network" }, { scope: "auth.password.user" }]);
+    expect((await service.auth.login("password-rate@example.com", "correct horse battery staple")).user.id).toBe(issued.user.id);
+    service.stop();
+  });
+
+  test("rate limits sensitive administrator lookups", async () => {
+    const { path } = tempDatabase();
+    const service = new HubService(config(path));
+    const adminUser = await service.auth.bootstrapAdmin("admin-rate@example.com", "a sufficiently long admin password");
+    const admin = await service.auth.login("admin-rate@example.com", "a sufficiently long admin password");
+    const headers = {
+      "content-type": "application/json",
+      Cookie: `hubapi_session=${admin.token}; hubapi_csrf=${admin.csrfToken}`,
+      Origin: service.config.publicOrigin,
+      "x-hubapi-csrf-token": admin.csrfToken,
+    };
+    const lookup = () => service.fetch(new Request("http://127.0.0.1:10400/hub/admin/user-details", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ userId: adminUser.id }),
+    }), "203.0.113.46");
+
+    for (let index = 0; index < 20; index += 1) expect((await lookup()).status).toBe(200);
+    const limited = await lookup();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).not.toBeNull();
+    expect(await limited.json()).toEqual({ error: "rate_limited" });
+    expect(service.database.db.query("SELECT scope FROM hub_rate_limits WHERE scope = 'admin.user_details'").get())
+      .toEqual({ scope: "admin.user_details" });
+    service.stop();
+  });
+
+  test("cancels oversized browser JSON before buffering the remaining body", async () => {
+    const { path } = tempDatabase();
+    const service = new HubService(config(path));
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 10) controller.enqueue(new Uint8Array(16 * 1024));
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const response = await service.fetch(new Request("http://127.0.0.1:10400/hub/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: service.config.publicOrigin },
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" }), "203.0.113.45");
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_body" });
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThanOrEqual(5);
     service.stop();
   });
 

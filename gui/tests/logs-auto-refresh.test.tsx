@@ -201,6 +201,59 @@ test("Logs: initial failure shows error; silent failure keeps it; retry then rec
   await act(async () => { root.unmount(); });
 });
 
+test("Logs: malformed successful history is rejected before it reaches rendering", async () => {
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes("/api/request-history")) {
+      return jsonResponse({
+        entries: [{ ...sampleLog, model: { attackerControlled: true } }],
+        hasMore: false,
+        index: { schemaVersion: 1, indexedRows: 1, sourceSize: 1, sourceMtimeMs: 1, builtAtMs: 1, lastError: "" },
+      });
+    }
+    return jsonResponse({});
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.textContent).toContain("Could not load request logs.");
+  expect(container.querySelector(".logs-table")).toBeNull();
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: a fresh history index with no prior error remains valid", async () => {
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes("/api/request-history")) {
+      return jsonResponse({
+        entries: [sampleLog],
+        hasMore: false,
+        index: { schemaVersion: 1, indexedRows: 1, sourceSize: 1, sourceMtimeMs: 1, builtAtMs: 1, lastError: null },
+      });
+    }
+    return jsonResponse({});
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.querySelector(".logs-table")).not.toBeNull();
+  expect(container.textContent).not.toContain("Could not load request logs.");
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: a legacy success without a logs array is not an honest empty state", async () => {
+  globalThis.fetch = (async (input) => {
+    if (String(input).includes("/api/request-history")) return new Response(null, { status: 404 });
+    return jsonResponse({ unexpected: true });
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.textContent).toContain("Could not load request logs.");
+  expect(container.textContent).not.toContain("No requests yet");
+  await act(async () => { root.unmount(); });
+});
+
 test("Logs: silent failure after successful load keeps the table and does not toggle loading or empty state", async () => {
   let mode: "ok" | "fail" | "updated" = "ok";
 
@@ -457,6 +510,108 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
   expect(rows[2]?.querySelectorAll("br")).toHaveLength(1);
   expect(rows[2]?.textContent).not.toContain("undefined");
 
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: a failed explanation fetch preserves inline route evidence", async () => {
+  const routeLog = {
+    ...sampleLog,
+    routeDecision: {
+      routeKind: "profile",
+      selected: { provider: "fallback-provider", model: "fallback-model", reason: "inline evidence" },
+      candidates: [{ provider: "fallback-provider", model: "fallback-model", selected: true }],
+    },
+  };
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes("/route-decision")) return jsonResponse({ error: "unavailable" }, 503);
+    if (url.includes("/api/request-history")) return new Response(null, { status: 404 });
+    if (url.includes("/api/logs")) return jsonResponse([routeLog]);
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".log-detail-btn")!.click();
+  });
+  await flushMicrotasks();
+
+  expect(container.textContent).toContain("Recorded route evidence could not be loaded");
+  const routeGrid = container.querySelector("#log-detail-route")?.closest("section")?.querySelector(".log-detail-grid");
+  expect(routeGrid?.textContent).toContain("fallback-provider/fallback-model");
+  expect(routeGrid?.textContent).toContain("inline evidence");
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: malformed explanation data falls back to validated inline evidence", async () => {
+  const routeLog = {
+    ...sampleLog,
+    routeDecision: {
+      routeKind: "profile",
+      selected: { provider: "inline-provider", model: "inline-model", reason: "validated inline" },
+      candidates: [{ provider: "inline-provider", model: "inline-model", eligible: true }],
+    },
+  };
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes("/route-decision")) return jsonResponse({ routeDecision: {}, summary: null, outcome: null, attemptSequence: {} });
+    if (url.includes("/api/request-history")) return new Response(null, { status: 404 });
+    if (url.includes("/api/logs")) return jsonResponse([routeLog]);
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".log-detail-btn")!.click();
+  });
+  await flushMicrotasks();
+
+  expect(container.textContent).toContain("Recorded route evidence could not be loaded");
+  const routeGrid = container.querySelector("#log-detail-route")?.closest("section")?.querySelector(".log-detail-grid");
+  expect(routeGrid?.textContent).toContain("inline-provider/inline-model");
+  expect(routeGrid?.textContent).toContain("validated inline");
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: explanation outcome enums are validated instead of displayed as trusted evidence", async () => {
+  const routeLog = {
+    ...sampleLog,
+    routeDecision: {
+      routeKind: "profile",
+      selected: { provider: "inline-provider", model: "inline-model" },
+    },
+  };
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes("/route-decision")) return jsonResponse({
+      requestId: sampleLog.requestId,
+      routeDecision: null,
+      attemptSequence: [],
+      outcome: { status: 200, usageStatus: "attacker-controlled" },
+      summary: {
+        requestedModel: sampleLog.model,
+        routeKind: null,
+        selected: null,
+        finalProvider: sampleLog.provider,
+        finalModel: sampleLog.model,
+      },
+    });
+    if (url.includes("/api/request-history")) return new Response(null, { status: 404 });
+    if (url.includes("/api/logs")) return jsonResponse([routeLog]);
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".log-detail-btn")!.click();
+  });
+  await flushMicrotasks();
+
+  expect(container.textContent).toContain("Recorded route evidence could not be loaded");
+  expect(container.textContent).not.toContain("attacker-controlled");
   await act(async () => { root.unmount(); });
 });
 

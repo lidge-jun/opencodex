@@ -23,12 +23,12 @@ import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
 import {
   EMPTY_HISTORY_FILTERS,
+  requestHistoryFiltersActive,
   requestHistoryUrl,
   type RequestHistoryFilters,
 } from "./logs-request-history";
 import {
   sanitizeLogEntryRouteDecision,
-  validCachedRouteDecision,
 } from "./log-route-decision";
 
 function logsCacheKey(apiBase: string): string {
@@ -183,7 +183,7 @@ interface RequestHistoryIndexStatus {
   sourceSize: number;
   sourceMtimeMs: number;
   builtAtMs: number;
-  lastError: string;
+  lastError: string | null;
 }
 
 interface RequestHistoryPage {
@@ -216,24 +216,281 @@ interface RouteDecisionExplanation {
   };
 }
 
-function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
-  if (!Array.isArray(cached)) return null;
-  for (const entry of cached) {
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validHistoryIndex(value: unknown): value is RequestHistoryIndexStatus {
+  const index = record(value);
+  return Boolean(index
+    && finiteNumber(index.schemaVersion)
+    && finiteNumber(index.indexedRows)
+    && finiteNumber(index.sourceSize)
+    && finiteNumber(index.sourceMtimeMs)
+    && finiteNumber(index.builtAtMs)
+    && (index.lastError === null || boundedString(index.lastError)));
+}
+
+const LOG_USAGE_STATUSES = new Set<LogUsageStatus>(["reported", "unreported", "unsupported", "estimated"]);
+const METRIC_REASONS = new Set<MetricUnavailableReason>([
+  "usage_missing", "usage_unsupported", "output_missing", "invalid_duration",
+  "price_unmatched", "invalid_cache_breakdown", "invalid_usage", "combo_attempt_unavailable",
+]);
+const ESTIMATE_REASONS = new Set<CostEstimateReason>([
+  "usage_estimated", "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound",
+]);
+
+function normalizeUsage(value: unknown): UsageBreakdown | null {
+  const usage = record(value);
+  if (!usage || !finiteNumber(usage.inputTokens) || !finiteNumber(usage.outputTokens)) return null;
+  const result: UsageBreakdown = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+  for (const key of ["contextTotalTokens", "totalTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens"] as const) {
+    if (usage[key] !== undefined) {
+      if (!finiteNumber(usage[key])) return null;
+      result[key] = usage[key];
+    }
+  }
+  if (usage.estimated !== undefined) {
+    if (typeof usage.estimated !== "boolean") return null;
+    result.estimated = usage.estimated;
+  }
+  return result;
+}
+
+function normalizeMatchedPrice(value: unknown): MatchedPriceInfo | null {
+  const price = record(value);
+  if (!price || !boundedString(price.provider) || !boundedString(price.modelId)
+    || !["jawcode", "expected", "user"].includes(String(price.source))
+    || !["verified", "verified-derived"].includes(String(price.status))) return null;
+  return {
+    provider: price.provider,
+    modelId: price.modelId,
+    source: price.source as MatchedPriceInfo["source"],
+    status: price.status as MatchedPriceInfo["status"],
+    ...(boundedString(price.jawcodeProvider) ? { jawcodeProvider: price.jawcodeProvider } : {}),
+    ...(boundedString(price.sourceRef) ? { sourceRef: price.sourceRef } : {}),
+    ...(boundedString(price.verifiedAt) ? { verifiedAt: price.verifiedAt } : {}),
+  };
+}
+
+function normalizeDisplayMetrics(value: unknown): LogDisplayMetrics | null {
+  const metrics = record(value);
+  const throughput = record(metrics?.tokPerSecond);
+  const cost = record(metrics?.cost);
+  if (!metrics || !throughput || !cost) return null;
+  let tokPerSecond: TokPerSecondResult;
+  if (throughput.kind === "value" && finiteNumber(throughput.value) && typeof throughput.estimated === "boolean") {
+    tokPerSecond = { kind: "value", value: throughput.value, estimated: throughput.estimated };
+  } else if (throughput.kind === "unavailable" && METRIC_REASONS.has(throughput.reason as MetricUnavailableReason)) {
+    tokPerSecond = { kind: "unavailable", reason: throughput.reason as MetricUnavailableReason };
+  } else return null;
+
+  let normalizedCost: CostResult;
+  if (cost.kind === "unavailable" && METRIC_REASONS.has(cost.reason as MetricUnavailableReason)) {
+    normalizedCost = { kind: "unavailable", reason: cost.reason as MetricUnavailableReason };
+  } else if (cost.kind === "value") {
+    const estimate = record(cost.estimate);
+    const parts = record(estimate?.cost);
+    if (!estimate || !parts || typeof estimate.estimated !== "boolean"
+      || ![parts.input, parts.output, parts.cacheRead, parts.cacheWrite, parts.total].every(finiteNumber)
+      || !Array.isArray(cost.estimateReasons) || cost.estimateReasons.length > 10
+      || cost.estimateReasons.some(reason => !ESTIMATE_REASONS.has(reason as CostEstimateReason))) return null;
+    const price = estimate.price === undefined ? undefined : normalizeMatchedPrice(estimate.price);
+    if (estimate.price !== undefined && !price) return null;
+    const attemptPrices = estimate.attempts === undefined ? undefined : Array.isArray(estimate.attempts) && estimate.attempts.length <= 100
+      ? estimate.attempts.map(value => {
+        const row = record(value);
+        const matched = normalizeMatchedPrice(row?.price);
+        return row && finiteNumber(row.ordinal) && matched ? { ordinal: row.ordinal, price: matched } : null;
+      })
+      : null;
+    if (attemptPrices === null || attemptPrices?.some(row => row === null)) return null;
+    normalizedCost = {
+      kind: "value",
+      estimate: {
+        cost: {
+          input: Number(parts.input),
+          output: Number(parts.output),
+          cacheRead: Number(parts.cacheRead),
+          cacheWrite: Number(parts.cacheWrite),
+          total: Number(parts.total),
+        },
+        estimated: estimate.estimated,
+        ...(typeof estimate.priorityLowerBound === "boolean" ? { priorityLowerBound: estimate.priorityLowerBound } : {}),
+        ...(price ? { price } : {}),
+        ...(attemptPrices ? { attempts: attemptPrices as Array<{ ordinal: number; price: MatchedPriceInfo }> } : {}),
+      },
+      estimateReasons: cost.estimateReasons as CostEstimateReason[],
+    };
+  } else return null;
+  return { tokPerSecond, cost: normalizedCost };
+}
+
+function parseLogAttempt(value: unknown): LogAttempt | null {
+  const attempt = record(value);
+  if (!attempt || !finiteNumber(attempt.ordinal) || !boundedString(attempt.provider)
+    || !boundedString(attempt.model) || !boundedString(attempt.adapter, 160)
+    || !finiteNumber(attempt.status) || !finiteNumber(attempt.durationMs) || !finiteNumber(attempt.sendCount)
+    || !Array.isArray(attempt.recoveryKinds) || attempt.recoveryKinds.length > 100
+    || attempt.recoveryKinds.some(kind => !boundedString(kind, 80))
+    || !LOG_USAGE_STATUSES.has(attempt.usageStatus as LogUsageStatus)) return null;
+  const usage = attempt.usage === undefined ? undefined : normalizeUsage(attempt.usage);
+  const displayMetrics = attempt.displayMetrics === undefined ? undefined : normalizeDisplayMetrics(attempt.displayMetrics);
+  if ((attempt.usage !== undefined && !usage) || (attempt.displayMetrics !== undefined && !displayMetrics)) return null;
+  return {
+    ordinal: attempt.ordinal,
+    provider: attempt.provider,
+    model: attempt.model,
+    adapter: attempt.adapter,
+    status: attempt.status,
+    durationMs: attempt.durationMs,
+    sendCount: attempt.sendCount,
+    recoveryKinds: attempt.recoveryKinds as AttemptRecoveryKind[],
+    usageStatus: attempt.usageStatus as LogUsageStatus,
+    ...(finiteNumber(attempt.inputTokenEstimate) ? { inputTokenEstimate: attempt.inputTokenEstimate } : {}),
+    ...(usage ? { usage } : {}),
+    ...(finiteNumber(attempt.totalTokens) ? { totalTokens: attempt.totalTokens } : {}),
+    ...(boundedString(attempt.errorCode) ? { errorCode: attempt.errorCode } : {}),
+    ...(finiteNumber(attempt.firstOutputMs) ? { firstOutputMs: attempt.firstOutputMs } : {}),
+    ...(boundedString(attempt.requestedEffort, 160) ? { requestedEffort: attempt.requestedEffort } : {}),
+    ...(boundedString(attempt.effectiveEffort, 160) ? { effectiveEffort: attempt.effectiveEffort } : {}),
+    ...(boundedString(attempt.reasoningWireField, 160) ? { reasoningWireField: attempt.reasoningWireField } : {}),
+    ...(["string", "boolean"].includes(typeof attempt.reasoningWireValue) || finiteNumber(attempt.reasoningWireValue)
+      ? { reasoningWireValue: attempt.reasoningWireValue as string | number | boolean }
+      : {}),
+    ...(displayMetrics ? { displayMetrics } : {}),
+  };
+}
+
+function normalizeLogEntries(value: unknown): LogEntry[] | null {
+  if (!Array.isArray(value) || value.length > 2_000) return null;
+  const entries: LogEntry[] = [];
+  for (const candidate of value) {
+    const entry = record(candidate) as unknown as LogEntry | null;
     if (
       !entry
-      || typeof entry !== "object"
-      || typeof entry.timestamp !== "number"
-      || typeof entry.model !== "string"
-      || typeof entry.provider !== "string"
-      || typeof entry.status !== "number"
-      || typeof entry.durationMs !== "number"
+      || !finiteNumber(entry.timestamp)
+      || typeof entry.model !== "string" || entry.model.length > 500
+      || typeof entry.provider !== "string" || entry.provider.length > 500
+      || !finiteNumber(entry.status)
+      || !finiteNumber(entry.durationMs)
       || (entry.shadowCallRewrittenFrom !== undefined && typeof entry.shadowCallRewrittenFrom !== "string")
-      || !validCachedRouteDecision(entry.routeDecision)
     ) {
       return null;
     }
+    for (const key of ["requestId", "surface", "conversationId", "requestedEffort", "effectiveEffort", "reasoningWireField", "requestedServiceTier", "requestedSpeedLabel", "configuredServiceTier", "configuredSpeedLabel", "responseServiceTier", "resolvedModel", "errorCode", "upstreamError"] as const) {
+      if (entry[key] !== undefined && !boundedString(entry[key])) return null;
+    }
+    if (entry.reasoningWireValue !== undefined
+      && !["string", "boolean"].includes(typeof entry.reasoningWireValue)
+      && !finiteNumber(entry.reasoningWireValue)) return null;
+    if (entry.modelSupportsServiceTier !== undefined && typeof entry.modelSupportsServiceTier !== "boolean") return null;
+    if (entry.usageStatus !== undefined && !LOG_USAGE_STATUSES.has(entry.usageStatus)) return null;
+    if (entry.totalTokens !== undefined && !finiteNumber(entry.totalTokens)) return null;
+    if (entry.firstOutputMs !== undefined && !finiteNumber(entry.firstOutputMs)) return null;
+    const usage = entry.usage === undefined ? undefined : normalizeUsage(entry.usage);
+    const displayMetrics = entry.displayMetrics === undefined ? undefined : normalizeDisplayMetrics(entry.displayMetrics);
+    const attempts = entry.attempts === undefined ? undefined : Array.isArray(entry.attempts) && entry.attempts.length <= 100
+      ? entry.attempts.map(parseLogAttempt)
+      : null;
+    if ((entry.usage !== undefined && !usage) || (entry.displayMetrics !== undefined && !displayMetrics)
+      || attempts === null || attempts?.some(attempt => attempt === null)) return null;
+    entries.push(sanitizeLogEntryRouteDecision({
+      ...entry,
+      ...(usage ? { usage } : {}),
+      ...(displayMetrics ? { displayMetrics } : {}),
+      ...(attempts ? { attempts: attempts as LogAttempt[] } : {}),
+    }));
   }
-  return cached;
+  return entries;
+}
+
+function validCachedLogs(cached: unknown): LogEntry[] | null {
+  return normalizeLogEntries(cached);
+}
+
+function parseLogPayload(payload: unknown): { entries: LogEntry[]; history: RequestHistoryPage | null } {
+  if (Array.isArray(payload)) {
+    const entries = normalizeLogEntries(payload);
+    if (!entries) throw new Error("invalid_log_response");
+    return { entries, history: null };
+  }
+  const body = record(payload);
+  if (!body) throw new Error("invalid_log_response");
+  if ("entries" in body) {
+    const entries = normalizeLogEntries(body.entries);
+    if (!entries || typeof body.hasMore !== "boolean" || !validHistoryIndex(body.index)
+      || (body.nextCursor !== undefined && (typeof body.nextCursor !== "string" || body.nextCursor.length > 4_096))) {
+      throw new Error("invalid_log_response");
+    }
+    const history: RequestHistoryPage = {
+      entries,
+      hasMore: body.hasMore,
+      index: body.index,
+      ...(typeof body.nextCursor === "string" ? { nextCursor: body.nextCursor } : {}),
+    };
+    return { entries, history };
+  }
+  if (!Array.isArray(body.logs)) throw new Error("invalid_log_response");
+  const entries = normalizeLogEntries(body.logs);
+  if (!entries) throw new Error("invalid_log_response");
+  return { entries, history: null };
+}
+
+function boundedString(value: unknown, max = 500): value is string {
+  return typeof value === "string" && value.length <= max;
+}
+
+function parseRouteExplanation(payload: unknown, detail: LogEntry): RouteDecisionExplanation {
+  const body = record(payload);
+  const summary = record(body?.summary);
+  const outcome = record(body?.outcome);
+  const selected = summary?.selected === null ? null : summary ? record(summary.selected) : null;
+  if (!body || !boundedString(body.requestId) || body.requestId !== detail.requestId || !summary || !outcome
+    || !boundedString(summary.requestedModel) || !(summary.routeKind === null || boundedString(summary.routeKind, 80))
+    || !(summary.selected === null || (selected && boundedString(selected.provider) && boundedString(selected.model)))
+    || !boundedString(summary.finalProvider) || !boundedString(summary.finalModel)
+    || !finiteNumber(outcome.status)
+    || (outcome.usageStatus !== undefined && !LOG_USAGE_STATUSES.has(outcome.usageStatus as LogUsageStatus))
+    || !Array.isArray(body.attemptSequence) || body.attemptSequence.length > 100) {
+    throw new Error("invalid_route_explanation");
+  }
+  const attemptSequence = body.attemptSequence.map(parseLogAttempt);
+  if (attemptSequence.some(attempt => attempt === null)) throw new Error("invalid_route_explanation");
+  const sanitizedRoute = body.routeDecision === null
+    ? null
+    : sanitizeLogEntryRouteDecision({ ...detail, routeDecision: body.routeDecision as LogEntry["routeDecision"] }).routeDecision;
+  if (body.routeDecision !== null && sanitizedRoute === undefined) throw new Error("invalid_route_explanation");
+  return {
+    requestId: body.requestId,
+    routeDecision: sanitizedRoute ?? null,
+    attemptSequence: attemptSequence as LogAttempt[],
+    outcome: {
+      status: outcome.status,
+      ...(boundedString(outcome.terminalStatus, 160) ? { terminalStatus: outcome.terminalStatus } : {}),
+      ...(boundedString(outcome.closeReason, 500) ? { closeReason: outcome.closeReason } : {}),
+      ...(boundedString(outcome.errorCode, 500) ? { errorCode: outcome.errorCode } : {}),
+      ...(finiteNumber(outcome.durationMs) ? { durationMs: outcome.durationMs } : {}),
+      ...(typeof outcome.usageStatus === "string" ? { usageStatus: outcome.usageStatus as LogUsageStatus } : {}),
+    },
+    summary: {
+      requestedModel: summary.requestedModel,
+      routeKind: summary.routeKind,
+      ...(boundedString(summary.profileId, 160) ? { profileId: summary.profileId } : {}),
+      ...(boundedString(summary.revision, 160) ? { revision: summary.revision } : {}),
+      ...(selected && boundedString(selected.provider) && boundedString(selected.model)
+        ? { selected: { provider: selected.provider, model: selected.model } }
+        : {}),
+      finalProvider: summary.finalProvider,
+      finalModel: summary.finalModel,
+    },
+  };
 }
 
 function displayTokenTotal(log: LogEntry): number | undefined {
@@ -472,15 +729,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     let res = await fetch(requestHistoryUrl(apiBase, historyFilters), { signal });
     // Keep the GUI usable with older local proxies during a rolling upgrade. Current
     // The routing core uses cursor history; only an absent endpoint falls back to the legacy ring.
-    if (res.status === 404) res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+    if (res.status === 404 && !requestHistoryFiltersActive(historyFilters)) {
+      res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+    }
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] } | RequestHistoryPage;
-    const history = !Array.isArray(body) && "entries" in body ? body : null;
-    let raw: LogEntry[];
-    if (Array.isArray(body)) raw = body;
-    else if ("entries" in body) raw = body.entries;
-    else raw = body.logs ?? [];
-    const next = raw.map(sanitizeLogEntryRouteDecision).toSorted((a, b) => a.timestamp - b.timestamp);
+    const { entries, history } = parseLogPayload(await res.json());
+    const next = entries.toSorted((a, b) => a.timestamp - b.timestamp);
     if (history) {
       setHistoryIndex(history.index);
       setNextCursor(history.nextCursor);
@@ -489,6 +743,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       setHistoryIndex(null);
       setNextCursor(undefined);
       setHasMore(false);
+      setOlderLogs(previous => previous.length ? [] : previous);
     }
     writeSessionListCache(resourceKey, next);
     return next;
@@ -525,8 +780,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     try {
       const res = await fetch(requestHistoryUrl(apiBase, historyFilters, nextCursor));
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      const page = await res.json() as RequestHistoryPage;
-      const rows = page.entries.map(sanitizeLogEntryRouteDecision);
+      const { history: page } = parseLogPayload(await res.json());
+      if (!page) throw new Error("invalid_log_response");
+      const rows = page.entries;
       setOlderLogs(previous => [...previous, ...rows]);
       setNextCursor(page.nextCursor);
       setHasMore(page.hasMore);
@@ -1017,15 +1273,10 @@ function LogDetailDialog({
     })
       .then(async response => {
         if (!response.ok) throw new Error(String(response.status));
-        return response.json() as Promise<RouteDecisionExplanation>;
+        return response.json() as Promise<unknown>;
       })
       .then(body => {
-        setRouteExplanation({
-          ...body,
-          routeDecision: body.routeDecision
-            ? sanitizeLogEntryRouteDecision({ ...detail, routeDecision: body.routeDecision }).routeDecision ?? null
-            : null,
-        });
+        setRouteExplanation(parseRouteExplanation(body, detail));
         setRouteLoading(false);
       })
       .catch(error => {
@@ -1110,10 +1361,9 @@ function LogDetailDialog({
 
         <section className="log-detail-section" aria-labelledby="log-detail-route">
           <h4 id="log-detail-route" className="log-detail-section-title">{t("logs.detail.route.section")}</h4>
-          {routeLoading ? (
+          {routeLoadFailed && <Notice tone="warn">{t("logs.detail.route.loadError")}</Notice>}
+          {routeLoading && !routeDecision ? (
             <p className="log-detail-notes-line muted" role="status">{t("logs.detail.route.loading")}</p>
-          ) : routeLoadFailed ? (
-            <Notice tone="warn">{t("logs.detail.route.loadError")}</Notice>
           ) : routeDecision ? (
             <div className="log-detail-grid">
               {routeExplanation?.summary.requestedModel && (
