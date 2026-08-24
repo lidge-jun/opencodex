@@ -537,7 +537,7 @@ describe("Command Code provider", () => {
     expect(JSON.parse(built.body).params.stream).toBe(true);
   });
 
-  test("derives a stable UUID x-session-id from thread or initial user text", async () => {
+  test("derives a stable UUID only from trusted conversation identities", async () => {
     const threadTurn = await builtRequest({ ...parsed(), _clientThreadId: "thread-abc" });
     const threadFollowup = await builtRequest({
       ...parsed(),
@@ -549,7 +549,7 @@ describe("Command Code provider", () => {
 
     const first = await builtRequest(parsed());
     const second = await builtRequest({ ...parsed(), context: { ...parsed().context, messages: [...parsed().context.messages, { role: "user", content: "followup", timestamp: 2 }] } });
-    expect(first.headers["x-session-id"]).toBe(second.headers["x-session-id"]);
+    expect(first.headers["x-session-id"]).not.toBe(second.headers["x-session-id"]);
   });
 
   test("does not use a shared prompt-cache cohort for session affinity", async () => {
