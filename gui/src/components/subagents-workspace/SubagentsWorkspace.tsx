@@ -28,7 +28,7 @@ import { SectionTabs } from "../section-tabs";
 import { sectionAnchorId } from "../../section-anchors";
 import SubagentDelegationSection from "./SubagentDelegationSection";
 import SubagentRolesSection from "./SubagentRolesSection";
-import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
+import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeState, V2NativeParentOverrideState } from "../../pages/use-subagent-delegation";
 
 export interface SubagentsWorkspaceProps {
   available: string[];
@@ -51,6 +51,9 @@ export interface SubagentsWorkspaceProps {
     onUltraModeSave: (patch: UltraModePatch) => void;
     ultraLoadFailed: boolean;
     onUltraModeRetry: () => void;
+    nativeParentOverride: V2NativeParentOverrideState;
+    nativeParentOverrideSaving: boolean;
+    onNativeParentOverrideSave: (state: V2NativeParentOverrideState) => void;
     prompt: string;
     childInstructions: string;
     childInstructionsSaving: boolean;
@@ -264,6 +267,10 @@ export default function SubagentsWorkspace({
             onUltraModeSave={delegation.onUltraModeSave}
             ultraLoadFailed={delegation.ultraLoadFailed}
             onUltraModeRetry={delegation.onUltraModeRetry}
+            nativeParentOverride={delegation.nativeParentOverride}
+            nativeParentOverrideSaving={delegation.nativeParentOverrideSaving}
+            onNativeParentOverrideSave={delegation.onNativeParentOverrideSave}
+            keepNativeChatGptOnV1={roles.keepNativeChatGptOnV1}
             prompt={delegation.prompt}
             childInstructions={delegation.childInstructions}
             childInstructionsSaving={delegation.childInstructionsSaving}

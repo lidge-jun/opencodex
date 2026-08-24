@@ -32,6 +32,12 @@ export type UltraModePatch = {
   multiAgentModeHintText: string | null;
 };
 
+export type V2NativeParentOverrideState = {
+  enabled: boolean;
+  model: string | null;
+  active: boolean;
+};
+
 type DelegationResponse = {
   multiAgentGuidanceEnabled?: boolean;
   syncCodexSubagentDefaults?: boolean;
