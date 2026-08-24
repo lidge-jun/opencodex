@@ -369,6 +369,27 @@ function stripDisabledReasoningSummaries(
 }
 
 /**
+ * Hide a no-op Responses verbosity control from the wire as well as the catalog. This runs at
+ * final serialization so a stale catalog or direct caller cannot bypass the capability. Other
+ * `text` settings (notably structured-output `format`) remain untouched.
+ */
+function stripDisabledVerbosity(
+  body: unknown,
+  provider: OcxProviderConfig,
+  modelId: string,
+): unknown {
+  if (modelRecordValue(provider.modelSupportsVerbosity, modelId) !== false || !isPlainObject(body)) {
+    return body;
+  }
+  if (!isPlainObject(body.text) || !Object.hasOwn(body.text, "verbosity")) return body;
+  const { verbosity: _verbosity, ...rest } = body.text;
+  return {
+    ...body,
+    ...(Object.keys(rest).length > 0 ? { text: rest } : { text: undefined }),
+  };
+}
+
+/**
  * Normalize only the delivery enum Codex already emitted. Do not inject a field into callers that
  * did not request summaries, and leave every unconfigured provider/model byte-for-byte unchanged.
  */
@@ -1787,8 +1808,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
         stripEncryptedContent: threadServingIdentityChanged,
       })))))));
-      const finalBody = stripDisabledReasoningSummaries(
-        normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
+      const finalBody = stripDisabledVerbosity(
+        stripDisabledReasoningSummaries(
+          normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
+          provider,
+          parsed.modelId,
+        ),
         provider,
         parsed.modelId,
       );
