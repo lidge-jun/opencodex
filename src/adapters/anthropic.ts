@@ -469,7 +469,7 @@ function claudeFamilyVersion(modelId: string): { family: string; major: number; 
   // Find the segment that actually starts with `claude-`, rather than assuming it is either
   // the first (breaks `anthropic/claude-sonnet-5`) or the last (breaks `claude-sonnet-5/variant`,
   // where the slash carries a vendor suffix rather than a routing prefix).
-  const match = /(?:^|\/)claude-([a-z]+)-(\d+)(?:[.-](\d{1,2}))?(?![\d.])/i.exec(modelId);
+  const match = /(?:^|\/)claude-([a-z]+)-(\d+)(?:[.-](\d{1,2}))?(?!\d)/i.exec(modelId);
   if (!match) return undefined;
   return {
     family: match[1]!.toLowerCase(),
