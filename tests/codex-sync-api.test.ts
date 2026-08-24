@@ -18,6 +18,8 @@ let prevCodexHome: string | undefined;
 let prevOpenCodexHome: string | undefined;
 let prevHome: string | undefined;
 let prevUserProfile: string | undefined;
+let prevBunOptions: string | undefined;
+let prevServiceProbeFlag: string | undefined;
 
 const config = {
   port: 0,
@@ -34,7 +36,9 @@ const config = {
 } as OcxConfig;
 
 function claimTempHome(codexHome: string, ocxHome: string, home: string): void {
-  claimOwnedServiceHome(codexHome, ocxHome, home);
+  for (const [key, value] of Object.entries(claimOwnedServiceHome(codexHome, ocxHome, home).env)) {
+    process.env[key] = value;
+  }
 }
 
 const admittedSync = () => ({ kind: "admitted" as const });
@@ -58,6 +62,8 @@ describe("GUI/CLI Codex sync backend", () => {
     prevOpenCodexHome = process.env.OPENCODEX_HOME;
     prevHome = process.env.HOME;
     prevUserProfile = process.env.USERPROFILE;
+    prevBunOptions = process.env.BUN_OPTIONS;
+    prevServiceProbeFlag = process.env.OCX_TEST_SERVICE_HOME_PROBE;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     mkdirSync(TEST_OCX_HOME, { recursive: true });
@@ -80,6 +86,10 @@ describe("GUI/CLI Codex sync backend", () => {
     else process.env.HOME = prevHome;
     if (prevUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = prevUserProfile;
+    if (prevBunOptions === undefined) delete process.env.BUN_OPTIONS;
+    else process.env.BUN_OPTIONS = prevBunOptions;
+    if (prevServiceProbeFlag === undefined) delete process.env.OCX_TEST_SERVICE_HOME_PROBE;
+    else process.env.OCX_TEST_SERVICE_HOME_PROBE = prevServiceProbeFlag;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
   test("returns the structured sync result used by POST /api/sync", async () => {
