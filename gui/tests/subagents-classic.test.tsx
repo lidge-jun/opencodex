@@ -93,8 +93,8 @@ function removeButtons(): HTMLButtonElement[] {
 test("renders one featured list and one picker, never the same list twice", async () => {
   await mount();
   expect(container.querySelector(".subagents-workspace-shell")).toBeTruthy();
-  // Three stacked sections: the featured roster, the model picker, then delegation settings.
-  expect(container.querySelectorAll(".subagents-workspace-section").length).toBe(3);
+  // Four stacked sections: roles, featured roster, model picker, then delegation settings.
+  expect(container.querySelectorAll(".subagents-workspace-section").length).toBe(4);
   // The rail listed the featured models a second time, which read as a rendering bug.
   expect(container.querySelector(".subagents-workspace-rail")).toBeNull();
   const featuredHeadings = Array.from(container.querySelectorAll(".swi-featured-title"))
@@ -121,7 +121,7 @@ test("caps featured selections at five", async () => {
   // The cap lives in TWO places: the disabled attribute above (presentation) and the
   // state guard in toggle(). Force a click past the disabled attribute so a weakened
   // state guard cannot hide behind the UI check.
-  await act(async () => { addToggle(available[5]!).dispatchEvent(new (globalThis as any).window.MouseEvent("click", { bubbles: true })); });
+  await act(async () => { addToggle(available[5]!).dispatchEvent(new testWindow.Event("click", { bubbles: true })); });
   expect(removeButtons().length).toBe(5);
 
   // And save must never ship more than five.

@@ -1234,6 +1234,42 @@ test("CCA image fallback preserves upstream 429 status", async () => {
   }
 });
 
+test("CCA image fallback does not retry a transport failure on the peer host", async () => {
+  let calls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const hostname = new URL(requestUrl).hostname;
+    if (hostname === "daily-cloudcode-pa.googleapis.com") {
+      calls += 1;
+      throw new TypeError("fetch failed: connection reset after acceptance");
+    }
+    if (hostname === "cloudcode-pa.googleapis.com") {
+      calls += 1;
+      return Response.json({
+        response: {
+          candidates: [{
+            content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] },
+          }],
+        },
+      });
+    }
+    return originalFetch(input);
+  }) as typeof fetch;
+
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const request = new Request("http://localhost:0/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "a cat" }),
+  });
+  const response = await handleImages(request, ccaConfig(), "generations", { model: "", provider: "" } as never);
+
+  expect(response.status).toBe(400);
+  expect(calls).toBe(1);
+});
+
 test("CCA fallback does not serve image edits", async () => {
   saveConfig(ccaConfig());
   await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
@@ -1399,16 +1435,19 @@ test("CCA OAuth no credential saved returns 401 (login required), not a misleadi
   }
 });
 
-test("CCA fetch network failure returns 502 without leaking the timeout timer", async () => {
-  // Mock: CCA fetch always fails with a network error. The bug was that the
-  // fetch catch returned 502 without calling linkedSignal.cleanup(), leaving
-  // the timeout timer alive. With a short timeout this would keep the process
-  // alive. The fix wraps everything in try/finally so cleanup always runs.
+test("CCA fetch network failure returns 400 without leaking the timeout timer", async () => {
+  // Mock: CCA fetch always fails with a network error after the POST is attempted.
+  // Image generation is a paid non-idempotent POST; Codex retries every 5xx up to 5
+  // attempts, so transport failure after fetch is attempted must be non-5xx (400).
+  // The timeout timer still must not leak: linkedSignal.cleanup() runs in finally.
+  // With a 10s images timeout and a 5s test timeout, a leaked timer fails this test.
+  let ccaPosts = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
     if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
-      throw new TypeError("fetch failed: connection refused");
+      if ((init?.method ?? "GET").toUpperCase() === "POST") ccaPosts += 1;
+      throw new TypeError("fetch failed: https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent connection refused");
     }
     return originalFetch(input, init);
   }) as typeof fetch;
@@ -1423,21 +1462,26 @@ test("CCA fetch network failure returns 502 without leaking the timeout timer", 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt: "a cat" }),
     });
-    expect(response.status).toBe(502);
-    const json = await response.json() as { error: { message: string } };
-    expect(json.error.message).toContain("CCA image generation failed");
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string; type: string } };
+    expect(json.error.type).toBe("invalid_request_error");
+    expect(json.error.message).toMatch(/may have started/i);
+    expect(json.error.message).toMatch(/must not be blindly retried/i);
+    expect(json.error.message).not.toContain("https://");
+    expect(json.error.message).not.toContain("daily-cloudcode-pa.googleapis.com");
+    expect(ccaPosts).toBe(1);
   } finally {
     await server.stop(true);
   }
 }, 5_000);
 
-test("CCA body-read timeout returns 504 when upstream stalls after sending headers", async () => {
+test("CCA body-read timeout returns 400 when upstream stalls after sending headers", async () => {
   // Mock: CCA returns 200 OK headers immediately but the body stream never
   // produces data. The linked signal's timeout aborts reader.read(), which
-  // must be caught and mapped to 504. The abort surfaces as a generic
+  // must be caught and mapped to 400 because the paid POST may have started.
+  // The abort surfaces as a generic
   // AbortError (not TimeoutError) — just like in production Bun — so the
-  // signal-state check (linkedSignal.signal.aborted) is what maps it, not
-  // err.name matching.
+  // signal-state check (linkedSignal.signal.aborted) identifies it.
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
@@ -1476,14 +1520,49 @@ test("CCA body-read timeout returns 504 when upstream stalls after sending heade
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt: "a cat" }),
     });
-    expect(response.status).toBe(504);
+    expect(response.status).toBe(400);
     const json = await response.json() as { error: { message: string } };
-    // Either the body-read timeout message or the general timeout message.
-    expect(json.error.message).toMatch(/body read|timed out/i);
+    expect(json.error.message).toMatch(/may have started|must not be blindly retried/i);
   } finally {
     await server.stop(true);
   }
 }, 5_000);
+
+test("CCA body-read transport failure returns 400 after headers are received", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      const brokenBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new TypeError("connection reset after headers"));
+        },
+      });
+      return new Response(brokenBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  saveConfig({ ...ccaConfig(), images: { timeoutMs: 1_000 } } as OcxConfig);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a cat" }),
+    });
+    expect(response.status).toBe(400);
+    const json = await response.json() as { error: { message: string } };
+    expect(json.error.message).toMatch(/may have started|must not be blindly retried/i);
+  } finally {
+    await server.stop(true);
+  }
+});
 
 test("CCA body-read client cancellation returns 499, not 504", async () => {
   // Regression for Wibias R4 finding 1: when the client aborts during the body-read

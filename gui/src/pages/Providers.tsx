@@ -28,6 +28,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     () => readSessionListCache<ProvidersConfig>(configCacheKey),
   );
   const [adding, setAdding] = useState(false);
+  const [replitWizardOpen, setReplitWizardOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [statusTone, setStatusTone] = useState<NoticeTone>("err");
@@ -307,6 +308,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       <div className="page-head">
         <h2>{t("nav.providers")}</h2>
         <div className="row">
+          <button type="button" className="btn" onClick={() => setReplitWizardOpen(true)}>{t("replitGateway.openButton")}</button>
           <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
         </div>
       </div>
@@ -390,6 +392,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         apiBase={apiBase}
         config={config}
         adding={adding}
+        replitWizardOpen={replitWizardOpen}
         addIntent={addIntent}
         busy={busy}
         addModalAccountRows={addModalAccountRows}
@@ -406,6 +409,15 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           if (busy) void cancelLoginOAuth(busy);
           setAdding(false);
           setAddIntent(null);
+        }}
+        onCloseReplitWizard={() => setReplitWizardOpen(false)}
+        onReplitInstalled={(name) => {
+          setReplitWizardOpen(false);
+          notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+          fetchConfig();
+          fetchProviderQuotas(true);
+          bumpModelsRefresh();
+          setWorkspaceSelected(name);
         }}
         onAdded={(name) => {
           setAdding(false);

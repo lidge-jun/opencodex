@@ -81,6 +81,8 @@ describe("Cursor desktop executor hooks", () => {
   });
 
   test("record-screen bad output maps to failure without throwing", async () => {
+    // `echo` does not drain stdin. Production writes the request JSON there;
+    // this fixture must still map to failure instead of leaking EPIPE.
     const deps = desktopDepsFromConfig({ recordScreenCommand: "echo not-json" });
     const reply = decode((await handleCursorNativeExec(execMessage({
       case: "recordScreenArgs",

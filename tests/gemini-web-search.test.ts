@@ -9,12 +9,21 @@ mock.module("../src/oauth/store", () => ({
 }));
 
 import { mapCcaGroundedResponse } from "../src/web-search/gemini-executor";
-import { findGeminiSidecarProvider, planWebSearch } from "../src/web-search";
+import { findGeminiSidecarProvider, mediaBridgeWillRun, planWebSearch, resolveCcaInTurnGrounding } from "../src/web-search";
+import { planImageBridge, planVideoBridge } from "../src/images";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const routed: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "k" };
 const cca: OcxProviderConfig = { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" };
+const antigravityRouted: OcxProviderConfig = {
+  adapter: "google",
+  googleMode: "cloud-code-assist",
+  baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+  project: "proj-1",
+  apiKey: "token",
+};
+const openAiSidecar = { provider: routed, headers: { Authorization: "Bearer chatgpt" } };
 
 function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return { port: 10100, defaultProvider: "routed", providers: { routed, "google-antigravity": cca }, ...overrides };
@@ -66,6 +75,317 @@ describe("mapCcaGroundedResponse (002 live capture shape)", () => {
     expect(bad.error).toContain("no text");
     expect(mapCcaGroundedResponse(null).error).toBeDefined();
     expect(mapCcaGroundedResponse({}).error).toContain("no candidates");
+  });
+
+  test("grounding sources are sanitized: non-http URLs, control chars, and oversized values are dropped", () => {
+    const out = mapCcaGroundedResponse({ response: { candidates: [{
+      content: { parts: [{ text: "answer" }] },
+      groundingMetadata: { groundingChunks: [
+        { web: { uri: "javascript:alert(1)", title: "xss" } },
+        { web: { uri: "https://good.example/a", title: "A" } },
+        { web: { uri: "https://good.example/b", title: "B\u0000control" } },
+        { web: { uri: "https://good.example/c", title: "C".repeat(10_000) } },
+        { web: { uri: "ftp://bad.example/d" } },
+        { web: { uri: "  https://whitespace.example/e  " } },
+      ] },
+    }] } });
+    // Non-http(s) schemes, javascript:, and whitespace-padded URLs are dropped entirely.
+    // Valid URLs with a control-char or oversized title keep the URL but drop the bad title
+    // (matches the shared safe-source validator used across the web-search subsystem).
+    expect(out.sources).toEqual([
+      { url: "https://good.example/a", title: "A" },
+      { url: "https://good.example/b" },
+      { url: "https://good.example/c" },
+    ]);
+    expect(out.error).toBeUndefined();
+  });
+});
+
+describe("resolveCcaInTurnGrounding / planWebSearch in-turn gate", () => {
+  test("Antigravity Gemini 3 with default backend -> in-turn grounding, no sidecar plan", () => {
+    const parsed = parsedWithWebSearch();
+    expect(resolveCcaInTurnGrounding(config(), parsed, false, antigravityRouted, "gemini-3.7-flash")).toEqual({
+      search: true,
+      urlContext: false,
+    });
+    expect(planWebSearch(config(), parsed, false, antigravityRouted, "gemini-3.7-flash", openAiSidecar)).toBeUndefined();
+  });
+
+  test("explicit gemini backend on Antigravity Gemini 3 still uses in-turn", () => {
+    const parsed = parsedWithWebSearch();
+    expect(resolveCcaInTurnGrounding(
+      config({ webSearchSidecar: { backend: "gemini" } }),
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-3.7-flash",
+    )).toEqual({
+      search: true,
+      urlContext: false,
+    });
+    expect(planWebSearch(
+      config({ webSearchSidecar: { backend: "gemini" } }),
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-3.7-flash",
+      openAiSidecar,
+    )).toBeUndefined();
+  });
+
+  test("explicit openai backend -> sidecar path, not in-turn", () => {
+    const parsed = parsedWithWebSearch();
+    expect(resolveCcaInTurnGrounding(
+      config({ webSearchSidecar: { backend: "openai" } }),
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-3.7-flash",
+    )).toBeUndefined();
+    expect(planWebSearch(
+      config({ webSearchSidecar: { backend: "openai" } }),
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-3.7-flash",
+      openAiSidecar,
+    )?.backend).toBe("openai");
+  });
+
+  test("Claude-on-CCA never selects in-turn grounding", () => {
+    expect(resolveCcaInTurnGrounding(config(), parsedWithWebSearch(), false, antigravityRouted, "claude-sonnet-4-6")).toBeUndefined();
+  });
+
+  test("Gemini 2.x with Codex tools stays on sidecar path", () => {
+    const parsed = parseRequest({
+      model: "gemini-2.0-flash",
+      input: "q",
+      stream: true,
+      tools: [{ type: "web_search" }, { type: "function", name: "shell", parameters: { type: "object" } }],
+    });
+    expect(resolveCcaInTurnGrounding(config(), parsed, false, antigravityRouted, "gemini-2.0-flash")).toBeUndefined();
+  });
+
+  test("Gemini 2.x with only hosted web_search uses in-turn grounding", () => {
+    const parsed = parseRequest({
+      model: "gemini-2.0-flash",
+      input: "q",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    });
+    expect(resolveCcaInTurnGrounding(config(), parsed, false, antigravityRouted, "gemini-2.0-flash")).toEqual({
+      search: true,
+      urlContext: false,
+    });
+    expect(planWebSearch(config(), parsed, false, antigravityRouted, "gemini-2.0-flash", openAiSidecar)).toBeUndefined();
+  });
+
+  test("Gemini 2.x with an active image bridge does not use in-turn grounding", async () => {
+    const parsed = parseRequest({
+      model: "gemini-2.0-flash",
+      input: "q",
+      stream: true,
+      tools: [
+        { type: "web_search" },
+        { type: "image_generation", size: "1024x1024" },
+      ],
+    });
+    const mediaConfig = config({
+      images: { bridgeEnabled: true },
+      providers: {
+        ...config().providers,
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-key" },
+      },
+    });
+    expect(resolveCcaInTurnGrounding(config(), parsed, false, antigravityRouted, "gemini-2.0-flash")).toEqual({
+      search: true,
+      urlContext: false,
+    });
+    const imgPlan = await planImageBridge(mediaConfig, parsed, antigravityRouted);
+    expect(imgPlan).toBeDefined();
+    const wsPlan = planWebSearch(mediaConfig, parsed, false, antigravityRouted, "gemini-2.0-flash", openAiSidecar, true);
+    expect(wsPlan).toBeDefined();
+    const mediaWillRun = mediaBridgeWillRun(!!imgPlan, !!wsPlan, true);
+    expect(mediaWillRun).toBe(true);
+    expect(resolveCcaInTurnGrounding(mediaConfig, parsed, false, antigravityRouted, "gemini-2.0-flash", mediaWillRun)).toBeUndefined();
+  });
+
+  test("Gemini 2.x uses in-turn grounding when web search wins over the planned image bridge", async () => {
+    const parsed = parseRequest({
+      model: "gemini-2.0-flash",
+      input: "q",
+      stream: true,
+      tools: [
+        { type: "web_search" },
+        { type: "image_generation", size: "1024x1024" },
+      ],
+    });
+    const mediaConfig = config({
+      images: { bridgeEnabled: true },
+      providers: {
+        ...config().providers,
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-key" },
+      },
+    });
+    const imgPlan = await planImageBridge(mediaConfig, parsed, antigravityRouted);
+    expect(imgPlan).toBeDefined();
+    const wsPlan = planWebSearch(mediaConfig, parsed, false, antigravityRouted, "gemini-2.0-flash", openAiSidecar, true);
+    expect(wsPlan).toBeDefined();
+    const mediaWillRun = mediaBridgeWillRun(!!imgPlan, !!wsPlan, false);
+    expect(mediaWillRun).toBe(false);
+    expect(resolveCcaInTurnGrounding(mediaConfig, parsed, false, antigravityRouted, "gemini-2.0-flash", mediaWillRun)).toEqual({
+      search: true,
+      urlContext: false,
+    });
+  });
+
+  test("Gemini 2.x keeps in-turn grounding for non-streaming video-only requests", async () => {
+    const parsed = parseRequest({
+      model: "gemini-2.0-flash",
+      input: "q",
+      stream: false,
+      tools: [{ type: "web_search" }],
+    });
+    const mediaConfig = config({
+      images: { videoBridgeEnabled: true },
+      providers: {
+        ...config().providers,
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-key" },
+      },
+    });
+    const videoPlan = await planVideoBridge(mediaConfig, parsed, antigravityRouted);
+    expect(videoPlan).toBeDefined();
+    const mediaCanInject = mediaBridgeWillRun(!!videoPlan, false, true, parsed.stream);
+    expect(mediaCanInject).toBe(false);
+    const wsPlan = planWebSearch(
+      mediaConfig,
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-2.0-flash",
+      openAiSidecar,
+      mediaCanInject,
+    );
+    expect(wsPlan).toBeUndefined();
+    expect(resolveCcaInTurnGrounding(
+      mediaConfig,
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-2.0-flash",
+      mediaCanInject,
+    )).toEqual({ search: true, urlContext: false });
+  });
+
+  test("Gemini 2.x suppresses in-turn grounding for streaming video injection", async () => {
+    const parsed = parseRequest({
+      model: "gemini-2.0-flash",
+      input: "q",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    });
+    const mediaConfig = config({
+      images: { videoBridgeEnabled: true },
+      providers: {
+        ...config().providers,
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-key" },
+      },
+    });
+    const videoPlan = await planVideoBridge(mediaConfig, parsed, antigravityRouted);
+    expect(videoPlan).toBeDefined();
+    const mediaCanInject = mediaBridgeWillRun(!!videoPlan, false, true, parsed.stream);
+    expect(mediaCanInject).toBe(true);
+    const wsPlan = planWebSearch(
+      mediaConfig,
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-2.0-flash",
+      openAiSidecar,
+      mediaCanInject,
+    );
+    expect(wsPlan).toBeDefined();
+    const mediaWillRun = mediaBridgeWillRun(!!videoPlan, !!wsPlan, true, parsed.stream);
+    expect(mediaWillRun).toBe(true);
+    expect(resolveCcaInTurnGrounding(
+      mediaConfig,
+      parsed,
+      false,
+      antigravityRouted,
+      "gemini-2.0-flash",
+      mediaWillRun,
+    )).toBeUndefined();
+  });
+
+  test("Gemini 3.x keeps in-turn grounding when an active media bridge is present", async () => {
+    const parsed = parseRequest({
+      model: "gemini-3.7-flash",
+      input: "q",
+      stream: true,
+      tools: [
+        { type: "web_search" },
+        { type: "image_generation", size: "1024x1024" },
+      ],
+    });
+    const mediaConfig = config({
+      images: { bridgeEnabled: true },
+      providers: {
+        ...config().providers,
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-key" },
+      },
+    });
+    const imgPlan = await planImageBridge(mediaConfig, parsed, antigravityRouted);
+    expect(imgPlan).toBeDefined();
+    const wsPlan = planWebSearch(mediaConfig, parsed, false, antigravityRouted, "gemini-3.7-flash", openAiSidecar, true);
+    expect(wsPlan).toBeUndefined();
+    const mediaWillRun = mediaBridgeWillRun(!!imgPlan, !!wsPlan, true);
+    expect(mediaWillRun).toBe(true);
+    expect(resolveCcaInTurnGrounding(mediaConfig, parsed, false, antigravityRouted, "gemini-3.7-flash", mediaWillRun)).toEqual({
+      search: true,
+      urlContext: false,
+    });
+  });
+
+  test("Gemini 3.x keeps in-turn grounding when web search wins over the planned image bridge", async () => {
+    const parsed = parseRequest({
+      model: "gemini-3.7-flash",
+      input: "q",
+      stream: true,
+      tools: [
+        { type: "web_search" },
+        { type: "image_generation", size: "1024x1024" },
+      ],
+    });
+    const mediaConfig = config({
+      images: { bridgeEnabled: true },
+      providers: {
+        ...config().providers,
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "xai-key" },
+      },
+    });
+    const imgPlan = await planImageBridge(mediaConfig, parsed, antigravityRouted);
+    expect(imgPlan).toBeDefined();
+    const wsPlan = planWebSearch(mediaConfig, parsed, false, antigravityRouted, "gemini-3.7-flash", openAiSidecar);
+    expect(wsPlan).toBeUndefined();
+    const mediaWillRun = mediaBridgeWillRun(!!imgPlan, !!wsPlan, false);
+    expect(mediaWillRun).toBe(true);
+    expect(resolveCcaInTurnGrounding(mediaConfig, parsed, false, antigravityRouted, "gemini-3.7-flash", mediaWillRun)).toEqual({
+      search: true,
+      urlContext: false,
+    });
+  });
+
+  test("url_context when the turn carries an http(s) URL", () => {
+    const parsed = parseRequest({
+      model: "gemini-3.7-flash",
+      input: "read https://example.com/docs",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    });
+    expect(resolveCcaInTurnGrounding(config(), parsed, false, antigravityRouted, "gemini-3.7-flash")).toEqual({
+      search: true,
+      urlContext: true,
+    });
   });
 });
 

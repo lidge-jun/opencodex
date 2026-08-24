@@ -356,6 +356,114 @@ describe("opencodex config defaults", () => {
     warnSpy.mockRestore();
   });
 
+  test("config candidates validate subagentRoles id, uniqueness, and length rules", () => {
+    const base = getDefaultConfig();
+    const role = {
+      id: "reviewer",
+      description: "PR review",
+      model: "anthropic/claude-sonnet-5",
+      effort: "high",
+      developerInstructions: "Review the diff for regressions.",
+    };
+    expect(validateConfigCandidate({ ...base, subagentRoles: [role] })).toMatchObject({
+      ok: true,
+      config: { subagentRoles: [expect.objectContaining({ id: "reviewer", enabled: true })] },
+    });
+    expect(validateConfigCandidate({ ...base, subagentRoles: [] })).toMatchObject({
+      ok: true,
+      config: { subagentRoles: [] },
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      subagentRoles: [{ ...role, id: "Reviewer" }],
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("subagentRoles"),
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      subagentRoles: [role, { ...role, id: "reviewer", description: "duplicate" }],
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("subagentRoles"),
+    });
+    expect(validateConfigCandidate({
+      ...base,
+      subagentRoles: Array.from({ length: 9 }, (_, i) => ({ ...role, id: `role-${i}` })),
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("subagentRoles"),
+    });
+    expect(validateConfigCandidate({ ...base, syncCodexAgentRoles: false })).toMatchObject({
+      ok: true,
+      config: { syncCodexAgentRoles: false },
+    });
+  });
+
+  test("malformed persisted subagentRoles are dropped with a warning without wiping config", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+      subagentRoles: [
+        {
+          id: "reviewer",
+          description: "PR review",
+          model: "anthropic/claude-sonnet-5",
+          developerInstructions: "Review the diff.",
+        },
+        { id: "BAD", description: "nope", model: "gpt-5.6-luna", developerInstructions: "x" },
+      ],
+    });
+
+    const config = loadConfig();
+    const diagnostics = readConfigDiagnostics();
+
+    expect(config.subagentRoles).toEqual([
+      expect.objectContaining({ id: "reviewer", model: "anthropic/claude-sonnet-5" }),
+    ]);
+    expect(config).toMatchObject({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
+    });
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      warnings: [expect.stringContaining("subagentRoles")],
+    });
+    expect(backupNames()).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test("malformed persisted syncCodexAgentRoles becomes false rather than default-on", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+      subagentRoles: [{
+        id: "reviewer",
+        description: "PR review",
+        model: "anthropic/claude-sonnet-5",
+        developerInstructions: "Review the diff.",
+      }],
+      syncCodexAgentRoles: "yes",
+    });
+
+    const config = loadConfig();
+    const diagnostics = readConfigDiagnostics();
+    expect(config.syncCodexAgentRoles).toBe(false);
+    expect(diagnostics.warnings?.some(warning => warning.includes("syncCodexAgentRoles"))).toBe(true);
+    expect(warnSpy.mock.calls.flat().join(" ")).toContain("syncCodexAgentRoles");
+    warnSpy.mockRestore();
+  });
+
   test("a blank hostname already on disk degrades without wiping providers or keys", () => {
     // Regression: rejecting a blank hostname in the schema made loadConfig fail twice
     // (getDefaultConfig() has no hostname key, so the merge-defaults repair cannot fix
@@ -827,6 +935,32 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().source).toBe("fallback");
     expect(readConfigDiagnostics().error).toContain("codexToolMode");
+  });
+
+  test("accepts both projectContext values and rejects non-enum spellings", () => {
+    for (const projectContext of ["off", "on"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: { adapter: "command-code", baseUrl: "https://example.test", projectContext },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().config.providers.custom.projectContext).toBe(projectContext);
+      expect(readConfigDiagnostics().error).toBeNull();
+    }
+
+    for (const projectContext of ["true", true, "yes"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: { adapter: "command-code", baseUrl: "https://example.test", projectContext },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("projectContext");
+    }
   });
 
   test("accepts the exact responsesItemIdRepair shape and rejects the old nested placeholderIds proposal", () => {
@@ -2224,9 +2358,13 @@ describe("opencodex config defaults", () => {
     expect(isOcxStartCommandLine('bun run src/cli.ts start')).toBe(true);
     expect(isOcxStartCommandLine('"C:/tools/bun/bin/bun.exe" "run" "src/cli/index.ts" "start"')).toBe(true);
     expect(isOcxStartCommandLine('bun C:/tools/bun/install/global/node_modules/@bitkyc08/opencodex/src/cli.ts start')).toBe(true);
+    expect(isOcxStartCommandLine('bun C:/tools/bun/install/global/node_modules/@yansigit/opencodex/src/cli.ts start')).toBe(true);
     // npm's in-place rename during `npm install -g` (Windows service wrapper respawn mid-update).
     expect(isOcxStartCommandLine(
       'bun C:/nvm/node_modules/@bitkyc08/.opencodex-1JejBqbZ/src/cli/index.ts start --port 10100',
+    )).toBe(true);
+    expect(isOcxStartCommandLine(
+      'bun C:/nvm/node_modules/@yansigit/.opencodex-1JejBqbZ/src/cli/index.ts start --port 10100',
     )).toBe(true);
     expect(isOcxStartCommandLine("opencodex start")).toBe(true);
 
@@ -2578,7 +2716,7 @@ describe("config.ts – Windows ACL hardening integration", () => {
 
 describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
   test("the production sync harden keys timeouts by destination", () => {
-    const source = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf-8");
+    const source = readFileSync(join(import.meta.dir, "..", "src", "config", "atomic-write.ts"), "utf-8");
     expect(source).toContain("hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
   });
 

@@ -1,6 +1,23 @@
 import { expect, test } from "bun:test";
+import { en, type TKey } from "../src/i18n/en";
 import { buildProviderModelGroups } from "../src/models-groups";
-import { CAP_OPTIONS, CAP_OPTION_SET, fmtK, NATIVE_CAP_OPTIONS, NATIVE_CAP_OPTION_SET } from "../src/pages/models-shared";
+import {
+  CAP_OPTIONS,
+  CAP_OPTION_SET,
+  claimedContextWindow,
+  fmtK,
+  formatModelContextTooltip,
+  modelContextSourceChipKey,
+  NATIVE_CAP_OPTIONS,
+  NATIVE_CAP_OPTION_SET,
+} from "../src/pages/models-shared";
+
+function t(key: TKey, vars?: Record<string, string | number>): string {
+  let out: string = en[key];
+  if (!vars) return out;
+  for (const name of Object.keys(vars)) out = out.split(`{${name}}`).join(String(vars[name]));
+  return out;
+}
 
 const nativeRow = (id: string) => ({ provider: "openai", id, native: true });
 const customRow = (id: string) => ({ provider: "openai", id, native: false });
@@ -83,4 +100,68 @@ test("the native group exposes the context modal alongside the custom-model and 
   expect(src).toContain("{nativeProviderGroup && <p");
   // The custom-add and cap controls no longer sit behind an isNative guard.
   expect(src).not.toMatch(/\{!isNative && </);
+});
+
+test("row tooltip distinguishes detected, capped, stale, and unknown windows", () => {
+  expect(formatModelContextTooltip({ metadataSource: "live", contextWindow: 500_000 }, t))
+    .toBe("500k · detected");
+  expect(formatModelContextTooltip({
+    metadataSource: "live",
+    contextWindow: 350_000,
+    contextCap: 350_000,
+    contextCapped: true,
+    detectedContextWindow: 1_050_000,
+  }, t)).toBe("1.05M detected · capped at 350k");
+  const now = Date.parse("2026-08-24T12:00:00.000Z");
+  expect(formatModelContextTooltip({
+    metadataSource: "snapshot",
+    metadataStale: true,
+    contextWindow: 500_000,
+    metadataObservedAt: "2026-08-23T10:00:00.000Z",
+  }, t, now)).toBe("500k · last checked yesterday");
+  expect(formatModelContextTooltip({ metadataSource: "unknown", contextWindow: 128_000 }, t))
+    .toBe("Context window unknown");
+  expect(formatModelContextTooltip({ contextWindow: 128_000 }, t))
+    .toBe("Context window unknown");
+  expect(formatModelContextTooltip({ native: true, contextWindow: 272_000 }, t))
+    .toBe("272k");
+});
+
+test("compatibility 128k is never a claimed window, even as a fallback", () => {
+  expect(formatModelContextTooltip({
+    metadataSource: "config_fallback",
+    contextWindow: 128_000,
+  }, t)).toBe("Context window unknown");
+  expect(formatModelContextTooltip({
+    metadataSource: "live",
+    contextWindow: 128_000,
+  }, t)).toBe("128k · detected");
+});
+
+test("capped and stale rows expose muted source chips", () => {
+  expect(modelContextSourceChipKey({ metadataSource: "live", contextCapped: true }))
+    .toBe("models.contextMetadataLive");
+  expect(modelContextSourceChipKey({ provider: "cursor", metadataSource: "registry" }))
+    .toBe("models.contextMetadataCursorStatic");
+  expect(modelContextSourceChipKey({ metadataSource: "snapshot", metadataStale: true }))
+    .toBe("models.contextMetadataSnapshot");
+  expect(modelContextSourceChipKey({ metadataSource: "unknown" }))
+    .toBeUndefined();
+});
+
+test("native rows with a real 128k window display the size", () => {
+  expect(claimedContextWindow({ native: true, contextWindow: 128_000 })).toBe(128_000);
+  expect(claimedContextWindow({ metadataSource: "live", contextWindow: 128_000 })).toBe(128_000);
+  expect(claimedContextWindow({ metadataSource: "unknown", contextWindow: 128_000 })).toBeUndefined();
+  expect(claimedContextWindow({ metadataSource: "config_fallback", contextWindow: 128_000 })).toBeUndefined();
+});
+
+test("Models rows render metadata tooltip keys and the capped chip", async () => {
+  const src = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
+  expect(src).toContain("formatModelContextTooltip");
+  expect(src).toContain("modelContextSourceChipKey");
+  expect(src).toContain('t("models.contextMetadataStale")');
+  expect(src).toContain('t("models.contextCappedValue"');
+  expect(src).toContain('t("models.contextMetadataSource")');
+  expect(src).not.toContain("fmtK(m.contextWindow ?? m.contextCap ?? 0)");
 });

@@ -1,4 +1,4 @@
-import { readRuntimePort, type RuntimePortState } from "../config";
+import { readRuntimePort, type RuntimePortState } from "../config/process-state";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
@@ -33,7 +33,7 @@ export interface LocalProviderReloadDeps {
   timeoutMs?: number;
 }
 
-const LOCAL_PROVIDER_RELOAD_TIMEOUT_MS = 10_000;
+export const LOCAL_PROVIDER_RELOAD_TIMEOUT_MS = 10_000;
 
 /**
  * Ask the exact runtime proxy to reload one already-persisted provider.

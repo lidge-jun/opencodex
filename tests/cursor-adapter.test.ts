@@ -4,6 +4,7 @@ import {
   cursorExecDeniedMessage,
 } from "../src/adapters/cursor";
 import {
+  clearCursorOverflowRemintForTests,
   clearCursorThreadContinuityForTests,
   lookupCursorThreadConversation,
 } from "../src/adapters/cursor/thread-continuity";
@@ -41,6 +42,66 @@ async function collect(gen: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[
 }
 
 describe("Cursor adapter live transport", () => {
+  test("validateRequest rejects both structured output formats", () => {
+    const adapter = createCursorAdapter(provider);
+    const validateRequest = (adapter as ProviderAdapter & {
+      validateRequest: (request: OcxParsedRequest) => void;
+    }).validateRequest;
+
+    for (const type of ["json_object", "json_schema"] as const) {
+      expect(() => validateRequest({
+        ...parsed,
+        options: { textFormat: { type } },
+      })).toThrow("Cursor does not support structured output");
+    }
+  });
+
+  test("validateRequest rejects the internal structured-output flag", () => {
+    const adapter = createCursorAdapter(provider);
+    const validateRequest = (adapter as ProviderAdapter & {
+      validateRequest: (request: OcxParsedRequest) => void;
+    }).validateRequest;
+
+    expect(() => validateRequest({ ...parsed, _structuredOutput: true })).toThrow(
+      "Cursor does not support structured output",
+    );
+  });
+
+  test("validateRequest accepts an ordinary request and structured requests with tools still fail", () => {
+    const adapter = createCursorAdapter(provider);
+    const validateRequest = (adapter as ProviderAdapter & {
+      validateRequest: (request: OcxParsedRequest) => void;
+    }).validateRequest;
+
+    expect(() => validateRequest(parsed)).not.toThrow();
+    expect(() => validateRequest({
+      ...parsed,
+      context: { messages: [], tools: [{ type: "function", name: "lookup", parameters: {} }] },
+      options: { textFormat: { type: "json_schema", schema: { type: "object" } } },
+    })).toThrow("Cursor does not support structured output");
+  });
+
+  test("runTurn rejects structured output before constructing its transport", async () => {
+    let transportFactoryCalls = 0;
+    const adapter = createCursorAdapter(provider, {
+      createTransport: () => {
+        transportFactoryCalls += 1;
+        return {
+          async *run() { yield { type: "done" } satisfies CursorServerMessage; },
+          writeClient() {},
+        };
+      },
+    });
+
+    await expect(adapter.runTurn?.({
+      ...parsed,
+      options: { textFormat: { type: "json_object" } },
+    }, { headers: new Headers() }, () => {})).rejects.toThrow(
+      "Cursor does not support structured output",
+    );
+    expect(transportFactoryCalls).toBe(0);
+  });
+
   test("runTurn emits a missing-token error before live network", async () => {
     const adapter = createCursorAdapter(provider);
     const events: AdapterEvent[] = [];
@@ -719,5 +780,238 @@ describe("Cursor adapter live transport", () => {
     const done = events.find(event => event.type === "done");
     expect(done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined).toBeUndefined();
     clearCursorCheckpointsForTests();
+  });
+});
+
+const LARGE_OVERFLOW_CONTENT = "word ".repeat(100_000);
+
+function bareOverflowError(): Error {
+  return Object.assign(
+    new Error("Cursor context limit exceeded: Cursor Connect error resource_exhausted: Error"),
+    { code: "resource_exhausted" },
+  );
+}
+
+function overflowTurnBody(threadId?: string): OcxParsedRequest {
+  return {
+    modelId: "cursor/auto",
+    context: { messages: [{ role: "user", content: LARGE_OVERFLOW_CONTENT, timestamp: 1 }] },
+    stream: false,
+    options: {},
+    _cursorIdentityScope: "acct-overflow-remint",
+    ...(threadId ? { _clientThreadId: threadId } : { _cursorConversationId: "cursor_overflow_base" }),
+  };
+}
+
+describe("Cursor overflow conversation remint", () => {
+  test("first bare overflow surfaces without reminting the conversation id", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-surface-first");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor context limit exceeded"),
+    });
+  });
+
+  test("second overflow remints and persists thread override", async () => {
+    clearCursorOverflowRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          if (attempts === 1) {
+            throw bareOverflowError();
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+
+    const threadId = "overflow-remint-thread";
+    const body = overflowTurnBody(threadId);
+
+    const surfaceEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => surfaceEvents.push(event));
+    expect(attempts).toBe(1);
+    expect(surfaceEvents.some(event => event.type === "error")).toBe(true);
+
+    seen.length = 0;
+    attempts = 0;
+    const remintEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => remintEvents.push(event));
+
+    expect(attempts).toBe(2);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(remintEvents.some(event => event.type === "done")).toBe(true);
+    expect(lookupCursorThreadConversation(threadId, "acct-overflow-remint")).toBe(seen[1]);
+    expect(body._cursorConversationId).toBe(seen[1]);
+  });
+
+  test("fourth overflow skips remint after surface-first and three remints", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-cap-skip");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    expect(attempts).toBe(1);
+
+    attempts = 0;
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(4);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor context limit exceeded"),
+    });
+  });
+
+  test("quota-cue resource_exhausted does not remint and surfaces as rate limit", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw Object.assign(
+            new Error("Cursor rate limit exceeded: resource_exhausted: too many requests"),
+            { code: "resource_exhausted" },
+          );
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-quota-cue");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor rate limit exceeded"),
+    });
+  });
+
+  test("does not overflow-remint on tool-result resumes", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: {
+        messages: [
+          { role: "user", content: LARGE_OVERFLOW_CONTENT, timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/auto",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", namespace: "mcp__fs", arguments: { path: "a.txt" } }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            toolNamespace: "mcp__fs",
+            content: "FILE CONTENTS HERE",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_overflow_tool",
+      _cursorIdentityScope: "acct-overflow-remint",
+    };
+
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    expect(attempts).toBe(1);
+  });
+
+  test("does not overflow-remint after non-heartbeat output was emitted", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          yield { type: "text", text: "partial" } satisfies CursorServerMessage;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-after-output");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events.some(event => event.type === "text_delta")).toBe(true);
+    expect(events.some(event => event.type === "error")).toBe(true);
   });
 });

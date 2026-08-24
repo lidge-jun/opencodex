@@ -39,6 +39,22 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+### Fetch-helper import boundary
+
+`src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
+Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
+the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
+It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
+modules merely because those imports existed in the pre-split `responses.ts` monolith.
+
+[Decision Log]
+- 목적과 의도: Keep transport helpers reusable without making every consumer evaluate the full routed Responses and sidecar graph at module load.
+- 기존 구현 및 제약 조건: The original `responses.ts` split copied the monolith import header into `fetch-helpers.ts`; seven helper exports therefore retained 39 distinct runtime import specifiers and reached 326 modules even though the implementations used only three runtime dependencies.
+- 검토한 주요 대안: Leave the imports because current modules have limited top-level side effects; move the helpers again; prune the copied imports and lock the direct runtime boundary.
+- 선택한 방식: Preserve the file and all public exports, remove unused runtime edges, and enforce an explicit three-specifier allowlist with a source-level regression that also proves type-only imports are ignored.
+- 다른 대안 대신 이 방식을 선택한 이유: Relying on unrelated modules to remain side-effect-free makes startup ownership accidental, while another move adds churn without changing the responsibility boundary.
+- 장점, 단점 및 영향: Ordinary native Chat and compact consumers no longer load unrelated routing, combo, OAuth, web-search, vision, and relay modules through this leaf. The allowlist is intentionally strict, so a future helper that needs a new runtime dependency must make that ownership decision explicit in code, tests, and this document.
+
 [Decision Log]
 - 목적과 의도: Prevent routed models from turning invented or neighboring-agent tool names into client-executable Responses calls.
 - 기존 구현 및 제약 조건: The request catalog already controlled custom-tool restoration and the non-OpenAI prompt nudge, but an undeclared upstream name still fell through as an ordinary `function_call`; Codex then reduced the mismatch to a bare `aborted` result.
@@ -295,9 +311,11 @@ These are standalone Images API routes, not the hosted Responses `image_generati
 selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
 provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never
 falls through to another paid upstream. The relay accepts bounded JSON generation and edit requests,
-then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST receives
-one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
-existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
+then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST,
+including the Google Antigravity fallback, receives one upstream attempt; an ambiguous transport
+failure is never replayed on a peer host because the generation may already have been accepted.
+Client cancellation aborts the upstream and pool-only failures update the existing account-health
+state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
 When the OpenAI credential path is unavailable or its authentication fails, `generations` (not
 `edits`) may fall back to Google Antigravity if that provider is logged in. The fallback is
@@ -387,6 +405,11 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
+When `nativeLocalExec` is not `"on"` but the turn advertises a bare Codex `shell_command` or
+`exec_command` bridge tool, native Shell/Read/Ls/Grep/Fetch exec frames map to one Codex shell tool
+call through the existing MCP split-turn instead of writing proxy-local policy rejections. Write and
+delete stay refused; `nativeLocalExec: "on"` still runs native exec on the proxy host.
+
 [Decision Log]
 - 목적과 의도: prevent caller-controlled Responses text from authorizing Cursor native local shell, filesystem, or fetch execution.
 - 기존 구현 및 제약 조건: the adapter preserved top-level `instructions`, system messages, and developer messages, then treated a `sandbox_mode ... danger-full-access` prose marker as an exec allow signal in `codex-sandbox` mode.
@@ -394,6 +417,14 @@ MCP, screen recording, and computer-use stay on their separate explicit executor
 - 선택한 방식: keep marker detection only as diagnostic/context and make `nativeLocalExec: "on"` the only non-legacy mode that enables built-in local exec; unset, `off`, and `codex-sandbox` all deny.
 - 다른 대안 대신 이 방식을 선택한 이유: opencodex has no trustworthy per-request sandbox attestation in request text or headers, so any prompt-carried marker is spoofable by data-plane callers.
 - 장점, 단점 및 영향: this closes prompt-to-native-exec escalation while preserving an explicit operator escape hatch; existing configs that relied on `codex-sandbox` must switch to `nativeLocalExec: "on"` for trusted local experiments.
+
+[Decision Log]
+- 목적과 의도: when default-off policy blocks proxy-local native exec, route read-class native execs to the advertised Codex shell bridge instead of writing `#604` retry prose that stalls the Cursor run.
+- 기존 구현 및 제약 조건: `handleServerMessage` fell through every native exec to `handleCursorNativeExec`, which wrote policy-rejection Connect frames even when `shell_command`/`exec_command` was already in the catalog.
+- 검토한 주요 대안: keep pure rejection; auto-enable proxy-local exec in codex-sandbox mode; add a new operator flag for bridging.
+- 선택한 방식: pure mapper plus reuse of `planMcpArgsHandling` / client-tool finalize; no new config flag; write/delete stay on the policy path.
+- 다른 대안 대신 이 방식을 선택한 이유: the MCP bridge already ends the Cursor turn correctly without fake native results; bridging reuses that path and keeps Codex execution on the client host.
+- 장점, 단점 및 영향: default-off turns stop looping on native retries; POSIX command templates may need client-side adaptation on non-POSIX Codex hosts.
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
 that survives the transport budget: unified Desktop `exec` as well as the legacy
@@ -995,6 +1026,9 @@ JSON object or schema. A mixed-capability gateway may list exact native model id
 `noStructuredOutputModels`; only those models omit the wire field, while siblings keep the normal
 translation. The proxy does not infer this from provider names, localhost destinations, or a model
 family shared by unrelated upstreams.
+The Google adapter lowers the same internal `textFormat` to Gemini JSON mode; Kiro still rejects
+structured output. Cursor has no structured-output wire field and rejects before transport.
+`requested_model.parameters` and MCP `input_schema` are not output-format channels.
 
 [Decision Log]
 - 목적과 의도: Recover chat models that reject `response_format` without removing structured output from models that support it.
@@ -1142,6 +1176,49 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
+## Antigravity transport failover
+
+CCA chat/adapter requests use `streamGenerateContent?alt=sse`, including unary callers; the adapter
+buffers those SSE events for the unary contract. Built-in image generation uses the separate unary
+`v1internal:generateContent` endpoint outside the adapter. The configured daily or production host
+is tried first, then only its maintained peer (`daily-cloudcode-pa.googleapis.com` or
+`cloudcode-pa.googleapis.com`) is eligible for a single retry after a first-host transport
+failure, empty stream, 404, or `UNAVAILABLE`. Authentication, geoblock, invalid-request, and
+exhausted-quota responses do not trigger host failover.
+
+## Combo streaming commit boundary
+
+An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's
+downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts`, which owns one
+reader and buffers only until one of these boundaries:
+
+- a non-control Responses event begins client-visible output or a tool/action item, after which the
+  target is committed and cross-target replay is forbidden;
+- a `response.failed` terminal arrives first, in which case the terminal is converted back through
+  the ordinary bounded combo-failure classifier and may advance to the next declared target;
+- a completed/incomplete terminal or the aggregate preflight byte cap is reached, in which case the
+  current target is committed conservatively.
+
+The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
+relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
+logging retain their existing owners. A failed child keeps its physical attempt receipt and usage,
+while the successful child remains the logical request result.
+
+HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
+structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
+deprecated, sunset, decommissioned, or no longer available). An unrelated application-level 410 is
+not retried.
+
+```text
+[Decision Log]
+- 목적과 의도: Recover a failover combo from a provider-local SSE or model-lifecycle failure only while replay is provably free of duplicate client output and tool calls.
+- 기존 구현 및 제약 조건: The parent committed every HTTP-200 child before reading its SSE body, while terminal stream errors were classified only later by logging; generic 410 responses stopped the chain.
+- 검토한 주요 대안: Retry every failed stream, buffer the complete turn, inspect only HTTP status, or preflight a bounded prefix until an explicit output/terminal boundary.
+- 선택한 방식: Put the one-reader bounded preflight in a dedicated module, commit on any non-control event, and treat only explicit model-lifecycle 410 evidence as target-local.
+- 다른 대안 대신 이 방식을 선택한 이유: Replaying after output can duplicate text or tools, full-turn buffering destroys streaming and grows memory, and making every 410 retryable hides caller/application errors.
+- 장점, 단점 및 영향: Zero-output provider failures can reach a healthy target with ordered receipts and cooldown; ambiguous or oversized pre-output streams keep the current fail-closed behavior instead of consuming unbounded memory.
+```
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport
@@ -1150,7 +1227,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
-| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. |
+| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-antigravity-hosts.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. CCA host failover is daily/prod only (`google-antigravity-hosts.ts`). |
 | Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
 | Anthropic image ingress | `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts` | Oversized or unsupported images are normalized or rejected before reaching upstream. |
 | Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |

@@ -19,6 +19,7 @@ import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { MAX_SIDECAR_RESPONSE_BYTES, type WebSearchSource } from "./parse";
+import { appendSafeWebSearchSource } from "./sources";
 import { BASE_INSTRUCTION, IMAGE_INSTRUCTION, type SidecarOutcome, type SidecarSettings } from "./executor";
 
 const CCA_FALLBACK_BASE = "https://daily-cloudcode-pa.googleapis.com";
@@ -117,25 +118,46 @@ export async function runGeminiWebSearch(
 }
 
 /** Map a CCA generateContent payload (possibly wrapped in {response}) to text + grounding sources. */
+export function extractCcaGroundingSources(groundingMetadata: unknown): WebSearchSource[] {
+  const sources: WebSearchSource[] = [];
+  const gm = isRec(groundingMetadata) ? groundingMetadata : undefined;
+  if (!gm || !Array.isArray(gm.groundingChunks)) return sources;
+  for (const chunk of gm.groundingChunks) {
+    const web = isRec(chunk) && isRec(chunk.web) ? chunk.web : undefined;
+    if (!web) continue;
+    // Route through the shared safe-source validator: enforces http(s) scheme,
+    // control-character filtering, dedup, and per-message count/byte budgets.
+    appendSafeWebSearchSource(sources, { url: web.uri, title: web.title });
+  }
+  return sources;
+}
+
+/** Skip search-suggestion HTML widgets Google may attach alongside grounded answers. */
+export function isCcaSearchSuggestionHtml(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("<")) return false;
+  return /<style[\s>]/i.test(trimmed) || /search[_-]?suggest/i.test(trimmed) || /grounding-widget/i.test(trimmed);
+}
+
+export function formatCcaGroundingSourcesAppendix(sources: readonly WebSearchSource[]): string {
+  if (sources.length === 0) return "";
+  const lines = ["", "Sources:"];
+  sources.slice(0, 8).forEach((s, i) => {
+    lines.push(`[${i + 1}] ${s.title ? `${s.title} — ` : ""}${s.url}`);
+  });
+  return lines.join("\n");
+}
+
 export function mapCcaGroundedResponse(payload: unknown): SidecarOutcome {
   const root = isRec(payload) && isRec(payload.response) ? payload.response : payload;
   if (!isRec(root)) return { text: "", sources: [], error: "gemini sidecar returned a non-JSON or empty body" };
   const candidate = Array.isArray(root.candidates) && isRec(root.candidates[0]) ? root.candidates[0] : undefined;
   if (!candidate) return { text: "", sources: [], error: "gemini sidecar returned no candidates" };
   const parts = isRec(candidate.content) && Array.isArray(candidate.content.parts) ? candidate.content.parts : [];
-  const text = parts.map(p => (isRec(p) && typeof p.text === "string" ? p.text : "")).join("");
-  const sources: WebSearchSource[] = [];
-  const seen = new Set<string>();
-  const gm = isRec(candidate.groundingMetadata) ? candidate.groundingMetadata : undefined;
-  if (gm && Array.isArray(gm.groundingChunks)) {
-    for (const chunk of gm.groundingChunks) {
-      const web = isRec(chunk) && isRec(chunk.web) ? chunk.web : undefined;
-      const uri = web && typeof web.uri === "string" ? web.uri : undefined;
-      if (!uri || seen.has(uri)) continue;
-      seen.add(uri);
-      sources.push({ url: uri, ...(typeof web?.title === "string" && web.title.length > 0 ? { title: web.title } : {}) });
-    }
-  }
+  const text = parts
+    .map(p => (isRec(p) && typeof p.text === "string" && !isCcaSearchSuggestionHtml(p.text) ? p.text : ""))
+    .join("");
+  const sources = extractCcaGroundingSources(candidate.groundingMetadata);
   if (text.length === 0) return { text: "", sources, error: "gemini sidecar returned no text" };
   return { text, sources };
 }

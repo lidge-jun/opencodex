@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
-import type { AdapterEvent, OcxProviderConfig } from "../types";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import {
+  isCursorBenignCancelError,
+  isCursorInvalidArgumentError,
+  isCursorOverflowRemintCandidate,
+  safeCursorErrorMessage,
+  type CursorSizeContext,
+} from "./cursor/cursor-errors";
 import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
@@ -26,7 +32,14 @@ import {
 } from "./cursor/checkpoint-store";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { estimateTokens } from "../lib/token-estimate";
-import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
+import {
+  cursorOverflowRemintScopeKey,
+  markCursorOverflowSurfaced,
+  recordCursorOverflowRemint,
+  rememberCursorThreadConversation,
+  shouldSkipCursorOverflowRemint,
+  shouldSurfaceCursorOverflowFirst,
+} from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import {
   createDisabledCursorTransport,
@@ -77,9 +90,17 @@ function cursorRequestSizeContext(request: { modelId: string; system: string[]; 
   };
 }
 
+function assertCursorRequestSupported(parsed: OcxParsedRequest): void {
+  if (parsed.options.textFormat !== undefined || parsed._structuredOutput === true) {
+    throw new Error("Cursor does not support structured output");
+  }
+}
+
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
   return {
     name: "cursor",
+
+    validateRequest: assertCursorRequestSupported,
 
     buildRequest() {
       return {
@@ -98,6 +119,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
     },
 
     async runTurn(_parsed, incoming, emit) {
+      assertCursorRequestSupported(_parsed);
       if (incoming.abortSignal?.aborted) {
         emit({ type: "error", message: "Cursor turn was aborted before start." });
         return;
@@ -243,39 +265,79 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           );
         };
 
-        try {
-          await runOnce(request);
-        } catch (err) {
-          // One-shot fallback for external-model Connect invalid_argument before any
-          // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
-          // resumes, local exec/MCP side effects, and already-emitted output fail closed.
-          if (
-            !isCursorInvalidArgumentError(err)
-            || !isCursorExternalWireModel(request.modelId)
-            || lastRawIsToolResult
-            || emittedOutput
-            || replayUnsafe
-            || incoming.abortSignal?.aborted
-          ) {
-            throw err;
-          }
-          const failedConversationId = request.conversationId;
+        const overflowRemintBaseId = _parsed._clientThreadId
+          ? undefined
+          : (previousConversationId ?? _parsed._cursorConversationId);
+
+        const remintConversationId = (failedConversationId: string) => {
           lastTransport = undefined;
           _parsed._cursorConversationId = undefined;
-          request = createCursorRequest(_parsed, { forceFreshConversation: true });
-          rekeyContextUsage(failedConversationId, request.conversationId);
-          _parsed._cursorConversationId = request.conversationId;
-          // Persist recovery for store:false clients that only send a parent thread id, so the
-          // next turn does not recompute the stale deterministic thread hash. Isolated helper /
-          // compaction turns must not park their throwaway id under the parent thread key.
+          const next = createCursorRequest(_parsed, { forceFreshConversation: true });
+          rekeyContextUsage(failedConversationId, next.conversationId);
+          _parsed._cursorConversationId = next.conversationId;
           if (_parsed._clientThreadId && _parsed._cursorIsolateConversation !== true) {
             rememberCursorThreadConversation(
               _parsed._clientThreadId,
-              request.conversationId,
+              next.conversationId,
               _parsed._cursorIdentityScope,
             );
           }
-          await runOnce(request);
+          return next;
+        };
+
+        for (;;) {
+          try {
+            await runOnce(request);
+            break;
+          } catch (err) {
+            const overflowRemintSafe =
+              !lastRawIsToolResult
+              && !emittedOutput
+              && !replayUnsafe
+              && !incoming.abortSignal?.aborted;
+            const overflowScopeKey = cursorOverflowRemintScopeKey(
+              _parsed,
+              overflowRemintBaseId ?? request.conversationId,
+            );
+
+            if (
+              overflowScopeKey
+              && overflowRemintSafe
+              && isCursorOverflowRemintCandidate(err, requestSizeContext)
+            ) {
+              if (shouldSkipCursorOverflowRemint(overflowScopeKey)) {
+                throw err;
+              }
+              if (shouldSurfaceCursorOverflowFirst(overflowScopeKey)) {
+                markCursorOverflowSurfaced(overflowScopeKey);
+                throw err;
+              }
+              if (!recordCursorOverflowRemint(overflowScopeKey)) {
+                throw err;
+              }
+              const failedConversationId = request.conversationId;
+              if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
+              request = remintConversationId(failedConversationId);
+              continue;
+            }
+
+            // One-shot fallback for external-model Connect invalid_argument before any
+            // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
+            // resumes, local exec/MCP side effects, and already-emitted output fail closed.
+            if (
+              !isCursorInvalidArgumentError(err)
+              || !isCursorExternalWireModel(request.modelId)
+              || lastRawIsToolResult
+              || emittedOutput
+              || replayUnsafe
+              || incoming.abortSignal?.aborted
+            ) {
+              throw err;
+            }
+            request = remintConversationId(request.conversationId);
+            await runOnce(request);
+            break;
+          }
         }
         if (
           request.checkpointInvalidationReason

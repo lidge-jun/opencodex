@@ -31,6 +31,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "integrations/replit-gateway/**"
       - "assets/**"
       - ".gitattributes"
       - ".npmignore"
@@ -40,6 +41,7 @@ on:
       - "README.md"
       - "LICENSE"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/fork-auto-release.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
       - ".github/workflows/stale-needs-info.yml"
@@ -179,6 +181,7 @@ jobs:
               - 'tests/**'
               - 'scripts/**'
               - 'gui/**'
+              - 'integrations/replit-gateway/**'
               - 'assets/**'
               - '.gitattributes'
               - '.npmignore'
@@ -188,6 +191,7 @@ jobs:
               - 'README.md'
               - 'LICENSE'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/fork-auto-release.yml'
               - '.github/workflows/release.yml'
               - '.github/workflows/enforce-pr-target.yml'
               - '.github/workflows/stale-needs-info.yml'
@@ -407,6 +411,15 @@ jobs:
           bun x tsc --noEmit
           bun x tsc --noEmit -p tests/tsconfig.doctor-service-memory-contract.json
 
+      - name: Install replit-gateway companion
+        run: cd integrations/replit-gateway && bun install --frozen-lockfile
+
+      - name: Replit gateway typecheck
+        run: cd integrations/replit-gateway && bun run typecheck
+
+      - name: Replit gateway tests
+        run: cd integrations/replit-gateway && bun run test
+
       - name: GUI tests
         run: cd gui && bun test --isolate tests
 
@@ -425,21 +438,22 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # macOS runs on every pull request, and runs the WHOLE suite unsharded.
+  # macOS runs the WHOLE suite unsharded. The four Linux shards each cover a
+  # quarter of the files, which quietly assumes no test depends on a sibling
+  # file having run in the same process pool. This leg is the control that
+  # would notice if that assumption ever broke.
   #
-  # That is the point of it. The four Linux shards each cover a quarter of the
-  # files, which quietly assumes no test depends on a sibling file having run in
-  # the same process pool. This leg is the control that would notice if that
-  # assumption ever broke. It is also the cheapest leg on the board — 5m23s on
-  # the baseline run, faster than the ubuntu leg it sits beside — so there was
-  # never a latency argument for touching it.
+  # Pull requests skip it: the unsharded run regularly hits the 30-minute
+  # timeout and is not a useful merge gate. Push to main/preview/dev and
+  # workflow_dispatch still run it. The aggregate `ci` job treats `skipped`
+  # as a deliberate pass.
   #
   # It does not repeat the gates: typecheck, privacy, lint, and build are
   # platform-independent and already ran once above.
   platform-macos:
     name: macos
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # The unsharded control for the sharded Linux lane: the only place the whole
     # suite runs in one pool, so it is the place that catches what sharding
@@ -746,7 +760,7 @@ jobs:
 
       - name: Install globally (downloads bundled bun)
         shell: bash
-        run: npm install -g ./bitkyc08-opencodex-*.tgz
+        run: npm install -g "./$(node -p "require('./pack.json')[0].filename")"
 
       - name: ocx help via bundled bun
         run: ocx help

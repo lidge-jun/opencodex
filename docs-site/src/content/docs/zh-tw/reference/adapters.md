@@ -116,6 +116,7 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 `agent.v1.AgentService/Run`。
 **認證：** `provider.apiKey` 或轉發 authorization header 中的 Cursor OAuth/access token。
 
+- 結構化輸出在傳輸前就會被拒絕：Cursor 沒有 protobuf 輸出 schema 欄位，因此 `text.format` / `response_format` JSON object 或 schema（以及內部 structured-output 旗標）會回傳 `400 invalid_request_error`。工具無法繞過此檢查。
 - 使用 `runTurn`，而不是常規 fetch/parse 路徑。請求、server event、工具引數、usage checkpoint
   和 client reply 由 `cursor/gen/agent_pb.ts` 中的 `@bufbuild/protobuf` schema 編碼，並 frame 成
   Connect message。
@@ -123,7 +124,22 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
   `GetUsableModels` RPC 發現即時 Cursor 模型，並且只在 run request 尚未 commit 到 wire 前重試。
 - Cursor 原生本機 filesystem/shell/network 執行預設被拒絕。顯式 `mcpServers` 與
   `desktopExecutor` 整合分別需要 opt-in；`unsafeAllowNativeLocalExec` 會啟用更廣泛的內建
-  executor，並繞過 Codex 審批和 sandbox 語義。
+  executor，並繞過 Codex 審批和 sandbox 語義。預設 `off` 下，當目錄中有橋接工具時，原生
+  Shell/Read/Ls/Grep/Fetch 會映射為 Codex `shell_command`/`exec_command` 呼叫；write/delete 仍被拒絕。
+
+## `command-code`
+
+**目標：** Command Code **OAuth** 訂閱 agent API（`POST {baseUrl}/alpha/generate`）。
+**認證：** 透過 `ocx login command-code` 的 OAuth Bearer。
+
+- 與 API 金鑰 `commandcode` 預設（`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`）不同。API 金鑰路由不會讀取 `projectContext`，也不會從磁碟填充 generate 信封。
+- 在 `providers.command-code` 上可選的 `projectContext: "on"` 會在請求時從 `process.cwd()` 複製有界檔案到 `memory`、`taste` 和 `skills`。未設定或 `"off"` 時，即使儲存庫中已有這些檔案，仍傳送 `memory: ""`、`taste: null`、`skills: null` — 僅 opt-in，不會自動載入。
+- 請從受信任的 Codex 專案目錄啟動代理，使工作目錄與 Codex 正在編輯的儲存庫一致。
+- **Memory：** 僅 cwd 下的 `AGENTS.md` UTF-8（不是 `CLAUDE.md`、`CODEX.md` 或主目錄路徑）。上限 32,768 位元組；超限時以前綴截斷並附加 `<!-- truncated -->`。
+- **Taste：** `.commandcode/taste/taste.md` 的 UTF-8，缺失時為 `null`。上限 8,192 位元組，使用相同截斷標記。存在但為空的檔案傳送 `""`。`x-taste-learning` 保持 `"false"`；載入 taste 不是 Command Code 的 taste learning。
+- **Skills：** 依序從專案 skill 根產生 XML：`.commandcode/skills`、`.agents/skills`、`.pi/skills`。每個含 `SKILL.md` 的子目錄成為一個 `<skill name="…">…</skill>` 項目（名稱來自 YAML frontmatter 的 `name:` 或目錄名）。跳過以 `.` 開頭的名稱與非目錄；依解析名 first-wins；最多 16 個 skill；XML 總上限 32,768 位元組。不會讀取 `~/.commandcode/skills` 或其他主目錄 skill 樹。
+- 路徑限制使用 cwd 下的 realpath 檢查；符號連結逸出會被省略。每個檔案操作 2 秒逾時。結果按 cwd 快取 30 秒（最多 128 筆）。任何失敗都會 fail-soft 地省略該部分。
+- `commandCodeVersion` 固定 `x-command-code-version`（預設 `0.52.1`）。`permissionMode` 保持 `"standard"`，`mode` 保持 `"agent"`。
 
 ## `azure-openai`（別名：`azure`）
 

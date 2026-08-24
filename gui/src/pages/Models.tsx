@@ -59,6 +59,9 @@ import {
   THREAD_OPTIONS,
   writeCollapsedProviders,
   discoveryFailureLabel,
+  claimedContextWindow,
+  formatModelContextTooltip,
+  modelContextSourceChipKey,
   REASONING_EFFORT_LEVELS,
   type ModelRow,
   type ProviderContextCapsResponse,
@@ -1025,7 +1028,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     // native group that is the 350k default, which says nothing true about what Codex sees.
     // The honest number there is the largest window the rows actually advertise.
     const widestRowWindow = rows.reduce<number | undefined>((widest, row) => {
-      const window = typeof row.contextWindow === "number" && row.contextWindow > 0 ? row.contextWindow : undefined;
+      const window = claimedContextWindow(row);
       if (window === undefined) return widest;
       return widest === undefined || window > widest ? window : widest;
     }, undefined);
@@ -1186,6 +1189,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
              {visible.map(m => {
                // The row reflects the same final-visibility answer as the count and the picker.
                const off = !isVisible(m);
+               const sourceKey = modelContextSourceChipKey(m);
+               const contextTip = formatModelContextTooltip(m, t);
                return (
                  <div
                    key={m.namespaced}
@@ -1206,6 +1211,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                        </span>
                      )}
                      {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                     {sourceKey && <span className="models-chip muted mono text-caption">{t(sourceKey)}</span>}
+                     {m.metadataStale && <span className="models-chip muted mono text-caption">{t("models.contextMetadataStale")}</span>}
                    </div>
                    {hoveredModel?.namespaced === m.namespaced && (() => {
                      const r = hoveredModel.rect;
@@ -1235,10 +1242,16 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                          <div className="model-tip-grid">
                            <span className="model-tip-key">{t("models.tipProvider")}</span>
                            <span className="model-tip-val">{formatProviderDisplayName(m.provider, t)}</span>
-                           {(m.contextWindow || m.contextCap) && (
+                           {contextTip && (
                              <>
                                <span className="model-tip-key">{t("models.tipContext")}</span>
-                               <span className="model-tip-val">{fmtK(m.contextWindow ?? m.contextCap ?? 0)}</span>
+                               <span className="model-tip-val">{contextTip}</span>
+                             </>
+                           )}
+                           {sourceKey && (
+                             <>
+                               <span className="model-tip-key">{t("models.contextMetadataSource")}</span>
+                               <span className="model-tip-val">{t(sourceKey)}</span>
                              </>
                            )}
                            {m.inputModalities && m.inputModalities.length > 0 && (

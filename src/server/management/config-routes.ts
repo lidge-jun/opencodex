@@ -75,6 +75,7 @@ import {
   webSearchModelIsRejected,
   webSearchModelOptionsFrom,
   webSearchModelRejection,
+  type WebSearchBackend,
 } from "./web-search-sidecar-options";
 import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -490,7 +491,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../../codex/sync");
     const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
-    const { readRuntimePort, loadConfig } = await import("../../config");
+    const [{ readRuntimePort }, { loadConfig }] = await Promise.all([
+      import("../../config/process-state"),
+      import("../../config"),
+    ]);
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
     const runtime = readRuntimePort(process.pid);
@@ -662,10 +666,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
-      const effectiveBackend = body.webSearch.backend === "anthropic"
-        ? "anthropic"
-        : body.webSearch.backend === "openai" || body.webSearch.backend === null
-          ? "openai"
+      const effectiveBackend: WebSearchBackend = body.webSearch.backend === null
+        ? "openai"
+        : typeof body.webSearch.backend === "string" && WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)
+          ? body.webSearch.backend as WebSearchBackend
           : config.webSearchSidecar?.backend ?? "openai";
       const effectiveModel = typeof body.webSearch.model === "string"
         ? body.webSearch.model || undefined

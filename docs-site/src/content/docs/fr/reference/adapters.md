@@ -94,11 +94,26 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 **Cibles :** `agent.v1.AgentService/Run` de Cursor, en flux HTTP/2 Connect sur `api2.cursor.sh`.
 **Authentification :** jeton OAuth/d’accès Cursor provenant de `provider.apiKey` ou de l’en-tête d’autorisation transmis.
 
+- La sortie structurée est refusée avant le transport : Cursor n'a pas de champ protobuf de schéma de sortie, donc `text.format` / `response_format` JSON object ou schema (et le drapeau interne de sortie structurée) renvoient `400 invalid_request_error`. Les outils ne contournent pas ce contrôle.
 - Utilise `runTurn` plutôt que le chemin habituel fetch/parse. Les requêtes, événements serveur, arguments d’outil, points de contrôle de l’utilisation et réponses du client sont encodés avec les schémas `@bufbuild/protobuf` de `cursor/gen/agent_pb.ts`, puis encadrés comme messages Connect.
 - Rejoue l’état de la conversation au moyen de blobs adressés par leur contenu, remappe les appels d’outils du serveur vers Codex, découvre les modèles Cursor disponibles en direct au moyen de l’appel RPC protobuf `GetUsableModels` et ne relance une opération qu’avant que la requête d’exécution ait été écrite sur le transport.
 - Expose Cursor Router sous `cursor/auto`, ainsi que les entrées explicites `cursor/auto-cost`, `cursor/auto-balance` et `cursor/auto-intelligence`. Les niveaux explicites sont encodés dans `requested_model.parameters`, tandis que l’ancienne entrée `cursor/auto` conserve la valeur par défaut du compte ou de l’équipe.
 - Envoie les niveaux ordinaires de `cursor/grok-4.5` avec les identifiants de protocole exacts issus de la découverte en direct de Cursor (`cursor-grok-4.5-low`, `-medium` ou `-high`). `cursor/grok-4.5-fast` reste sélectionnable, mais le modèle canonique `grok-4.5` est envoyé avec des paramètres distincts `effort` et `fast=true`.
-- L’exécution locale native de commandes sur le système de fichiers, le shell ou le réseau par Cursor est refusée par défaut. Les intégrations explicites `mcpServers` et `desktopExecutor` disposent d’activations distinctes ; `nativeLocalExec: "on"` active l’exécuteur intégré plus large et contourne la sémantique d’approbation et de bac à sable de Codex. L’ancien réglage `unsafeAllowNativeLocalExec: true` reste équivalent uniquement lorsque `nativeLocalExec` n’est pas défini.
+- L’exécution locale native de commandes sur le système de fichiers, le shell ou le réseau par Cursor est refusée par défaut. Les intégrations explicites `mcpServers` et `desktopExecutor` disposent d’activations distinctes ; `nativeLocalExec: "on"` active l’exécuteur intégré plus large et contourne la sémantique d’approbation et de bac à sable de Codex. L’ancien réglage `unsafeAllowNativeLocalExec: true` reste équivalent uniquement lorsque `nativeLocalExec` n’est pas défini. Avec la politique par défaut `off`, Shell/Read/Ls/Grep/Fetch natifs sont mappés vers `shell_command`/`exec_command` Codex lorsque cet outil pont est dans le catalogue ; write/delete restent refusés.
+
+## `command-code`
+
+**Cibles :** API agent d’abonnement Command Code **OAuth** (`POST {baseUrl}/alpha/generate`).
+**Authentification :** Bearer OAuth via `ocx login command-code`.
+
+- Distinct du préréglage à clé API `commandcode` (`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`). La route à clé API ne lit jamais `projectContext` ni ne remplit l’enveloppe generate depuis le disque.
+- `projectContext: "on"` optionnel sur `providers.command-code` copie des fichiers bornés depuis `process.cwd()` au moment de la requête vers `memory`, `taste` et `skills`. Absent ou `"off"` envoie `memory: ""`, `taste: null`, `skills: null` même si ces fichiers existent dans le dépôt — opt-in uniquement, jamais de chargement automatique.
+- Démarrez le proxy depuis le répertoire de projet Codex de confiance afin que le répertoire de travail corresponde au dépôt que Codex édite.
+- **Mémoire :** UTF-8 de `AGENTS.md` à la racine du cwd uniquement (pas `CLAUDE.md`, `CODEX.md` ni chemins du répertoire personnel). Plafond 32 768 octets ; dépassement tronqué avec `<!-- truncated -->`.
+- **Taste :** UTF-8 de `.commandcode/taste/taste.md`, ou `null` si absent. Plafond 8 192 octets avec le même marqueur. Un fichier présent mais vide envoie `""`. `x-taste-learning` reste `"false"` ; charger taste n’est pas l’apprentissage taste de Command Code.
+- **Skills :** paquet XML depuis les racines de skills du projet, dans l’ordre : `.commandcode/skills`, `.agents/skills`, `.pi/skills`. Chaque sous-répertoire avec `SKILL.md` devient une entrée `<skill name="…">…</skill>` (nom depuis le frontmatter YAML `name:` ou le nom du répertoire). Ignore les noms commençant par `.` et les non-répertoires ; premier gagnant par nom résolu ; 16 skills max ; plafond XML total 32 768 octets. Ne lit jamais `~/.commandcode/skills` ni d’autres arborescences de skills du répertoire personnel.
+- Le confinement de chemin utilise des vérifications realpath sous cwd ; les échappements par lien symbolique sont omis. Chaque opération fichier a un délai de 2 secondes. Résultats mis en cache par cwd pendant 30 secondes (128 entrées max). Toute défaillance omet cette partie en fail-soft.
+- `commandCodeVersion` épingle `x-command-code-version` (défaut `0.52.1`). `permissionMode` reste `"standard"` et `mode` reste `"agent"`.
 
 ## `azure-openai` (alias : `azure`)
 

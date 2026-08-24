@@ -109,7 +109,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 코딩 모델. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 구독 게이트웨이(Hermes Agent와 동일한 백엔드). `portal.nousresearch.com`에 대한 디바이스 그랜트 로그인; access 토큰은 요청별 inference JWT. 유료 + `:free` 모델 혼합 카탈로그(`tencent/hy3:free`, `stepfun/step-3.7-flash:free` 등)는 로그인한 계정에서 실시간으로 발견됩니다. Refresh 토큰은 단회 사용이며, 갱신할 때마다 회전됩니다. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
-| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. 실시간 탐색은 인증된 CCA `v1internal:fetchAvailableModels` 엔드포인트를 사용하며 로그인한 계정에서 사용할 수 있는 agent 모델만 게시합니다. 유지 관리되는 카탈로그는 폴백으로 남습니다. |
+| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. 실시간 탐색은 인증된 CCA `v1internal:fetchAvailableModels` 엔드포인트를 사용하며 로그인한 계정에서 사용할 수 있는 agent 모델만 게시합니다. 유지 관리되는 카탈로그는 폴백으로 남습니다. Quota는 `retrieveUserQuota` 및 `retrieveUserQuotaSummary` RPC(8초 시간 제한)로 조회합니다. CCA 채팅/어댑터 요청은 SSE(`v1internal:streamGenerateContent?alt=sse`)를 사용하고 단항 호출에는 해당 스트림을 버퍼링합니다. 내장 이미지 생성은 별도의 단항 `v1internal:generateContent` 엔드포인트를 사용합니다. 어댑터는 첫 호스트의 transport/404/unavailable 실패 시 daily/production peer로 한 번 재시도합니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적. GitHub 디바이스 플로우 + `copilot_internal` 교환(VS Code OAuth 클라이언트). 활성 Copilot 구독 필요; 공식 서드파티 API가 아닙니다. |
 
@@ -274,6 +274,8 @@ CLI 사용자는 `~/.commandcode/auth.json`의 로컬 CLI 자격 증명을 가�
 키를 사용합니다. 키는 [Command Code Studio](https://commandcode.ai/studio/)에서 생성합니다.
 
 **Command Code 할당량:** 대시보드와 `ocx account refresh`는 정규 호스트 `https://api.commandcode.ai`에서 `/alpha/billing/credits` 창(5시간 및 주간)을 조회합니다. OAuth 프리셋(`command-code`)은 저장된 계정 bearer를 사용하고, Provider-API 키 프리셋(`commandcode`)은 현재 설정된 활성 키를 사용합니다. 사용자가 바꾼 유사 base URL은 조회하지 않습니다. Command Code가 기간 사용량을 함께 반환하면 남은 monthly / purchased / free credits가 USD 창으로 표시됩니다.
+
+**Command Code 프로젝트 컨텍스트.** OAuth `command-code` 공급자에서만( API 키 `commandcode` 프리셋 아님) 선택적 `projectContext: "on"`이 프록시 작업 디렉터리에서 `/alpha/generate`의 `memory` / `taste` / `skills`를 채웁니다. **Providers → Command Code → Edit JSON**으로 `providers.command-code`에 설정하고, 신뢰할 수 있는 Codex 프로젝트에서 프록시를 시작한 뒤 저장 후 재시작하세요. 생략하거나 `"off"`이면 `AGENTS.md`나 taste 파일이 있어도 빈 엔벨로프를 유지합니다. 파일 경로, 상한, fail-soft 동작은 [Adapters](/ko/reference/adapters/#command-code)를 참고하세요.
 
 **SambaNova Cloud 검색:** 프리셋은 고정 API 호스트의 SambaNova Cloud 공개 `/v1/models` 목록을 읽고, 프로바이더
 네이티브 ID를 보존하며 discovery를 128 KiB와 raw 행 128개로 제한합니다. 카탈로그에는 인증이 필요하지 않으므로

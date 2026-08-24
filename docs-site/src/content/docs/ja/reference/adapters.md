@@ -126,11 +126,26 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 `agent.v1.AgentService/Run`。
 **認証:** `provider.apiKey` または転送された authorization ヘッダーの Cursor OAuth/access token。
 
+- 構造化出力は転送前に拒否されます。Cursor には protobuf の出力スキーマフィールドがないため、`text.format` / `response_format` の JSON object または schema（および内部の structured-output フラグ）は `400 invalid_request_error` を返します。ツールではこの検査を迂回できません。
 - 通常の fetch/parse 経路の代わりに `runTurn` を使います。リクエスト、サーバーイベント、ツール引数、使用量 checkpoint、クライアントレスポンスは `cursor/gen/agent_pb.ts` の `@bufbuild/protobuf` スキーマでエンコードしたのち Connect メッセージとして framing します。
 - content-addressed blob で対話状態を再生し、サーバーツール呼び出しを Codex に再マッピングします。protobuf の `GetUsableModels` RPC でリアルタイム Cursor モデルを探し、run リクエストが wire に commit される前だけリトライします。
 - `cursor/grok-4.5-fast` は選択可能なモデルとして維持しつつ、Cursor には正規の `grok-4.5`
   モデルを送信し、個別の `effort` および `fast=true` 値は `requested_model.parameters` に格納します。
-- Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`unsafeAllowNativeLocalExec` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。
+- Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`unsafeAllowNativeLocalExec` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。既定の `off` では、カタログにブリッジツールがある場合、ネイティブ Shell/Read/Ls/Grep/Fetch は Codex の `shell_command`/`exec_command` にマップされ、write/delete は引き続き拒否されます。
+
+## `command-code`
+
+**対象:** Command Code **OAuth** サブスクリプション agent API (`POST {baseUrl}/alpha/generate`)。
+**認証:** `ocx login command-code` の OAuth Bearer。
+
+- API キーの `commandcode` プリセット (`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`) とは別経路です。API キー経路は `projectContext` を読まず、ディスクから generate エンベロープを埋めません。
+- `providers.command-code` の任意の `projectContext: "on"` は、リクエスト時に `process.cwd()` から上限付きファイルを `memory` / `taste` / `skills` へコピーします。未設定または `"off"` のときは、リポジトリにファイルがあっても `memory: ""`, `taste: null`, `skills: null` を送ります — 明示的 opt-in のみで、自動読み込みはありません。
+- Codex が編集するリポジトリと作業ディレクトリが一致するよう、信頼できる Codex プロジェクトディレクトリからプロキシを起動してください。
+- **Memory:** cwd の `AGENTS.md` の UTF-8 のみ（`CLAUDE.md`、`CODEX.md`、ホームパスは対象外）。上限 32,768 バイト。超過時は `<!-- truncated -->` 付きで先頭を切り詰めます。
+- **Taste:** `.commandcode/taste/taste.md` の UTF-8。欠落時は `null`。上限 8,192 バイト、同じ切り詰めマーカー。存在するが空のファイルは `""` を送ります。`x-taste-learning` は `"false"` のままです。taste の読み込みは Command Code の taste learning ではありません。
+- **Skills:** プロジェクト skill ルートをこの順で XML 化: `.commandcode/skills`、`.agents/skills`、`.pi/skills`。`SKILL.md` を持つ各サブディレクトリが `<skill name="…">…</skill>` になります（名前は YAML frontmatter の `name:` またはディレクトリ名）。`.` 始まり名と非ディレクトリはスキップ。解決名で first-wins。最大 16 skills。XML 合計上限 32,768 バイト。`~/.commandcode/skills` などホーム skill ツリーは読みません。
+- パス制限は cwd 配下の realpath チェック。シンボリックリンク逸脱は省略。各ファイル操作は 2 秒タイムアウト。結果は cwd ごとに 30 秒キャッシュ（最大 128 エントリ）。失敗時は fail-soft でその部分のみ省略。
+- `commandCodeVersion` は `x-command-code-version` を固定（デフォルト `0.52.1`）。`permissionMode` は `"standard"`、`mode` は `"agent"` のままです。
 
 ## `azure-openai`（別名: `azure`）
 

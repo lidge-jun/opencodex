@@ -11,8 +11,7 @@ import {
   transactionalNpmUpdate,
   verifyInstallTree,
 } from "../src/update/transactional-install.mjs";
-
-const PKG = "@bitkyc08/opencodex";
+import { PKG } from "../src/update/index";
 
 function writeTree(packageDir: string, version: string): void {
   mkdirSync(join(packageDir, "bin"), { recursive: true });

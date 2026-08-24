@@ -138,6 +138,21 @@ OAuth 設定 seed に供給します。`enrichProviderFromCatalog()` はモデ�
 `runTurn` を使ってください。`tests/` の下に集中したテストを追加し、公開パッケージ API に含まれる
 factory の場合は `src/index.ts` からも export してください。
 
+### 互換性クレームを追加
+
+互換性クレームは `src/compatibility/` に置きます。クレームの範囲はアダプターより狭く、検証済みの
+正確なプロバイダー、正規化された upstream base URL、認証モード、inbound/upstream プロトコル、
+model id を指定します。同じアダプターや wire format を使う別のプロバイダーや接続先へ、クレームを
+そのままコピーしないでください。
+
+versioned disposition は `passthrough`、`translated`、`degraded`、`unsupported` のいずれかを使います。
+`passthrough` 以外のクレームには具体的な制限を記載し、fixture に基づくクレームでは根拠となる正確な
+assertion id を指定してください。秘密情報を含まない request vector を `tests/fixtures/compatibility/` に
+追加し、production adapter に対して実行する集中テストを用意します。
+
+compatibility manifest は受動的なデータです。通常の router、Responses handler、server startup path から
+manifest catalog を import したり、Compatibility Lab を有効化したりしてはいけません。
+
 ## 完了を主張する前に検証
 
 変更を証明する最も狭いコマンドから実行してください。型は `bun run typecheck`、動作は集中した

@@ -22,6 +22,10 @@ export interface SubagentDelegationSectionProps {
   syncCodexDefaults: boolean;
   saving: boolean;
   onSave: (patch: DelegationPatch) => void;
+  prompt: string;
+  childInstructions: string;
+  childInstructionsSaving: boolean;
+  onChildInstructionsSave: (value: string | null) => void;
   ultraMode: UltraModeState;
   ultraSaving: boolean;
   onUltraModeSave: (patch: UltraModePatch) => void;
@@ -38,6 +42,10 @@ export default function SubagentDelegationSection({
   syncCodexDefaults,
   saving,
   onSave,
+  prompt,
+  childInstructions,
+  childInstructionsSaving,
+  onChildInstructionsSave,
   ultraMode,
   ultraSaving,
   onUltraModeSave,
@@ -167,6 +175,43 @@ export default function SubagentDelegationSection({
           />
         </div>
       )}
+
+      <div className="swi-delegation-row swi-prompt-editor">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.injectionPrompt")}</div>
+          <div className="muted setting-hint">
+            {t("sub.injectionPromptHint")}{" "}
+            <code>{"{{model}}"}</code>{" "}
+            <code>{"{{effort}}"}</code>{" "}
+            <code>{"{{roster}}"}</code>{" "}
+            <code>{"{{fallback}}"}</code>{" "}
+            <code>{"{{roles}}"}</code>
+          </div>
+        </div>
+        <PromptDraftEditor
+          key={`prompt:${prompt}`}
+          initialValue={prompt}
+          disabled={saving}
+          ariaLabel={t("sub.injectionPrompt")}
+          saveLabel={t("sub.injectionPromptSave")}
+          onSave={value => onSave({ prompt: value.trim() ? value : null })}
+        />
+      </div>
+
+      <div className="swi-delegation-row swi-prompt-editor">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.childInstructions")}</div>
+          <div className="muted setting-hint">{t("sub.childInstructionsHint")}</div>
+        </div>
+        <PromptDraftEditor
+          key={`child:${childInstructions}`}
+          initialValue={childInstructions}
+          disabled={saving || childInstructionsSaving}
+          ariaLabel={t("sub.childInstructions")}
+          saveLabel={t("sub.childInstructionsSave")}
+          onSave={value => onChildInstructionsSave(value.trim() ? value : null)}
+        />
+      </div>
     </div>
   );
 }
@@ -227,3 +272,40 @@ function UltraModeEditor({
 /** Canonical Proactive delegation text mirrored from codex-rs (multi_agent_mode_instructions.rs). */
 export const ULTRA_MODE_PRESET =
   "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently. Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself. This mode remains active until a later multi-agent mode developer message changes it.";
+
+function PromptDraftEditor({
+  initialValue,
+  disabled,
+  ariaLabel,
+  saveLabel,
+  onSave,
+}: {
+  initialValue: string;
+  disabled: boolean;
+  ariaLabel: string;
+  saveLabel: string;
+  onSave: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(initialValue);
+  return (
+    <div className="swi-prompt-draft">
+      <textarea
+        className="input swi-ultra-mode-textarea"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        disabled={disabled}
+        rows={4}
+        aria-label={ariaLabel}
+      />
+      <button
+        type="button"
+        className="btn btn-primary btn-sm"
+        onClick={() => onSave(draft)}
+        disabled={disabled}
+        aria-label={saveLabel}
+      >
+        {saveLabel}
+      </button>
+    </div>
+  );
+}

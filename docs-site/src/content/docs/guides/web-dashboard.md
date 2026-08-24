@@ -48,7 +48,7 @@ the browser or password manager's decision.
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
+| **Subagents** | Feature up to five bare native or namespaced routed models, edit up to eight named roles, toggle Codex agent-file sync, and edit custom parent guidance plus global child instructions. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
@@ -111,14 +111,22 @@ may clear affinity and rotate to another eligible Pool account. This is separate
 and other providers.
 
 :::caution[Provider-policy responsibility]
-The account pool is a technical account-management, routing, and resilience feature. It does not
+Account pools are technical account-management, routing, and resilience features. They do not
 claim that having multiple accounts is itself prohibited; compliance depends on the account setup and
 use pattern. OpenCodex does not endorse using additional accounts to circumvent rate limits, quotas,
 plan limits, or other provider restrictions, or sharing account credentials between people. You are
-responsible for complying with the provider's current terms for every connected account and use
+responsible for complying with each provider's current terms for every connected account and use
 pattern. Provider restrictions, suspension, or termination are outside OpenCodex's control;
 maintainers do not provide policy advice and cannot resolve provider enforcement. Review
-[OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/).
+[OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/) and the terms for every
+other OAuth provider you pool (Anthropic, Google Antigravity, Cursor, and others).
+
+The same caution applies to experimental Claude and Cursor account pools in
+[Provider Configuration](/reference/configuration/providers/#shared-oauth-account-pool-kernel).
+Those pools are off by default. Antigravity multi-account routing is failover-only — it does not
+spread new sessions across accounts. Command Code does not support account pooling; one account per
+person is required by Command Code terms. Billing and payment failures are not rate-limit 429s and do
+not trigger the short account-hop carousel.
 :::
 
 - Manually choosing an account applies immediately: an already-bound thread moves to it on its next

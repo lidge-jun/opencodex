@@ -145,12 +145,23 @@ Codex는 그 핸드셰이크 결과를 해당 세션에서 HTTP로 되돌아가�
 choice, 이미지, reasoning effort, 지원되는 response format을 변환한 뒤, 일반 Responses 라우팅 파이프라인을
 실행하고, 결과를 다시 변환합니다.
 
+구조화된 출력도 이 변환의 일부입니다. `json_object` 또는 `json_schema`를 포함한
+`response_format`은 제공자의 `noStructuredOutputModels` 모델별 opt-out을 제외하고 라우팅된
+`openai-chat` 모델로 전달됩니다. 목록에 있는 모델은 해당 wire에서 `response_format`을 생략하고,
+다른 모델은 변환을 유지합니다. 라우팅된 Google 모델은 지원되는 요청을 Gemini JSON mode
+(`responseMimeType` / `responseSchema`)로 변환하지만, 요청에 도구가 있거나 선택한 모델이
+Claude이거나 모델이 이미지 생성을 지원하면 이 변환을 건너뜁니다. Kiro는 구조화된 출력을
+거부합니다. Cursor에는 구조화된 출력을 위한 와이어 필드가 없으며, 전송 전에 요청을 거부합니다.
+
+`POST /v1/responses`에서 해당 요청 필드는 `text.format`입니다. 네이티브 Responses 경로는
+이를 원본 Responses body에 보존하고, 모델이 `openai-chat` 제공자로 라우팅되면
+`response_format`으로 변환합니다. 어댑터 동작은 구현된 기능에 따라 다릅니다. 요청 기능은
+전달되거나, 변환을 건너뛰거나, 무시되거나, 거부될 수 있으므로 표현할 수 없는 모든 기능이
+프록시에서 fail closed 된다고 보장하지 않습니다.
+
 비스트리밍 출력의 `object`는 `"chat.completion"`입니다. 스트리밍 출력은 `object: "chat.completion.chunk"`인
 SSE 객체, choice delta, `finish_reason`이 있는 종료 choice, `data: [DONE]`을 사용합니다. tool-call과 usage
 정보는 원본 이벤트가 그것들을 담고 있을 때 다시 변환됩니다.
-
-내부 실행 경로가 Responses 기반이기 때문에 provider adapter는 더 좁은 기능 집합을 강제할 수 있습니다. 예를
-들어 선택된 adapter로 표현할 수 없는 요청 기능은 의미를 바꾸지 않고 오류로 반환됩니다.
 
 ## `POST /v1/messages`와 `count_tokens`
 

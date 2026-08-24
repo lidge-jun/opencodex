@@ -74,11 +74,16 @@ ocx restore back
 ocx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
+### `ocx recover-history --legacy-openai --yes`
 
 Tersine çevrilebilir yedekleme desteği var olmadan önce Codex App geçmişini
 yeniden eşleyen eski geliştirme derlemeleri için açık kurtarma. Geçmiş
 veritabanı kilitliyse önce Codex'i kapatın.
+
+Bu, geniş kapsamlı ve yıkıcı bir yeniden etiketlemedir: kullanıcı iletisi bulunan ve şu anda
+`opencodex` olarak etiketlenmiş her thread `openai` olarak değiştirilir, `exec` değeri `cli`
+olarak normalleştirilir ve event marker ayarlanır. Geçerli dedicated-provider geçmişi de kapsama
+dahildir. Durumu yedekleyin ve yalnızca bu kapsamın tamamını istiyorsanız çalıştırın.
 
 ### `ocx uninstall` · `ocx remove`
 

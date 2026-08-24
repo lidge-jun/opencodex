@@ -31,7 +31,8 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `images?` | `OcxImagesConfig` | 自动选择 OpenAI | 用于 Codex `image_gen` 的独立 Images 转发选项。 |
 
 如果较旧的开发版本在尚未提供备份支持之前修改过了 resume-history 元数据，请运行
-`ocx recover-history --legacy-openai` 强制使用原生提供方恢复。
+`ocx recover-history --legacy-openai --yes` 强制使用原生提供方恢复。
+此命令会重标所有包含用户消息的 `opencodex` 行，其中包括正常的专用提供方历史记录；执行前请查看生命周期参考中的完整范围警告。
 
 ## 远程访问
 

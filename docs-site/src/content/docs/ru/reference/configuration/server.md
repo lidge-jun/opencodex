@@ -31,8 +31,9 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
 
 Если более старая development-сборка изменила metadata resume-history до появления резервного
-backup'а, выполните `ocx recover-history --legacy-openai`, чтобы принудительно вернуть
+backup'а, выполните `ocx recover-history --legacy-openai --yes`, чтобы принудительно вернуть
 native-provider history.
+Команда переименовывает все строки `opencodex` с пользовательским сообщением, включая корректную историю выделенного провайдера; перед запуском прочитайте предупреждение о полном охвате в справочнике lifecycle.
 
 ## Удалённый доступ
 

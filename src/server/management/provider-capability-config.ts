@@ -1,4 +1,4 @@
-import { booleanRecordConfigError } from "../../config";
+import { booleanRecordConfigError } from "../../config/provider-validation";
 import type { OcxConfig } from "../../types";
 
 /**

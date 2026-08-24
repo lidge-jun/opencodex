@@ -38,4 +38,9 @@ describe("reasoning replay scope propagation", () => {
     expect(cache).not.toContain("identity.providerBaseUrl");
     expect(`${bridge}\n${adapter}`).not.toContain('replayCacheScope ?? "global"');
   });
+
+  test("opaque recovery preserves the shared prompt-cache cohort marker", () => {
+    const core = source("server/responses/core.ts");
+    expect(core).toContain('"_promptCacheKeyIsSharedCohort",');
+  });
 });

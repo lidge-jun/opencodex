@@ -1,6 +1,6 @@
 {
-  "name": "@bitkyc08/opencodex",
-  "version": "2.27.0",
+  "name": "@yansigit/opencodex",
+  "version": "2.32.0",
   "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -39,7 +39,9 @@
     "dev:gui": "cd gui && bun run dev",
     "start": "bun run src/cli/index.ts start",
     "test": "bun scripts/test.ts",
-    "typecheck": "bun x tsc --noEmit",
+    "test:replit-gateway": "cd integrations/replit-gateway && bun install --frozen-lockfile && bun run test",
+    "typecheck": "bun x tsc --noEmit && bun run typecheck:replit-gateway",
+    "typecheck:replit-gateway": "cd integrations/replit-gateway && bun install --frozen-lockfile && bun run typecheck",
     "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
     "privacy:scan": "bun scripts/privacy-scan.ts",
     "generate:model-metadata": "bun scripts/generate-model-metadata.ts",
@@ -96,11 +98,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lidge-jun/opencodex.git"
+    "url": "git+https://github.com/yansigit/opencodex.git"
   },
-  "homepage": "https://lidge-jun.github.io/opencodex/",
+  "homepage": "https://github.com/yansigit/opencodex",
   "bugs": {
-    "url": "https://github.com/lidge-jun/opencodex/issues"
+    "url": "https://github.com/yansigit/opencodex/issues"
   },
   "license": "MIT"
 }

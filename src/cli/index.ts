@@ -12,6 +12,9 @@ import {
   codexAutoStartEnabled,
   getConfigDir,
   loadConfig,
+  saveConfig,
+} from "../config";
+import {
   readPid,
   readPidFileValue,
   readRuntimePort,
@@ -19,10 +22,9 @@ import {
   removePidIfValueIs,
   removeRuntimePort,
   removeRuntimePortIfPidIs,
-  saveConfig,
   writePid,
   writeRuntimePort,
-} from "../config";
+} from "../config/process-state";
 import { collectStatus } from "./status";
 
 import {
@@ -53,6 +55,7 @@ import { startHistoryMigrationGuardian } from "../codex/history-migration-guardi
 import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
+import { PKG } from "../update/index";
 import { syncModelsToCodex } from "../codex/sync";
 import {
   shouldSyncGrokOnStart,
@@ -823,7 +826,7 @@ async function handleUninstall() {
     console.error(`\nUninstall finished with ${failures.length} failed step(s): ${failures.join(", ")}`);
     process.exit(1);
   }
-  console.log("\n✅ opencodex local state removed. Remove the package with: npm uninstall -g @bitkyc08/opencodex");
+  console.log(`\n✅ opencodex local state removed. Remove the package with: npm uninstall -g ${PKG}`);
 }
 
 async function handleStatus() {
@@ -905,8 +908,13 @@ async function handleStatus() {
 
 async function handleRecoverHistory() {
   if (args[1] !== "--legacy-openai") {
-    console.error("Usage: ocx recover-history --legacy-openai");
-    console.error("Only use this if an older syncResumeHistory build already remapped OpenAI Codex App history to opencodex before backup support existed.");
+    console.error("Usage: ocx recover-history --legacy-openai --yes");
+    console.error("This force-relabels every user-message opencodex row to OpenAI, including legitimate dedicated-provider history. Back up first and use it only for pre-backup legacy recovery.");
+    process.exit(1);
+  }
+  console.error("WARNING: this force-relabels every user-message opencodex row to OpenAI, normalizes exec to cli, and includes legitimate dedicated-provider history.");
+  if (args.length !== 3 || args[2] !== "--yes") {
+    console.error("Re-run with explicit confirmation: ocx recover-history --legacy-openai --yes");
     process.exit(1);
   }
   // Manifest-independent legacy ejection, serialized like every other history

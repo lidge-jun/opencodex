@@ -1,0 +1,185 @@
+name: Fork auto-release
+
+# After a human merge to main, dispatch the existing Release workflow only
+# after the promotion CI and its service gate are green. npm Trusted Publishing
+# must be bound to yansigit/opencodex's release.yml workflow; this dispatcher
+# never changes package.json or carries publish credentials.
+on:
+  workflow_run:
+    workflows: ["Cross-platform CI"]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: fork-auto-release
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout CI head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether to dispatch
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name || ''")"
+          PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version || ''")"
+          LIVE_MAIN_SHA="$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+          export PACKAGE_NAME PACKAGE_VERSION LIVE_MAIN_SHA
+
+          # Indented heredocs in this step never terminate; call the env CLI instead.
+          initial_decision="$(node .github/scripts/fork-auto-release.cjs)"
+
+          if [ "$(node -p "JSON.parse(process.argv[1]).action" "$initial_decision")" = "skip" ]; then
+            node -e 'console.log(`::notice::${JSON.parse(process.argv[1]).reason}`)' "$initial_decision"
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          npm_output="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>&1)"
+          npm_status=$?
+          set -e
+          if [ "$npm_status" -eq 0 ]; then
+            VERSION_ON_NPM="$npm_output"
+          elif printf '%s\n' "$npm_output" | grep -Eqi 'E404|No match found|404 Not Found'; then
+            VERSION_ON_NPM=""
+          else
+            printf '::error::npm version lookup failed\n%s\n' "$npm_output"
+            exit "$npm_status"
+          fi
+          export VERSION_ON_NPM
+
+          final_decision="$(node .github/scripts/fork-auto-release.cjs)"
+          if [ "$(node -p "JSON.parse(process.argv[1]).action" "$final_decision")" = "skip" ]; then
+            node -e 'console.log(`::notice::${JSON.parse(process.argv[1]).reason}`)' "$final_decision"
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "dispatch=true" >> "$GITHUB_OUTPUT"
+          echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "package-name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Service lifecycle
+        if: steps.decide.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.decide.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+
+          # Mirrors scripts/release.ts waitForSuccessfulCi. If there are no
+          # service paths changed and no run exists, the service gate is not
+          # applicable and the dispatcher proceeds.
+          previous_tag="$(git tag --merged "$HEAD_SHA" --list 'v[0-9]*' | sort -V | awk 'END { print }')"
+          if [ -n "$previous_tag" ]; then
+            changed_files="$(git diff --name-only "${previous_tag}..${HEAD_SHA}")"
+          else
+            changed_files="$(git diff-tree --no-commit-id --name-only -r -m "$HEAD_SHA")"
+          fi
+
+          service_paths_changed=no
+          if printf '%s\n' "$changed_files" |
+            grep -Eq '^(src/service\.ts|src/cli\.ts|src/cli/index\.ts|src/lib/bun-runtime\.ts|package\.json|bun\.lock|\.github/workflows/service-lifecycle\.yml)$'
+          then
+            service_paths_changed=yes
+          fi
+
+          waitForSuccessfulCi() {
+            local deadline=$((SECONDS + 1200))
+            local attempt=1
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              runs="$(gh run list \
+                --workflow service-lifecycle.yml \
+                --commit "$HEAD_SHA" \
+                --limit 20 \
+                --json conclusion,headSha,status,url)"
+
+              run_count="$(jq 'length' <<<"$runs")"
+              if [ "$run_count" -eq 0 ] && [ "$service_paths_changed" = no ]; then
+                echo "::notice::no Service lifecycle run and no service paths changed; proceeding"
+                return 0
+              fi
+
+              successful_url="$(jq -r --arg sha "$HEAD_SHA" \
+                '[.[] | select(.headSha == $sha and .status == "completed" and .conclusion == "success")][0].url // ""' \
+                <<<"$runs")"
+              if [ -n "$successful_url" ]; then
+                echo "Service lifecycle passed for $HEAD_SHA: $successful_url"
+                return 0
+              fi
+
+              failed_url="$(jq -r --arg sha "$HEAD_SHA" \
+                '[.[] | select(.headSha == $sha and .status == "completed" and .conclusion != null and .conclusion != "success")][0].url // ""' \
+                <<<"$runs")"
+              if [ -n "$failed_url" ]; then
+                echo "::error::Service lifecycle failed for $HEAD_SHA: $failed_url"
+                exit 1
+              fi
+
+              echo "waiting for Service lifecycle ($HEAD_SHA) attempt $attempt"
+              attempt=$((attempt + 1))
+              sleep 10
+            done
+            echo "::error::timed out waiting for Service lifecycle on $HEAD_SHA"
+            exit 1
+          }
+
+          waitForSuccessfulCi
+
+      - name: Re-read live main before dispatch
+        id: live-main
+        if: steps.decide.outputs.dispatch == 'true'
+        env:
+          HEAD_SHA: ${{ steps.decide.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+          live_main_sha="$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+          if ! printf '%s\n' "$live_main_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::origin/main did not return a full commit SHA"
+            exit 1
+          fi
+          if [ "$live_main_sha" != "$HEAD_SHA" ]; then
+            echo "::notice::origin/main moved while waiting; a newer CI run will retry"
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "dispatch=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch Release workflow
+        if: steps.decide.outputs.dispatch == 'true' && steps.live-main.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.decide.outputs.head-sha }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref main \
+            -f "version=$VERSION" \
+            -f "tag=latest" \
+            -f "expected-sha=$HEAD_SHA" \
+            -f "dry-run=false"

@@ -6,12 +6,14 @@ import {
   atomicWriteFile,
   getConfigDir,
   loadConfig,
+} from "../config";
+import {
   readPid,
   readRuntimePort,
   removePid,
   removeRuntimePort,
   verifyPidIdentity,
-} from "../config";
+} from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
@@ -219,7 +221,7 @@ function packageLauncherPath(): string {
   // tree (`@bitkyc08/.opencodex-*`). Prefer the live package path when that happens.
   const fromMeta = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "ocx.mjs");
   if (!/[\\/]\.opencodex-/i.test(fromMeta) && existsSync(fromMeta)) return fromMeta;
-  const live = fromMeta.replace(/[\\/]@bitkyc08[\\/]\.opencodex-[^\\/]+/i, `${sep}@bitkyc08${sep}opencodex`);
+  const live = fromMeta.replace(/[\\/]@([^\\/]+)[\\/]\.opencodex-[^\\/]+/i, `${sep}@$1${sep}opencodex`);
   if (live !== fromMeta && existsSync(live)) return live;
   return fromMeta;
 }
@@ -1397,7 +1399,7 @@ function restartFailureHint(port: number): string {
   return `Update installed, but the restarted proxy did not stay healthy on port ${port}. `
     + `Try 'ocx start --port ${port}'. `
     + "If the update log shows bun postinstall or EPERM warnings, "
-    + "reinstall with 'npm install -g --allow-scripts=bun @bitkyc08/opencodex'.";
+    + `reinstall with 'npm install -g --allow-scripts=bun ${PKG}'.`;
 }
 
 type AwaitHealthyResult =

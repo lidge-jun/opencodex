@@ -627,6 +627,7 @@ export function bridgeToResponsesSSE(
         const argsStr = coerceIntegerToolArguments(
           currentToolCall.args || "{}",
           options?.toolParameterSchemas?.get(currentToolCall.name),
+          currentToolCall.namespace === undefined ? currentToolCall.name : undefined,
         );
         // Finalize streamed function-call arguments so Codex commits the call (incl. MCP / computer_use).
         if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
@@ -1659,6 +1660,7 @@ function buildResponseJSONWithBudget(
     const coercedArgs = coerceIntegerToolArguments(
       currentToolCallArgs,
       options?.toolParameterSchemas?.get(currentToolCallName),
+      ns === undefined ? realName : undefined,
     );
     // Freeform tools serialize as custom_tool_call without extra_content; remember the
     // signature server-side regardless so the replayed call can be re-signed (#1735).

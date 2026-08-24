@@ -231,10 +231,12 @@ async function fetchCursorUsableModelsHttp2Once(opts: CursorUsableModelsOptions)
    }
 
     let status = 0;
+    let responseReceived = false;
     const chunks: Buffer[] = [];
     let receivedBytes = 0;
     let bodyRejected = false;
     req.on("response", headers => {
+      responseReceived = true;
       status = Number(headers[":status"] ?? 0);
       const contentLength = Number(headers["content-length"] ?? 0);
       if (Number.isFinite(contentLength) && contentLength > CURSOR_MODEL_DISCOVERY_MAX_BYTES) {
@@ -257,6 +259,12 @@ async function fetchCursorUsableModelsHttp2Once(opts: CursorUsableModelsOptions)
     req.on("error", () => close({ ok: false, error: "transport", detail: "HTTP/2 request failed" }));
     req.on("end", () => {
       if (bodyRejected) return;
+      // A stream can end after an HTTP/2 session/reset without ever delivering response headers.
+      // Treat status 0 as a transient transport failure so the bounded discovery retry can recover;
+      // reporting it as `http/HTTP unknown` makes the pre-response failure non-retryable.
+      if (!responseReceived || status === 0) {
+        return close({ ok: false, error: "transport", detail: "HTTP/2 stream ended before response headers" });
+      }
       if (status === 401 || status === 403) {
         return close({ ok: false, error: "auth", detail: `HTTP ${status}` });
       }

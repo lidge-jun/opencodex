@@ -78,7 +78,7 @@ geçersiz kılmalarını reddeder. Bu nedenle rehberlik, `model` veya
 pozitif bir kısmi tur sayısı) kullanmasını ve görev mesajını bağımsız hale
 getirmesini söyler.
 
-Özel `injectionPrompt` metni dört yer tutucunun tümünü kullanabilir:
+Özel `injectionPrompt` metni şu yer tutucuları kullanabilir:
 
 | Yer tutucu | Şununla değiştirilir |
 | --- | --- |
@@ -86,6 +86,7 @@ getirmesini söyler.
 | `{{effort}}` | Yapılandırılmış `injectionEffort` veya boş bir dize |
 | `{{roster}}` | Çözümlenen seçicide görünen, arayüzle uyumlu kadro |
 | `{{fallback}}` | Yapılandırılmış genel geri dönüş rehberliği |
+| `{{roles}}` | Sıkıştırılmış etkin rol kataloğu (id, ne zaman kullanılır, model, isteğe bağlı efor); geçerli yüzey ve 700 karakter bütçesine göre süzülür |
 
 Yerleşik v2 rehberliğinin 700 karakterlik bir bütçesi vardır. Bütçeyi aşacaksa
 opencodex temel spawn talimatlarını kesmek yerine önce kadroyu bırakır. Yerleşik

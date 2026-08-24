@@ -29,7 +29,8 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | 이미지 설명 사이드카 옵션입니다. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Codex `image_gen`용 독립형 Images 릴레이 옵션입니다. |
 
-오래된 개발 빌드가 백업 지원이 생기기 전에 resume-history 메타데이터를 바꿨다면, native-provider 복구를 강제로 수행하려면 `ocx recover-history --legacy-openai`를 실행합니다.
+오래된 개발 빌드가 백업 지원이 생기기 전에 resume-history 메타데이터를 바꿨다면, native-provider 복구를 강제로 수행하려면 `ocx recover-history --legacy-openai --yes`를 실행합니다.
+이 명령은 정상적인 dedicated-provider history를 포함해 사용자 메시지가 있는 모든 `opencodex` row를 재태깅합니다. 실행하기 전에 lifecycle reference의 전체 범위 경고를 확인하세요.
 
 ## Remote access
 

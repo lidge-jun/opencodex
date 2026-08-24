@@ -128,6 +128,8 @@ cross-route credential fallback не существует. Строки API GPT-
 | `desktopExecutor?` | `DesktopExecutorConfig` | Только Cursor: команды внешнего computer-use и record-screen. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Legacy boolean Cursor, эквивалентен `nativeLocalExec: "on"` только если новое поле не задано. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Политика local-exec для Cursor. `off` — дефолт; `codex-sandbox` сейчас ведёт себя fail-closed как `off`. |
+| `commandCodeVersion?` | `string` | Только Command Code OAuth (`adapter: "command-code"`). Фиксирует заголовок `x-command-code-version` в запросах `/alpha/generate`. Если не задан, используется дефолт адаптера (`0.52.1`). Не читается пресетом API-ключа `commandcode` (`openai-chat` / `/provider/v1`). |
+| `projectContext?` | `"off" \| "on"` | Только Command Code OAuth (`adapter: "command-code"`). При `"on"` копирует ограниченные файлы проекта из рабочей директории процесса прокси в конверт `/alpha/generate` (`memory`, `taste`, `skills`). Если отсутствует или `"off"`, сохраняется пустой конверт, даже когда файлы есть на диске. Не читается пресетом API-ключа `commandcode`. Задаётся на `providers.command-code`, не на верхнем уровне. В дашборде: **Providers → Command Code → Edit JSON**. Запускайте прокси из доверенной директории проекта Codex, чтобы `process.cwd()` указывал на нужный репозиторий. Fail-soft: отсутствие, нечитаемость, таймаут или выход за пределы пути — часть опускается, ход не падает. Не читает `~/.commandcode/skills` и другие домашние skill-деревья. `x-taste-learning` остаётся `"false"` независимо от флага. |
 
 Провайдеры с API-key могут хранить literal key или environment-reference. OAuth-провайдеры
 используют credential store, заполняемый через `ocx login`; поведение subscription-backed launcher'а
@@ -293,8 +295,9 @@ Bridge Cursor экспериментальный. После `ocx login cursor` 
 Server-driven local tool'ы Cursor по умолчанию выключены. Codex продолжает использовать собственные
 инструменты, такие как `apply_patch` и `exec_command`, со своей же approval/sandbox policy:
 
-- `"off"` (по умолчанию) отвергает нативное выполнение `read`, `write`, `delete`, `ls`, `grep`,
-  `shell` и `fetch` со стороны Cursor.
+- `"off"` (по умолчанию) запрещает proxy-local выполнение нативных Cursor `read`, `write`, `delete`, `ls`, `grep`,
+  `shell` и `fetch`. Когда в turn объявлен bare Codex `shell_command` или `exec_command`, нативные Shell/Read/Ls/Grep/Fetch
+  маппятся в этот Codex shell bridge вместо выполнения на proxy; write/delete по-прежнему запрещены.
 - `"on"` включает trusted local execution и обходит approval/sandbox semantics Codex.
 - `"codex-sandbox"` сохранён ради совместимости, но закрывается с ошибкой так же, как `"off"`; на
   prose запроса нельзя полагаться как на достоверную sandbox-attestation.

@@ -5,9 +5,9 @@
  * weighted round-robin selection with per-credential auth-failure cooldown
  * and one-retry failover on a different account before surfacing the error.
  *
- * OpenCodex already has JWT-based multi-account identification (src/oauth/cursor.ts)
- * and Anthropic-specific 429 rotation; this module adds Cursor-aware weighted
- * routing on top of those primitives.
+ * **Not wired in opencodex.** Session-pinned OAuth pooling uses
+ * `src/oauth/cursor-routing.ts` on the shared account-pool kernel instead (#2334).
+ * This module remains for unit tests only until removed.
  */
 
 export interface CursorCredential {

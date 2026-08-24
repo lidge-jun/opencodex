@@ -120,7 +120,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modèles de programmation Kimi K2.7/K2.6/K2.5. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Passerelle d'abonnement Nous Research (le même service en amont que celui utilisé par Hermes Agent). Connexion par autorisation d'appareil auprès de `portal.nousresearch.com` ; le jeton d'accès est le JWT d'inférence envoyé avec chaque requête. Le catalogue mixte de modèles payants et `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) est découvert en direct pour le compte connecté. Les jetons d'actualisation sont à usage unique et renouvelés à chaque actualisation. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
-| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
+| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. Le quota est sondé via `retrieveUserQuota` et `retrieveUserQuotaSummary` (délai de 8 secondes). Les requêtes de chat et d'adaptateur CCA utilisent SSE (`v1internal:streamGenerateContent?alt=sse`) et mettent ce flux en mémoire tampon pour les appels unitaires. La génération d'images intégrée utilise le point de terminaison unitaire distinct `v1internal:generateContent`. L'adaptateur réessaie le pair daily/production en cas d'échec de transport, de 404 ou d'indisponibilité sur le premier hôte. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Connexion PKCE expérimentale, transport HTTP/2 en direct et découverte de modèles filtrés par compte. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Expérimental. Flux d'appareil GitHub et échange `copilot_internal` (client OAuth de VS Code). Nécessite un abonnement Copilot actif ; il ne s'agit pas d'une API tierce officielle. |
 
@@ -403,6 +403,14 @@ enregistré ; le préréglage à clé d'API fournisseur (`commandcode`) utilise 
 URL de base modifiée ressemblant à l'original n'est jamais sondée. Les crédits mensuels, achetés et
 gratuits restants sont affichés sous forme de fenêtre en USD lorsque Command Code signale également les
 dépenses de la période.
+
+**Contexte de projet Command Code.** `projectContext: "on"` optionnel sur le fournisseur OAuth `command-code`
+uniquement (pas le préréglage à clé API `commandcode`) remplit `memory`, `taste` et `skills` de
+`/alpha/generate` depuis le répertoire de travail du proxy. Définissez-le sur `providers.command-code` via
+**Providers → Command Code → Edit JSON**, démarrez le proxy depuis le projet Codex de confiance et
+redémarrez après enregistrement. Absent ou `"off"` conserve l'enveloppe vide même si `AGENTS.md` ou des
+fichiers taste existent. Voir [Adapters](/fr/reference/adapters/#command-code) pour les chemins, plafonds
+et le comportement fail-soft.
 
 **Découverte SambaNova Cloud.** Le préréglage lit la liste publique `/v1/models` de SambaNova Cloud depuis
 l'hôte API fixe, préserve les identifiants natifs du fournisseur et limite la découverte à 128 KiB et 128

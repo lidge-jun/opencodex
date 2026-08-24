@@ -1,4 +1,4 @@
-import { readRuntimePort, type RuntimePortState } from "../config";
+import { readRuntimePort, type RuntimePortState } from "../config/process-state";
 import { createLocalAttestationChallenge } from "../lib/local-management-attestation";
 import {
   LOCAL_MANAGEMENT_CAPABILITY_HEADER,

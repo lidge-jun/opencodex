@@ -1,4 +1,4 @@
-import type { TFn } from "../i18n/shared";
+import type { TFn, TKey } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
 import { formatNamespacedModelId } from "../provider-icons";
@@ -25,6 +25,14 @@ export function discoveryFailureLabel(
   }
 }
 
+export type ModelMetadataSource =
+  | "live"
+  | "registry"
+  | "snapshot"
+  | "config_fallback"
+  | "unknown"
+  | "derived";
+
 export interface ModelRow {
   provider: string;
   id: string;
@@ -38,9 +46,17 @@ export interface ModelRow {
   contextWindow?: number;
   contextCap?: number;
   contextCapped?: boolean;
+  /** Pre-cap discovered window when the API still has it; used for "1.05M detected · capped at 350k". */
+  detectedContextWindow?: number;
+  metadataSource?: ModelMetadataSource;
+  metadataObservedAt?: string;
+  metadataStale?: boolean;
   /** Stored custom-row override (not the inherited ladder); only present on custom rows. */
   reasoningEfforts?: string[];
 }
+
+/** Codex strict-parser placeholder; never shown as a claimed discovered window. */
+export const COMPATIBILITY_CONTEXT_WINDOW = 128_000;
 
 /**
  * Reasoning-effort labels offered in the custom-model dialog. The full set of real
@@ -107,6 +123,115 @@ export function fmtK(n: number): string {
   // eslint-disable-next-line local-i18n/no-hardcoded-ui-strings -- unit suffix, not prose
   if (n >= 1_000_000) return Number((n / 1_000_000).toFixed(2)) + "M";
   return `${n / 1000}k`;
+}
+
+type ContextRow = Pick<
+  ModelRow,
+  | "contextWindow"
+  | "contextCap"
+  | "contextCapped"
+  | "detectedContextWindow"
+  | "metadataSource"
+  | "metadataObservedAt"
+  | "metadataStale"
+  | "native"
+>;
+
+function positiveWindow(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function sourceClaimsWindow(source: ModelRow["metadataSource"]): boolean {
+  return source === "live" || source === "registry" || source === "snapshot" || source === "derived";
+}
+
+/** Window the UI may display as a real size. Compatibility 128k and `unknown` are omitted. */
+export function claimedContextWindow(row: ContextRow): number | undefined {
+  const window = positiveWindow(row.contextWindow);
+  if (window === undefined) return undefined;
+  if (row.metadataSource === "unknown") return undefined;
+  if (window === COMPATIBILITY_CONTEXT_WINDOW) {
+    if (sourceClaimsWindow(row.metadataSource)) return window;
+    if (row.native === true) return window;
+    if (row.metadataSource === undefined || row.metadataSource === "config_fallback") {
+      return undefined;
+    }
+  }
+  return window;
+}
+
+export function modelContextSourceChipKey(
+  row: Pick<ModelRow, "metadataSource"> & Partial<Pick<ModelRow, "provider">>,
+): TKey | undefined {
+  switch (row.metadataSource) {
+    case "live":
+      return "models.contextMetadataLive";
+    case "registry":
+      return row.provider === "cursor" ? "models.contextMetadataCursorStatic" : "models.contextMetadataRegistry";
+    case "snapshot":
+      return "models.contextMetadataSnapshot";
+    case "config_fallback":
+      return "models.contextMetadataFallback";
+    case "derived":
+      return "models.contextMetadataDerived";
+    default:
+      return undefined;
+  }
+}
+
+export function formatMetadataAge(iso: string | undefined, t: TFn, now = Date.now()): string {
+  if (!iso) return t("time.notChecked");
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return t("time.notChecked");
+  const elapsedMs = Math.max(0, now - then);
+  const days = Math.floor(elapsedMs / 86_400_000);
+  if (days === 1) return t("models.contextYesterday");
+  if (days >= 2) return t("time.daysAgo", { n: days });
+  const hours = Math.floor(elapsedMs / 3_600_000);
+  if (hours >= 1) return t("time.hoursAgo", { n: hours });
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes >= 1) return t("time.minutesAgo", { n: minutes });
+  return t("time.justNow");
+}
+
+export function formatModelContextTooltip(row: ContextRow, t: TFn, now = Date.now()): string | undefined {
+  const cap = row.contextCapped === true ? positiveWindow(row.contextCap) : undefined;
+  const detected = positiveWindow(row.detectedContextWindow);
+  if (cap !== undefined && detected !== undefined && detected > cap) {
+    return t("models.contextTooltipCapped", { detected: fmtK(detected), cap: fmtK(cap) });
+  }
+
+  const claimed = claimedContextWindow(row);
+  if (claimed === undefined) {
+    if (row.metadataSource === "unknown" || positiveWindow(row.contextWindow) === COMPATIBILITY_CONTEXT_WINDOW) {
+      return t("models.contextTooltipUnknown");
+    }
+    return undefined;
+  }
+
+  if (cap !== undefined) {
+    return t("models.contextTooltipCapped", {
+      detected: fmtK(detected ?? claimed),
+      cap: fmtK(cap),
+    });
+  }
+
+  if (row.metadataStale === true) {
+    return t("models.contextTooltipStale", {
+      value: fmtK(claimed),
+      when: t("models.contextLastChecked", {
+        when: formatMetadataAge(row.metadataObservedAt, t, now),
+      }),
+    });
+  }
+
+  if (row.metadataSource === "live") {
+    return t("models.contextTooltipDetected", { value: fmtK(claimed) });
+  }
+
+  const sourceKey = modelContextSourceChipKey(row);
+  if (sourceKey) return t("models.contextTooltipSource", { value: fmtK(claimed), source: t(sourceKey) });
+  return fmtK(claimed);
 }
 
 export function collectDisabledNamespaced(rows: ModelRow[]): Set<string> {

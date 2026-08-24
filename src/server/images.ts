@@ -118,6 +118,14 @@ const CCA_BLOCKING_FINISH_REASONS: ReadonlySet<string> = new Set([
   "RECITATION",
 ]);
 
+function ccaAmbiguousImageTransportError(detail: string): Response {
+  return formatErrorResponse(
+    400,
+    "invalid_request_error",
+    `CCA image generation may have started and must not be blindly retried: ${detail}`,
+  );
+}
+
 /**
  * Race a promise against an abort signal. If the signal aborts first, reject
  * immediately — our code stops awaiting the underlying operation even though
@@ -223,9 +231,12 @@ async function tryCcaImageGeneration(
       sessionId: `ocx-img-${crypto.randomUUID().slice(0, 8)}`,
     },
   };
-  let upstream: Response;
+  let upstream: Response | undefined;
   try {
     try {
+      // Image generation is a paid, non-idempotent POST. A transport failure is
+      // ambiguous: the upstream may have accepted the request before the
+      // connection failed, so never replay it on a peer host.
       upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
         method: "POST",
         headers: {
@@ -239,19 +250,22 @@ async function tryCcaImageGeneration(
     } catch (err) {
       if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
       if (err instanceof Error && err.name === "TimeoutError") {
-        return formatErrorResponse(504, "upstream_error", "CCA image generation timed out");
+        return ccaAmbiguousImageTransportError("upstream request timed out");
       }
       // Network/DNS/runtime errors may embed the request URL or headers verbatim
       // (e.g. "fetch failed: https://…/v1internal:generateContent"). The token
       // lives in an Authorization header, not in the URL, but sanitize defensively
       // so no upstream-rejected credential or query param can reach the client,
       // and strip the internal base URL host from the surfaced message.
+      // 400, not 5xx: the POST is paid and non-idempotent. Codex retries every
+      // 5xx up to 5 attempts, which would duplicate generation after an ambiguous
+      // transport failure (the upstream may already have accepted the request).
       const rawMsg = err instanceof Error ? err.message : String(err);
       const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(
         /https?:\/\/[^\s"'<>]+/gi,
         "[upstream-url]",
       );
-      return formatErrorResponse(502, "upstream_error", `CCA image generation failed: ${safeMsg}`);
+      return ccaAmbiguousImageTransportError(safeMsg);
     }
 
     // Stream the upstream body with a bounded reader so an oversized or malicious
@@ -260,7 +274,7 @@ async function tryCcaImageGeneration(
     try {
       const reader = upstream.body?.getReader();
       if (!reader) {
-        return formatErrorResponse(502, "upstream_error", "CCA image response had no body");
+        return ccaAmbiguousImageTransportError("upstream response had no body");
       }
       const chunks: Uint8Array[] = [];
       let total = 0;
@@ -286,21 +300,17 @@ async function tryCcaImageGeneration(
         offset += chunk.byteLength;
       }
     } catch (err) {
-      // Body-read timeout/abort: when CCA returns headers then stalls, the linked
-      // signal's timeout aborts reader.read(), which rejects here. The rejection
-      // often surfaces as AbortError (not TimeoutError), so distinguish by signal
-      // state, not error name. Parent abort propagates into the linked signal, so
-      // check the parent first: parent abort → 499 (client cancelled); linked-only
-      // abort → 504 (upstream stall); anything else → 502 body-read failure.
+      // Body-read timeout/abort: when CCA returns headers then stalls or the
+      // connection fails, the paid POST may already have started. Parent abort
+      // remains 499; every other ambiguous transport failure is non-retryable.
       if (signal.aborted) {
         return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
       }
-      if (linkedSignal.signal.aborted) {
-        return formatErrorResponse(504, "upstream_error", "CCA image response timed out during body read");
-      }
       const rawMsg = err instanceof Error ? err.message : String(err);
       const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(/https?:\/\/[^\s"'<>]+/gi, "[upstream-url]");
-      return formatErrorResponse(502, "upstream_error", `CCA image body read failed: ${safeMsg}`);
+      return ccaAmbiguousImageTransportError(
+        linkedSignal.signal.aborted ? "upstream response timed out during body read" : safeMsg,
+      );
     }
 
     if (!upstream.ok) {

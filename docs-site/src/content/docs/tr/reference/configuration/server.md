@@ -33,7 +33,8 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 
 Daha eski bir geliştirme derlemesi yedekleme desteği var olmadan önce devam
 geçmişi meta verilerini değiştirdiyse yerel sağlayıcı kurtarmasını zorlamak için
-`ocx recover-history --legacy-openai` çalıştırın.
+`ocx recover-history --legacy-openai --yes` çalıştırın.
+Komut, geçerli dedicated-provider geçmişi de dahil olmak üzere kullanıcı iletisi bulunan tüm `opencodex` satırlarını yeniden etiketler; çalıştırmadan önce lifecycle başvurusundaki tam kapsam uyarısını okuyun.
 
 ## Uzaktan erişim
 

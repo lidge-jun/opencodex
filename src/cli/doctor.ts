@@ -10,7 +10,8 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "../config";
+import { getConfigDir, getConfigPath, readConfigDiagnostics, resolveEnvValue } from "../config";
+import { readPid } from "../config/process-state";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
@@ -1072,10 +1073,10 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   console.log(`  ${probe.ok ? "ok " : "-- "} ${WHAM_USAGE_URL}`);
   console.log(`       ${detail}, ${probe.durationMs}ms, ${probe.authenticated ? "authenticated" : "unauthenticated"}`);
 
-  // Design B upgrade visibility: threads still tagged opencodex are invisible to the native
-  // Codex app until the one-time migration lands. Read-only probe (readonly sqlite, 100ms
-  // busy timeout) — reports state, never mutates.
-  console.log("\nCodex history migration");
+  // Design B upgrade visibility: only the backup manifest authorizes restoring provider
+  // metadata. Bare routed rows have unknown provenance and remain unchanged. This read-only
+  // probe reports manifest work and database readability; it never mutates.
+  console.log("\nCodex history metadata restore");
   // The history failure messages point here; make the visit worthwhile by
   // probing the coordinator namespace the locks live in. The probe exercises
   // identity, runtime-root, and permission checks without taking any lock or
@@ -1096,11 +1097,17 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   for (const line of formatCoordinatorDoctorLines(inspectCodexCoordinator())) console.log(line);
   const pending = countPendingOpencodexHistory();
   if (pending.failed) {
-    console.log("  --     state DB locked or unreadable (Codex app open?) — migration state unknown");
+    if (pending.failureReason === "busy") {
+      console.log("  --     history database, backup manifest, or rollout file is busy — exact metadata restore is pending");
+    } else if (pending.failureReason === "permission") {
+      console.log("  --     state DB or backup manifest access was denied — restore state unknown");
+    } else {
+      console.log("  --     backup manifest or restore target failed integrity checks — manual review required");
+    }
   } else if (pending.pendingRows === 0 && pending.backupEntries === 0) {
-    console.log("  ok     no legacy opencodex-tagged threads pending");
+    console.log("  ok     no manifest-backed provider metadata pending; untracked routed history is unchanged");
   } else {
-    console.log(`  --     ${pending.pendingRows} thread(s) still tagged opencodex, ${pending.backupEntries} backup manifest entr${pending.backupEntries === 1 ? "y" : "ies"}`);
+    console.log(`  --     ${pending.backupEntries} backup manifest entr${pending.backupEntries === 1 ? "y" : "ies"} pending exact metadata restore`);
   }
 
   console.log("\nProject Codex configs");
@@ -1185,8 +1192,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       }
     }
   }
-  if (pending.failed || pending.pendingRows > 0 || pending.backupEntries > 0) {
-    hints.push("Legacy chat threads are still tagged opencodex (or the DB was locked). The running proxy retries the migration automatically; to force it now, close the Codex app and run 'ocx sync'.");
+  if (pending.failed && pending.failureReason === "busy") {
+    hints.push("Backed-up history metadata is pending or its state is unreadable. The running proxy retries exact restoration automatically; to force it now, close the Codex app and run 'ocx sync'. Untracked routed history is not relabeled.");
+  } else if (pending.failed && pending.failureReason === "permission") {
+    hints.push("Backed-up history metadata could not be inspected because access was denied. Fix access to the reported Codex history paths, then run 'ocx sync'; repeated retries do not repair permissions.");
+  } else if (pending.failed) {
+    hints.push("The history manifest or its target is invalid or changed. Preserve both, inspect the manifest/database/rollout identity, and do not repeatedly run 'ocx sync' until the mismatch is understood. Untracked routed history is not relabeled.");
+  } else if (pending.backupEntries > 0) {
+    hints.push("Backed-up history metadata is pending. The running proxy retries exact restoration automatically; to force it now, close the Codex app and run 'ocx sync'. Untracked routed history is not relabeled.");
   }
   if (dual.dualInstall && !dual.effectiveIsWindowsMount) {
     hints.push(`Codex is installed on BOTH WSL and Windows. Each side keeps its own ~/.codex (logins, config, catalog are separate); ocx here manages the Linux one. To share a single home, set CODEX_HOME=${dual.windowsCodexHomes[0] ?? `${dual.automountRoot}/c/Users/<you>/.codex`} in WSL (drvfs file locking is less reliable).`);

@@ -1,0 +1,137 @@
+{
+  "contractVersion": "1",
+  "title": "opencodex Replit Gateway Companion",
+  "status": "experimental-pending-canary",
+  "statusNote": "v1 relays implemented in code; live Replit AI_INTEGRATIONS injection names and deployability pending disposable Repl canary plus official or runtime confirmation",
+  "transport": {
+    "publicOrigin": {
+      "scheme": "https",
+      "description": "User-owned Replit deployment origin exposed to opencodex"
+    },
+    "clientAuth": {
+      "scheme": "bearer",
+      "header": "Authorization",
+      "envVar": "REPLIT_GATEWAY_KEY",
+      "comparison": "constant-time",
+      "format": {
+        "minLength": 32,
+        "maxLength": 512,
+        "pattern": "[\\x21-\\x7E]+",
+        "description": "Printable ASCII; enforced at gateway startup and opencodex pairing"
+      }
+    }
+  },
+  "routes": {
+    "healthz": {
+      "method": "GET",
+      "path": "/healthz",
+      "authRequired": false,
+      "phase": 2,
+      "billable": false
+    },
+    "openaiModels": {
+      "method": "GET",
+      "path": "/v1/models",
+      "authRequired": true,
+      "phase": 2,
+      "billable": false
+    },
+    "openaiChatCompletions": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "authRequired": true,
+      "wire": "openai-chat",
+      "phase": 2,
+      "billable": true
+    },
+    "anthropicMessages": {
+      "method": "POST",
+      "path": "/v1/messages",
+      "authRequired": true,
+      "wire": "anthropic",
+      "phase": 2,
+      "billable": true
+    }
+  },
+  "modelPolicy": {
+    "matching": "exact-id",
+    "openaiAllowlistEnv": "REPLIT_GATEWAY_OPENAI_MODELS",
+    "anthropicAllowlistEnv": "REPLIT_GATEWAY_ANTHROPIC_MODELS"
+  },
+  "limits": {
+    "maxRequestBytes": 33554432,
+    "maxHeaderBytes": 32768,
+    "maxConcurrentRequests": 10,
+    "upstreamTimeoutMs": 300000,
+    "clientTimeoutMs": 310000
+  },
+  "configOverrideBounds": {
+    "REPLIT_GATEWAY_MAX_REQUEST_BYTES": { "min": 1024, "max": 67108864 },
+    "REPLIT_GATEWAY_MAX_HEADER_BYTES": { "min": 1024, "max": 262144 },
+    "REPLIT_GATEWAY_MAX_CONCURRENT": { "min": 1, "max": 100 },
+    "REPLIT_GATEWAY_UPSTREAM_TIMEOUT_MS": { "min": 1000, "max": 3600000 },
+    "REPLIT_GATEWAY_CLIENT_TIMEOUT_MS": { "min": 1000, "max": 3600000 },
+    "PORT": { "min": 1, "max": 65535 }
+  },
+  "replitIntegrationsEnv": {
+    "verification": "unverified-observed-convention",
+    "verificationDate": "2026-08-22",
+    "requiredNames": [
+      "AI_INTEGRATIONS_OPENAI_BASE_URL",
+      "AI_INTEGRATIONS_OPENAI_API_KEY",
+      "AI_INTEGRATIONS_ANTHROPIC_BASE_URL",
+      "AI_INTEGRATIONS_ANTHROPIC_API_KEY"
+    ],
+    "note": "Observed in Replit-generated apps; not published as an official off-platform contract by Replit"
+  },
+  "sseHeartbeatPolicy": {
+    "idleComment": ": heartbeat\\n\\n",
+    "intervalMs": 15000,
+    "lineBoundaryInjection": true,
+    "delayedLfPromotion": "When CRLF is split across chunks, a trailing CR may be treated as a completed line boundary for heartbeat timing if LF is delayed beyond the interval; payload bytes are not modified"
+  },
+  "redirectPolicy": "reject",
+  "loggingPolicy": "metadata-only",
+  "secretPolicy": {
+    "neverExpose": [
+      "AI_INTEGRATIONS_OPENAI_API_KEY",
+      "AI_INTEGRATIONS_ANTHROPIC_API_KEY",
+      "AI_INTEGRATIONS_OPENAI_BASE_URL",
+      "AI_INTEGRATIONS_ANTHROPIC_BASE_URL"
+    ],
+    "clientCredential": "REPLIT_GATEWAY_KEY"
+  },
+  "errorCategories": [
+    "auth_failed",
+    "config_invalid",
+    "request_too_large",
+    "headers_too_large",
+    "unsupported_content_encoding",
+    "model_not_allowed",
+    "concurrency_limited",
+    "upstream_timeout",
+    "client_timeout",
+    "client_aborted",
+    "redirect_rejected",
+    "upstream_error",
+    "internal"
+  ],
+  "registryPromotionGate": {
+    "required": true,
+    "condition": "written Replit authorization plus contributing.md provider evidence",
+    "registryIds": ["replit", "replit-anthropic"]
+  },
+  "pairedOpencodexProviders": {
+    "openai": {
+      "id": "replit",
+      "adapter": "openai-chat",
+      "baseUrl": "<origin>/v1"
+    },
+    "anthropic": {
+      "id": "replit-anthropic",
+      "adapter": "anthropic",
+      "baseUrl": "<origin>",
+      "transport": "bearer"
+    }
+  }
+}

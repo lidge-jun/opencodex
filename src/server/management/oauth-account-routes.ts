@@ -309,19 +309,29 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
-  // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
+  // Opt-in OAuth account pool settings (Anthropic + Cursor).
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
-    const pool = config.anthropicAccountPool ?? {};
-    return jsonResponse({
-      provider,
-      enabled: pool.enabled === true,
-      autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
-      strategy: normalizeAccountPoolStrategy(pool.strategy),
-      stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
-      experimental: true,
-    });
+    if (provider === "anthropic") {
+      const pool = config.anthropicAccountPool ?? {};
+      return jsonResponse({
+        provider,
+        enabled: pool.enabled === true,
+        autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
+        strategy: normalizeAccountPoolStrategy(pool.strategy),
+        stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
+        experimental: true,
+      });
+    }
+    if (provider === "cursor") {
+      const pool = config.cursorAccountPool ?? {};
+      return jsonResponse({
+        provider,
+        enabled: pool.enabled === true,
+        experimental: true,
+      });
+    }
+    return jsonResponse({ error: "pool config is only supported for anthropic or cursor" }, 400);
   }
   if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
     const parsedBody = await readManagementJsonBodyOr(req, {});
@@ -336,7 +346,32 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       stickyLimit?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
+    if (provider !== "anthropic" && provider !== "cursor") {
+      return jsonResponse({ error: "pool config is only supported for anthropic or cursor" }, 400);
+    }
+    if (provider === "cursor") {
+      if (
+        body.autoSwitchThreshold !== undefined
+        || body.strategy !== undefined
+        || body.stickyLimit !== undefined
+      ) {
+        return jsonResponse({ error: "cursor pool only supports enabled" }, 400);
+      }
+      let enabled = config.cursorAccountPool?.enabled === true;
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+        enabled = body.enabled;
+      }
+      config.cursorAccountPool = { enabled };
+      saveConfigPreservingClaudeCode(config);
+      reconcileLiveStateStores();
+      return jsonResponse({
+        ok: true,
+        provider,
+        enabled,
+        experimental: true,
+      });
+    }
     let enabled = config.anthropicAccountPool?.enabled === true;
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);

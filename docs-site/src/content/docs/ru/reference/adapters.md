@@ -149,6 +149,7 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 **Аутентификация:** Cursor OAuth/access token из `provider.apiKey` или из переданного заголовка
 authorization.
 
+- Структурированный вывод отклоняется до транспорта: у Cursor нет protobuf-поля схемы вывода, поэтому `text.format` / `response_format` JSON object или schema (и внутренний флаг structured-output) возвращают `400 invalid_request_error`. Инструменты эту проверку не обходят.
 - Использует `runTurn` вместо обычного пути fetch/parse. Запросы, серверные события, аргументы
   инструментов, контрольные точки использования и ответы клиента кодируются схемами
   `@bufbuild/protobuf` из `cursor/gen/agent_pb.ts` и оформляются как сообщения Connect.
@@ -160,7 +161,23 @@ authorization.
 - Нативное для Cursor локальное выполнение операций с файловой системой/shell/сетью по умолчанию
   запрещено. Явные интеграции `mcpServers` и `desktopExecutor` включаются отдельно;
   `unsafeAllowNativeLocalExec` включает более широкий встроенный executor и обходит семантику
-  одобрений/песочницы Codex.
+  одобрений/песочницы Codex. При политике `off` по умолчанию нативные Shell/Read/Ls/Grep/Fetch
+  маппятся в Codex `shell_command`/`exec_command`, когда этот bridge-инструмент есть в каталоге;
+  write/delete по-прежнему запрещены.
+
+## `command-code`
+
+**Цели:** agent API подписки Command Code **OAuth** (`POST {baseUrl}/alpha/generate`).
+**Аутентификация:** OAuth Bearer через `ocx login command-code`.
+
+- Отличается от пресета API-ключа `commandcode` (`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`). Маршрут API-ключа никогда не читает `projectContext` и не заполняет generate-конверт с диска.
+- Необязательный `projectContext: "on"` на `providers.command-code` копирует ограниченные файлы из `process.cwd()` во время запроса в `memory`, `taste` и `skills`. Если отсутствует или `"off"`, отправляет `memory: ""`, `taste: null`, `skills: null`, даже когда файлы есть в репозитории — только opt-in, без автозагрузки.
+- Запускайте прокси из доверенной директории проекта Codex, чтобы рабочая директория совпадала с редактируемым репозиторием.
+- **Memory:** только UTF-8 `AGENTS.md` в cwd (не `CLAUDE.md`, `CODEX.md` и не домашние пути). Лимит 32 768 байт; при превышении префикс обрезается с `<!-- truncated -->`.
+- **Taste:** UTF-8 `.commandcode/taste/taste.md` или `null`, если файла нет. Лимит 8 192 байт с тем же маркером. Пустой, но существующий файл отправляет `""`. `x-taste-learning` остаётся `"false"`; загрузка taste — это не taste learning Command Code.
+- **Skills:** XML из корней skill проекта по порядку: `.commandcode/skills`, `.agents/skills`, `.pi/skills`. Каждый подкаталог с `SKILL.md` становится `<skill name="…">…</skill>` (имя из YAML frontmatter `name:` или имени каталога). Пропускает имена с `.` и не-каталоги; first-wins по разрешённому имени; максимум 16 skills; общий XML-лимит 32 768 байт. Никогда не читает `~/.commandcode/skills` и другие домашние skill-деревья.
+- Ограничение путей через realpath под cwd; symlink-выходы опускаются. Таймаут 2 секунды на операцию с файлом. Кэш по cwd на 30 секунд (максимум 128 записей). Любая ошибка fail-soft опускает только эту часть.
+- `commandCodeVersion` фиксирует `x-command-code-version` (по умолчанию `0.52.1`). `permissionMode` остаётся `"standard"`, `mode` — `"agent"`.
 
 ## `azure-openai` (алиас: `azure`)
 

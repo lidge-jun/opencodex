@@ -148,6 +148,9 @@ export function resolveProductionBehaviorValues(
     "wire.upstreamProtocol": behaviorRow("provider_config", upstreamProtocol),
     "wire.responsesPath": behaviorRow("provider_config", effective.responsesPath ?? null),
     "wire.commandCodeVersion": behaviorRow("provider_config", effective.commandCodeVersion ?? null),
+    ...(adapter === "command-code"
+      ? { "wire.commandCodeProjectContext": behaviorRow("provider_config", effective.projectContext ?? "off") }
+      : {}),
     "wire.modelSuffixMode": behaviorRow(
       "provider_config",
       effective.modelSuffixBracketStrip === true ? "bracket_strip" : "none",

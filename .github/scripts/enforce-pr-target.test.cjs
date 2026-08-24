@@ -40,6 +40,14 @@ describe("enforce-pr-target workflow", () => {
     assert.match(workflow, /Could not convert pull request to draft/);
   });
 
+  it("allows main only on the public fork while upstream stays dev-only", () => {
+    assert.match(
+      workflow,
+      /const ALLOWED_BASES =\s*context\.repo\.owner === "lidge-jun"\s*\? \["dev"\]\s*:\s*\["dev", "main"\]/,
+    );
+    assert.match(workflow, /const DEFAULT_BASE = "dev";/);
+  });
+
   it("soft-fails ready-for-review restoration the same way", () => {
     assert.match(workflow, /readyConversionFailed/);
     assert.match(workflow, /Could not mark pull request ready for review/);

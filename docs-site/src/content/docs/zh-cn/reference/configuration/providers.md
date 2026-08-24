@@ -115,6 +115,8 @@ selector，而不是分配一个新名称。
 | `desktopExecutor?` | `DesktopExecutorConfig` | 仅 Cursor：外部 computer-use 和录屏命令。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
+| `commandCodeVersion?` | `string` | 仅 Command Code OAuth（`adapter: "command-code"`）。固定 `/alpha/generate` 请求的 `x-command-code-version` 头。未设置时使用适配器默认值（`0.52.1`）。API 密钥 `commandcode` 预设（`openai-chat` / `/provider/v1`）不会读取。 |
+| `projectContext?` | `"off" \| "on"` | 仅 Command Code OAuth（`adapter: "command-code"`）。为 `"on"` 时，从代理进程工作目录复制有界项目文件到 `/alpha/generate` 的 `memory` / `taste` / `skills` 信封。未设置或 `"off"` 时保持空信封，即使磁盘上已有这些文件。API 密钥 `commandcode` 预设不会读取。请设置在 `providers.command-code` 上，而非顶层。在仪表板使用 **Providers → Command Code → Edit JSON**。请从受信任的 Codex 项目目录启动代理，使 `process.cwd()` 指向目标仓库。fail-soft：缺失、不可读、超时或路径逃逸会省略该部分，而不会让整个回合失败。不会读取 `~/.commandcode/skills` 或其他主目录 skill 树。无论此标志如何，`x-taste-learning` 保持 `"false"`。 |
 
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
 
@@ -242,7 +244,8 @@ Cursor Router 的优化层级会作为独立的 Codex id 暴露，因为选择�
 
 Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用自己的工具，例如 `apply_patch` 和 `exec_command`，并沿用自己的审批与沙箱策略：
 
-- `"off"`（默认）会拒绝执行 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 和 `fetch`。
+- `"off"`（默认）拒绝在 proxy 上执行 Cursor 原生的 `read`、`write`、`delete`、`ls`、`grep`、`shell` 和
+  `fetch`。当 turn 公布了 bare Codex `shell_command` 或 `exec_command` 时，原生 Shell/Read/Ls/Grep/Fetch 会映射到该 Codex shell 桥接工具，而不是在 proxy 上运行；write/delete 仍被拒绝。
 - `"on"` 会启用受信任的本地执行，并绕过 Codex 的审批/沙箱语义。
 - `"codex-sandbox"` 为兼容性保留，但会像 `"off"` 一样失败关闭；请求文案并不是可信的沙箱证明。
 

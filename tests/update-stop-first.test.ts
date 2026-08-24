@@ -227,21 +227,23 @@ esac
     60_000,
   );
 
-  test("both update paths surface a skipped history restore after the stop", () => {
-    // A codex-history-backup-*.json surviving `ocx stop` means the native-history restore
-    // was skipped (locked state DB) — users must be told or their threads silently stay
-    // hidden in the Codex app.
+  test("both update paths surface an incomplete manifest-backed history restore after the stop", () => {
+    // A codex-history-backup-*.json surviving `ocx stop` means exact metadata restoration
+    // remains pending. It can be contention or an integrity refusal, so neither update path
+    // may claim a DB lock or that every routed thread is hidden.
     expect(updateSource).toContain("export function historyRestoreIncomplete(");
     expect(updateSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
     expect(updateSource).toContain("if (historyRestoreIncomplete())");
     expect(launcherSource).toContain("function historyRestoreIncomplete()");
     expect(launcherSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
     expect(launcherSource).toContain("if (historyRestoreIncomplete())");
-    const warnAt = launcherSource.indexOf("Codex resume history was NOT restored");
+    const warnAt = launcherSource.indexOf("Codex resume-history metadata restore is incomplete");
     const installAt = launcherSource.indexOf("transactionalNpmUpdate({");
     expect(warnAt).toBeGreaterThan(-1);
     expect(installAt).toBeGreaterThan(-1);
     expect(warnAt).toBeLessThan(installAt);
+    expect(updateSource).toContain("manifest/target may need review");
+    expect(launcherSource).toContain("untracked routed history is intentionally unchanged");
   });
 
   test("the stop gate covers service-managed and orphaned proxies whose pid file is stale/missing", () => {

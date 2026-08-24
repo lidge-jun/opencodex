@@ -115,7 +115,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 coding models. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
-| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
+| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. Quota is probed live via `retrieveUserQuota` and `retrieveUserQuotaSummary` (8-second timeout). CCA chat/adapter requests use SSE (`v1internal:streamGenerateContent?alt=sse`) and buffer that stream for unary callers. Built-in image generation uses the separate unary `v1internal:generateContent` endpoint. The adapter retries its maintained daily/production peer at most once after a first-host transport failure, empty stream, 404, or `UNAVAILABLE`; authentication, geoblock, invalid-request, and exhausted-quota responses do not trigger host failover. See [Claude on Antigravity](#claude-on-antigravity-cloud-code-assist) below. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
@@ -152,6 +152,23 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 ```
 
 Inline JSON and extra positional arguments are rejected. Keep exported files private and delete or store them securely after import.
+
+### Claude on Antigravity (Cloud Code Assist)
+
+The `google-antigravity` provider routes Claude models through Google's Cloud Code Assist (Antigravity)
+wire rather than Anthropic's native API. opencodex translates requests and responses at the Gemini
+format envelope: tool use/result pairing follows Anthropic semantics (including stable `functionCall.id`
+/ `functionResponse.id` fields), and Claude thinking blocks keep their `thoughtSignature` values across
+turns.
+
+CCA Claude models reject histories that end with an assistant (model) turn — upstream treats that as
+prefill. opencodex strips trailing model turns when safe and appends a `(continue)` user nudge when the
+history would otherwise end on model output (for example after context compaction or interrupted-turn
+replay). Histories that already end on a user message or tool result are left unchanged.
+
+Antigravity exposes only SSE transport. Unary (non-streaming) callers still go through the same
+`parseStream` path; plain JSON bodies without `data:` framing are rejected as truncated SSE rather
+than parsed as a separate JSON response format.
 
 ### OAuth reliability
 
@@ -383,6 +400,13 @@ Provider-API keys at [Command Code Studio](https://commandcode.ai/studio/).
 account bearer; the Provider-API key preset (`commandcode`) uses the active configured
 key. A user-edited lookalike base URL is never probed. Remaining monthly, purchased, and
 free credits are shown as a USD window when Command Code also reports period spend.
+
+**Command Code project context.** Optional `projectContext: "on"` on the OAuth `command-code` provider
+only (not the API-key `commandcode` preset) fills `/alpha/generate` `memory`, `taste`, and `skills`
+from the proxy working directory. Set it on `providers.command-code` via **Providers → Command Code →
+Edit JSON**, start the proxy from the trusted Codex project, and restart after saving. Absent or
+`"off"` keeps the empty envelope even when `AGENTS.md` or taste files exist. See
+[Adapters](/reference/adapters/#command-code) for file paths, caps, and fail-soft behavior.
 
 **SambaNova Cloud discovery.** The preset reads SambaNova Cloud's public `/v1/models` list from the fixed API
 host, preserves provider-native ids, and caps discovery at 128 KiB and 128 raw rows. Because the

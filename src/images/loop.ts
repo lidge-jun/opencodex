@@ -237,6 +237,8 @@ export interface ImageBridgeDeps {
   videoPlan?: VideoBridgePlan;
   /** Per-video generation timeout (ms) including polling. */
   videoTimeoutMs?: number;
+  /** OAuth account identity forwarded to AdapterFetchContext for provider-local cooldown bookkeeping. */
+  accountId?: string;
   /** Headers forwarded from the original request (e.g. Codex auth). Cloned per iteration. */
   forwardHeaders?: Headers;
   /** Called before each routed-model dispatch in the bridge loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
@@ -509,6 +511,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               returnRawErrors: true,
               stream: true,
               executor: fetchImpl,
+              ...(deps.accountId ? { accountId: deps.accountId } : {}),
             });
           } else {
             response = await fetchWithResetRetry(

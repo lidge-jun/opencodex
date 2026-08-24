@@ -65,3 +65,74 @@ export function lookupCursorThreadConversation(
 export function clearCursorThreadContinuityForTests(): void {
   overrides.clear();
 }
+
+/** Max conversation-id remints after the first surfaced overflow (senpi cap). */
+export const CURSOR_OVERFLOW_REMINT_MAX = 3;
+
+type OverflowRemintState = {
+  surfaced: boolean;
+  remintCount: number;
+  skip: boolean;
+};
+
+const overflowRemintByScope = new Map<string, OverflowRemintState>();
+
+function overflowRemintEntry(scopeKey: string): OverflowRemintState {
+  const existing = overflowRemintByScope.get(scopeKey);
+  if (existing) return existing;
+  const fresh: OverflowRemintState = { surfaced: false, remintCount: 0, skip: false };
+  overflowRemintByScope.set(scopeKey, fresh);
+  return fresh;
+}
+
+/**
+ * Stable scope for overflow remint accounting. Thread-identified clients key by
+ * thread + identity; conversation-only clients key by the base conversation id
+ * captured before any remint (wire id may rotate).
+ */
+export function cursorOverflowRemintScopeKey(
+  parsed: {
+    _clientThreadId?: string;
+    _cursorIdentityScope?: string;
+  },
+  baseConversationId?: string,
+): string | null {
+  if (parsed._clientThreadId) {
+    return `overflow\0${cursorThreadScopeKey(parsed._clientThreadId, parsed._cursorIdentityScope)}`;
+  }
+  const base = baseConversationId?.trim();
+  if (!base) return null;
+  const scope = parsed._cursorIdentityScope?.trim() || "local";
+  return `overflow\0${scope}\0conv\0${base}`;
+}
+
+/** True until the first overflow for this scope has been surfaced for Codex compact. */
+export function shouldSurfaceCursorOverflowFirst(scopeKey: string): boolean {
+  return overflowRemintEntry(scopeKey).surfaced !== true;
+}
+
+export function markCursorOverflowSurfaced(scopeKey: string): void {
+  const entry = overflowRemintEntry(scopeKey);
+  entry.surfaced = true;
+}
+
+export function shouldSkipCursorOverflowRemint(scopeKey: string): boolean {
+  const entry = overflowRemintByScope.get(scopeKey);
+  if (!entry) return false;
+  return entry.skip === true || entry.remintCount >= CURSOR_OVERFLOW_REMINT_MAX;
+}
+
+/** Record one overflow remint; returns false when the cap is exhausted. */
+export function recordCursorOverflowRemint(scopeKey: string): boolean {
+  const entry = overflowRemintEntry(scopeKey);
+  if (entry.skip || entry.remintCount >= CURSOR_OVERFLOW_REMINT_MAX) {
+    entry.skip = true;
+    return false;
+  }
+  entry.remintCount += 1;
+  return true;
+}
+
+export function clearCursorOverflowRemintForTests(): void {
+  overflowRemintByScope.clear();
+}

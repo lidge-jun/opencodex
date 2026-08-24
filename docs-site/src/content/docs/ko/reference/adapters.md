@@ -143,6 +143,7 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 `agent.v1.AgentService/Run`.
 **인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Cursor OAuth/access token.
 
+- 구조화된 출력은 전송 전에 거부됩니다. Cursor에는 protobuf 출력 스키마 필드가 없으므로 `text.format` / `response_format` JSON object 또는 schema(및 내부 structured-output 플래그)는 `400 invalid_request_error`를 반환합니다. 도구로 이 검사를 우회할 수 없습니다.
 - 일반 fetch/parse 경로 대신 `runTurn`을 사용합니다. 요청, 서버 이벤트, 툴 인자, 사용량 checkpoint,
   클라이언트 응답은 `cursor/gen/agent_pb.ts`의 `@bufbuild/protobuf` 스키마로 인코딩한 뒤 Connect
   메시지로 framing합니다.
@@ -160,7 +161,23 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
   별도의 `effort`, `fast=true` 값은 `requested_model.parameters`에 담습니다.
 - Cursor 네이티브 로컬 파일시스템/shell/network 실행은 기본적으로 거부합니다. 명시적인
   `mcpServers`와 `desktopExecutor` 통합은 각각 별도 opt-in입니다. `unsafeAllowNativeLocalExec`은
-  더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다.
+  더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다. 기본 `off`에서는 카탈로그에
+  브리지 도구가 있을 때 네이티브 Shell/Read/Ls/Grep/Fetch가 Codex `shell_command`/`exec_command`로
+  매핑되며 write/delete는 계속 거부됩니다.
+
+## `command-code`
+
+**대상:** Command Code **OAuth** 구독 agent API (`POST {baseUrl}/alpha/generate`).
+**인증:** `ocx login command-code` OAuth Bearer.
+
+- API 키 `commandcode` 프리셋(`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`)과 별개입니다. API 키 경로는 `projectContext`를 읽지 않으며 디스크에서 generate 엔벨로프를 채우지 않습니다.
+- `providers.command-code`의 선택적 `projectContext: "on"`은 요청 시 `process.cwd()`의 제한된 파일을 `memory` / `taste` / `skills`에 복사합니다. 생략하거나 `"off"`이면 저장소에 파일이 있어도 `memory: ""`, `taste: null`, `skills: null`을 보냅니다 — 명시적 opt-in만, 자동 로드 없음.
+- Codex가 편집하는 저장소와 작업 디렉터리가 일치하도록 신뢰할 수 있는 Codex 프로젝트 디렉터리에서 프록시를 시작하세요.
+- **Memory:** cwd의 `AGENTS.md` UTF-8만(`CLAUDE.md`, `CODEX.md`, 홈 경로 제외). 상한 32,768바이트. 초과 시 `<!-- truncated -->`로 앞부분만 유지.
+- **Taste:** `.commandcode/taste/taste.md` UTF-8, 없으면 `null`. 상한 8,192바이트, 동일한 잘림 마커. 존재하지만 빈 파일은 `""`를 보냅니다. `x-taste-learning`은 `"false"`로 유지됩니다. taste 로드는 Command Code taste learning이 아닙니다.
+- **Skills:** 프로젝트 skill 루트를 순서대로 XML화: `.commandcode/skills`, `.agents/skills`, `.pi/skills`. `SKILL.md`가 있는 각 하위 디렉터리가 `<skill name="…">…</skill>`가 됩니다(YAML frontmatter `name:` 또는 디렉터리 이름). `.`로 시작하는 이름과 비디렉터리는 건너뜀. 해석된 이름 기준 first-wins. 최대 16 skills. XML 총 상한 32,768바이트. `~/.commandcode/skills` 등 홈 skill 트리는 읽지 않습니다.
+- 경로 제한은 cwd 아래 realpath 검사. 심볼릭 링크 이탈은 생략. 각 파일 작업 2초 타임아웃. 결과는 cwd별 30초 캐시(최대 128개). 실패 시 fail-soft로 해당 부분만 생략.
+- `commandCodeVersion`은 `x-command-code-version` 고정(기본 `0.52.1`). `permissionMode`는 `"standard"`, `mode`는 `"agent"`로 유지.
 
 ## `azure-openai` (별칭: `azure`)
 

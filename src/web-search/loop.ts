@@ -312,6 +312,8 @@ export interface WebSearchLoopDeps {
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
   onCompletedResponse?: (response: Record<string, unknown>) => void;
+  /** OAuth account identity forwarded to AdapterFetchContext for provider-local cooldown bookkeeping. */
+  accountId?: string;
 }
 
 /**
@@ -446,6 +448,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
+              ...(deps.accountId ? { accountId: deps.accountId } : {}),
             });
           } else {
             response = await fetchWithResetRetry(

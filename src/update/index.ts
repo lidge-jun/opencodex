@@ -2,7 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import { getConfigDir, loadConfig } from "../config";
+import { readPid, readRuntimePort } from "../config/process-state";
 import { npmInvocation } from "./npm-invocation.mjs";
 import {
   npmCachePreflightFailureMessage,
@@ -26,8 +27,24 @@ export function historyRestoreIncomplete(configDir = getConfigDir()): boolean {
   }
 }
 
-export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
+
+function readPackageIdentity(): { name: string; version: string } {
+  try {
+    const parsed = JSON.parse(readFileSync(join(HERE, "..", "..", "package.json"), "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    return {
+      name: typeof parsed.name === "string" && parsed.name ? parsed.name : "@yansigit/opencodex",
+      version: typeof parsed.version === "string" && parsed.version ? parsed.version : "?",
+    };
+  } catch {
+    return { name: "@yansigit/opencodex", version: "?" };
+  }
+}
+
+export const PKG = readPackageIdentity().name;
 
 export type Installer = "bun" | "npm" | "source";
 export type Channel = "latest" | "preview";
@@ -39,11 +56,7 @@ export function detectInstall(): Installer {
 }
 
 export function currentVersion(): string {
-  try {
-    return (JSON.parse(readFileSync(join(HERE, "..", "..", "package.json"), "utf8")).version as string) ?? "?";
-  } catch {
-    return "?";
-  }
+  return readPackageIdentity().version;
 }
 
 export function defaultUpdateTag(current: string): Channel {
@@ -267,9 +280,9 @@ export async function runUpdate(): Promise<void> {
     }
     if (historyRestoreIncomplete()) {
       console.warn(
-        "⚠️  Codex resume history was NOT restored (history DB locked — Codex app/IDE open?).\n" +
-        "    Your routed threads stay hidden in the native Codex app until restored.\n" +
-        "    After the update: close the Codex app, then run 'ocx stop' once to restore.",
+        "⚠️  Codex resume-history metadata restore is incomplete (a backup manifest remains).\n" +
+        "    The DB may be busy or the manifest/target may need review; untracked routed history is intentionally unchanged.\n" +
+        "    After the update: close the Codex app, run 'ocx doctor', then run 'ocx stop' once to retry.",
       );
     }
   }

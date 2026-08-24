@@ -106,6 +106,13 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
+    // The packed tarball name follows package.json (`yansigit-opencodex-*.tgz` on
+    // this fork). Installing a hardcoded upstream filename makes the smoke fail
+    // after `npm pack` with ENOENT.
+    expect(workflow).toContain(
+      `npm install -g "./$(node -p "require('./pack.json')[0].filename")"`,
+    );
+    expect(workflow).not.toContain("bitkyc08-opencodex-*.tgz");
     expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
     expect(ci.permissions).toEqual({ contents: "read" });
 
@@ -193,9 +200,8 @@ describe("GitHub Actions hardening", () => {
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test --isolate tests")).toBe(true);
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test tests")).toBe(false);
 
-    // macOS is the unsharded control for every CI-relevant change. It may skip
-    // only when the shared path filter says the entire expensive suite is out of
-    // scope (for example a docs-site-only PR).
+    // macOS is the unsharded control for push and dispatch. Pull requests skip
+    // it so merge feedback is not gated on that 30-minute runtime.
     const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { run?: string }[] })?.steps ?? [];
     // The 60s per-test ceiling is part of the pinned shape: dropping it silently
     // restores the timing-flake class this lane kept surfacing.
@@ -223,7 +229,7 @@ describe("GitHub Actions hardening", () => {
     expect(macosTestRun).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
     expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
-      .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");
+      .toBe("github.event_name != 'pull_request'");
 
     // Windows is dispatch-only: it gates nothing, not even the shipping
     // boundary. The sharded promotion run surfaced ~207 Windows-only failures
@@ -340,10 +346,12 @@ describe("GitHub Actions hardening", () => {
     // `ci.yml` therefore carries no base filter at all. `service-lifecycle.yml`
     // keeps its list: it gates the release service path, not review.
     const gate = await readText(".github/workflows/enforce-pr-target.yml");
-    const allowed = gate.match(/const ALLOWED_BASES = \[([^\]]*)\];/);
+    const allowed = gate.match(
+      /const ALLOWED_BASES\s*=\s*context\.repo\.owner === "lidge-jun"\s*\? \["dev"\]\s*:\s*\["dev", "main"\]/,
+    );
     expect(allowed).not.toBeNull();
-    const bases = [...(allowed?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
-    expect(bases).toEqual(["dev"]);
+    expect(allowed?.[0]).toContain('["dev"]');
+    expect(allowed?.[0]).toContain('["dev", "main"]');
 
     // The gate itself must stay unfiltered by base, or the stacked exemption it
     // implements would never be evaluated for the branches it exempts.
@@ -414,6 +422,7 @@ describe("GitHub Actions hardening", () => {
       ".gitattributes",
       ".github/workflows/ci.yml",
       ".github/workflows/enforce-pr-target.yml",
+      ".github/workflows/fork-auto-release.yml",
       ".github/workflows/release.yml",
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",
@@ -423,6 +432,7 @@ describe("GitHub Actions hardening", () => {
       "bin/**",
       "bun.lock",
       "gui/**",
+      "integrations/replit-gateway/**",
       "package.json",
       "scripts/**",
       "src/**",
@@ -468,11 +478,14 @@ describe("GitHub Actions hardening", () => {
     expect(scopeIndex).toBeGreaterThan(filterIndex);
 
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
-    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke"]) {
+    for (const jobName of ["test", "storage-policy", "gates", "keyring-smoke"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
     }
+    const macosJob = ci.jobs?.["platform-macos"] as { needs?: string; if?: string } | undefined;
+    expect(`platform-macos:${macosJob?.needs}`).toBe("platform-macos:changes");
+    expect(`platform-macos:${macosJob?.if}`).toBe("platform-macos:github.event_name != 'pull_request'");
   });
 
   test("cross-platform CI keeps the GUI lint and build gates", async () => {
@@ -1216,10 +1229,11 @@ describe("GitHub Actions hardening", () => {
     expect(script).toContain("PR head moved while listing changed files");
     expect(script).toContain("github.rest.repos.getCollaboratorPermissionLevel");
     expect(script).toContain("github.rest.repos.compareCommitsWithBasehead");
-    // The allow-list is the gate's whole policy, so it is pinned by value and
-    // not just by shape: a widened list is the one edit that opens every base
-    // at once while every behavioural scenario below still passes.
-    expect(script).toMatch(/const ALLOWED_BASES = \["dev"\];/);
+    // The allow-list is fork-aware: upstream stays dev-only while the public
+    // fork also permits merge-from-main sync PRs.
+    expect(script).toMatch(
+      /const ALLOWED_BASES\s*=\s*context\.repo\.owner === "lidge-jun"\s*\? \["dev"\]\s*:\s*\["dev", "main"\]/,
+    );
     expect(script).toMatch(/const DEFAULT_BASE = "dev";/);
 
     // The read-only resolver is the single authority for PR identity. The

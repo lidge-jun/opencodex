@@ -25,6 +25,12 @@ export interface ProviderAdapter {
   name: string;
 
   /**
+   * Validate a parsed request before any attempt, sidecar, pacing, queue, or transport work.
+   * Adapters may throw a client-facing validation error when the request is unsupported.
+   */
+  validateRequest?(parsed: OcxParsedRequest): void;
+
+  /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and
    * return fully redacted output: callers may pass untrusted provider headers and payload text.
    */
@@ -110,6 +116,8 @@ export interface AdapterRequest {
 export interface AdapterFetchContext {
   /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
+  /** OAuth account identity used for provider-local cooldown bookkeeping. */
+  accountId?: string;
   /** Deadline for receiving response headers on each attempt, not for consuming the response body. */
   timeoutMs?: number;
   /** Return final non-2xx responses untouched so the caller can own the error-body read. */

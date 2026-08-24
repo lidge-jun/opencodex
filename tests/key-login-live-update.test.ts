@@ -7,10 +7,14 @@ import { commitKeyLoginProvider, providerConfigFromKeyLoginProvider } from "../s
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { startServer } from "../src/server";
 import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
+import { LOCAL_PROVIDER_RELOAD_TIMEOUT_MS } from "../src/server/local-provider-reload-client";
 import type { OcxConfig } from "../src/types";
 import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { managementFetch as fetch } from "./helpers/management-auth";
+import { watchdogMs } from "./helpers/ci-watchdog";
+
+const LIVE_UPDATE_TIMEOUT_MS = watchdogMs(LOCAL_PROVIDER_RELOAD_TIMEOUT_MS * 2 + 5_000);
 
 /**
  * Regression: `ocx login <key-provider>` used to POST the unmerged preset row
@@ -101,5 +105,5 @@ describe("CLI key-login live-update overlay preservation", () => {
     } finally {
       await server.stop(true);
     }
-  }, 15_000);
+  }, LIVE_UPDATE_TIMEOUT_MS);
 });

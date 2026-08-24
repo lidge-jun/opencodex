@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
+import { antigravityHostCandidates } from "../src/adapters/google-antigravity-hosts";
+import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "../src/adapters/google-antigravity-tools";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
-import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
   withTestTranslatorBudget(createGoogleAdapterProduction(...args));
@@ -44,7 +46,7 @@ describe("antigravity CCA envelope", () => {
   test("wraps the gemini body in the CCA envelope with project/userAgent/requestType/requestId/sessionId", async () => {
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     const env = JSON.parse(req.body);
-    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
+    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
     expect(env.model).toBe("gemini-3-pro");
     // The envelope BODY userAgent is the protocol constant; the versioned CLI UA rides in the header.
     expect(env.userAgent).toBe("antigravity");
@@ -74,6 +76,64 @@ describe("antigravity CCA envelope", () => {
   test("stream uses :streamGenerateContent?alt=sse", async () => {
     const req = await createGoogleAdapter(provider).buildRequest(parsed("x", true));
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+  });
+
+  test("known HTTP CCA origins are canonicalized to HTTPS before dispatch", async () => {
+    const req = await createGoogleAdapter({
+      ...provider,
+      baseUrl: "http://daily-cloudcode-pa.googleapis.com",
+    }).buildRequest(parsed("x", true));
+    expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+  });
+
+  test("host candidates keep the configured host first and use only daily/prod", () => {
+    expect(antigravityHostCandidates("https://daily-cloudcode-pa.googleapis.com")).toEqual([
+      "https://daily-cloudcode-pa.googleapis.com",
+      "https://cloudcode-pa.googleapis.com",
+    ]);
+    expect(antigravityHostCandidates("https://cloudcode-pa.googleapis.com/")).toEqual([
+      "https://cloudcode-pa.googleapis.com",
+      "https://daily-cloudcode-pa.googleapis.com",
+    ]);
+  });
+
+  test("Claude CCA adds the interleaved-thinking beta header and preamble mode", async () => {
+    const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, "claude-sonnet-4-6"));
+    const env = JSON.parse(req.body);
+
+    expect(req.headers["anthropic-beta"]).toBe("interleaved-thinking-2025-05-14");
+    expect(env.request.preambleConfig).toEqual({ mode: "SYSTEM_INSTRUCTION_MODE_REPLACE" });
+  });
+
+  test("Gemini CCA does not receive the Claude beta header", async () => {
+    const req = await createGoogleAdapter(provider).buildRequest(parsed());
+    expect(req.headers["anthropic-beta"]).toBeUndefined();
+  });
+
+  test("Claude CCA strips a trailing prefill model turn but keeps a lone model turn", async () => {
+    const withPrefill = {
+      ...parsed("x", false, "claude-sonnet-4-6"),
+      context: {
+        messages: [
+          { role: "user", content: "question" },
+          { role: "assistant", content: [{ type: "text", text: "prefill" }] },
+        ],
+        systemPrompt: [],
+        tools: [],
+      },
+    } as unknown as OcxParsedRequest;
+    const prefillEnv = JSON.parse((await createGoogleAdapter(provider).buildRequest(withPrefill)).body);
+    expect(prefillEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["user", "user"]);
+
+    const loneModel = {
+      ...withPrefill,
+      context: {
+        ...withPrefill.context,
+        messages: [{ role: "assistant", content: [{ type: "text", text: "only turn" }] }],
+      },
+    } as unknown as OcxParsedRequest;
+    const loneEnv = JSON.parse((await createGoogleAdapter(provider).buildRequest(loneModel)).body);
+    expect(loneEnv.request.contents.map((content: { role: string }) => content.role)).toEqual(["model", "user"]);
   });
 
   test("exposes Gemini 3.7 Flash while retired Flash ids resolve to it", async () => {
@@ -658,9 +718,114 @@ describe("antigravity CCA envelope", () => {
   });
 });
 
+describe("Google Antigravity history repair", () => {
+  test("drops orphan tool results and unmatched trailing calls", () => {
+    const messages = [
+      { role: "user", content: "run tools" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "one", arguments: {} },
+          { type: "toolCall", id: "call-2", name: "two", arguments: {} },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call-1", toolName: "one", content: "ok", isError: false },
+      { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect(repaired).toHaveLength(3);
+    expect((repaired[1] as { content: { id: string }[] }).content.map(part => part.id)).toEqual(["call-1"]);
+    expect((repaired[2] as { toolCallId: string }).toolCallId).toBe("call-1");
+  });
+
+  test("keeps unmatched trailing calls when dropUnmatchedCalls is false", () => {
+    const messages = [
+      { role: "user", content: "run tools" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-pending", name: "one", arguments: {} }],
+      },
+      { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages, { dropUnmatchedCalls: false });
+    expect(repaired).toHaveLength(2);
+    expect((repaired[1] as { content: { id: string }[] }).content.map(part => part.id)).toEqual(["call-pending"]);
+  });
+
+  test("keeps parallel calls when every call has a later result", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "call-1", name: "one", arguments: {} },
+        { type: "toolCall", id: "call-2", name: "two", arguments: {} },
+      ] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "one", content: "one", isError: false },
+      { role: "toolResult", toolCallId: "call-2", toolName: "two", content: "two", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect((repaired[0] as { content: { id: string }[] }).content.map(part => part.id)).toEqual(["call-1", "call-2"]);
+    expect(repaired).toHaveLength(3);
+  });
+
+  test("pairs duplicate tool-call ids by occurrence", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "dup", name: "one", arguments: {} },
+        { type: "toolCall", id: "dup", name: "one", arguments: {} },
+      ] },
+      { role: "toolResult", toolCallId: "dup", toolName: "one", content: "first", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect((repaired[0] as { content: { id: string }[] }).content).toHaveLength(1);
+    expect(repaired).toHaveLength(2);
+  });
+
+  test("keeps only the first complete exchange when duplicate ids have matching results", () => {
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "dup", name: "one", arguments: { n: 1 } },
+        { type: "toolCall", id: "dup", name: "one", arguments: { n: 2 } },
+      ] },
+      { role: "toolResult", toolCallId: "dup", toolName: "one", content: "first", isError: false },
+      { role: "toolResult", toolCallId: "dup", toolName: "one", content: "second", isError: false },
+    ] as unknown as Parameters<typeof repairGoogleToolPairs>[0];
+
+    const repaired = repairGoogleToolPairs(messages);
+    expect((repaired[0] as { content: { id: string; arguments: { n: number } }[] }).content).toEqual([
+      { type: "toolCall", id: "dup", name: "one", arguments: { n: 1 } },
+    ]);
+    expect(repaired).toHaveLength(2);
+    expect((repaired[1] as { content: string }).content).toBe("first");
+  });
+
+  test("strips only trailing model turns when another content turn remains", () => {
+    const contents = [{ role: "user" }, { role: "model" }, { role: "model" }];
+    expect(stripTrailingClaudePrefill(contents)).toBe(true);
+    expect(contents).toEqual([{ role: "user" }]);
+    const soloModel = [{ role: "model" }];
+    expect(stripTrailingClaudePrefill(soloModel)).toBe(false);
+    expect(soloModel).toEqual([{ role: "model" }]);
+  });
+});
+
 function sseResponse(chunks: unknown[]): Response {
   const body = chunks.map(c => `data: ${JSON.stringify(c)}\n`).join("\n") + "\n";
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function chunkedSseResponse(chunks: unknown[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+      }
+      controller.close();
+    },
+  }), { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 describe("antigravity parseStream unwraps response", () => {
@@ -680,10 +845,48 @@ describe("antigravity parseStream unwraps response", () => {
 });
 
 describe("antigravity parseResponse unwraps response (non-streaming)", () => {
+  test("buffers CCA SSE frames for unary callers", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const events = await adapter.parseResponse!(sseResponse([
+      { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }] } },
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]));
+    expect(events).toContainEqual({ type: "text_delta", text: "hello" });
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("unary CCA responses retain the translated event batch in the translator budget", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 1024 });
+    const events = await adapter.parseResponse!(sseResponse([
+      { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }] } },
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]), budget);
+
+    expect(events).toContainEqual({ type: "text_delta", text: "hello" });
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+  });
+
+  test("unary CCA responses fail boundedly when translated events exceed the budget", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 256 });
+    const events = await adapter.parseResponse!(chunkedSseResponse([
+      ...Array.from({ length: 16 }, (_, index) => ({
+        response: { candidates: [{ content: { parts: [{ text: `event-${index}` }] } }] },
+      })),
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]), budget);
+
+    expect(events).toEqual([expect.objectContaining({
+      type: "error",
+      code: "translation_buffer_limit",
+    })]);
+  });
+
   test("reads response.candidates + response.usageMetadata from the CCA envelope", async () => {
     const adapter = createGoogleAdapter(provider);
-    const body = JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "hello" }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 2, cachedContentTokenCount: 7 } } });
-    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    const body = { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 2, cachedContentTokenCount: 7 } } };
+    const events = await adapter.parseResponse!(sseResponse([body]));
     expect(events.some(e => e.type === "text_delta" && e.text === "hello")).toBe(true);
     const done = events.find(e => e.type === "done");
     expect((done as Extract<AdapterEvent, { type: "done" }>).usage?.inputTokens).toBe(9);
@@ -696,8 +899,12 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     const adapter = createGoogleAdapter(provider);
     // buildRequest first to set the per-adapter model/session, then parseResponse to observe.
     await adapter.buildRequest(parsed("hello world"));
-    const body = JSON.stringify({ response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } });
-    await adapter.parseResponse!(new Response(body, { status: 200 }));
+    const body = { response: { candidates: [{ content: { parts: [{ functionCall: { name: "do_x", args: { a: 1 } }, thoughtSignature: "sig-nonstream0000000" } ] } }] } };
+    const events = await adapter.parseResponse!(sseResponse([
+      body,
+      { response: { candidates: [{ finishReason: "STOP" }] } },
+    ]));
+    expect(events.at(-1)?.type).toBe("done");
     // A follow-up request's history should now get the signature re-injected.
     const followup = parsed("hello world");
     const contents = [{ role: "model", parts: [{ functionCall: { name: "do_x", args: { a: 1 } } }] }];
@@ -716,7 +923,7 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
     __resetAntigravityReplayCache();
     const adapter = createGoogleAdapter(provider);
     await adapter.buildRequest(parsed("hello world"));
-    const body = JSON.stringify({
+    const body = {
       response: {
         candidates: [{
           content: {
@@ -727,8 +934,8 @@ describe("antigravity parseResponse unwraps response (non-streaming)", () => {
           },
         }],
       },
-    });
-    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    };
+    const events = await adapter.parseResponse!(sseResponse([body]));
 
     expect(events).not.toContainEqual({ type: "text_delta", text: "deciding which tool to call" });
 
@@ -748,6 +955,7 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
         messages: [
           { role: "user", content: "go" },
           { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: { a: 1 }, thoughtSignature: "sig-abcdef0123456789" }] },
+          { role: "toolResult", toolCallId: "c1", toolName: "get_x", content: "ok", isError: false },
         ],
         systemPrompt: [], tools: [],
       },
@@ -768,6 +976,7 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
         messages: [
           { role: "user", content: "go" },
           { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: {}, thoughtSignature: "fc_d8df7548e31a4130b7624f3d27571cdd" }] },
+          { role: "toolResult", toolCallId: "c1", toolName: "get_x", content: "ok", isError: false },
         ],
         systemPrompt: [], tools: [],
       },
@@ -788,6 +997,7 @@ describe("antigravity history preserves tool-call thoughtSignature", () => {
         messages: [
           { role: "user", content: "go" },
           { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "get_x", namespace: "mcp__t", arguments: {}, thoughtSignature: "ctc_038f26d3f20962bc016a54f0fcfa208190a8ec0f289c2ba211" }] },
+          { role: "toolResult", toolCallId: "c1", toolName: "get_x", content: "ok", isError: false },
         ],
         systemPrompt: [], tools: [],
       },
@@ -841,5 +1051,229 @@ describe("canonicalAntigravityUsageModel", () => {
     expect(canonicalAntigravityUsageModel("gemini-3.1-pro-low")).toBe("gemini-3.1-pro");
     expect(canonicalAntigravityUsageModel("claude-opus-4-6-thinking")).toBe("claude-opus-4-6-thinking");
     expect(canonicalAntigravityUsageModel("unknown-model")).toBe("unknown-model");
+  });
+});
+
+describe("antigravity structured output", () => {
+  function parsedWithTextFormat(modelId: string, textFormat: Record<string, unknown>): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      context: { messages: [{ role: "user", content: "return JSON" }], systemPrompt: [], tools: [] },
+      options: { textFormat },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("CCA Gemini lowers json_schema on request.generationConfig", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest(parsedWithTextFormat("gemini-3-pro", {
+      type: "json_schema",
+      name: "answer",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string", additionalProperties: false } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+    }));
+    const envelope = JSON.parse(request.body);
+
+    expect(envelope.request.generationConfig).toEqual({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      },
+    });
+  });
+
+  test("CCA Gemini 3.7 Flash keeps JSON schema and default thinking after compilation", async () => {
+    const request = await createGoogleAdapter(effortProvider).buildRequest(parsedWithTextFormat("gemini-3.7-flash", {
+      type: "json_schema",
+      name: "decision",
+      schema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+        additionalProperties: false,
+      },
+    }));
+    const envelope = JSON.parse(request.body);
+
+    expect(envelope.model).toBe("gemini-3.7-flash-tiered");
+    expect(envelope.request.generationConfig).toMatchObject({
+      thinkingConfig: { thinkingLevel: "medium" },
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+      },
+    });
+    expect(envelope.request.generationConfig.responseSchema.additionalProperties).toBeUndefined();
+  });
+
+  test("CCA Claude suppresses json_object responseMimeType", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest(parsedWithTextFormat("claude-sonnet-4-6", {
+      type: "json_object",
+    }));
+    const envelope = JSON.parse(request.body);
+
+    expect(envelope.request.generationConfig?.responseMimeType).toBeUndefined();
+  });
+
+  test("in-turn grounding attaches google_search alongside functionDeclarations on Gemini CCA", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest({
+      ...parsed("search", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+      context: {
+        messages: [{ role: "user", content: "find news" }],
+        systemPrompt: [],
+        tools: [{ name: "shell", description: "run", parameters: { type: "object" } }],
+      },
+    } as unknown as OcxParsedRequest);
+    const envelope = JSON.parse(request.body);
+    expect(envelope.request.tools).toEqual([
+      { functionDeclarations: [{ name: "shell", description: "run", parameters: { type: "object", properties: {} } }] },
+      { google_search: {} },
+    ]);
+  });
+
+  test("Claude CCA never attaches google_search even when _ccaInTurnGrounding is set", async () => {
+    const request = await createGoogleAdapter(provider).buildRequest({
+      ...parsed("x", false, "claude-sonnet-4-6"),
+      _ccaInTurnGrounding: { search: true, urlContext: true },
+      context: {
+        messages: [{ role: "user", content: "https://example.com" }],
+        systemPrompt: [],
+        tools: [{ name: "shell", description: "run", parameters: { type: "object" } }],
+      },
+    } as unknown as OcxParsedRequest);
+    const envelope = JSON.parse(request.body);
+    expect(envelope.request.tools).toEqual([
+      { functionDeclarations: [{ name: "shell", description: "run", parameters: { type: "object", properties: {} } }] },
+    ]);
+  });
+
+  test("parseStream appends grounding sources and drops search-suggestion HTML widgets", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest({
+      ...parsed("x", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+    } as unknown as OcxParsedRequest);
+    const sse = [
+      "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"<style>.s{}</style>\"}]}}]}}\n",
+      "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Grounded answer.\"}]},\"groundingMetadata\":{\"groundingChunks\":[{\"web\":{\"uri\":\"https://a.example\",\"title\":\"A\"}}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2}}}\n",
+    ].join("");
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      new Response(sse, { headers: { "content-type": "text/event-stream" } }),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+    const text = events.filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map(event => event.text)
+      .join("");
+    expect(text).toContain("Grounded answer.");
+    expect(text).toContain("Sources:");
+    expect(text).toContain("https://a.example");
+    expect(text).not.toContain("<style");
+    expect(events.some(event => event.type === "done")).toBe(true);
+  });
+
+  test("parseStream preserves search-suggestion-looking HTML when CCA grounding is off", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(parsed("x", true, "gemini-3.7-flash"));
+    const marker = "<style>.s{}</style><search_suggest>legitimate text</search_suggest>";
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      sseResponse([
+        { response: { candidates: [{ content: { parts: [{ text: marker }] } }] } },
+        { response: { candidates: [{ finishReason: "STOP" }] } },
+      ]),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({ type: "text_delta", text: marker });
+  });
+
+  test("keeps grounding-source emission aligned when requests are built consecutively", async () => {
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest({
+      ...parsed("grounded", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+    } as unknown as OcxParsedRequest);
+    await adapter.buildRequest(parsed("plain", true, "gemini-3.7-flash"));
+
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      sseResponse([
+        {
+          response: {
+            candidates: [{
+              content: { parts: [{ text: "grounded answer" }] },
+              groundingMetadata: {
+                groundingChunks: [{ web: { uri: "https://grounded.example", title: "Grounded" } }],
+              },
+              finishReason: "STOP",
+            }],
+          },
+        },
+      ]),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map(event => event.text)
+      .join("");
+    expect(text).toContain("grounded answer");
+    expect(text).toContain("Sources:");
+    expect(text).toContain("https://grounded.example");
+  });
+
+  test("does not emit grounding sources after a grounded request fails to build", async () => {
+    const providerThatRecovers = { ...provider, project: undefined } as OcxProviderConfig;
+    const adapter = createGoogleAdapter(providerThatRecovers);
+    await expect(adapter.buildRequest({
+      ...parsed("failed grounded request", true, "gemini-3.7-flash"),
+      _ccaInTurnGrounding: { search: true, urlContext: false },
+    } as unknown as OcxParsedRequest)).rejects.toThrow(/project id/);
+
+    providerThatRecovers.project = provider.project;
+    await adapter.buildRequest(parsed("plain", true, "gemini-3.7-flash"));
+
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(
+      sseResponse([
+        {
+          response: {
+            candidates: [{
+              content: { parts: [{ text: "plain answer" }] },
+              groundingMetadata: {
+                groundingChunks: [{ web: { uri: "https://stale.example", title: "Stale" } }],
+              },
+              finishReason: "STOP",
+            }],
+          },
+        },
+      ]),
+      createTestTranslatorBudget(),
+    )) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map(event => event.text)
+      .join("");
+    expect(text).toContain("plain answer");
+    expect(text).not.toContain("Sources:");
+    expect(text).not.toContain("https://stale.example");
   });
 });

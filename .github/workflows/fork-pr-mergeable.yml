@@ -1,0 +1,66 @@
+name: Fork PR Mergeable
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  mergeable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check GitHub mergeability
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INITIAL_MERGEABLE: ${{ toJSON(github.event.pull_request.mergeable) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          mergeable="$INITIAL_MERGEABLE"
+          attempts=0
+
+          while [ "$mergeable" = "null" ] && [ "$attempts" -lt 3 ]; do
+            attempts=$((attempts + 1))
+            sleep 10
+            mergeable="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.mergeable')"
+          done
+
+          if [ "$mergeable" = "null" ]; then
+            echo "GitHub has not computed mergeability"
+            exit 1
+          fi
+
+          if [ "$mergeable" = "false" ]; then
+            echo "GitHub reports this pull request is not mergeable (dirty)"
+            exit 1
+          fi
+
+          if [ "$mergeable" != "true" ]; then
+            echo "GitHub returned an unknown mergeability state: $mergeable"
+            exit 1
+          fi
+
+      - name: Check base ancestry
+        run: |
+          set -eu
+          if ! git merge-base --is-ancestor "origin/${{ github.base_ref }}" HEAD; then
+            echo "The pull request head is not a descendant of origin/${{ github.base_ref }}"
+            echo "Recovery: daily: merge \`origin/main\` into the sync branch; emergency: \`-s ours\` on \`run/main\` only."
+            echo "Never ask the human to resolve GitHub's 3-way of a disconnected rebuild."
+            exit 1
+          fi

@@ -28,6 +28,12 @@ OAuth 帳號時使用 `anthropic`，否則使用 `openai`。明確選擇 `anthro
    search 工具並強制生成最終答案。如果模型呼叫 `apply_patch` 或 shell 等真實用戶端工具，目前
    turn 會結束，以便這些呼叫到達 Codex。
 
+**Antigravity Gemini 3 例外：** 當路由提供方是 Google Antigravity（`google-antigravity`）且
+wire 模型為 Gemini 3.x 時，opencodex 會在**同一**主請求上附加 CCA `google_search`（若該 turn
+含 `http(s)` URL 再附加 `url_context`），而不是走合成 sidecar 迴圈。Claude-on-CCA、顯式
+`openai` / `anthropic` / `xai` / `exa` 後端，以及同時帶有 Codex 函數工具的 Gemini 3 以下型號
+仍走 sidecar。
+
 路由模型的每次迭代都會向上遊請求 `stream: true`，但 opencodex 會在決定搜尋還是回傳最終答案前，
 在內部完整緩衝所有語義 event。只有第一次迭代的最終 header/status 和 429 key rotation 會被提前
 取得。因此，合成搜尋呼叫和中間輸出不會作為模型輸出暴露給用戶端。

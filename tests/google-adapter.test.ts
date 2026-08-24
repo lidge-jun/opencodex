@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
+import { anthropicToolCallId } from "../src/adapters/tool-call-id";
 import type { OcxParsedRequest } from "../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
@@ -133,6 +134,45 @@ describe("google adapter — tool-call ids on the wire", () => {
     expect(frPart.functionResponse.id).toBe("call_abc");
   });
 
+  test("orphan tool results stay visible as text instead of emitting an unmatched functionResponse", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "toolResult", toolCallId: "orphan", toolName: "missing", content: "discard", isError: false },
+      { role: "user", content: "continue" },
+    ]));
+
+    expect(contents.flatMap(content => content.parts).some(part => "functionResponse" in part)).toBe(false);
+    expect(contents.map(content => content.role)).toEqual(["user", "user"]);
+    expect(contents[0].parts).toEqual([
+      { text: "[tool_result without adjacent tool_use: missing (orphan)]\ndiscard" },
+    ]);
+    expect(contents[1].parts).toEqual([{ text: "continue" }]);
+  });
+
+  test("AI Studio keeps an unmatched trailing tool call", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call_pending", name: "bash", arguments: { cmd: "ls" } }] },
+    ]));
+
+    const modelTurn = contents.find(content => content.role === "model");
+    const functionCall = modelTurn?.parts.find(part => "functionCall" in part) as { functionCall: { id?: string } } | undefined;
+    expect(functionCall?.functionCall.id).toBe("call_pending");
+  });
+
+  test("orphan result ids do not reserve allocator slots", async () => {
+    const rawId = "call:a";
+    const normalizedId = anthropicToolCallId(rawId)!;
+    const contents = await geminiContents(parsedWith([
+      { role: "assistant", content: [{ type: "toolCall", id: rawId, name: "bash", arguments: {} }] },
+      { role: "toolResult", toolCallId: rawId, toolName: "bash", content: "ok", isError: false },
+      { role: "toolResult", toolCallId: normalizedId, toolName: "missing", content: "discard", isError: false },
+    ]));
+
+    const functionCall = contents.find(content => content.role === "model")!.parts
+      .find(part => "functionCall" in part) as { functionCall: { id?: string } };
+    expect(functionCall.functionCall.id).toBe(normalizedId);
+  });
+
   test("ids are normalized to Anthropic's tool_use.id charset, preserving call/response pairing", async () => {
     const contents = await geminiContents(parsedWith([
       { role: "assistant", content: [{ type: "toolCall", id: "fc:weird/id#1", name: "bash", arguments: {} }] },
@@ -153,6 +193,8 @@ describe("google adapter — tool-call ids on the wire", () => {
         { type: "toolCall", id: "call:a", name: "bash", arguments: {} },
         { type: "toolCall", id: "call/a", name: "bash", arguments: {} },
       ] },
+      { role: "toolResult", toolCallId: "call:a", toolName: "bash", content: "one", isError: false },
+      { role: "toolResult", toolCallId: "call/a", toolName: "bash", content: "two", isError: false },
     ]));
     const ids = contents.find(c => c.role === "model")!.parts
       .filter(p => "functionCall" in p)
@@ -421,5 +463,101 @@ describe("google adapter — direct -tiered wire renames", () => {
       expect(systemText).toContain(`powered by the ${modelId}`);
       expect(systemText).not.toContain("-tiered");
     }
+  });
+});
+
+describe("google adapter — structured output", () => {
+  function parsedWithTextFormat(
+    modelId: string,
+    textFormat: Record<string, unknown>,
+    tools?: unknown[],
+  ): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: { textFormat },
+      context: { messages: [{ role: "user", content: "return JSON" }], tools },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("AI Studio json_schema lowers to JSON mode with a sanitized responseSchema", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", {
+      type: "json_schema",
+      name: "answer",
+      schema: {
+        type: "object",
+        properties: { answer: { type: "string", additionalProperties: false } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+    }));
+
+    expect(body.generationConfig).toEqual({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      },
+    });
+  });
+
+  test("Vertex json_schema uses flat JSON mode with a sanitized responseSchema", async () => {
+    const request = await createGoogleAdapter({ ...provider, googleMode: "vertex" as const }).buildRequest(
+      parsedWithTextFormat("gemini-3.7-flash", {
+        type: "json_schema",
+        name: "decision",
+        schema: {
+          type: "object",
+          properties: { keep: { type: "boolean" } },
+          required: ["keep"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    const body = JSON.parse(request.body) as Record<string, any>;
+
+    expect(body.model).toBeUndefined();
+    expect(body.request).toBeUndefined();
+    expect(body.generationConfig).toMatchObject({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+      },
+    });
+    expect(body.generationConfig.responseSchema.additionalProperties).toBeUndefined();
+  });
+
+  test("AI Studio json_object lowers to responseMimeType only", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", { type: "json_object" }));
+
+    expect(body.generationConfig).toEqual({ responseMimeType: "application/json" });
+  });
+
+  test("function tools suppress Gemini JSON mode", async () => {
+    const body = await geminiBody(parsedWithTextFormat(
+      "gemini-3-pro",
+      { type: "json_object" },
+      [{ name: "lookup", parameters: { type: "object" } }],
+    ));
+
+    expect(body.generationConfig?.responseMimeType).toBeUndefined();
+  });
+
+  test("schema-less json_schema still lowers to responseMimeType", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", {
+      type: "json_schema",
+      name: "answer",
+    }));
+
+    expect(body.generationConfig).toEqual({ responseMimeType: "application/json" });
+  });
+
+  test("image-capable models suppress Gemini JSON mode", async () => {
+    const body = await geminiBody(parsedWithTextFormat("gemini-3.1-flash-image", { type: "json_object" }));
+
+    expect(body.generationConfig?.responseMimeType).toBeUndefined();
   });
 });

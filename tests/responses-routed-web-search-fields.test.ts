@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction, stripOpenAiOnlyWebSearchFields } from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { resolveProviderTransport } from "../src/providers/xai-transport";
 import { routedProviderConfig } from "../src/router";
 import type { OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -23,6 +24,8 @@ function buildWebSearchBody(provider: OcxProviderConfig): Record<string, unknown
         external_web_access: true,
         search_context_size: "medium",
         user_location: { type: "approximate" },
+        search_content_types: ["text"],
+        filters: { allowed_domains: ["x.ai"] },
       }],
     },
   }, { headers: new Headers() });
@@ -92,17 +95,24 @@ describe("Responses buildRequest web_search capability", () => {
       external_web_access: true,
       search_context_size: "medium",
       user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
     }]);
   });
 
-  test("registry xAI traffic normalizes Codex search fields for its public Responses API", () => {
+  test("registry xAI traffic keeps accepted fields on the public api.x.ai Responses API", () => {
     const entry = getProviderRegistryEntry("xai");
     if (!entry) throw new Error("xAI registry entry missing");
     const provider = { ...providerConfigSeed(entry), adapter: "openai-responses" };
     enrichProviderFromRegistry("xai", provider);
 
     const body = buildWebSearchBody(provider);
-    expect(body.tools).toEqual([{ type: "web_search" }]);
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
+    }]);
   });
 
   test("non-xAI classified gateways use generic field stripping, not xAI cached-search policy", () => {
@@ -184,16 +194,47 @@ describe("routedProviderConfig web_search capability backfill", () => {
     expect(routed.supportsOpenAiWebSearchToolFields).toBe(false);
   });
 
-  test("the routed row actually normalizes the search tool at the adapter", () => {
+  test("the registry-classified OAuth row strips only fatal fields at the CLI adapter", () => {
     const routed = routedProviderConfig("xai", {
       adapter: "openai-chat",
       baseUrl: "https://api.x.ai/v1",
       authMode: "oauth",
       modelAdapters: { "grok-4.6": "openai-responses" },
     });
+    const transport = resolveProviderTransport("xai", routed);
 
-    const body = buildWebSearchBody({ ...routed, adapter: "openai-responses" });
-    expect(body.tools).toEqual([{ type: "web_search" }]);
+    expect(transport.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    const body = buildWebSearchBody({ ...transport, adapter: "openai-responses" });
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
+    }]);
+  });
+
+  test("an equivalent unclassified OAuth row retains fatal fields at the CLI adapter", () => {
+    const routed = routedProviderConfig("xai", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "oauth",
+      modelAdapters: { "grok-4.6": "openai-responses" },
+    });
+    const unclassified = { ...routed };
+    delete unclassified.supportsOpenAiWebSearchToolFields;
+    const transport = resolveProviderTransport("xai", unclassified);
+
+    expect(transport.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    expect(transport.supportsOpenAiWebSearchToolFields).toBeUndefined();
+    const body = buildWebSearchBody({ ...transport, adapter: "openai-responses" });
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: "medium",
+      user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
+    }]);
   });
 
   test("an explicit saved value still overrides the registry default", () => {

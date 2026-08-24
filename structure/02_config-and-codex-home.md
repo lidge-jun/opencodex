@@ -171,6 +171,32 @@ are consumed incrementally and at most 512 stale files are attempted per process
 
 ## Config surface
 
+### OpenCodex home and live process state
+
+`src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
+the config directory and `config.json` path and retains the existing cache rule: a relative home is
+resolved once for each distinct raw environment value, so a later working-directory change cannot
+silently move the active installation.
+
+`src/config/process-state.ts` derives `ocx.pid` and `runtime-port.json` from that resolved directory.
+It owns their byte-compatible writes, parsing, expected-PID filters, cheap liveness, full OCX command
+identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` remains optional,
+owner-only state and is validated before a record is returned. `src/config.ts` re-exports the same
+symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
+
+Both config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
+process-wide temp sequence, symlink target resolution, real-home test guard, owner manifest,
+Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
+must not replace it with a local temp-and-rename shortcut.
+
+[Decision Log]
+- 목적과 의도: Make persisted config, path resolution, atomic file publication, and live process state distinct ownership boundaries.
+- 기존 구현 및 제약 조건: All four concerns lived in `src/config.ts`; process-state extraction could not safely import the facade without a cycle and could not copy the atomic writer without creating two security/correctness contracts.
+- 검토한 주요 대안: Keep one file, tolerate the cycle, duplicate only PID/runtime writes, or extract the minimal dependency leaves.
+- 선택한 방식: Preserve one implementation per concern under `src/config/` and keep facade re-exports for downstream compatibility.
+- 다른 대안 대신 이 방식을 선택한 이유: The dependency graph stays acyclic and every existing path, serialized shape, error, identity probe, and cleanup guard remains reusable from one owner.
+- 장점, 단점 및 영향: Internal lifecycle imports become narrow and testable; review must still treat changes to `atomic-write.ts` and `process-state.ts` as shared cross-platform runtime changes.
+
 `src/types.ts` is the shape and `src/config.ts` is the loader; neither is reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 
@@ -200,10 +226,12 @@ openai_base_url = "http://127.0.0.1:10100/v1"
 ```
 
 Codex keeps the native `openai` provider id, so new threads stay under that identity instead of
-being re-tagged. History that an earlier legacy injection re-tagged as `opencodex` is migrated back
-to `openai` once, as restore machinery — a no-op when there is nothing to migrate. A user-owned root
-`openai_base_url` is preserved instead of overwritten, and that case also blocks managed sub-agent
-defaults rather than fighting the user for ownership.
+being re-tagged. History restore is manifest-authoritative: only rows whose original provider,
+source, and event marker were backed up for the same state database are restored exactly. A bare
+`opencodex` row is never assumed to have originated at OpenAI; it stays unchanged unless the user
+explicitly runs legacy OpenAI recovery. A user-owned root `openai_base_url` is preserved instead of
+overwritten, and that case also blocks managed sub-agent defaults rather than fighting the user for
+ownership.
 
 **API auth header (non-loopback).** The built-in `openai` provider cannot carry the
 `x-opencodex-api-key` env header, so this form re-tags the root provider and appends the table:
@@ -231,11 +259,30 @@ Native Codex sub-agent defaults are a separate, explicit opt-in. When
 overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
 restore must preserve later user edits while stripping those managed values.
 
+### History backup manifest contract
+
+`src/codex/history-manifest.ts` is the pure schema-and-identity leaf for the versioned history
+backup manifest. It owns the accepted provider/source provenance tuples, platform-aware database
+path identity, backup filename id, and validation from unknown JSON to a typed manifest. It does
+not read files, inspect rollouts, open SQLite, retry, fingerprint, write, or delete anything.
+
+`history-provider.ts` remains the strict mutation owner and maps shared validation failures to its
+restore/no-op integrity states. `native-residue.ts` remains a read-only observer and maps the same
+result to clean, residue, or indeterminate before inspecting referenced rollout files.
+
+[Decision Log]
+- 목적과 의도: Make restore and native-residue inspection accept and reject exactly the same versioned history provenance contract.
+- 기존 구현 및 제약 조건: Both modules independently checked version, database identity, entry ids, absolute rollout paths, provider/source tuples, and event markers; drift could make one module restore a manifest that the other refused to classify.
+- 검토한 주요 대안: Keep duplicate validators synchronized through review, import the mutation-heavy history provider into residue inspection, or extract a pure shared leaf.
+- 선택한 방식: Extract only types, path identity, filename id, provenance, and unknown-data validation; keep all filesystem, rollout, SQLite, retry, and mutation policy in the existing callers.
+- 다른 대안 대신 이 방식을 선택한 이유: A pure leaf removes schema drift without pulling write-side effects or database ownership into the read-only startup inspection graph.
+- 장점, 단점 및 영향: Format changes now have one validator and shared invalid fixtures; callers still intentionally own different user-facing failure mappings, so contract changes require updating both mappings and this document.
+
 If the root config selects a provider other than `openai` or `opencodex`, injection must leave the
-config byte-for-byte unchanged and skip profile creation/updates and history migration. External
+config byte-for-byte unchanged and skip profile creation/updates and history metadata restoration. External
 provider managers own that routing configuration, and replacing their provider id can hide
 otherwise intact Codex sessions. This ownership check must run before catalog/cache refresh,
-journal creation, and the background history migration guardian.
+journal creation, and the background history restoration guardian.
 
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
@@ -281,6 +328,22 @@ the provider default, then the adapter omits `max_tokens`.
 Both fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
 and `routeModel`, but user config overrides registry defaults per field/key.
+
+## Provider validation ownership
+
+`src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
+CLI writes, and management DTO validation. `src/config.ts` imports those checks for Zod refinement
+and re-exports them as a compatibility facade; it must not grow a second copy. Validation error text,
+ordering, and cross-field rules are part of the write/load contract because management requests and
+hand-edited `config.json` must accept and reject the same provider shapes.
+
+[Decision Log]
+- 목적과 의도: Separate reusable provider payload validation from config file persistence without changing accepted configuration or error behavior.
+- 기존 구현 및 제약 조건: The Zod schema, CLI, and management API shared helpers defined inside `src/config.ts`, so callers needing one pure check depended on the full persistence module.
+- 검토한 주요 대안: Keep validation in the persistence module; duplicate checks per caller; extract one leaf and retain compatibility re-exports.
+- 선택한 방식: Use one pure validation leaf, consume it from config refinement and direct DTO callers, and keep `src/config.ts` re-exports during migration.
+- 다른 대안 대신 이 방식을 선택한 이유: One implementation preserves load/write parity while reducing dependency breadth and avoiding a flag-day import rewrite.
+- 장점, 단점 및 영향: Validation can be characterized independently and config persistence becomes smaller; a temporary facade remains until all internal callers migrate.
 
 ## Restore
 

@@ -130,6 +130,8 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
+| `commandCodeVersion?` | `string` | Command Code OAuth (`adapter: "command-code"`) only. Pins the `x-command-code-version` header on `/alpha/generate` requests. Absent uses the adapter default (`0.52.1`). Not read by the API-key `commandcode` preset (`openai-chat` / `/provider/v1`). |
+| `projectContext?` | `"off" \| "on"` | Command Code OAuth (`adapter: "command-code"`) only. When `"on"`, copies bounded project files from the proxy process working directory into the `/alpha/generate` `memory`, `taste`, and `skills` envelope. Absent or `"off"` keeps today's empty envelope even when those files exist on disk. Not read by the API-key `commandcode` preset. Set on `providers.command-code`, not at the top level. In the dashboard use **Providers → Command Code → Edit JSON**. Start the proxy from the trusted Codex project directory so `process.cwd()` is the repo you intend. Fail-soft: missing, unreadable, timed-out, or path-escape conditions omit that piece rather than failing the turn. Does not read `~/.commandcode/skills` or other home trees. `x-taste-learning` stays `"false"` regardless of this flag. |
 
 ### FastWire B1 capability migration
 
@@ -255,6 +257,57 @@ and pauses only accounts freshly confirmed at 100%; unknown or failed refreshes 
 
 Rotation does not protect against provider enforcement; multi-account use may violate provider terms.
 
+### Shared OAuth account-pool kernel
+
+Claude, Antigravity, and Cursor reuse a small shared kernel (`src/routing/account-pool/`)
+for process-local session affinity, bounded cooldowns, and pre-stream 429 failover.
+Codex keeps its own rich pool plugin (WHAM, spark scopes, probe leases, pin) and is
+not rewritten onto the kernel in this generation.
+
+Every kernel-backed plugin obeys the same four rules:
+
+1. A bound session stays on one OAuth account until affinity is cleared or the
+   session ends.
+2. New-session spreading (quota, round-robin, or fill-first) is **opt-in per
+   plugin**. Only Claude exposes it when enabled; Antigravity and Cursor do not
+   load-balance unbound sessions in v1.
+3. Mid-request rotation is limited to **rate-limit 429** or **credential
+   death** (401/403). Hops are capped at three, pre-commit / pre-stream only —
+   never after client-visible output. Global `setActiveAccount` must not steal
+   accounts bound to other live sessions.
+4. Operators should refuse or warn when pooled credentials share an
+   organization, workspace, Cloud project, or team quota bucket.
+
+**Billing is not 429.** Payment-required, 402, and billing-exhaustion responses use
+a separate billing cooldown. They do not enter the short 429 hop carousel or the
+three-hop failover cap. Codex already classifies these separately; kernel plugins
+use the same taxonomy.
+
+**Antigravity stick-wait (narrow).** When this session's sticky account is
+`rate_limited` and the remaining cooldown is at most five seconds, opencodex may
+**wait** instead of hopping to another account. It never waits on
+`quota_exhausted` or `geo_blocked`. This is not a prompt-cache feature — Code
+Assist OAuth does not support cached content per the Gemini CLI documentation.
+Stickiness serves thought-signature replay, project bind, and stable session
+routing.
+
+**Command Code unsupported.** Command Code terms require one account per person;
+extra accounts to obtain credits risk a lifetime ban. Team credits pool per
+organization only. opencodex does not implement a Command Code account pool, 429
+carousel, or dashboard control for multiple Command Code OAuth logins.
+
+Affinity keys ignore Desktop shared-cohort `prompt_cache_key` values. Promotion of
+the dashboard "active" account is not a kernel primitive — plugins promote only
+after a usable token is obtained.
+
+:::caution[Provider-policy responsibility]
+Kernel-backed pools are technical routing and resilience features. They do not
+endorse using additional accounts to circumvent rate limits, quotas, plan limits,
+or other provider restrictions, or sharing credentials between people. You are
+responsible for complying with each provider's current terms. See the Codex Auth
+caution in [Web Dashboard](/guides/web-dashboard/#codex-auth-and-account-pools).
+:::
+
 ### `anthropicAccountPool` (experimental)
 
 This opt-in pools multiple Anthropic OAuth accounts already stored in `auth.json`. It is off by
@@ -268,14 +321,52 @@ rotation may trigger provider restrictions.
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session strategy; quota uses 5-hour bars only. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection. Range 1–100. |
 
-When enabled, 429 records bounded cooldown from `Retry-After` or a default backoff and may rotate
-within the request. Affinity is process-local and size-bounded. Credential 401/403 marks the account
-as needing reauthentication. If all eligible accounts are cooling, clients receive 429 with
-`Retry-After` when known, not an authentication error.
+When enabled, affinity and 429 failover use the shared account-pool kernel. A 429 records
+bounded cooldown from `Retry-After` or a default backoff and may rotate within the request
+(pre-stream only, cap three). Billing / payment failures are not treated as 429 and do not
+use the hop carousel. Affinity is process-local and size-bounded. Credential 401/403 marks
+the account as needing reauthentication. If all eligible accounts are cooling, clients receive
+429 with `Retry-After` when known, not an authentication error.
 
 :::caution[Experimental]
 Leave this disabled unless you understand Anthropic account policy risk. Prefer manual
 `ocx account use anthropic <id>` switching when unsure.
+:::
+
+### Antigravity multi-account routing (failover-only)
+
+Multiple Antigravity OAuth accounts do not receive new-session load balancing in v1.
+When several accounts are logged in, opencodex binds each conversation to one account
+for its lifetime and may fail over to another eligible account on rate-limit 429 or
+credential death — without promoting a global active account that would disturb other
+live sessions. Stick-wait (up to five seconds) applies only when the bound account is
+`rate_limited` with a short remaining cooldown.
+
+Do not expect prompt-cache dollar savings from Antigravity stickiness. Code Assist
+OAuth does not support cached content; affinity is for signature replay, project bind,
+and stable routing. Gemini API key and Vertex paths use per-project cache semantics
+separately.
+
+### `cursorAccountPool` (experimental, default off)
+
+Optional sticky session affinity and 429 failover for multiple Cursor OAuth accounts.
+Disabled unless `cursorAccountPool.enabled` is explicitly `true`.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `cursorAccountPool.enabled?` | `boolean` | `false` | Enable sticky affinity and 429 cooldown failover across Cursor OAuth accounts. |
+
+When enabled with at least two accounts, a conversation keys affinity from the client
+thread id (and related session headers), not `prompt_cache_key`. Mid-request hops are
+pre-stream only, capped at three, and billing / 402 responses use a billing cooldown —
+not the 429 carousel. Checkpoints remain fail-closed: switching accounts without
+rebinding yields `identity_changed` rather than replaying another user's conversation.
+opencodex does not wire weighted round-robin `CursorCredentialRouter` for session
+routing.
+
+:::caution[Experimental]
+Leave this disabled unless you understand Cursor account policy risk. Cursor's
+acceptable-use policy forbids circumventing rate limits and manipulating usage metering.
 :::
 
 ### Managed record shapes
@@ -375,8 +466,10 @@ the curated `noVisionModels` list and use the vision describe sidecar instead.
 Cursor server-driven local tools are disabled by default. Codex continues using its own tools such as
 `apply_patch` and `exec_command` with its own approval and sandbox policy:
 
-- `"off"` (default) rejects Cursor-native `read`, `write`, `delete`, `ls`, `grep`, `shell`, and
-  `fetch` execution.
+- `"off"` (default) denies proxy-local Cursor-native `read`, `write`, `delete`, `ls`, `grep`,
+  `shell`, and `fetch` execution. When the turn advertises a bare Codex `shell_command` or
+  `exec_command` tool, native Shell/Read/Ls/Grep/Fetch map to that Codex shell bridge instead of
+  running on the proxy host; write/delete stay refused.
 - `"on"` opts into trusted-local execution and bypasses Codex approval/sandbox semantics.
 - `"codex-sandbox"` is retained for compatibility but fails closed like `"off"`; request prose is
   not trustworthy sandbox attestation.

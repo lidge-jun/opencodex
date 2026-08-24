@@ -47,6 +47,7 @@ import {
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
+import { registerFork } from "../fork/register";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
@@ -1886,6 +1887,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   if (labActivationRequired(config, labConfigDir)) {
     activateLab(config, labConfigDir);
   }
+
+  registerFork();
 
   return server;
 }

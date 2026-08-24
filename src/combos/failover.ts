@@ -109,6 +109,28 @@ export function clearComboTargetCooldowns(comboId?: string): void {
 
 export type ComboFailureDecision = "hop" | "stop";
 
+function isModelLifecycleGone(
+  status: number,
+  message: string,
+  code?: string | null,
+): boolean {
+  if (status !== 410) return false;
+  const normalizedCode = code?.trim().toLowerCase().replaceAll("-", "_");
+  if ([
+    "model_deprecated",
+    "model_end_of_life",
+    "model_eol",
+    "model_not_found",
+    "model_retired",
+  ].includes(normalizedCode ?? "")) return true;
+  const text = message.toLowerCase();
+  return /\bmodel\b/.test(text) && (
+    /\bend[ -]of[ -]life\b/.test(text)
+    || /\bno longer available\b/.test(text)
+    || /\b(?:deprecated|retired|retirement|sunset|decommissioned)\b/.test(text)
+  );
+}
+
 export function comboFailureDecision(
   status: number,
   message: string,
@@ -119,6 +141,11 @@ export function comboFailureDecision(
   // Cyber policy is a hard non-retryable refusal — honor structured code even when
   // classificationText was truncated before the JSON code field.
   if (isCyberPolicyCode(options?.code)) return "stop";
+  // HTTP 410 is normally terminal. A model-specific lifecycle verdict is target-local,
+  // however: another provider/model in the declared combo can still serve the request.
+  // Require structured lifecycle code or explicit model+lifecycle prose so unrelated
+  // application-level 410 responses remain fail-closed.
+  if (isModelLifecycleGone(status, message, options?.code)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",

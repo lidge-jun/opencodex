@@ -116,6 +116,13 @@ of the HTTP retry loop.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- **Structured output:** Responses `text.format` and Chat Completions `response_format`
+  with `json_object` or `json_schema` become Gemini `generationConfig.responseMimeType:
+  "application/json"`. A `json_schema` with a schema is sanitized to Gemini
+  `responseSchema` using the same allowlist as function declarations. JSON mode is
+  omitted when the turn has function tools, when the routed model is
+  Claude-on-Antigravity, or when the model is image-capable (`responseModalities`
+  TEXT+IMAGE). Schema-less `json_schema` and `json_object` send mime type only.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending
@@ -216,6 +223,7 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
 `aiserver.v1.BidiService/BidiAppend` for client messages.
 **Auth:** Cursor OAuth/access token from `provider.apiKey` or the forwarded authorization header.
 
+- Structured output is rejected before transport: Cursor has no protobuf output-schema field, so `text.format` / `response_format` JSON object or schema (and the internal structured-output flag) return `400 invalid_request_error`. Tools do not bypass this. `requested_model.parameters` and MCP `input_schema` are not output-format channels.
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests, server events, tool arguments,
   usage checkpoints, and client replies are encoded with `@bufbuild/protobuf` schemas in
   `cursor/gen/agent_pb.ts` and framed as Connect messages.
@@ -242,6 +250,22 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+  With default-off policy, native Shell/Read/Ls/Grep/Fetch map to Codex `shell_command`/`exec_command`
+  when that bridge tool is in the catalog; write/delete remain refused.
+
+## `command-code`
+
+**Targets:** Command Code **OAuth** subscription agent API (`POST {baseUrl}/alpha/generate`).
+**Auth:** OAuth Bearer from `ocx login command-code`.
+
+- Distinct from the API-key `commandcode` preset (`openai-chat` → `POST {baseUrl}/provider/v1/chat/completions`). The API-key route never reads `projectContext` or fills the generate envelope from disk.
+- Optional `projectContext: "on"` on `providers.command-code` copies bounded files from `process.cwd()` at request time into `memory`, `taste`, and `skills`. Absent or `"off"` sends `memory: ""`, `taste: null`, `skills: null` even when those files exist in the repo — opt-in only, never auto-load.
+- Start the proxy from the trusted Codex project directory so the working directory matches the repository Codex is editing.
+- **Memory:** UTF-8 of `AGENTS.md` at cwd only (not `CLAUDE.md`, `CODEX.md`, or home paths). Cap 32,768 bytes; oversize prefixes truncate with `<!-- truncated -->`.
+- **Taste:** UTF-8 of `.commandcode/taste/taste.md`, or `null` when missing. Cap 8,192 bytes with the same truncation marker. A present-but-empty file sends `""`. `x-taste-learning` remains `"false"`; loading taste is not Command Code taste learning.
+- **Skills:** XML bundle from project skill roots in order: `.commandcode/skills`, `.agents/skills`, `.pi/skills`. Each subdirectory with `SKILL.md` becomes one `<skill name="…">…</skill>` entry (name from YAML frontmatter `name:` or the directory name). Skips dotted names and non-directories; first-wins by resolved name; max 16 skills; total XML cap 32,768 bytes. Never reads `~/.commandcode/skills` or other home skill trees.
+- Path confinement uses realpath checks under cwd; symlink escapes are omitted. Each file operation has a 2-second timeout. Results are cached per cwd for 30 seconds (max 128 entries). Any failure omits that piece fail-softly.
+- `commandCodeVersion` pins `x-command-code-version` (default `0.52.1`). `permissionMode` stays `"standard"` and `mode` stays `"agent"`.
 
 ## `azure-openai` (alias: `azure`)
 
