@@ -438,6 +438,7 @@ const requestPacingRuleSchema = z.object({
   // Keep the RPM-derived timer within the same one-hour bound as minIntervalMs.
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
+  jitterMs: z.number().int().min(0).max(60_000).optional(),
 }).strict().refine(value => value.requestsPerMinute !== undefined || value.minIntervalMs !== undefined, {
   message: "request pacing rules need requestsPerMinute or minIntervalMs",
 });
@@ -446,6 +447,7 @@ const requestPacingSchema = z.object({
   enabled: z.boolean(),
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
+  jitterMs: z.number().int().min(0).max(60_000).optional(),
   models: z.record(z.string().trim().min(1), requestPacingRuleSchema).optional(),
 }).strict().refine(value => value.enabled === false
   || value.requestsPerMinute !== undefined

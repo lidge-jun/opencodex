@@ -226,6 +226,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: entry.modelSuffixBracketStrip } : {}),
     ...(entry.staticHeaders ? { headers: { ...entry.staticHeaders } } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
+    ...(entry.requestPacing ? { requestPacing: structuredClone(entry.requestPacing) } : {}),
     ...(entry.models ? { models: [...entry.models] } : {}),
     ...(liveModels !== undefined ? { liveModels } : {}),
     ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
@@ -438,6 +439,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   repairStaticModelCatalogProvider(name, prov);
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
+  if (prov.requestPacing === undefined && seed.requestPacing) prov.requestPacing = structuredClone(seed.requestPacing);
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
   if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;

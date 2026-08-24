@@ -1215,6 +1215,7 @@ export const ru: Record<TKey, string> = {
   "pws.pacingRpm": "Запросов в минуту",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "Минимальный интервал (мс)",
+  "pws.pacingJitter": "Случайная задержка (мс)",
   "pws.pacingSlowerWins": "Действует более медленный лимит провайдера. Правила моделей могут только увеличить задержку.",
   "pws.pacingQueued": "в очереди",
   "pws.pacingNextSlot": "до следующего слота",

@@ -68,6 +68,8 @@ export interface RequestPacingRule {
   requestsPerMinute?: number;
   /** Minimum delay between request starts. The slower configured value wins. */
   minIntervalMs?: number;
+  /** Positive-only random delay added to each request-start slot. */
+  jitterMs?: number;
 }
 
 export interface ProviderRequestPacingConfig extends RequestPacingRule {

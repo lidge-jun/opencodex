@@ -1222,6 +1222,7 @@ export const tr: Record<TKey, string> = {
   "pws.pacingRpm": "Dakikadaki istek",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "En kısa aralık (ms)",
+  "pws.pacingJitter": "Rastgele titreşim (ms)",
   "pws.pacingSlowerWins": "Daha yavaş sağlayıcı sınırı geçerlidir. Model kuralları yalnızca ek gecikme getirir.",
   "pws.pacingQueued": "kuyrukta",
   "pws.pacingNextSlot": "sonraki aralığa",

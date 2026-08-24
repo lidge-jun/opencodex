@@ -1164,6 +1164,7 @@ export const ja: Record<TKey, string> = {
   "pws.pacingRpm": "1分あたりのリクエスト数",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "最小間隔 (ms)",
+  "pws.pacingJitter": "ランダムジッター (ms)",
   "pws.pacingSlowerWins": "より遅いプロバイダー制限が優先され、モデル設定は遅延を増やす場合のみ適用されます。",
   "pws.pacingQueued": "待機中",
   "pws.pacingNextSlot": "次のスロットまで",

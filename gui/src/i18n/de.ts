@@ -1733,6 +1733,7 @@ export const de: Record<TKey, string> = {
   "pws.pacingRpm": "Anfragen pro Minute",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "Mindestintervall (ms)",
+  "pws.pacingJitter": "Zufällige Streuung (ms)",
   "pws.pacingSlowerWins": "Das langsamere Anbieterlimit gilt. Modellregeln können nur stärker verzögern.",
   "pws.pacingQueued": "in Warteschlange",
   "pws.pacingNextSlot": "bis zum nächsten Slot",

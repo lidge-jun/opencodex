@@ -1760,6 +1760,7 @@ export const ko: Record<TKey, string> = {
   "pws.pacingRpm": "분당 요청 수",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "최소 시작 간격(ms)",
+  "pws.pacingJitter": "무작위 지터(ms)",
   "pws.pacingSlowerWins": "프로바이더의 더 느린 제한이 우선합니다. 모델별 설정은 지연을 더 늘릴 때만 적용됩니다.",
   "pws.pacingQueued": "대기 중",
   "pws.pacingNextSlot": "다음 슬롯까지",

@@ -1180,6 +1180,7 @@ export const fr: Record<TKey, string> = {
   "pws.pacingRpm": "Requêtes par minute",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "Intervalle minimal (ms)",
+  "pws.pacingJitter": "Variation aléatoire (ms)",
   "pws.pacingSlowerWins": "La limite la plus lente du fournisseur s’applique. Les remplacements par modèle ne peuvent qu’ajouter un délai.",
   "pws.pacingQueued": "en attente",
   "pws.pacingNextSlot": "avant le prochain créneau",

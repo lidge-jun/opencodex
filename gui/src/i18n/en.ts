@@ -1231,6 +1231,7 @@ export const en = {
   "pws.pacingRpm": "Requests per minute",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "Minimum interval (ms)",
+  "pws.pacingJitter": "Random jitter (ms)",
   "pws.pacingSlowerWins": "The slower provider limit wins. Model overrides can only add more delay.",
   "pws.pacingQueued": "queued",
   "pws.pacingNextSlot": "until next slot",

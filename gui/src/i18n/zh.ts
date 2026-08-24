@@ -1753,6 +1753,7 @@ export const zh: Record<TKey, string> = {
   "pws.pacingRpm": "每分钟请求数",
   "pws.pacingRpmUnit": "RPM",
   "pws.pacingDelay": "最小间隔（毫秒）",
+  "pws.pacingJitter": "随机抖动（毫秒）",
   "pws.pacingSlowerWins": "以较慢的提供商限制为准，模型规则只能增加延迟。",
   "pws.pacingQueued": "排队中",
   "pws.pacingNextSlot": "距下个时隙",

@@ -222,6 +222,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshAntigravityToken,
     providerConfig: oauthConfig("google-antigravity"),
     defaultModel: oauthDefaultModel("google-antigravity"),
+    defaultRefreshPolicy: "lazy-only",
   },
   cursor: {
     login: (ctrl, opts) => loginCursor(ctrl, undefined, { forceLogin: opts?.forceLogin }),

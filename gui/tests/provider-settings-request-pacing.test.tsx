@@ -60,9 +60,11 @@ test("settings saves provider pacing and a slower model override", async () => {
   await act(async () => { container.querySelector<HTMLInputElement>(".pwi-pacing-toggle input")!.click(); });
   const numbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-card input[type="number"]');
   await setInput(numbers[0]!, "38");
+  await setInput(numbers[2]!, "500");
   const modelInput = container.querySelector<HTMLInputElement>('.pwi-pacing-grid--model input[list]')!;
   await setInput(modelInput, "deepseek-ai/deepseek-v4-flash-0731");
-  await setInput(numbers[2]!, "10");
+  await setInput(numbers[3]!, "10");
+  await setInput(numbers[5]!, "20");
   await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-pacing-grid--model button")!.click(); });
   const save = container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
   await act(async () => { save.click(); await Promise.resolve(); });
@@ -71,7 +73,8 @@ test("settings saves provider pacing and a slower model override", async () => {
     requestPacing: {
       enabled: true,
       requestsPerMinute: 38,
-      models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
+      jitterMs: 500,
+      models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10, jitterMs: 20 } },
     },
   }]);
   expect(container.textContent).toContain("deepseek-ai/deepseek-v4-flash-0731");

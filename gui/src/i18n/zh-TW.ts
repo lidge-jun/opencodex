@@ -1010,6 +1010,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.pacingRpm": "每分鐘請求數",
   "pws.pacingRpmUnit": "次/分鐘",
   "pws.pacingDelay": "最小間隔（毫秒）",
+  "pws.pacingJitter": "隨機抖動（毫秒）",
   "pws.pacingSlowerWins": "以較慢的供應商限制為準，模型規則只能增加延遲。",
   "pws.pacingQueued": "排隊中",
   "pws.pacingNextSlot": "距下個時段",

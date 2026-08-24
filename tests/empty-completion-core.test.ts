@@ -224,6 +224,7 @@ describe("empty-completion core integration", () => {
       },
       clearTimer() {},
       enqueueMicrotask: callback => callback(),
+      random: () => 0,
     });
     attemptEvents = [
       [{ type: "done" }],
