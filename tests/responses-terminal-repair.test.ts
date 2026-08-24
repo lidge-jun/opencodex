@@ -350,6 +350,56 @@ describe("DeepSeek Responses terminal repair", () => {
     expect(output).not.toContain('"type":"response.completed"');
   });
 
+  test("unframed terminal-like suffixes stay tainted and cannot outrank incomplete", async () => {
+    const fixtures = [
+      {
+        event: "response.completed",
+        payload: { type: "response.completed", response: { id: "resp_truncated_completed", status: "completed" } },
+      },
+      {
+        event: "response.failed",
+        payload: { type: "response.failed", response: { id: "resp_truncated_failed", status: "failed" } },
+      },
+      {
+        event: "response.incomplete",
+        payload: { type: "response.incomplete", response: { id: "resp_truncated_incomplete", status: "incomplete" } },
+      },
+      {
+        event: "error",
+        payload: {
+          type: "error",
+          response: { id: "resp_truncated_error", status: "failed" },
+          error: { type: "server_error", code: "upstream_error", message: "provider failed" },
+        },
+      },
+      {
+        event: "error",
+        payload: {
+          type: "error",
+          error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked by upstream policy" },
+        },
+      },
+    ] as const;
+
+    for (const newline of ["\n", "\r\n"] as const) {
+      for (const fixture of fixtures) {
+        const input = `event: ${fixture.event}${newline}data: ${JSON.stringify(fixture.payload)}`;
+        const { output } = await repairClosedText(input);
+
+        expect(terminalTypes(output)).toEqual(["response.incomplete"]);
+        expect(output).toContain('"reason":"missing_terminal_event"');
+        expect(output).not.toContain("resp_truncated_");
+        expect(output).not.toContain("cyber_policy");
+        expect(output.match(/data: \[DONE\]/g)?.length).toBe(1);
+      }
+
+      const { output: doneOutput } = await repairClosedText(`data: [DONE]${newline}`);
+      expect(terminalTypes(doneOutput)).toEqual(["response.incomplete"]);
+      expect(doneOutput).toContain('"reason":"missing_terminal_event"');
+      expect(doneOutput.match(/data: \[DONE\]/g)?.length).toBe(1);
+    }
+  });
+
   test("DONE is replaced by completed then one DONE only for a complete candidate", async () => {
     const { output } = await repairClosedText(completedMessageLifecycle() + "data: [DONE]\n\n");
     expect(terminalTypes(output)).toEqual(["response.completed"]);

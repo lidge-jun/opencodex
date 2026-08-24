@@ -22,6 +22,22 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isUnframedTerminalLikeSuffix(block: string): boolean {
+  const payload = sseDataPayload(block);
+  if (payload === "[DONE]") return true;
+  if (!payload) return false;
+  try {
+    const parsed = JSON.parse(payload);
+    if (!isPlainRecord(parsed)) return false;
+    return parsed.type === "response.completed"
+      || parsed.type === "response.failed"
+      || parsed.type === "response.incomplete"
+      || parsed.type === "error";
+  } catch {
+    return false;
+  }
+}
+
 function outputIndex(value: unknown): number | null {
   return Number.isInteger(value) && (value as number) >= 0 ? value as number : null;
 }
@@ -292,14 +308,16 @@ export function relayResponsesSseWithTerminalRepair(
         if (done) {
           appendBuffer(decoder.decode());
           if (buffer.length > 0) {
-            // A delimiter-less suffix is not a complete SSE event. Preserve the
-            // upstream bytes for passthrough compatibility, but terminate the
-            // preserved block before emitting the synthetic terminal. Without
-            // this delimiter the boundary relay sees both JSON payloads as one
-            // malformed SSE block and appends a second adapter_eof terminal.
+            // A delimiter-less suffix is not a complete SSE event. Preserve an
+            // ordinary suffix for passthrough compatibility, but never promote
+            // a terminal-like suffix by adding the delimiter it did not receive
+            // upstream. The latter must stay tainted and fail closed through the
+            // synthetic incomplete terminal below.
             tainted = true;
-            controller.enqueue(encoder.encode(buffer));
-            controller.enqueue(encoder.encode(buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n"));
+            if (!isUnframedTerminalLikeSuffix(buffer)) {
+              controller.enqueue(encoder.encode(buffer));
+              controller.enqueue(encoder.encode(buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n"));
+            }
           }
           if (!realTerminalSeen) {
             emitSynthetic(completeCandidate() ? "completed" : "incomplete", controller);
