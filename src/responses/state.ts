@@ -117,7 +117,18 @@ async function snapshotOnDiskMatches(path: string, payload: string, payloadBytes
   try {
     const file = Bun.file(path);
     if (file.size !== payloadBytes) return false;
-    return await file.text() === payload;
+    if (await file.text() !== payload) return false;
+    // Content matching is not the whole invariant. This file holds persisted request
+    // and response bodies, and `atomicWriteFileAsync` writes it owner-only; the
+    // unconditional rewrite used to restore that on every mutation. Skipping without
+    // checking would let a broadened mode persist indefinitely, so treat a widened
+    // file as "does not match" and let the caller rewrite it through the hardening
+    // path. POSIX only — Windows ACLs are re-applied by that same write path.
+    if (process.platform !== "win32") {
+      const mode = statSync(path).mode & 0o777;
+      if (mode !== 0o600) return false;
+    }
+    return true;
   } catch {
     return false;
   }

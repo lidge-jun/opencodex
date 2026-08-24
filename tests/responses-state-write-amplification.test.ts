@@ -8,7 +8,7 @@
  * of the snapshot actually being written.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -131,6 +131,25 @@ describe("responses-state snapshot write amplification (#2460)", () => {
     await flushResponseState();
 
     expect(readFileSync(snapshot, "utf-8")).toBe(original);
+  });
+
+  // Content is not the whole invariant. This file holds persisted request and response
+  // bodies and is written owner-only; the unconditional rewrite used to restore that on
+  // every mutation. Skipping on content alone would let a widened mode persist for the
+  // life of the process, which is a durable privacy regression rather than a slow one.
+  test.skipIf(process.platform === "win32")("a snapshot whose mode was broadened is rewritten and re-hardened", async () => {
+    remember("resp_amp_perm", "sensitive");
+    await flushResponseState();
+    expect(statSync(snapshot).mode & 0o777).toBe(0o600);
+
+    chmodSync(snapshot, 0o644);
+
+    // Same trick as above: the oversized entry is dropped by the per-entry bound, so
+    // the bounded payload is byte-identical and only the mode differs.
+    remember("resp_amp_perm_oversized", "y".repeat(3 * 1024 * 1024));
+    await flushResponseState();
+
+    expect(statSync(snapshot).mode & 0o777).toBe(0o600);
   });
 
   test("the scheduled debounce stays at its base value for a small snapshot", async () => {

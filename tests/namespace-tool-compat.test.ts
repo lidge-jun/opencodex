@@ -263,6 +263,61 @@ describe("Responses namespace tool compatibility", () => {
     }).aliases.size).toBe(0);
   });
 
+  // A selector's `namespace` is either absent — meaning "unqualified, resolve the bare
+  // name" — or a string naming the group. A present-but-malformed value is neither, and
+  // treating it as absent let it resolve to a namespace wire name and authorize an alias
+  // the caller never qualified. Fail closed instead: an unqualified selector is a
+  // deliberate shape, a malformed one is not.
+  describe("a malformed namespace field authorizes nothing", () => {
+    const namespaceTools = [{
+      type: "namespace",
+      name: "collaboration",
+      tools: [{ type: "function", name: "safe" }],
+    }];
+    const wireName = "collaboration__safe";
+
+    test.each([
+      ["a number", 1],
+      ["null", null],
+      ["an object", {}],
+      ["an array", ["collaboration"]],
+      ["a boolean", true],
+    ])("a forced selector whose namespace is %s", (_label, namespace) => {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "function", namespace, name: "safe" },
+      });
+      expect(aliases.size).toBe(0);
+      expect(restoreRoutedNamespaceCalls({ type: "function_call", name: wireName }, aliases).changed).toBe(false);
+    });
+
+    test("an allowed_tools entry whose namespace is malformed", () => {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "allowed_tools", mode: "required", tools: [{ type: "function", namespace: 1, name: "safe" }] },
+      });
+      expect(aliases.size).toBe(0);
+    });
+
+    test("a correctly qualified selector still authorizes, so this is not deny-all", () => {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "function", namespace: "collaboration", name: "safe" },
+      });
+      expect(aliases.get(wireName)).toEqual({ namespace: "collaboration", name: "safe", kind: "function" });
+    });
+
+    test("an unqualified selector keeps resolving by bare name", () => {
+      // The absent case is the one legitimate reason the fallback exists; narrowing
+      // malformed values must not take it away.
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "function", name: "safe" },
+      });
+      expect(aliases.get(wireName)).toBeDefined();
+    });
+  });
+
   test("fails closed when flattening would collide with a declared wire name", () => {
     expect(() => rewriteRoutedNamespaceToolsForUpstream({
       tools: [

@@ -223,12 +223,19 @@ function rewriteNamedSelector(
   bareFallback: boolean,
 ): unknown {
   if (!isPlainObject(value) || typeof value.name !== "string") return value;
-  if (typeof value.namespace !== "string") {
+  // An ABSENT namespace is an unqualified selector and may fall back to the bare
+  // name. A PRESENT but non-string one is malformed, and must not take that path:
+  // treating it as absent lets `{type:"function", namespace:1, name:"safe"}` resolve
+  // to a namespace wire name, which then authorizes an alias the caller never named
+  // in any well-formed way. Fail closed and hand the selector back untouched.
+  if ("namespace" in value && typeof value.namespace !== "string") return value;
+  const namespace = value.namespace;
+  if (typeof namespace !== "string") {
     if (!bareFallback) return value;
     const wireName = plan.selectors.get(value.name) ?? undefined;
     return wireName === undefined || wireName === value.name ? value : { ...value, name: wireName };
   }
-  const { namespace, ...rest } = value;
+  const { namespace: _dropped, ...rest } = value;
   const wireName = plan.identities.get(loweredIdentity(namespace, value.name))
     ?? loweredWireName(namespace, value.name);
   return { ...rest, name: wireName };
