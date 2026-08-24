@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseRequest } from "../src/responses/parser";
 import { routeModel } from "../src/router";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
@@ -65,6 +68,34 @@ function responseRequest(body: Record<string, unknown>, headers: Record<string, 
   });
 }
 
+const savedCodexHome = process.env.CODEX_HOME;
+const activeCodexHome = mkdtempSync(join(tmpdir(), "ocx-v2-parent-override-"));
+
+beforeAll(() => {
+  writeFileSync(join(activeCodexHome, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+  process.env.CODEX_HOME = activeCodexHome;
+});
+
+afterAll(() => {
+  if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = savedCodexHome;
+  rmSync(activeCodexHome, { recursive: true, force: true });
+});
+
+async function withUpstreamV2(enabled: boolean, fn: () => Promise<void>): Promise<void> {
+  const previous = process.env.CODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-v2-parent-override-flag-"));
+  writeFileSync(join(home, "config.toml"), enabled ? "[features.multi_agent_v2]\nenabled = true\n" : "[features]\n");
+  process.env.CODEX_HOME = home;
+  try {
+    await fn();
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
 describe("v2 native parent override decision", () => {
   test("returns a routed target for an eligible native V2 root", () => {
     const result = decideV2NativeParentOverride({
@@ -112,9 +143,93 @@ describe("v2 native parent override decision", () => {
     expect(decideV2NativeParentOverride({ kind: "compact", config: { ...compactConfig, multiAgentMode: "default" }, headers: new Headers(), sourceRoute: source, targetEvidence: {} }).kind).toBe("skip");
     expect(decideV2NativeParentOverride({ kind: "compact", config: compactConfig, headers: new Headers({ "x-openai-subagent": "memory" }), sourceRoute: source, targetEvidence: {} }).kind).toBe("skip");
   });
+
+  test.each([
+    ["ordinary default mode", "responses", { multiAgentMode: "default" }],
+    ["ordinary Keep-Native", "responses", { keepNativeChatGptOnV1: true }],
+    ["compact default mode", "compact", { multiAgentMode: "default" }],
+    ["compact Keep-Native", "compact", { keepNativeChatGptOnV1: true }],
+  ] as const)("skips when %s is inactive", async (_label, kind, changes) => {
+    const cfg = { ...config(), ...changes } as OcxConfig;
+    const result = decideV2NativeParentOverride({
+      kind,
+      config: cfg,
+      headers: new Headers(),
+      ...(kind === "responses" ? { parsed: parsed() } : {}),
+      sourceRoute: sourceRoute(cfg),
+      targetEvidence: {},
+    });
+    expect(result.kind).toBe("skip");
+  });
+
+  test("skips ordinary and compact requests when the upstream V2 flag is off", async () => {
+    await withUpstreamV2(false, async () => {
+      const cfg = config();
+      expect(decideV2NativeParentOverride({
+        kind: "responses", config: cfg, headers: new Headers(), parsed: parsed(), sourceRoute: sourceRoute(cfg),
+      }).kind).toBe("skip");
+      expect(decideV2NativeParentOverride({
+        kind: "compact", config: cfg, headers: new Headers(), sourceRoute: sourceRoute(cfg), targetEvidence: {},
+      }).kind).toBe("skip");
+    });
+  });
 });
 
 describe("v2 native parent override runtime", () => {
+  test.each([
+    ["ordinary default mode", "responses", { multiAgentMode: "default" }],
+    ["ordinary Keep-Native", "responses", { keepNativeChatGptOnV1: true }],
+    ["compact default mode", "compact", { multiAgentMode: "default" }],
+    ["compact Keep-Native", "compact", { keepNativeChatGptOnV1: true }],
+  ] as const)("does not fetch the routed target when %s is inactive", async (_label, kind, changes) => {
+    const targetUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown) => {
+      targetUrls.push(String(url));
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const cfg = { ...config(), ...changes } as OcxConfig;
+      await (kind === "responses"
+        ? handleResponses(responseRequest(rootBody()), cfg, { model: "", provider: "" })
+        : handleResponsesCompact(responseRequest(rootBody({ input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+          { type: "compaction_trigger" },
+        ] })), cfg, { model: "", provider: "" }));
+      expect(targetUrls.filter(url => url.includes("gateway.example"))).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("does not fetch the routed target when the upstream V2 flag is off", async () => {
+    await withUpstreamV2(false, async () => {
+      const targetUrls: string[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: unknown) => {
+        targetUrls.push(String(url));
+        return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      try {
+        const cfg = config();
+        await handleResponses(responseRequest(rootBody()), cfg, { model: "", provider: "" });
+        await handleResponsesCompact(responseRequest(rootBody({ input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+          { type: "compaction_trigger" },
+        ] })), cfg, { model: "", provider: "" });
+        expect(targetUrls.filter(url => url.includes("gateway.example"))).toEqual([]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
   test.each([
     ["missing", undefined],
     ["unroutable", "missing/model"],

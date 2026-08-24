@@ -1,6 +1,7 @@
 import type { OcxConfig, OcxParsedRequest } from "../../types";
 import { routeModel, type RouteResult } from "../../router";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
+import { isMultiAgentV2Enabled } from "../../codex/features";
 import { collabSurface } from "./collaboration";
 import { isThreadSpawnRequest } from "../effort-policy";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -20,14 +21,18 @@ export function decideV2NativeParentOverride(args: {
   targetEvidence?: PolicyRequestEvidence;
 }): V2NativeParentOverrideDecision {
   const { config, headers, sourceRoute } = args;
-  if (args.comboAttempt || config.v2NativeParentOverride?.enabled !== true) return { kind: "skip" };
-  if (args.kind === "compact") {
-    if (config.multiAgentMode !== "v2") return { kind: "skip" };
-  } else if (
+  if (
+    args.comboAttempt
+    || config.v2NativeParentOverride?.enabled !== true
+    || config.multiAgentMode !== "v2"
+    || config.keepNativeChatGptOnV1 === true
+    || !isMultiAgentV2Enabled()
+  ) return { kind: "skip" };
+  if (args.kind === "responses" && (
     !args.parsed
     || (collabSurface(args.parsed) !== "v2"
       && !(args.parsed._compactionRequest === true && config.multiAgentMode === "v2"))
-  ) {
+  )) {
     return { kind: "skip" };
   }
   if (isThreadSpawnRequest(headers) || headers.has("x-openai-subagent")) return { kind: "skip" };
