@@ -9,17 +9,27 @@ export interface AzureTokenCredential {
 
 export type AzureCredentialFactory = (options?: { managedIdentityClientId?: string }) =>
   AzureTokenCredential | Promise<AzureTokenCredential>;
+export type AzureIdentityModuleLoader = () => Promise<{
+  DefaultAzureCredential: new (options?: { managedIdentityClientId?: string }) => AzureTokenCredential;
+}>;
 
 const credentials = new Map<string, AzureTokenCredential>();
 const inflight = new Map<string, Promise<AzureTokenCredential>>();
 let testFactory: AzureCredentialFactory | undefined;
+let testModuleLoader: AzureIdentityModuleLoader | undefined;
 
-async function loadDefaultAzureCredential(options?: { managedIdentityClientId?: string }): Promise<AzureTokenCredential> {
+async function loadAzureIdentityModule(): Promise<{
+  DefaultAzureCredential: new (options?: { managedIdentityClientId?: string }) => AzureTokenCredential;
+}> {
   // Keep the package out of the static module graph until Task 3 installs it.
   const packageName: string = "@azure/identity";
-  const module = await import(packageName) as unknown as {
+  return await import(packageName) as unknown as {
     DefaultAzureCredential: new (options?: { managedIdentityClientId?: string }) => AzureTokenCredential;
   };
+}
+
+async function loadDefaultAzureCredential(options?: { managedIdentityClientId?: string }): Promise<AzureTokenCredential> {
+  const module = await (testModuleLoader ?? loadAzureIdentityModule)();
   return options === undefined
     ? new module.DefaultAzureCredential()
     : new module.DefaultAzureCredential(options);
@@ -34,12 +44,16 @@ async function credentialFor(clientId: string): Promise<AzureTokenCredential> {
   if (cached) return cached;
   const running = inflight.get(clientId);
   if (running) return running;
-  const promise = Promise.resolve((testFactory ?? loadDefaultAzureCredential)(clientId ? { managedIdentityClientId: clientId } : undefined))
+  const generation = cacheGeneration;
+  let promise!: Promise<AzureTokenCredential>;
+  promise = Promise.resolve((testFactory ?? loadDefaultAzureCredential)(clientId ? { managedIdentityClientId: clientId } : undefined))
     .then(credential => {
-      credentials.set(clientId, credential);
+      if (cacheGeneration === generation) credentials.set(clientId, credential);
       return credential;
     })
-    .finally(() => inflight.delete(clientId));
+    .finally(() => {
+      if (inflight.get(clientId) === promise) inflight.delete(clientId);
+    });
   inflight.set(clientId, promise);
   return promise;
 }
@@ -57,13 +71,27 @@ export async function getAzureAccessToken(provider: OcxProviderConfig): Promise<
 }
 
 export function setAzureCredentialFactoryForTests(factory: AzureCredentialFactory): void {
+  cacheGeneration++;
   testFactory = factory;
+  testModuleLoader = undefined;
   credentials.clear();
   inflight.clear();
 }
 
 export function __resetAzureCredentialCache(): void {
+  cacheGeneration++;
   testFactory = undefined;
+  testModuleLoader = undefined;
+  credentials.clear();
+  inflight.clear();
+}
+
+let cacheGeneration = 0;
+
+export function setAzureIdentityModuleLoaderForTests(loader: AzureIdentityModuleLoader): void {
+  cacheGeneration++;
+  testFactory = undefined;
+  testModuleLoader = loader;
   credentials.clear();
   inflight.clear();
 }

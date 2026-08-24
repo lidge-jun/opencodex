@@ -4,6 +4,7 @@ import {
   __resetAzureCredentialCache,
   getAzureAccessToken,
   setAzureCredentialFactoryForTests,
+  setAzureIdentityModuleLoaderForTests,
 } from "../src/lib/azure-identity";
 import type { OcxProviderConfig } from "../src/types";
 
@@ -65,5 +66,35 @@ describe("Azure identity credential helper", () => {
     });
     expect(await getAzureAccessToken(provider())).toBe("default-token");
     expect(options).toBeUndefined();
+  });
+
+  test("reset does not let an older in-flight construction repopulate the cache", async () => {
+    let releaseOld!: (credential: { getToken: (scope: string) => Promise<{ token: string }> }) => void;
+    let constructions = 0;
+    setAzureCredentialFactoryForTests(() => {
+      constructions++;
+      if (constructions === 1) {
+        return new Promise(resolve => { releaseOld = resolve; });
+      }
+      return { getToken: async () => ({ token: "new-token" }) };
+    });
+    const oldRequest = getAzureAccessToken(provider("client")).catch(() => "old-failed");
+    await Bun.sleep(0);
+    __resetAzureCredentialCache();
+    setAzureCredentialFactoryForTests(() => ({ getToken: async () => ({ token: "new-token" }) }));
+    expect(await getAzureAccessToken(provider("client"))).toBe("new-token");
+    releaseOld({ getToken: async () => ({ token: "old-token" }) });
+    await oldRequest;
+    expect(await getAzureAccessToken(provider("client"))).toBe("new-token");
+  });
+
+  test("dynamic module-loader failures are stable and redacted", async () => {
+    setAzureIdentityModuleLoaderForTests(async () => {
+      throw new Error("Cannot find module @azure/identity tenant-secret token-secret");
+    });
+    const error = await getAzureAccessToken(provider()).catch(value => value as Error);
+    expect(error.message).toBe(AZURE_IDENTITY_UNAVAILABLE_ERROR);
+    expect(error.message).not.toContain("tenant-secret");
+    expect(error.message).not.toContain("@azure/identity");
   });
 });
