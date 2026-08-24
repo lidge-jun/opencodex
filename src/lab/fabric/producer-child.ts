@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   writeLine({ type: "result", patch });
 }
 
-main().catch((error: unknown) => {
+await main().catch((error: unknown) => {
   writeLine({
     type: "error",
     code: "harness_failure",
