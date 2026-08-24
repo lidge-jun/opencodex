@@ -114,6 +114,80 @@ describe("fetchProviderQuotaReports", () => {
     expect(cancelCalls).toBe(1);
   });
 
+  test("Codex report exposes primary, weekly, and Spark weekly windows", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
+      return Response.json({
+        plan_type: "plus",
+        rate_limit: {
+          primary_window: { used_percent: 11, reset_at: 1, limit_window_seconds: 5 * 60 * 60 },
+          secondary_window: { used_percent: 22, reset_at: 2, limit_window_seconds: 7 * 24 * 60 * 60 },
+        },
+        additional_rate_limits: [{
+          limit_name: "GPT-5.3-Codex-Spark",
+          metered_feature: "codex_bengalfox",
+          rate_limit: {
+            primary_window: { used_percent: 33, reset_at: 3, limit_window_seconds: 7 * 24 * 60 * 60 },
+          },
+        }],
+      });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+    } as OcxConfig, true);
+
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 11,
+      fiveHourResetAt: 1,
+      weeklyPercent: 22,
+      weeklyResetAt: 2,
+      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
+    });
+  });
+
+  test("Anthropic report exposes the canonical Fable window from direct and limits payloads", async () => {
+    await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://api.anthropic.com/api/oauth/usage");
+      return Response.json({
+        five_hour: { utilization: 11, resets_at: "2026-07-05T12:00:00Z" },
+        seven_day: { utilization: 22, resets_at: "2026-07-11T12:00:00Z" },
+        seven_day_fable: null,
+        limits: [
+          { kind: "session", percent: 44, resets_at: "2026-07-13T12:00:00Z" },
+          { kind: "weekly_all", percent: 55, resets_at: "2026-07-14T12:00:00Z" },
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: "Claude Fable 5" } },
+            percent: 33,
+            resets_at: "2026-07-12T12:00:00Z",
+          },
+        ],
+      });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "anthropic",
+      providers: { anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com/v1" } },
+    } as OcxConfig, true);
+
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 11,
+      weeklyPercent: 22,
+      customWindows: [{ label: "Fable", percent: 33, resetAt: Date.parse("2026-07-12T12:00:00Z") }],
+    });
+    expect(result.reports[0]?.quota.customWindows).toHaveLength(1);
+  });
+
   test("returns active provider quota rows without leaking credentials or raw upstream payloads", async () => {
     await saveCredential("xai", { access: "xai-access-secret", refresh: "xai-refresh-secret", expires: Date.now() + 3600_000 });
     await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
