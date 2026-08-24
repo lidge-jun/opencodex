@@ -724,6 +724,41 @@ describe("kiro adapter — buildRequest", () => {
     expect(current.content).toContain("Omitted and unavailable this turn");
   });
 
+  test("large catalogs prioritize tool-search discoveries and the search gateway", async () => {
+    const ordinaryTools = Array.from({ length: MAX_KIRO_TOOL_COUNT + 20 }, (_, index) => ({
+      name: `ordinary_tool_${String(index).padStart(3, "0")}`,
+      description: `Ordinary tool ${index}`,
+      parameters: { type: "object" },
+    }));
+    const searchGateway = {
+      name: "tool_search",
+      description: "Search deferred tools",
+      parameters: { type: "object" },
+      toolSearch: true,
+    };
+    const loadedTool = {
+      name: "codex_app__send_message_to_thread",
+      description: "Send a message to a task",
+      parameters: { type: "object" },
+      loadedFromToolSearch: true,
+    };
+    const tools = [...ordinaryTools, searchGateway, loadedTool];
+
+    const current = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], tools),
+    )).body).conversationState.currentMessage.userInputMessage;
+    const ordinary = current.userInputMessageContext.tools.slice(0, -1);
+    const names = ordinary.map((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name);
+    const omissionNotice = current.content.split("\n\n", 1)[0];
+
+    expect(ordinary).toHaveLength(MAX_KIRO_TOOL_COUNT);
+    expect(names.slice(0, 2)).toEqual([loadedTool.name, searchGateway.name]);
+    expect(names.slice(2)).toEqual(ordinaryTools.slice(0, MAX_KIRO_TOOL_COUNT - 2).map(tool => tool.name));
+    expect(omissionNotice).toContain("ordinary_tool_046");
+    expect(omissionNotice).not.toContain(loadedTool.name);
+    expect(omissionNotice).not.toContain(searchGateway.name);
+  });
+
   test("large catalogs retain the declared prefix within Kiro's serialized byte budget", async () => {
     // Top-level descriptions stay small, so existing description truncation cannot make this pass.
     // The repeated schema descriptions instead make the aggregate converted catalog exceed 96 KiB.
