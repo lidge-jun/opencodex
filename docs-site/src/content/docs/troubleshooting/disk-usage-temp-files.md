@@ -50,6 +50,20 @@ running process can own those.
 The safety rules are unchanged: a file younger than 15 minutes is never removed,
 and the proxy never removes a file it is writing itself.
 
+## How often the snapshot is written
+
+Writes are debounced, and the debounce scales with how large the snapshot
+actually is: a small cache is written about two seconds after a change, while one
+near the 24 MB bound waits up to thirty seconds. A flush that would reproduce the
+existing file byte-for-byte is skipped entirely.
+
+Together these keep the write rate roughly flat as the cache grows, instead of
+re-serializing and replacing the whole file every two seconds.
+
+A graceful shutdown always flushes, so the longer wait only widens the window in
+which a hard kill loses the most recent continuation entries — which are cache,
+as above.
+
 ## Reclaiming files that already accumulated
 
 If the proxy runs, this happens automatically within a minute or two.
