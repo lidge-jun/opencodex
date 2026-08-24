@@ -250,6 +250,8 @@ export interface ProviderRegistryEntry {
   preserveResponsesReasoningContent?: boolean;
   /** Registry defaults for per-model Codex reasoning propagation; explicit user keys win during enrichment. */
   modelSupportsReasoningSummaries?: Record<string, boolean>;
+  /** Registry defaults for per-model Codex Responses verbosity support. */
+  modelSupportsVerbosity?: Record<string, boolean>;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -416,6 +418,15 @@ const OPENAI_DAYBREAK_REASONING_EFFORTS: Record<string, string[]> = Object.fromE
   OPENAI_DAYBREAK_MODELS.map(id => [id, [] as string[]]),
 );
 const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
+const XAI_MODELS = [
+  "grok-4.6",
+  "grok-4.5",
+  "grok-4.3",
+  "grok-4.20-0309-reasoning",
+  "grok-4.20-0309-non-reasoning",
+  "grok-build-0.1",
+  "grok-composer-2.5-fast",
+];
 // OpenRouter's live /endpoints routes report 1,050,000; keep this separate from the
 // unverified OpenAI API-key seed. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
 const OPENROUTER_GPT56_CONTEXT_WINDOW = 1_050_000;
@@ -1067,7 +1078,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
-    models: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
+    models: XAI_MODELS,
+    // Measured only on grok-4.6 against cli-chat-proxy.grok.com: even an invalid
+    // `text.verbosity` value is accepted and low/high/omitted output length is non-monotonic.
+    // Apply the resulting opt-out to the whole xAI lineup because `text.verbosity` is an OpenAI
+    // Responses parameter absent from xAI's documented API, not because every model was probed.
+    // Keep this separate from reasoning-summary support: that bit gates Codex's
+    // entire Responses reasoning object, including reasoning.effort.
+    modelSupportsVerbosity: Object.fromEntries(XAI_MODELS.map(id => [id, false])),
     defaultModel: "grok-4.5",
     // Keep Codex Responses callers on the compatibility Chat wire until xAI can replay
     // opaque reasoning continuation and compaction state across later turns. The scoped
@@ -1237,6 +1255,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Per-model context metadata is maintained next to the Kiro model list.
     modelContextWindows: KIRO_MODEL_CONTEXT_WINDOWS,
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
+    modelSupportsVerbosity: Object.fromEntries(KIRO_MODELS.map(id => [id, false])),
   },
   {
     // Nous Portal — Nous Research subscription gateway (same backend Hermes Agent

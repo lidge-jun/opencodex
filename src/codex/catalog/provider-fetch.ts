@@ -577,6 +577,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     re: prov.modelReasoningEfforts ?? null,
     defRe: prov.modelDefaultReasoningEfforts ?? null,
     rsSum: prov.modelSupportsReasoningSummaries ?? null,
+    verbosity: prov.modelSupportsVerbosity ?? null,
     rsDel: prov.modelReasoningSummaryDelivery ?? null,
     serviceTier: prov.modelSupportsServiceTier ?? null,
     noVis: [...(prov.noVisionModels ?? [])].sort(),
@@ -645,6 +646,10 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
   return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
 }
 
+function configuredVerbositySupport(prov: OcxProviderConfig | undefined, id: string): boolean | undefined {
+  return prov ? modelRecordValue(prov.modelSupportsVerbosity, id) : undefined;
+}
+
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
   void name;
   const configuredCap = configuredContextWindow(prov, model.id);
@@ -662,6 +667,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
+  const supportsVerbosity = configuredVerbositySupport(prov, model.id);
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
   const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
@@ -690,11 +696,11 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
+    ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
       ? { fastTierDescription: fastPolicy.fastTierDescription }
       : {}),
-    ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),
     // Default-on for openai-chat providers (explicit false opts out); other adapters
     // advertise only on explicit opt-in.
     ...(prov.parallelToolCalls === true || (prov.adapter === "openai-chat" && prov.parallelToolCalls !== false)

@@ -4,6 +4,7 @@ import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { routeModel } from "../src/router";
+import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses, sanitizeEncryptedContentInPlace } from "../src/server/responses";
 import {
   encodeCompactionSummary,
@@ -904,6 +905,79 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     expect(body.stream_options).toEqual({ include_usage: true });
     expect(body.reasoning).toEqual({ effort: "high" });
+  });
+
+  function routedXaiResponsesProvider() {
+    const entry = getProviderRegistryEntry("xai")!;
+    const route = routeModel({
+      port: 0,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: entry.adapter,
+          baseUrl: entry.baseUrl,
+          authMode: "key",
+          apiKey: "xai-test-key",
+          modelAdapters: { "grok-4.6": "openai-responses" },
+        },
+      },
+    } as OcxConfig, "xai/grok-4.6");
+    return resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
+  }
+
+  test("xAI verbosity opt-out strips verbosity but preserves sibling text settings", () => {
+    const provider = routedXaiResponsesProvider();
+    expect(provider.modelSupportsVerbosity?.["grok-4.6"]).toBe(false);
+    expect(provider.adapter).toBe("openai-responses");
+
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        input: [],
+        reasoning: { effort: "high" },
+        text: { verbosity: "high", format: { type: "json_object" } },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body.text).toEqual({ format: { type: "json_object" } });
+    expect(body.reasoning).toEqual({ effort: "high" });
+  });
+
+  test("xAI verbosity opt-out removes an emptied text object", () => {
+    const request = createResponsesPassthroughAdapter(routedXaiResponsesProvider()).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", input: [], text: { verbosity: "low" } },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("text");
+  });
+
+  test("unclassified Responses destinations preserve text verbosity", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    });
+    const request = adapter.buildRequest({
+      modelId: "other-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "other-model", input: [], text: { verbosity: "medium" } },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body.text).toEqual({ verbosity: "medium" });
   });
 
   test("model reasoning-summary delivery rewrites only the configured stale-client enum (#538)", () => {

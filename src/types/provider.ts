@@ -342,6 +342,12 @@ export interface OcxProviderConfig {
    */
   modelSupportsReasoningSummaries?: Record<string, boolean>;
   /**
+   * Model-specific Codex Responses verbosity capability. Set false when the upstream ignores
+   * `text.verbosity`; the catalog hides the no-op picker and the Responses adapter strips stale
+   * or caller-supplied values while preserving other `text` fields.
+   */
+  modelSupportsVerbosity?: Record<string, boolean>;
+  /**
    * Per-model wire value for Responses `stream_options.reasoning_summary_delivery`.
    * Presence also advertises reasoning-summary support for that routed model.
    */

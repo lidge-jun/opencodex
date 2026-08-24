@@ -1127,6 +1127,17 @@ const configSchema = z.object({
         message: reasoningSummariesError,
       });
     }
+    const verbositySupportError = booleanRecordConfigError(
+      (provider as { modelSupportsVerbosity?: unknown }).modelSupportsVerbosity,
+      "modelSupportsVerbosity",
+    );
+    if (verbositySupportError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelSupportsVerbosity"],
+        message: verbositySupportError,
+      });
+    }
     const serviceTierModelsError = booleanRecordConfigError(
       (provider as { modelSupportsServiceTier?: unknown }).modelSupportsServiceTier,
       "modelSupportsServiceTier",

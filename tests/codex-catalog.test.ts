@@ -4387,6 +4387,42 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.default_reasoning_summary).toBe("none");
   });
 
+  test("xAI and Kiro routed rows disable verbosity without changing other providers", async () => {
+    const models = await gatherRoutedModels({
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
+          liveModels: false,
+          models: ["grok-4.6"],
+        },
+        kiro: {
+          adapter: "kiro",
+          baseUrl: "https://runtime.us-east-1.kiro.dev",
+          authMode: "oauth",
+          liveModels: false,
+          models: ["gpt-5.6-sol"],
+        },
+        plain: {
+          adapter: "openai-responses",
+          baseUrl: "https://plain.example.test/v1",
+          authMode: "key",
+          liveModels: false,
+          models: ["plain-model"],
+        },
+      },
+    });
+    const entries = buildCatalogEntries(null, [], models);
+
+    expect(models.find(model => model.provider === "xai" && model.id === "grok-4.6")?.supportsVerbosity).toBe(false);
+    expect(entries.find(entry => entry.slug === "xai/grok-4.6")?.support_verbosity).toBe(false);
+    expect(models.find(model => model.provider === "kiro" && model.id === "gpt-5.6-sol")?.supportsVerbosity).toBe(false);
+    expect(entries.find(entry => entry.slug === "kiro/gpt-5.6-sol")?.support_verbosity).toBe(false);
+    expect(models.find(model => model.provider === "plain" && model.id === "plain-model")?.supportsVerbosity).toBeUndefined();
+    expect(entries.find(entry => entry.slug === "plain/plain-model")?.support_verbosity).toBe(true);
+  });
+
   test("a routed model never inherits the native template's context window (#992)", () => {
     // /models returns only the id: the routed entry must fall to the
     // conservative 128k triple, never the native template's larger window.
@@ -4696,6 +4732,23 @@ describe("Codex catalog routed normalization", () => {
     };
     enrichProviderFromCatalog("deepseek", submitted);
     expect(submitted.modelSupportsReasoningSummaries).toEqual({ "deepseek-v4-flash": false });
+
+    const xai: OcxConfig["providers"][string] = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+    };
+    enrichProviderFromCatalog("xai", xai);
+    expect(xai.modelSupportsVerbosity).toBeUndefined();
+
+    const submittedVerbosity: OcxConfig["providers"][string] = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+      modelSupportsVerbosity: { "grok-4.6": true },
+    };
+    enrichProviderFromCatalog("xai", submittedVerbosity);
+    expect(submittedVerbosity.modelSupportsVerbosity).toEqual({ "grok-4.6": true });
   });
 
   test("explicit per-model overrides survive registry backfill", () => {

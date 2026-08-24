@@ -116,6 +116,7 @@ export function knownModelIdsForProvider(
     registry?.modelReasoningEffortMap,
     registry?.modelMaxOutputTokens,
     registry?.modelSupportsServiceTier,
+    registry?.modelSupportsVerbosity,
   ]) {
     for (const id of Object.keys(map ?? {})) ids.add(id);
   }
@@ -312,6 +313,10 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       : undefined,
     provider.modelSupportsServiceTier,
   );
+  const modelSupportsVerbosity = mergeRecordFill(
+    registryEntry.modelSupportsVerbosity,
+    provider.modelSupportsVerbosity,
+  );
   const noVisionModels = mergeStringArray(registryEntry.noVisionModels, provider.noVisionModels);
   const noReasoningModels = mergeStringArray(registryEntry.noReasoningModels, provider.noReasoningModels);
   const noTemperatureModels = mergeStringArray(registryEntry.noTemperatureModels, provider.noTemperatureModels);
@@ -426,6 +431,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(modelMaxInputTokens ? { modelMaxInputTokens } : {}),
     ...(modelMaxOutputTokens ? { modelMaxOutputTokens } : {}),
     ...(modelSupportsServiceTier ? { modelSupportsServiceTier } : {}),
+    ...(modelSupportsVerbosity ? { modelSupportsVerbosity } : {}),
     ...(modelReasoningEfforts ? { modelReasoningEfforts } : {}),
     ...(modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts } : {}),
     ...(reasoningEffortMap ? { reasoningEffortMap } : {}),

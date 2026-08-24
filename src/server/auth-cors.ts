@@ -619,6 +619,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   }
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
+  const verbositySupportError = booleanRecordConfigError(raw.modelSupportsVerbosity, "modelSupportsVerbosity");
+  if (verbositySupportError) return `provider ${name} ${verbositySupportError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
     raw.modelReasoningSummaryDelivery,
     raw.modelSupportsReasoningSummaries,

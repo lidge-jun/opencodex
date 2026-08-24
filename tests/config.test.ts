@@ -34,6 +34,7 @@ import {
 import * as windowsAcl from "../src/lib/windows-secret-acl";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
+import { providerManagementConfigError } from "../src/server/auth-cors";
 let testDir = "";
 
 /**
@@ -1244,6 +1245,48 @@ describe("opencodex config defaults", () => {
       expect(readConfigDiagnostics().source).toBe("fallback");
       expect(readConfigDiagnostics().error).toContain("modelSupportsReasoningSummaries");
     }
+  });
+
+  test("modelSupportsVerbosity accepts only plain boolean records", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelSupportsVerbosity: { strict: false, normal: true },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    for (const invalid of [[], { strict: "false" }, { "": false }]) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.test/v1",
+            modelSupportsVerbosity: invalid,
+          },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelSupportsVerbosity");
+    }
+
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      modelSupportsVerbosity: { strict: false },
+    })).toBeNull();
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      modelSupportsVerbosity: { strict: "false" },
+    })).toContain("modelSupportsVerbosity");
   });
 
   test("modelReasoningSummaryDelivery validates known values and rejects summary opt-out conflicts (#538)", () => {
