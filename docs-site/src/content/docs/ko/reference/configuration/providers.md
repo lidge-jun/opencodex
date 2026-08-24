@@ -115,6 +115,8 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor 전용입니다. 외부 computer-use 및 record-screen 명령입니다. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
+| `commandCodeVersion?` | `string` | Command Code OAuth (`adapter: "command-code"`) 전용입니다. `/alpha/generate` 요청의 `x-command-code-version` 헤더를 고정합니다. 생략 시 어댑터 기본값(`0.52.1`)을 사용합니다. API 키 `commandcode` 프리셋(`openai-chat` / `/provider/v1`)에서는 읽지 않습니다. |
+| `projectContext?` | `"off" \| "on"` | Command Code OAuth (`adapter: "command-code"`) 전용입니다. `"on"`이면 프록시 프로세스 작업 디렉터리의 제한된 프로젝트 파일을 `/alpha/generate`의 `memory` / `taste` / `skills` 엔벨로프에 복사합니다. 생략하거나 `"off"`이면 디스크에 파일이 있어도 빈 엔벨로프를 유지합니다. API 키 `commandcode` 프리셋에서는 읽지 않습니다. 최상위가 아니라 `providers.command-code`에 설정합니다. 대시보드에서는 **Providers → Command Code → Edit JSON**을 사용합니다. `process.cwd()`가 의도한 저장소가 되도록 신뢰할 수 있는 Codex 프로젝트 디렉터리에서 프록시를 시작하세요. fail-soft: 누락·읽기 불가·타임아웃·경로 이탈은 해당 조각을 생략하며 턴 전체는 실패하지 않습니다. `~/.commandcode/skills` 등 홈 skill 트리는 읽지 않습니다. 이 플래그와 관계없이 `x-taste-learning`은 `"false"`로 유지됩니다. |
 
 API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/reference/configuration/server/#claude-code)에서 설정합니다.
 
@@ -240,7 +242,7 @@ Cursor 브리지는 실험적입니다. `ocx login cursor`를 실행한 뒤 `pro
 
 Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Codex는 계속해서 `apply_patch`, `exec_command` 같은 자체 도구를 자체 승인 및 샌드박스 정책과 함께 사용합니다.
 
-- `"off"`(기본값)는 Cursor 네이티브 `read`, `write`, `delete`, `ls`, `grep`, `shell`, `fetch` 실행을 거부합니다.
+- `"off"`(기본값)는 프록시에서 Cursor 네이티브 `read`, `write`, `delete`, `ls`, `grep`, `shell`, `fetch` 실행을 거부합니다. 턴에 bare Codex `shell_command` 또는 `exec_command`가 광고되어 있으면 네이티브 Shell/Read/Ls/Grep/Fetch는 프록시가 아니라 해당 Codex 셸 브리지로 매핑되며 write/delete는 계속 거부됩니다.
 - `"on"`은 신뢰된 로컬 실행을 허용하고, Codex 승인/샌드박스 의미를 우회합니다.
 - `"codex-sandbox"`는 호환성을 위해 남아 있지만 `"off"`처럼 실패를 닫습니다. 요청 문구는 신뢰할 수 있는 샌드박스 증명이 아닙니다.
 

@@ -30,6 +30,12 @@ Lorsque Codex demande un hébergement `web_search` pour un modèle routé sans p
    (par défaut 3), supprime ensuite l'outil de recherche et force une réponse finale. De vrais outils clients tels que
    `apply_patch` ou le shell mettent fin au tour afin que ces appels parviennent à Codex.
 
+**Exception Antigravity Gemini 3 :** lorsque le fournisseur routé est Google Antigravity (`google-antigravity`)
+et que le modèle filaire est Gemini 3.x, opencodex attache `google_search` CCA (et `url_context` si le tour
+contient des URL `http(s)`) sur la **même** requête principale au lieu de la boucle sidecar. Claude-on-CCA,
+les backends explicites `openai` / `anthropic` / `xai` / `exa`, et Gemini < 3 avec des outils fonction Codex
+restent sur le sidecar.
+
 Chaque itération du modèle routé envoie `stream: true` en amont, mais, par défaut, opencodex met entièrement
 en mémoire tampon les événements sémantiques avant de décider s'il faut lancer une recherche ou renvoyer la réponse finale.
 Seuls les en-têtes et le statut du tour final, ainsi que les réponses 429 de la première itération, sont traités immédiatement. Ainsi,

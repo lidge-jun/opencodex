@@ -31,6 +31,12 @@ Codex がパススルーでないルーティングモデルにホスト型 `web
    **反復**します。限度に達すると検索ツールを削除し最終回答を強制します。`apply_patch` や shell
    のような実際のクライアントツールが出たらターンを終了し該当呼び出しが Codex に渡るようにします。
 
+**Antigravity Gemini 3 の例外:** ルーティング先が Google Antigravity (`google-antigravity`) で
+ワイヤモデルが Gemini 3.x のとき、opencodex は合成サイドカーループの代わりに、同じメインリクエストへ
+CCA `google_search`（ターンに `http(s)` URL があれば `url_context`）を付けます。Claude-on-CCA、
+明示的な `openai` / `anthropic` / `xai` / `exa` バックエンド、および Codex 関数ツール付きの
+Gemini 3 未満は従来のサイドカーのままです。
+
 ルーティングモデルのすべての反復は上流に `stream: true` を要求しますが、opencodex は検索可否や最終
 回答を決める前に意味のある event を内部ですべてバッファリングします。最初の反復の最終
 header/status と 429 キーローテーションのみ先行取得します。したがって合成検索呼び出しと中間出力はクライアントに

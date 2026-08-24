@@ -32,7 +32,7 @@ a missing credential produces no sidecar plan and the request takes the normal r
 
 ## Web-search sidecar
 
-When Codex requests hosted `web_search` for a non-passthrough routed model, opencodex:
+When Codex requests hosted `web_search` for a non-passthrough routed model, opencodex normally:
 
 1. **Drops** the hosted `web_search` tool and exposes a synthetic `web_search(query)` function tool
    to the routed model instead. The original hosted-tool options are retained for the sidecar call.
@@ -44,6 +44,14 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
 3. **Loops** until the model answers or the total real-query budget reaches `maxSearchesPerTurn`
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
+
+**Antigravity Gemini 3 exception:** when the routed provider is Google Antigravity (`google-antigravity`)
+and the wire model is Gemini 3.x, opencodex attaches CCA `google_search` (and `url_context` when the
+turn includes `http(s)` URLs) on the **same** main routed request instead of the synthetic sidecar loop.
+Grounding citations are appended to the streamed answer. The sidecar remains the path for Claude-on-CCA,
+explicit `webSearchSidecar.backend` overrides (`openai`, `anthropic`, `xai`, `exa`), and
+Gemini models below 3.x when Codex function tools are also present. An explicit `gemini` backend
+does not disable in-turn grounding when the route itself is Antigravity Gemini 3.
 
 Every routed-model iteration requests upstream `stream: true`, but by default opencodex fully
 buffers semantic events internally before deciding whether to search or return the final answer.

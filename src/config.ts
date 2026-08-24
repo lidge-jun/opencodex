@@ -735,6 +735,8 @@ const providerConfigSchema = z.object({
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
   // operator asked for shell mode, got code mode, and was told nothing (#2106).
   codexToolMode: z.enum(["code_mode_only", "shell"]).optional(),
+  // Validated rather than passed through: same rationale as codexToolMode above.
+  projectContext: z.enum(["off", "on"]).optional(),
   responsesItemIdRepair: z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),

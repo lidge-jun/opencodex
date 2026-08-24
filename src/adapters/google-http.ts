@@ -5,7 +5,7 @@ import {
   retryableGoogleStatus,
   safeGoogleHttpErrorMessage,
 } from "./google-errors";
-import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
+import { isGoogleMixedBuiltinToolError, repairGoogleInvalidRequestBody, stripGoogleBuiltinToolsFromWireBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { recordAntigravityCooldown } from "../oauth/antigravity-routing";
 import {
@@ -378,7 +378,17 @@ async function fetchGoogleWithRetryInternal(
         } catch (error) {
           if (ctx.abortSignal?.aborted) throw error;
         }
-        const repairedBody = repairGoogleInvalidRequestBody(activeRequest.body, payloadText);
+        // Mixed built-in + function tools must win over schema repair: those 400s often mention
+        // function_declarations, which would otherwise empty parameters and leave google_search attached.
+        let repairedBody: string | undefined;
+        if (isGoogleMixedBuiltinToolError(payloadText)) {
+          repairedBody = stripGoogleBuiltinToolsFromWireBody(activeRequest.body);
+          if (repairedBody === undefined) {
+            repairedBody = repairGoogleInvalidRequestBody(activeRequest.body, payloadText);
+          }
+        } else {
+          repairedBody = repairGoogleInvalidRequestBody(activeRequest.body, payloadText);
+        }
         if (repairedBody !== undefined) {
           compatibilityReplayUsed = true;
           activeRequest = { ...activeRequest, body: repairedBody };

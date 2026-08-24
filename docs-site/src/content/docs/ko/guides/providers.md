@@ -275,6 +275,8 @@ CLI 사용자는 `~/.commandcode/auth.json`의 로컬 CLI 자격 증명을 가�
 
 **Command Code 할당량:** 대시보드와 `ocx account refresh`는 정규 호스트 `https://api.commandcode.ai`에서 `/alpha/billing/credits` 창(5시간 및 주간)을 조회합니다. OAuth 프리셋(`command-code`)은 저장된 계정 bearer를 사용하고, Provider-API 키 프리셋(`commandcode`)은 현재 설정된 활성 키를 사용합니다. 사용자가 바꾼 유사 base URL은 조회하지 않습니다. Command Code가 기간 사용량을 함께 반환하면 남은 monthly / purchased / free credits가 USD 창으로 표시됩니다.
 
+**Command Code 프로젝트 컨텍스트.** OAuth `command-code` 공급자에서만( API 키 `commandcode` 프리셋 아님) 선택적 `projectContext: "on"`이 프록시 작업 디렉터리에서 `/alpha/generate`의 `memory` / `taste` / `skills`를 채웁니다. **Providers → Command Code → Edit JSON**으로 `providers.command-code`에 설정하고, 신뢰할 수 있는 Codex 프로젝트에서 프록시를 시작한 뒤 저장 후 재시작하세요. 생략하거나 `"off"`이면 `AGENTS.md`나 taste 파일이 있어도 빈 엔벨로프를 유지합니다. 파일 경로, 상한, fail-soft 동작은 [Adapters](/ko/reference/adapters/#command-code)를 참고하세요.
+
 **SambaNova Cloud 검색:** 프리셋은 고정 API 호스트의 SambaNova Cloud 공개 `/v1/models` 목록을 읽고, 프로바이더
 네이티브 ID를 보존하며 discovery를 128 KiB와 raw 행 128개로 제한합니다. 카탈로그에는 인증이 필요하지 않으므로
 CLI 로그인 흐름은 공개 응답을 키 유효성의 증거로 사용하지 않고 키를 검증할 수 없는 것으로 보고합니다. chat 요청은

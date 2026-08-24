@@ -1073,6 +1073,9 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (existing?.commandCodeVersion !== undefined) {
     next.commandCodeVersion = existing.commandCodeVersion;
   }
+  if (existing?.projectContext !== undefined) {
+    next.projectContext = existing.projectContext;
+  }
   // User-configured price overlays are operator data, not preset state; a
   // re-login, add-account, or reauth must not silently drop them from the
   // Logs/Usage estimates.

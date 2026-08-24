@@ -128,6 +128,8 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor uniquement : commandes externes d'utilisation d'un ordinateur et d'enregistrement de l'écran. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Ancien booléen de Cursor, équivalent à `nativeLocalExec: "on"` uniquement lorsque le champ plus récent n'est pas défini. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Politique d'exécution locale de Cursor. `off` est la valeur par défaut ; actuellement, `codex-sandbox` échoue de manière sûre comme `off`. |
+| `commandCodeVersion?` | `string` | Command Code OAuth (`adapter: "command-code"`) uniquement. Épingle l'en-tête `x-command-code-version` sur les requêtes `/alpha/generate`. Si absent, utilise la valeur par défaut de l'adaptateur (`0.52.1`). Non lu par le préréglage à clé API `commandcode` (`openai-chat` / `/provider/v1`). |
+| `projectContext?` | `"off" \| "on"` | Command Code OAuth (`adapter: "command-code"`) uniquement. Lorsque `"on"`, copie des fichiers de projet bornés depuis le répertoire de travail du processus proxy vers l'enveloppe `/alpha/generate` `memory`, `taste` et `skills`. Absent ou `"off"` conserve l'enveloppe vide actuelle, même si ces fichiers existent sur le disque. Non lu par le préréglage à clé API `commandcode`. À définir sur `providers.command-code`, pas au niveau supérieur. Dans le tableau de bord, utilisez **Providers → Command Code → Edit JSON**. Démarrez le proxy depuis le répertoire de projet Codex de confiance afin que `process.cwd()` soit le dépôt visé. Fail-soft : fichier manquant, illisible, expiré ou hors du périmètre → cette partie est omise plutôt que de faire échouer le tour. Ne lit pas `~/.commandcode/skills` ni d'autres arborescences du répertoire personnel. `x-taste-learning` reste `"false"` quel que soit ce réglage. |
 
 Les fournisseurs à clé API peuvent détenir une clé littérale ou une référence à une variable d'environnement. Les fournisseurs OAuth utilisent le
 magasin d'identifiants alimenté par `ocx login` ; le comportement de lancement de Claude Code avec abonnement est
@@ -296,8 +298,8 @@ sur la liste curatée `noVisionModels` et passent par le sidecar de description 
 Les outils locaux pilotés par le serveur Cursor sont désactivés par défaut. Codex continue d'utiliser ses propres outils tels que
 `apply_patch` et `exec_command` avec sa propre politique d'approbation et de bac à sable :
 
-- `"off"` (par défaut) rejette l'exécution des outils Cursor natifs `read`, `write`, `delete`, `ls`, `grep`, `shell` et
-  `fetch`.
+- `"off"` (par défaut) refuse l'exécution proxy-locale des outils Cursor natifs `read`, `write`, `delete`, `ls`, `grep`, `shell` et
+  `fetch`. Lorsque le tour annonce un outil Codex nu `shell_command` ou `exec_command`, Shell/Read/Ls/Grep/Fetch natifs sont mappés vers ce pont Codex au lieu de s'exécuter sur l'hôte proxy ; write/delete restent refusés.
 - `"on"` active une exécution locale de confiance et contourne les règles d'approbation et de bac à sable de Codex.
 - `"codex-sandbox"` est conservé pour compatibilité, mais échoue de manière sûre comme `"off"` ; le texte de la requête
   ne constitue pas une attestation fiable d'exécution en bac à sable.

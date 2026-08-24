@@ -99,6 +99,9 @@ beforeAll(async () => {
     },
     planWebSearch: () => mockWsPlan,
     shouldResolveOpenAiWebSearchSidecar: () => false,
+    mediaBridgeWillRun: (hasMediaPlan: boolean, hasWebSearchPlan: boolean, adapterRunsTurn: boolean, isStreaming = true) =>
+      hasMediaPlan && isStreaming && (!hasWebSearchPlan || adapterRunsTurn),
+    resolveCcaInTurnGrounding: () => undefined,
   }));
 
   ({ handleResponses } = await import("../../src/server/responses"));

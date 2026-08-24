@@ -437,6 +437,8 @@ anahtarını kullanır. [Command Code Studio](https://commandcode.ai/studio/)
 
 **Command Code kotası.** Pano ve `ocx account refresh`, kanonik `https://api.commandcode.ai` ana bilgisayarında `/alpha/billing/credits` pencerelerini (5 saat ve haftalık) sorgular. OAuth önayarı (`command-code`) kayıtlı hesap bearer'ını kullanır; Provider-API anahtar önayarı (`commandcode`) etkin yapılandırılmış anahtarı kullanır. Kullanıcının değiştirdiği benzer bir temel URL asla sorgulanmaz. Command Code dönem harcamasını da bildirirse kalan monthly / purchased / free credits USD penceresi olarak gösterilir.
 
+**Command Code proje bağlamı.** Yalnızca OAuth `command-code` sağlayıcısında (API anahtarı `commandcode` önayarında değil) isteğe bağlı `projectContext: "on"`, proxy çalışma dizininden `/alpha/generate` `memory` / `taste` / `skills` alanlarını doldurur. **Providers → Command Code → Edit JSON** ile `providers.command-code` üzerinde ayarlayın, güvenilir Codex projesinden proxy'yi başlatın ve kaydettikten sonra yeniden başlatın. Eksik veya `"off"` iken `AGENTS.md` veya taste dosyaları olsa bile boş zarf korunur. Dosya yolları, üst sınırlar ve fail-soft davranışı için [Adapters](/tr/reference/adapters/#command-code) bölümüne bakın.
+
 **SambaNova Cloud keşfi.** Önayar, sabit API ana bilgisayarından SambaNova
 Cloud'un genel `/v1/models` listesini okur, sağlayıcı yerel kimliklerini korur
 ve keşfi 128 KiB ve 128 ham satırla sınırlar. Katalog kimlik doğrulamasız

@@ -28,6 +28,12 @@ OAuth 账户时使用 `anthropic`，否则使用 `openai`。显式选择 `anthro
    search 工具并强制生成最终答案。如果模型调用 `apply_patch` 或 shell 等真实客户端工具，当前
    turn 会结束，以便这些调用到达 Codex。
 
+**Antigravity Gemini 3 例外：** 当路由提供方是 Google Antigravity（`google-antigravity`）且
+wire 模型为 Gemini 3.x 时，opencodex 会在**同一**主请求上附加 CCA `google_search`（若该 turn
+含 `http(s)` URL 则再附加 `url_context`），而不是走合成 sidecar 循环。Claude-on-CCA、显式
+`openai` / `anthropic` / `xai` / `exa` 后端，以及同时带有 Codex 函数工具的 Gemini 3 以下型号
+仍走 sidecar。
+
 路由模型的每次迭代都会向上游请求 `stream: true`，但 opencodex 会在决定搜索还是返回最终答案前，
 在内部完整缓冲所有语义 event。只有第一次迭代的最终 header/status 和 429 key rotation 会被提前
 取得。因此，合成搜索调用和中间输出不会作为模型输出暴露给客户端。

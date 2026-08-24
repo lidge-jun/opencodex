@@ -94,6 +94,12 @@ export interface OcxParsedRequest {
    * executes searches via the gpt-5.4-mini sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
+  /**
+   * Antigravity Gemini in-turn CCA grounding: google_search and optional url_context ride the main
+   * routed fetch instead of the web-search sidecar loop. Set by core.ts when resolveCcaInTurnGrounding
+   * matches; consumed by the Google adapter at buildRequest/parseStream time.
+   */
+  _ccaInTurnGrounding?: { search: boolean; urlContext: boolean };
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
   _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**

@@ -37,6 +37,12 @@ Codex, doğrudan geçiş olmayan bir yönlendirilmiş model için barındırıla
    kaldırır ve nihai bir yanıta zorlar. `apply_patch` veya kabuk gibi gerçek
    istemci araçları turu sonlandırır, böylece bu çağrılar Codex'e ulaşır.
 
+**Antigravity Gemini 3 istisnası:** yönlendirilen sağlayıcı Google Antigravity (`google-antigravity`)
+ve tel modeli Gemini 3.x ise opencodex, sentetik sidecar döngüsü yerine **aynı** ana isteğe CCA
+`google_search` (turda `http(s)` URL varsa `url_context`) ekler. Claude-on-CCA, açık `openai` /
+`anthropic` / `xai` / `exa` arka uçları ve Codex işlev araçları olan Gemini 3 altı modeller
+sidecar'da kalır.
+
 Her yönlendirilen model yinelemesi yukarı akışta `stream: true` ister, ancak
 varsayılan olarak opencodex arama yapmaya veya nihai yanıtı döndürmeye karar
 vermeden önce anlamsal olayları dahili olarak tamamen arabelleğe alır. Yalnızca

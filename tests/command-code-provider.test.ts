@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createCommandCodeAdapter } from "../src/adapters/command-code";
+import { projectContextCache } from "../src/adapters/command-code-project-context";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../src/oauth/command-code";
 import { buildModelsRequest, OAUTH_PROVIDERS } from "../src/oauth";
 import { commandCodeReasoningEfforts, resetCommandCodeReasoningEffortsForTest } from "../src/providers/command-code-efforts";
@@ -32,7 +36,10 @@ async function builtRequest(...args: Parameters<ReturnType<typeof createCommandC
   return createCommandCodeAdapter(provider).buildRequest(...args);
 }
 
-afterEach(() => resetCommandCodeReasoningEffortsForTest());
+afterEach(() => {
+  resetCommandCodeReasoningEffortsForTest();
+  projectContextCache.clear();
+});
 
 describe("Command Code provider", () => {
   test("registry and OAuth surfaces stay in parity", () => {
@@ -171,6 +178,46 @@ describe("Command Code provider", () => {
     expect(body.params).toMatchObject({ model: "deepseek/deepseek-v4-flash", reasoning_effort: "high", max_tokens: 100, stream: true });
     expect(body.params.tools[0]).toMatchObject({ name: "lookup" });
     expect(built.body).not.toContain("secret-command-key");
+  });
+
+  test("keeps project context empty by default even when the cwd has AGENTS.md", async () => {
+    for (const configured of [provider, { ...provider, projectContext: "off" as const }]) {
+      const built = await createCommandCodeAdapter(configured).buildRequest(parsed());
+      expect(JSON.parse(built.body)).toMatchObject({
+        memory: "",
+        taste: null,
+        skills: null,
+      });
+    }
+  });
+
+  test("loads all opt-in project context fields from the current working directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-cc-provider-context-"));
+    const previousCwd = process.cwd();
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "provider project memory", "utf8");
+      mkdirSync(join(root, ".commandcode", "taste"), { recursive: true });
+      writeFileSync(join(root, ".commandcode", "taste", "taste.md"), "provider taste", "utf8");
+      mkdirSync(join(root, ".commandcode", "skills", "provider-skill"), { recursive: true });
+      writeFileSync(
+        join(root, ".commandcode", "skills", "provider-skill", "SKILL.md"),
+        "---\nname: Provider Skill\n---\nprovider skill body",
+        "utf8",
+      );
+      process.chdir(root);
+
+      const built = await createCommandCodeAdapter({ ...provider, projectContext: "on" }).buildRequest(parsed());
+      expect(JSON.parse(built.body)).toMatchObject({
+        memory: "provider project memory",
+        taste: "provider taste",
+        skills: '<skills>\n  <skill name="Provider Skill">provider skill body</skill>\n</skills>',
+      });
+      expect(built.headers["x-taste-learning"]).toBe("false");
+    } finally {
+      process.chdir(previousCwd);
+      projectContextCache.clear();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("passes every canonical Command Code id through unchanged", async () => {

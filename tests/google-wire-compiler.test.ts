@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
-import { compileGoogleWireBody, repairGoogleInvalidRequestBody } from "../src/adapters/google-wire-compiler";
+import { compileGoogleWireBody, isGoogleMixedBuiltinToolError, repairGoogleInvalidRequestBody, stripGoogleBuiltinToolsFromWireBody } from "../src/adapters/google-wire-compiler";
 import type { OcxParsedRequest } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -99,6 +99,32 @@ describe("Google wire compiler", () => {
     });
   });
 
+  test("passthrough google_search and url_context siblings alongside functionDeclarations", () => {
+    const compiled = compileGoogleWireBody({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      tools: [
+        { functionDeclarations: [{ name: "shell", parameters: { type: "object" } }] },
+        { google_search: {} },
+        { urlContext: {} },
+        { futureBuiltin: true, google_search: {} },
+      ],
+    });
+
+    expect(compiled.body.tools).toEqual([
+      { functionDeclarations: [{ name: "shell", parameters: { type: "object", properties: {} } }] },
+      { google_search: {} },
+      { url_context: {} },
+    ]);
+  });
+
+  test("strips unknown extra keys from builtin tool siblings", () => {
+    const compiled = compileGoogleWireBody({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      tools: [{ googleSearch: {}, rogue: true }],
+    });
+    expect(compiled.body.tools).toBeUndefined();
+  });
+
   test("drops non-json responseMimeType and unknown schema types", () => {
     const compiled = compileGoogleWireBody({
       contents: [{ role: "user", parts: [{ text: "hi" }] }],
@@ -183,5 +209,71 @@ describe("Google wire compiler", () => {
 
     const repaired = JSON.parse(repairGoogleInvalidRequestBody(body, error)!);
     expect(repaired.request.generationConfig).toEqual({ maxOutputTokens: 4096 });
+  });
+
+  test("schema repair keeps google_search siblings on the wire body", () => {
+    const body = JSON.stringify({
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        tools: [
+          { functionDeclarations: [{ name: "shell", parameters: { type: "object", properties: {} } }] },
+          { google_search: {} },
+        ],
+      },
+    });
+    const error = "function_declarations.0: JSON schema is invalid";
+    const repaired = JSON.parse(repairGoogleInvalidRequestBody(body, error)!);
+    expect(repaired.request.tools.map((tool: Record<string, unknown>) => Object.keys(tool))).toEqual([
+      ["functionDeclarations"],
+      ["google_search"],
+    ]);
+  });
+
+  test("mixed-tool 400 replay strips built-in siblings only", () => {
+    const body = JSON.stringify({
+      request: {
+        tools: [
+          { functionDeclarations: [{ name: "shell", parameters: { type: "object" } }] },
+          { google_search: {} },
+          { url_context: {} },
+        ],
+      },
+    });
+    expect(isGoogleMixedBuiltinToolError("cannot mix google_search with function_declarations")).toBe(true);
+    const stripped = JSON.parse(stripGoogleBuiltinToolsFromWireBody(body)!);
+    expect(stripped.request.tools).toEqual([
+      { functionDeclarations: [{ name: "shell", parameters: { type: "object" } }] },
+    ]);
+  });
+
+  test("classifies only explicit mixed built-in-tool incompatibility language", () => {
+    for (const message of [
+      "cannot mix google_search with function_declarations",
+      "mixed built-in tools and custom function declarations are unsupported",
+      "incompatible coexistence of url_context and function tools",
+      "cannot use `google_search` and `function_declarations` together",
+      "google_search cannot be combined with other tools",
+      "google_search alongside function_declarations is not supported",
+      "code_execution and function declarations cannot coexist",
+      "google_search cannot be used with function_declarations",
+      "google_search is not supported with function_declarations",
+      "google_search and function_declarations are mutually exclusive",
+    ]) {
+      expect(isGoogleMixedBuiltinToolError(message)).toBe(true);
+    }
+  });
+
+  test("does not classify built-in-tool mentions without coexistence language", () => {
+    for (const message of [
+      "google_search tool is unavailable",
+      "url_context returned an invalid result",
+      "builtin tool schema is invalid",
+      "google_search is enabled but function_declarations.0: JSON schema is invalid",
+      "google_search is incompatible with a function schema",
+      "function_declarations are incompatible with this model",
+      "the schema fields coexist and google_search is enabled",
+    ]) {
+      expect(isGoogleMixedBuiltinToolError(message)).toBe(false);
+    }
   });
 });
