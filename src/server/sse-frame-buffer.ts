@@ -1,3 +1,5 @@
+import { isCyberPolicyCode, isCyberPolicyMessage } from "../lib/errors";
+
 export const MAX_CLIENT_SSE_FRAME_BYTES = 4 * 1024 * 1024;
 
 const LF_LF = Uint8Array.of(10, 10);
@@ -106,10 +108,35 @@ function isResponsesTerminalFrame(block: Uint8Array): boolean {
   const payload = data.join("\n");
   if (payload === "[DONE]") return false;
   try {
-    const parsed = JSON.parse(payload) as { type?: unknown };
-    return parsed.type === "response.completed"
+    const parsed = JSON.parse(payload) as {
+      type?: unknown;
+      code?: unknown;
+      message?: unknown;
+      error?: unknown;
+      last_error?: unknown;
+      response?: { error?: unknown; incomplete_details?: unknown };
+    };
+    if (parsed.type === "response.completed"
       || parsed.type === "response.failed"
-      || parsed.type === "response.incomplete";
+      || parsed.type === "response.incomplete") return true;
+    if (parsed.type !== "error") return false;
+    // A top-level error is terminal for this boundary only when it carries the
+    // same high-confidence cyber-policy evidence used by relay.ts. Ordinary
+    // upstream errors remain transport failures and still become a bounded 502.
+    const candidates = [
+      parsed,
+      parsed.error,
+      parsed.last_error,
+      parsed.response?.error,
+      parsed.response?.incomplete_details,
+    ];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      const record = candidate as { code?: unknown; message?: unknown };
+      if (isCyberPolicyCode(typeof record.code === "string" ? record.code : undefined)) return true;
+      if (typeof record.message === "string" && isCyberPolicyMessage(record.message)) return true;
+    }
+    return false;
   } catch {
     return false;
   }

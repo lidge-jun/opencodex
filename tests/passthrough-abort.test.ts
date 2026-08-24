@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { linkAbortSignal, relaySseWithHeartbeat, relayWithAbort } from "../src/server";
+import { consumeForInspection, linkAbortSignal, relaySseWithFailedTail, relaySseWithHeartbeat, relayWithAbort } from "../src/server";
 
 const root = new URL("../", import.meta.url);
 
@@ -15,6 +15,16 @@ function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
       else controller.close();
     },
   });
+}
+
+function joinBytes(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
 }
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -173,6 +183,344 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
 
     expect(await readAll(relayed)).toContain("response.failed");
     expect(terminals).toEqual(["failed"]);
+  });
+
+  test("tee/pull relay clean EOF synthesizes one adapter_eof incomplete and one DONE", async () => {
+    const enc = new TextEncoder();
+    const relayed = relaySseWithFailedTail(streamFromChunks([
+      enc.encode('event: response.created\ndata: {"type":"response.created"}\n\n'),
+    ]), new AbortController());
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.incomplete/g)?.length).toBe(1);
+    expect(text).toContain('"reason":"adapter_eof"');
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+  });
+
+  test("tee/pull relay suppresses a premature DONE before the synthetic terminal", async () => {
+    const enc = new TextEncoder();
+    const relayed = relaySseWithFailedTail(streamFromChunks([
+      enc.encode('event: response.created\ndata: {"type":"response.created"}\n\ndata: [DONE]\n\n'),
+    ]), new AbortController());
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.incomplete/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text.indexOf("response.incomplete")).toBeLessThan(text.indexOf("data: [DONE]"));
+  });
+
+  test("tee/pull relay rewrites policy incomplete and top-level error to failed", async () => {
+    const enc = new TextEncoder();
+    for (const frame of [
+      `event: response.incomplete\ndata: ${JSON.stringify({
+        type: "response.incomplete",
+        response: {
+          status: "incomplete",
+          error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+        },
+      })}\n\n`,
+      `event: error\ndata: ${JSON.stringify({
+        type: "error",
+        error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+      })}\n\n`,
+    ]) {
+      const relayed = relaySseWithFailedTail(streamFromChunks([enc.encode(frame)]), new AbortController());
+      const text = await readAll(relayed);
+      expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+      expect(text).not.toContain("response.incomplete");
+      expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+      expect(text).toContain('"type":"invalid_request_error"');
+      expect(text).toContain('"code":"cyber_policy"');
+    }
+  });
+
+  test("tee/pull normalizes structured policy response.failed while preserving metadata", async () => {
+    const enc = new TextEncoder();
+    const payload = JSON.stringify({
+      type: "response.failed",
+      sequence_number: 19,
+      model: "gpt-policy",
+      response: {
+        id: "resp-structured-policy-pull",
+        output: [{ type: "message", id: "item-structured-policy-pull" }],
+        status: "failed",
+        error: {
+          type: "server_error",
+          code: "cyber_policy",
+          message: "blocked by upstream policy",
+        },
+      },
+    });
+    const relayed = relaySseWithFailedTail(streamFromChunks([
+      enc.encode(`event: response.failed\ndata: ${payload}\n\n`),
+    ]), new AbortController());
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).toContain('"type":"invalid_request_error"');
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).not.toContain('"type":"server_error"');
+    expect(text).toContain('"sequence_number":19');
+    expect(text).toContain('"model":"gpt-policy"');
+    expect(text).toContain('"id":"resp-structured-policy-pull"');
+    expect(text).toContain('"output":[{"type":"message","id":"item-structured-policy-pull"}]');
+  });
+
+  test("tee/pull preserves a policy error before same-chunk frame-count overflow", async () => {
+    const enc = new TextEncoder();
+    const policy = JSON.stringify({
+      type: "error",
+      sequence_number: 24,
+      response: {
+        id: "resp-policy-pull-frame-count",
+        output: [{ type: "message", id: "item-policy-pull-frame-count" }],
+        status: "failed",
+      },
+      error: {
+        type: "invalid_request_error",
+        code: "cyber_policy",
+        message: "blocked by upstream policy",
+      },
+    });
+    const relayed = relaySseWithFailedTail(streamFromChunks([
+      enc.encode(`event: error\ndata: ${policy}\n\n${"\n\n".repeat(4096)}`),
+    ]), new AbortController());
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("upstream_reset");
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).toContain('"sequence_number":24');
+    expect(text).toContain('"id":"resp-policy-pull-frame-count"');
+    expect(text).toContain('"output":[{"type":"message","id":"item-policy-pull-frame-count"}]');
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+  });
+
+  test("tee/pull preserves a policy error before same-chunk oversized trailing bytes", async () => {
+    const enc = new TextEncoder();
+    const policy = JSON.stringify({
+      type: "error",
+      sequence_number: 26,
+      response: { id: "resp-policy-pull-byte-overflow", output: [], status: "failed" },
+      error: {
+        type: "invalid_request_error",
+        code: "cyber_policy",
+        message: "blocked by upstream policy",
+      },
+    });
+    const oversizedTail = new Uint8Array(4 * 1024 * 1024 + 1).fill(120);
+    const relayed = relaySseWithFailedTail(streamFromChunks([joinBytes([
+      enc.encode(`event: error\ndata: ${policy}\n\n`),
+      oversizedTail,
+    ])]), new AbortController());
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("upstream_reset");
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).toContain('"sequence_number":26');
+    expect(text).toContain('"id":"resp-policy-pull-byte-overflow"');
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+  });
+
+  test("tee/pull parses each unframed EOF terminal once without adapter_eof", async () => {
+    const enc = new TextEncoder();
+    const cases = [
+      {
+        type: "response.completed",
+        event: "response.completed",
+        payload: {
+          type: "response.completed",
+          sequence_number: 41,
+          response: { id: "resp-pull-unframed-completed", status: "completed", output: [] },
+        },
+      },
+      {
+        type: "response.failed",
+        event: "response.failed",
+        payload: {
+          type: "response.failed",
+          sequence_number: 42,
+          response: { id: "resp-pull-unframed-failed", status: "failed", output: [] },
+        },
+      },
+      {
+        type: "response.incomplete",
+        event: "response.incomplete",
+        payload: {
+          type: "response.incomplete",
+          sequence_number: 43,
+          response: { id: "resp-pull-unframed-incomplete", status: "incomplete", output: [] },
+        },
+      },
+      {
+        type: "error",
+        event: "response.failed",
+        payload: {
+          type: "error",
+          sequence_number: 44,
+          response: {
+            id: "resp-pull-unframed-policy",
+            output: [{ type: "message", id: "item-pull-unframed-policy" }],
+            status: "failed",
+          },
+          error: {
+            type: "invalid_request_error",
+            code: "cyber_policy",
+            message: "blocked by upstream policy",
+          },
+        },
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      const relayed = relaySseWithFailedTail(streamFromChunks([
+        enc.encode(`event: ${fixture.type}\ndata: ${JSON.stringify(fixture.payload)}`),
+      ]), new AbortController());
+      const text = await readAll(relayed);
+      expect(text.match(/event: response\.(?:completed|failed|incomplete)/g)?.length).toBe(1);
+      expect(text).toContain(`event: ${fixture.event}`);
+      expect(text).not.toContain('"reason":"adapter_eof"');
+      expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    }
+  });
+
+  test("tee/pull preserves an unframed terminal before a reader error", async () => {
+    const enc = new TextEncoder();
+    const cases = [
+      {
+        type: "response.completed",
+        event: "response.completed",
+        payload: {
+          type: "response.completed",
+          sequence_number: 51,
+          response: { id: "resp-read-error-completed", status: "completed", output: [] },
+        },
+      },
+      {
+        type: "response.failed",
+        event: "response.failed",
+        payload: {
+          type: "response.failed",
+          sequence_number: 52,
+          response: { id: "resp-read-error-failed", status: "failed", output: [] },
+        },
+      },
+      {
+        type: "response.incomplete",
+        event: "response.incomplete",
+        payload: {
+          type: "response.incomplete",
+          sequence_number: 53,
+          response: { id: "resp-read-error-incomplete", status: "incomplete", output: [] },
+        },
+      },
+      {
+        type: "error",
+        event: "response.failed",
+        payload: {
+          type: "error",
+          sequence_number: 54,
+          response: {
+            id: "resp-read-error-policy",
+            output: [{ type: "message", id: "item-read-error-policy" }],
+            status: "failed",
+          },
+          error: {
+            type: "invalid_request_error",
+            code: "cyber_policy",
+            message: "blocked by upstream policy",
+          },
+        },
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      let firstPull = true;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (firstPull) {
+            firstPull = false;
+            controller.enqueue(enc.encode(`event: ${fixture.type}\ndata: ${JSON.stringify(fixture.payload)}`));
+          } else {
+            controller.error(new Error("socket reset after unframed terminal"));
+          }
+        },
+      });
+      const relayed = relaySseWithFailedTail(body, new AbortController());
+      const text = await readAll(relayed);
+      expect(text.match(/event: response\.(?:completed|failed|incomplete)/g)?.length).toBe(1);
+      expect(text).toContain(`event: ${fixture.event}`);
+      expect(text).not.toContain("upstream_reset");
+      expect(text).not.toContain('"reason":"adapter_eof"');
+      expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+      if (fixture.type === "error") {
+        expect(text).toContain('"sequence_number":54');
+        expect(text).toContain('"id":"resp-read-error-policy"');
+        expect(text).toContain('"output":[{"type":"message","id":"item-read-error-policy"}]');
+      }
+    }
+  });
+
+  test("tee/pull keeps an ordinary top-level error fail-closed on reader error", async () => {
+    let firstPull = true;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (firstPull) {
+          firstPull = false;
+          controller.enqueue(new TextEncoder().encode(
+            `event: error\ndata: ${JSON.stringify({
+              type: "error",
+              error: { type: "server_error", code: "upstream_error", message: "provider failed" },
+            })}`,
+          ));
+        } else {
+          controller.error(new Error("socket reset after ordinary error"));
+        }
+      },
+    });
+    const relayed = relaySseWithFailedTail(body, new AbortController());
+    const text = await readAll(relayed);
+    expect(text).toContain("event: error");
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).toContain('"code":"upstream_reset"');
+    expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(text).not.toContain('"code":"cyber_policy"');
+  });
+
+  test("inspection read-error flush records an unframed policy terminal as failed 400", async () => {
+    let firstPull = true;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (firstPull) {
+          firstPull = false;
+          controller.enqueue(new TextEncoder().encode(
+            `event: error\ndata: ${JSON.stringify({
+              type: "error",
+              sequence_number: 55,
+              response: { id: "resp-inspection-read-error-policy", output: [], status: "failed" },
+              error: {
+                type: "invalid_request_error",
+                code: "cyber_policy",
+                message: "blocked by upstream policy",
+              },
+            })}`,
+          ));
+        } else {
+          controller.error(new Error("socket reset after inspection policy terminal"));
+        }
+      },
+    });
+    const terminals: Array<{ status: string; httpStatus?: number }> = [];
+    let done!: () => void;
+    const completed = new Promise<void>(resolve => { done = resolve; });
+    consumeForInspection(
+      body,
+      (status, httpStatus) => terminals.push({ status, ...(httpStatus === undefined ? {} : { httpStatus }) }),
+      undefined,
+      done,
+    );
+    await completed;
+    expect(terminals).toEqual([{ status: "failed", httpStatus: 400 }]);
   });
 
   test("SSE passthrough reports incomplete on EOF before a terminal payload", async () => {
