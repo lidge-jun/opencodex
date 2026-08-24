@@ -63,6 +63,15 @@ describe("llama.cpp served context ingestion (#1797)", () => {
     expect(hints.contextWindow).toBe(32768);
   });
 
+  test("top-level n_ctx still leaves meta.n_ctx last against recognized fields", () => {
+    const hints = catalogHintsFromModelsApiItem("lidge", {
+      id: "both-n-ctx",
+      n_ctx: 16384,
+      meta: { n_ctx: 8192, n_ctx_train: 262144 },
+    });
+    expect(hints.contextWindow).toBe(16384);
+  });
+
   test("the dual-envelope body now yields BOTH context and image evidence", () => {
     // Was a characterization of the #1797 gap: the multimodal token lived in
     // models[] while discovery read only data[], so the row stayed image-blind.
