@@ -90,3 +90,20 @@ export interface GitHubIssuesClient {
     labels: string[];
   }): Promise<void>;
 }
+
+export interface GitHubPullRequest {
+  number: number;
+  title: string;
+  body?: string;
+  state: string;
+  draft?: boolean;
+  head: { ref: string };
+  base: { ref: string };
+}
+
+export interface DraftPullRequestClient {
+  upsert(input: {
+    event: SyncEvent;
+    result: PrepareResult;
+  }): Promise<number>;
+}
