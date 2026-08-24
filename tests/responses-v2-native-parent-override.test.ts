@@ -134,6 +134,19 @@ describe("v2 native parent override decision", () => {
     expect(decideV2NativeParentOverride({ kind: "responses", config: config("missing/model"), headers: new Headers(), parsed: parsed(), sourceRoute: sourceRoute() }).kind).toBe("reject");
     const canonical = { ...config("openai/gpt-5.6-luna") } as OcxConfig;
     expect(decideV2NativeParentOverride({ kind: "responses", config: canonical, headers: new Headers(), parsed: parsed(), sourceRoute: sourceRoute(canonical) }).kind).toBe("reject");
+    const canonicalAlias = {
+      ...config("alias/routed-model"),
+      providers: {
+        ...config().providers,
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["routed-model"],
+        },
+      },
+    } as OcxConfig;
+    expect(decideV2NativeParentOverride({ kind: "responses", config: canonicalAlias, headers: new Headers(), parsed: parsed(), sourceRoute: sourceRoute(canonicalAlias) }).kind).toBe("reject");
   });
 
   test("compact requires explicit V2 mode and excludes helper markers", () => {

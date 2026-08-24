@@ -65,7 +65,7 @@ export default function SubagentDelegationSection({
   // Proactive message, so it must render as OFF (and the toggle can install the
   // preset). Only a nonblank hint is "on".
   const ultraOn = (ultraMode.hintText ?? "").trim().length > 0;
-  const nativeParentTargets = available.filter(option => option.provider !== "openai");
+  const nativeParentTargets = available.filter(option => option.canonical !== true);
   const nativeParentCanActivate = ultraMode.multiAgentV2Enabled && !keepNativeChatGptOnV1 && nativeParentOverride.model !== null;
 
   return (

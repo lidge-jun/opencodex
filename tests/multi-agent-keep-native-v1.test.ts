@@ -392,6 +392,35 @@ describe("/api/v2 v2NativeParentOverride", () => {
     });
   });
 
+  test("GET reports a canonical transport alias as inactive", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["parent"],
+        },
+      },
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+      v2NativeParentOverride: { enabled: true, model: "alias/parent" },
+    } as OcxConfig;
+    saveConfig(config);
+
+    const response = await handleManagementAPI(getV2(), new URL("http://localhost/api/v2"), config);
+    expect(response?.status).toBe(200);
+    expect((await response?.json()).v2NativeParentOverride).toEqual({
+      enabled: true,
+      model: "alias/parent",
+      active: false,
+    });
+  });
+
   test("PUT rejects an ineligible or malformed complete object atomically", async () => {
     isolateHomes();
     writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
@@ -399,6 +428,12 @@ describe("/api/v2 v2NativeParentOverride", () => {
       providers: {
         openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
         relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["parent"],
+        },
       },
       port: 10100,
       defaultProvider: "openai",
@@ -419,6 +454,34 @@ describe("/api/v2 v2NativeParentOverride", () => {
       expect(response?.status).toBe(400);
       expect(JSON.stringify(loadConfig())).toBe(before);
     }
+  });
+
+  test("PUT rejects canonical transport aliases while retaining the complete object atomically", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["parent"],
+        },
+      },
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+    } as OcxConfig;
+    saveConfig(config);
+    const before = JSON.stringify(loadConfig());
+
+    const response = await handleManagementAPI(
+      putNativeParentOverride({ enabled: true, model: "alias/parent" }),
+      new URL("http://localhost/api/v2"), config,
+    );
+    expect(response?.status).toBe(400);
+    expect(JSON.stringify(loadConfig())).toBe(before);
   });
 
   test("disabled override retains its selected target", async () => {

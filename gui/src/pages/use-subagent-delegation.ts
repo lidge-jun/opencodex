@@ -11,7 +11,7 @@ import { requireJson } from "./dashboard-shared";
 import { readJsonOrThrow } from "../fetch-json";
 import { normalizeInjectionSelection } from "./dashboard-core-poll";
 
-export type DelegationModelOption = { provider: string; model: string; namespaced: string };
+export type DelegationModelOption = { provider: string; model: string; namespaced: string; canonical?: boolean };
 
 export type DelegationPatch = {
   multiAgentGuidanceEnabled?: boolean;

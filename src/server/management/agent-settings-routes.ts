@@ -31,7 +31,7 @@ import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
@@ -102,10 +102,19 @@ function v2NativeParentOverrideDto(
     model,
     active: enabled
       && model !== null
+      && v2NativeParentOverrideTargetIsNoncanonical(config, model)
       && config.multiAgentMode === "v2"
       && upstreamEnabled
       && config.keepNativeChatGptOnV1 !== true,
   };
+}
+
+function v2NativeParentOverrideTargetIsNoncanonical(config: OcxConfig, model: string): boolean {
+  try {
+    return !isCanonicalOpenAiForwardProvider(routeModel(config, model).provider);
+  } catch {
+    return false;
+  }
 }
 
 function persistV2NativeParentOverride(
@@ -404,10 +413,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         } catch {
           return jsonResponse({ error: "body.v2NativeParentOverride.model must resolve to a configured provider" }, 400);
         }
-        const targetProvider = target.provider.authMode === undefined
-          ? { ...target.provider, authMode: "forward" as const }
-          : target.provider;
-        if (target.providerName === OPENAI_CODEX_PROVIDER_ID && isCanonicalOpenAiForwardProvider(targetProvider)) {
+        if (isCanonicalOpenAiForwardProvider(target.provider)) {
           return jsonResponse({ error: "body.v2NativeParentOverride.model must resolve to a noncanonical provider" }, 400);
         }
       }
@@ -601,9 +607,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
     const nativeModels = listCatalogNativeSlugs()
       .filter(slug => !disabled.has(slug))
-      .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
+      .map(slug => ({ provider: "openai", model: slug, namespaced: slug, canonical: true }));
     const routedModels = uniqueCatalogModelsForPublicList(models)
-      .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
+      .map(m => {
+        const namespaced = catalogModelSlug(m);
+        return {
+          provider: m.provider,
+          model: m.id,
+          namespaced,
+          canonical: !v2NativeParentOverrideTargetIsNoncanonical(config, namespaced),
+        };
+      })
       .filter(m => ![...disabled].some(stored => (
         stored === m.namespaced || slugEquals(stored, m.provider, m.model)
       )));

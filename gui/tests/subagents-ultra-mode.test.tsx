@@ -14,7 +14,7 @@ let root: Root | null = null;
 let v2Responses: Array<{ ok: boolean; body: unknown; status?: number }> = [];
 let v2Call = 0;
 let requests: Array<{ url: string; init?: RequestInit }> = [];
-let injectionAvailable: Array<{ provider: string; model: string; namespaced: string }> = [];
+let injectionAvailable: Array<{ provider: string; model: string; namespaced: string; canonical?: boolean }> = [];
 let nativeOverrideServer = { enabled: false, model: null as string | null, active: false };
 let nativeOverridePutError: string | null = null;
 let nativeOverrideAfterPut: Partial<typeof nativeOverrideServer> | null = null;
@@ -215,7 +215,8 @@ test("a save refresh from an old API server cannot overwrite a newer server", as
 
 test("hydrates native parent override off and filters canonical ChatGPT rows", async () => {
   injectionAvailable = [
-    { provider: "openai", model: "gpt-5.6-luna", namespaced: "gpt-5.6-luna" },
+    { provider: "openai", model: "gpt-5.6-luna", namespaced: "gpt-5.6-luna", canonical: true },
+    { provider: "alias", model: "parent-model", namespaced: "alias/parent-model", canonical: true },
     { provider: "relay", model: "parent-model", namespaced: "relay/parent-model" },
   ];
   v2Responses = [{ ok: true, body: {
@@ -227,6 +228,7 @@ test("hydrates native parent override off and filters canonical ChatGPT rows", a
   await mount();
 
   expect(nativeParentSwitch().getAttribute("aria-pressed")).toBe("false");
+  expect(container.textContent).not.toContain("alias/parent-model");
   await act(async () => { nativeParentSelect().click(); });
   const options = [...testWindow.document.querySelectorAll('[role="option"]')];
   expect(options).toHaveLength(2);
