@@ -26,7 +26,7 @@ export async function pinVendorRef(
   if (!isAllowedVendorRef(ref)) {
     throw new Error(`ref ${ref} is not allowlisted`);
   }
-  await run(runner, ["fetch", ".", target, `refs/heads/${ref}`]);
+  await run(runner, ["fetch", ".", `${target}:refs/heads/${ref}`]);
 }
 
 export interface PinOptions {

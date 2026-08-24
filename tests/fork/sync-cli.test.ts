@@ -180,12 +180,15 @@ describe("fork sync CLI", () => {
       },
       write: value => output.push(value),
     });
-    expect(calls).toContainEqual(["fetch", ".", TAG_SHA, "refs/heads/vendor/main"]);
     expect(calls).toContainEqual([
       "fetch",
       ".",
-      "refs/remotes/upstream/dev",
-      "refs/heads/vendor/dev",
+      `${TAG_SHA}:refs/heads/vendor/main`,
+    ]);
+    expect(calls).toContainEqual([
+      "fetch",
+      ".",
+      "refs/remotes/upstream/dev:refs/heads/vendor/dev",
     ]);
     expect(calls).toEqual([
       ["ls-remote", "--tags", "--refs", "upstream", "v*"],
@@ -195,9 +198,9 @@ describe("fork sync CLI", () => {
       ["merge-base", "--is-ancestor", TAG_SHA, MAIN_SHA],
       ["merge-base", "--is-ancestor", MAIN_SHA, TAG_SHA],
       ["rev-parse", "HEAD"],
-      ["fetch", ".", TAG_SHA, "refs/heads/vendor/main"],
+      ["fetch", ".", `${TAG_SHA}:refs/heads/vendor/main`],
       ["rev-parse", "refs/heads/vendor/main"],
-      ["fetch", ".", "refs/remotes/upstream/dev", "refs/heads/vendor/dev"],
+      ["fetch", ".", "refs/remotes/upstream/dev:refs/heads/vendor/dev"],
       ["rev-parse", "refs/heads/vendor/dev"],
       ["merge-base", "--is-ancestor", TAG_SHA, DEFAULT_MAIN_SHA],
       ["merge-base", "--all", DEFAULT_MAIN_SHA, TAG_SHA],

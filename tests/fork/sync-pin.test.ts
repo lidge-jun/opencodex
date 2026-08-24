@@ -51,9 +51,9 @@ describe("fork sync pinning", () => {
     });
 
     expect(calls).toEqual([
-      ["fetch", ".", TAG_SHA, "refs/heads/vendor/main"],
+      ["fetch", ".", `${TAG_SHA}:refs/heads/vendor/main`],
       ["rev-parse", "refs/heads/vendor/main"],
-      ["fetch", ".", "refs/remotes/upstream/dev", "refs/heads/vendor/dev"],
+      ["fetch", ".", "refs/remotes/upstream/dev:refs/heads/vendor/dev"],
       ["rev-parse", "refs/heads/vendor/dev"],
     ]);
     expect(pinned.kind).toBe("pin-updated");
@@ -82,7 +82,7 @@ describe("fork sync pinning", () => {
     expect(diverged.kind).toBe("pin-diverged");
     expect(diverged.error).toContain("fast-forward");
     expect(calls).toEqual([
-      ["fetch", ".", TAG_SHA, "refs/heads/vendor/main"],
+      ["fetch", ".", `${TAG_SHA}:refs/heads/vendor/main`],
     ]);
   });
 
