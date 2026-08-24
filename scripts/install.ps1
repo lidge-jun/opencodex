@@ -4,14 +4,14 @@ $ErrorActionPreference = "Stop"
 Write-Host "Installing opencodex..." -ForegroundColor Cyan
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Error "Node.js 18+ is required. Install Node from https://nodejs.org/ and rerun this script."
+    Write-Error "Node.js 22+ is required. Install Node from https://nodejs.org/ and rerun this script."
     exit 1
 }
 
 $nodeVersion = & node -p "process.versions.node"
 $nodeMajor = [int]($nodeVersion.Split(".")[0])
-if ($nodeMajor -lt 18) {
-    Write-Error "Node.js 18+ is required. Current version: v$nodeVersion"
+if ($nodeMajor -lt 22) {
+    Write-Error "Node.js 22+ is required. Current version: v$nodeVersion"
     exit 1
 }
 

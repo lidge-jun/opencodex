@@ -73,14 +73,14 @@ flowchart LR
 | Linux (x64 / arm64) | Полная поддержка | systemd (пользовательский unit) |
 | Windows (x64) | Полная поддержка | Task Scheduler (скрыто) / опциональная нативная служба (`--native`, WinSW) |
 
-Требуется [Node](https://nodejs.org) 18+. Рантайм Bun добавляется автоматически при `npm install` — отдельно устанавливать Bun не нужно. Все три платформы работают нативно (WSL на Windows не требуется).
+Требуется [Node](https://nodejs.org) 22+. Рантайм Bun добавляется автоматически при `npm install` — отдельно устанавливать Bun не нужно. Все три платформы работают нативно (WSL на Windows не требуется).
 
 ## Быстрый старт
 
 ### Для людей
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
+npm install -g @bitkyc08/opencodex   # Node 22+; the Bun runtime is bundled automatically
 ocx start                            # or `ocx service` to run it in the background
 ```
 

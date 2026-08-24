@@ -70,12 +70,12 @@ flowchart LR
 | Linux (x64 / arm64) | 完整支援 | systemd（使用者層級） |
 | Windows (x64) | 完整支援 | Task Scheduler |
 
-需要 [Node](https://nodejs.org) 18+。Bun 執行環境會在 `npm install` 時自動打包，不必另外安裝。三個平台皆可原生執行（Windows 不需要 WSL）。
+需要 [Node](https://nodejs.org) 22+。Bun 執行環境會在 `npm install` 時自動打包，不必另外安裝。三個平台皆可原生執行（Windows 不需要 WSL）。
 
 ## 快速開始
 
 ```bash
-# 安裝（自動打包 Bun 執行時 —— 只需 Node 18+）
+# 安裝（自動打包 Bun 執行時 —— 只需 Node 22+）
 # 建議使用自己的 Node（nvm/fnm）—— 避免使用 `sudo npm install -g …`
 npm install -g @bitkyc08/opencodex
 

@@ -71,7 +71,7 @@ flowchart LR
 | Linux (x64 / arm64) | 완전 지원 | systemd (user unit) |
 | Windows (x64) | 완전 지원 | Task Scheduler |
 
-[Node](https://nodejs.org) 18 이상이 필요합니다. Bun 런타임은 `npm install` 시 자동으로 번들되므로 따로 설치할 필요가 없습니다. 세 플랫폼 모두 네이티브로 동작합니다 (Windows에서도 WSL 없이 사용 가능합니다).
+[Node](https://nodejs.org) 22 이상이 필요합니다. Bun 런타임은 `npm install` 시 자동으로 번들되므로 따로 설치할 필요가 없습니다. 세 플랫폼 모두 네이티브로 동작합니다 (Windows에서도 WSL 없이 사용 가능합니다).
 
 ## 빠른 시작
 

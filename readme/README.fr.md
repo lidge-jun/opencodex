@@ -56,7 +56,7 @@ tandis que les fils existants restent associés au compte qui les a démarrés.
 ### Pour les humains
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
+npm install -g @bitkyc08/opencodex   # Node 22+ ; le runtime Bun est inclus automatiquement
 ocx start                            # ou `ocx service` pour l’exécuter en arrière-plan
 ```
 
@@ -127,7 +127,7 @@ mais les commandes sans interface comme `ocx provider add` et `ocx combo set` co
 | Linux (x64 / arm64) | Entièrement pris en charge | systemd (unité utilisateur) |
 | Windows (x64) | Entièrement pris en charge | Planificateur de tâches (masqué) / service natif en option (`--native`, WinSW) |
 
-Nécessite [Node](https://nodejs.org) 18 ou version ultérieure. L'environnement d'exécution Bun est inclus
+Nécessite [Node](https://nodejs.org) 22 ou version ultérieure. L'environnement d'exécution Bun est inclus
 lors de `npm install` — aucune installation séparée de Bun n'est nécessaire, ni WSL sous Windows. Si npm a
 bloqué les scripts d'installation de l'environnement inclus, consultez la
 [documentation d'installation](https://opencodex.me/fr/getting-started/installation/).

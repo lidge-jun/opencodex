@@ -50,7 +50,7 @@ opencodex, Codex'in Responses API'sini sağlayıcınızın desteklediği formata
 ### İnsanlar için
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenmiştir
+npm install -g @bitkyc08/opencodex   # Node 22+; Bun çalışma zamanı otomatik olarak paketlenmiştir
 ocx start                            # veya arka planda çalıştırmak için `ocx service`
 ```
 
@@ -76,7 +76,7 @@ ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i 
 | Linux (x64 / arm64) | Tam destekleniyor | systemd (user unit) |
 | Windows (x64) | Tam destekleniyor | Görev Zamanlayıcı (gizli) / isteğe bağlı yerel servis (`--native`, WinSW) |
 
-[Node](https://nodejs.org) 18+ gerektirir. Bun çalışma zamanı `npm install` sırasında paketlenmiş olarak gelir — ayrı bir Bun kurulumu veya Windows'ta WSL gerekmez. npm paketlenmiş çalışma zamanının yükleme betiklerini engellediyse [kurulum dokümantasyonuna](https://opencodex.me/getting-started/installation/) bakın.
+[Node](https://nodejs.org) 22+ gerektirir. Bun çalışma zamanı `npm install` sırasında paketlenmiş olarak gelir — ayrı bir Bun kurulumu veya Windows'ta WSL gerekmez. npm paketlenmiş çalışma zamanının yükleme betiklerini engellediyse [kurulum dokümantasyonuna](https://opencodex.me/getting-started/installation/) bakın.
 
 ## Öne Çıkan Özellikler
 
