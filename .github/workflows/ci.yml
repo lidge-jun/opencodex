@@ -438,21 +438,22 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # macOS runs on every pull request, and runs the WHOLE suite unsharded.
+  # macOS runs the WHOLE suite unsharded. The four Linux shards each cover a
+  # quarter of the files, which quietly assumes no test depends on a sibling
+  # file having run in the same process pool. This leg is the control that
+  # would notice if that assumption ever broke.
   #
-  # That is the point of it. The four Linux shards each cover a quarter of the
-  # files, which quietly assumes no test depends on a sibling file having run in
-  # the same process pool. This leg is the control that would notice if that
-  # assumption ever broke. It is also the cheapest leg on the board — 5m23s on
-  # the baseline run, faster than the ubuntu leg it sits beside — so there was
-  # never a latency argument for touching it.
+  # Pull requests skip it: the unsharded run regularly hits the 30-minute
+  # timeout and is not a useful merge gate. Push to main/preview/dev and
+  # workflow_dispatch still run it. The aggregate `ci` job treats `skipped`
+  # as a deliberate pass.
   #
   # It does not repeat the gates: typecheck, privacy, lint, and build are
   # platform-independent and already ran once above.
   platform-macos:
     name: macos
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # The unsharded control for the sharded Linux lane: the only place the whole
     # suite runs in one pool, so it is the place that catches what sharding
