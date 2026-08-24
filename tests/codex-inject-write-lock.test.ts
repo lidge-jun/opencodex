@@ -6,7 +6,7 @@
  * "the lock function was invoked" — a pass-through mock satisfies that — but
  * that two real processes running the real injection cannot both write.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,10 +16,16 @@ import {
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import { STABLE_ZERO_BYTE_COORDINATOR_AGE_MS } from "../src/codex/inject-coordination";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = join(import.meta.dir, "..");
 const CHILD = join(repoRoot, "tests", "helpers", "codex-inject-race-child.ts");
 const LOCK_CHILD = join(repoRoot, "tests", "helpers", "codex-write-lock-child.ts");
+// Leave teardown and assertion headroom inside the surrounding test budget. A real
+// Bun child can take several seconds to start and settle on a loaded Windows runner.
+const SPAWN_TIMEOUT_MS = SPAWN_BUDGET_MS - 5_000;
+
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 let root = "";
 let codexHome = "";
@@ -31,19 +37,64 @@ function seedNative(): void {
   writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5"\n');
 }
 
-function runInject(port: number, lockTimeoutMs = 0): { success: boolean; status?: "skipped"; retryable: boolean; message: string } {
-  const result = spawnSync(process.execPath, [CHILD], {
+function runChild(args: string[], env: NodeJS.ProcessEnv): ReturnType<typeof spawnSync> {
+  return spawnSync(process.execPath, args, {
     cwd: repoRoot,
     encoding: "utf8",
-    env: {
+    env,
+    timeout: SPAWN_TIMEOUT_MS,
+    windowsHide: true,
+  });
+}
+
+function childDiagnostics(result: ReturnType<typeof spawnSync>): string {
+  const stdout = String(result.stdout ?? "").trim();
+  const stderr = String(result.stderr ?? "").trim();
+  const error = result.error instanceof Error
+    ? result.error.message
+    : result.error
+      ? String(result.error)
+      : "";
+  return [
+    `status=${String(result.status)}`,
+    `signal=${String(result.signal)}`,
+    error ? `error=${error}` : "",
+    `stdout=${stdout || "<empty>"}`,
+    `stderr=${stderr || "<empty>"}`,
+  ].filter(Boolean).join("; ");
+}
+
+function requireChildSuccess(result: ReturnType<typeof spawnSync>, label: string): string {
+  if (result.error || result.status !== 0) {
+    throw new Error(`${label} failed: ${childDiagnostics(result)}`);
+  }
+  return String(result.stdout ?? "");
+}
+
+function parseChildJson<T>(result: ReturnType<typeof spawnSync>, label: string): T {
+  const stdout = requireChildSuccess(result, label);
+  const line = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+  if (!line) {
+    throw new Error(`${label} produced no JSON output: ${childDiagnostics(result)}`);
+  }
+  try {
+    return JSON.parse(line) as T;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} produced invalid JSON (${reason}): ${childDiagnostics(result)}`);
+  }
+}
+
+function runInject(port: number, lockTimeoutMs = 0): { success: boolean; status?: "skipped"; retryable: boolean; message: string } {
+  return parseChildJson<{ success: boolean; status?: "skipped"; retryable: boolean; message: string }>(
+    runChild([CHILD], {
       ...process.env,
       CODEX_HOME: codexHome,
       OPENCODEX_HOME: opencodexHome,
       OCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port, lockTimeoutMs }),
-    },
-  });
-  const line = (result.stdout ?? "").trim().split("\n").filter(Boolean).pop() ?? "{}";
-  return JSON.parse(line) as { success: boolean; status?: "skipped"; retryable: boolean; message: string };
+    }),
+    `inject child (port=${port})`,
+  );
 }
 
 beforeEach(() => {
@@ -102,18 +153,18 @@ describe("the lock is on the production path", () => {
     expect(result.success).toBeTrue();
 
     // The row is the proof that the lock ran, not that the function was called.
-    const state = spawnSync(process.execPath, ["--eval", `
+    const state = runChild(["--eval", `
       const { readCodexTransitionState } = require("./src/codex/transition-state");
       console.log(JSON.stringify(readCodexTransitionState()));
     `], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
     });
-    const row = JSON.parse((state.stdout ?? "{}").trim().split("\n").pop() ?? "{}") as {
+    const row = parseChildJson<{
       kind?: string;
       state?: { nativeGeneration?: number; currentTxId?: string | null };
-    };
+    }>(state, "read transition state after clean apply");
     expect(row.kind).toBe("ready");
     expect(row.state?.nativeGeneration).toBeGreaterThan(0);
     // Guessing null passes on a fresh machine and fails on a real one, so the
@@ -149,7 +200,7 @@ describe("the lock is on the production path", () => {
 
     const deadline = Date.now() + 10_000;
     while (!existsSync(holdMarker) && Date.now() < deadline) {
-      spawnSync(process.execPath, ["--eval", "Bun.sleepSync(20)"], { encoding: "utf8" });
+      requireChildSuccess(runChild(["--eval", "Bun.sleepSync(20)"], process.env), "hold-marker wait child");
     }
     expect(existsSync(holdMarker)).toBeTrue();
 
@@ -171,7 +222,7 @@ describe("the lock is on the production path", () => {
     const finalConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
     expect(finalConfig).not.toContain("20200");
     expect(finalConfig).toBe(afterFirst);
-  }, 30_000);
+  }, SPAWN_BUDGET_MS);
 });
 
 describe("homes the coordinator cannot adopt keep working", () => {
@@ -237,18 +288,18 @@ describe("the transition is resolved, not left pending", () => {
     seedNative();
     expect(runInject(10100).success).toBeTrue();
 
-    const state = spawnSync(process.execPath, ["--eval", `
+    const state = runChild(["--eval", `
       const { readCodexTransitionState } = require("./src/codex/transition-state");
       console.log(JSON.stringify(readCodexTransitionState()));
     `], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
     });
-    const row = JSON.parse((state.stdout ?? "{}").trim().split("\n").pop() ?? "{}") as {
+    const row = parseChildJson<{
       kind?: string;
       state?: { history?: { status?: string } };
-    };
+    }>(state, "read transition state after completed apply");
     expect(row.kind).toBe("ready");
     expect(row.state?.history?.status).not.toBe("pending");
   });
@@ -268,30 +319,26 @@ describe("the transition is resolved, not left pending", () => {
       syncResumeHistory: false,
     }, null, 2));
 
-    const result = spawnSync(process.execPath, [CHILD], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CODEX_HOME: codexHome,
-        OPENCODEX_HOME: opencodexHome,
-        OCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port: 10100, lockTimeoutMs: 0 }),
-      },
+    const result = runChild([CHILD], {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
+      OCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port: 10100, lockTimeoutMs: 0 }),
     });
-    expect(result.status).toBe(0);
+    requireChildSuccess(result, "opted-out inject child");
 
-    const state = spawnSync(process.execPath, ["--eval", `
+    const state = runChild(["--eval", `
       const { readCodexTransitionState } = require("./src/codex/transition-state");
       console.log(JSON.stringify(readCodexTransitionState()));
     `], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
     });
-    const row = JSON.parse((state.stdout ?? "{}").trim().split("\n").pop() ?? "{}") as {
+    const row = parseChildJson<{
       kind?: string;
       state?: { history?: { status?: string; attempts?: number } };
-    };
+    }>(state, "read transition state after opted-out apply");
     expect(row.kind).toBe("ready");
     // Opt-out is a completed decision, not a failure: converged, never blocked,
     // and never left pending for a job that chose to do nothing.
