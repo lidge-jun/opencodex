@@ -416,7 +416,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
-      liveModels: p.liveModels !== false,
+      liveModels: isAzureIdentityProvider(p) ? false : p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],
       contextWindow: p.contextWindow,
@@ -429,7 +429,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
-      discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
+      discovery: isAzureIdentityProvider(p) || p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
   }
 
@@ -762,7 +762,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
       });
     }
-    if (prov.liveModels === false) {
+    if (prov.liveModels === false || isAzureIdentityProvider(prov)) {
       // A static catalog has no live discovery endpoint to test. This is neither
       // positive connectivity evidence nor an outage, and it must stay before
       // credential resolution/network access for providers such as Antigravity.

@@ -142,6 +142,12 @@ describe("provider management validation", () => {
     expect(providerManagementConfigError("azure", { ...provider, authMode: "oauth" })).toContain("authMode");
     expect(providerManagementConfigError("azure", { ...provider, azureCredential: { type: "default-azure-credential", managedIdentityClientId: "   " } })).toContain("non-empty");
     expect(providerManagementConfigError("azure", { ...provider, azureCredential: { type: "default-azure-credential", token: "secret-token" } })).toContain("unrecognized");
+    const redactedNameError = providerManagementConfigError("sk-super-secret-9876", {
+      ...provider,
+      azureCredential: { type: "default-azure-credential", managedIdentityClientId: "   " },
+    })!;
+    expect(redactedNameError).not.toContain("sk-super-secret-9876");
+    expect(redactedNameError).toContain("[REDACTED]");
 
     const dto = safeConfigDTO({ port: 10100, defaultProvider: "azure", providers: { azure: provider } } as OcxConfig) as {
       providers: { azure: Record<string, unknown> };

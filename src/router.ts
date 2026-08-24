@@ -9,6 +9,7 @@ import {
 } from "./combos";
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
+import { isAzureIdentityProvider } from "./config/provider-validation";
 import { resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
@@ -271,10 +272,15 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
-    return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
+    return {
+      ...provider,
+      apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(isAzureIdentityProvider(provider) ? { liveModels: false } : {}),
+    };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
-  const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
+  const staticModelCatalog = isAzureIdentityProvider(provider)
+    || !providerSupportsLiveModelDiscovery(providerName, provider);
   const repairLegacyMimoFreeAuth = providerName === "mimo-free"
     && staticModelCatalog
     && (provider.authMode === undefined || provider.authMode === "local");

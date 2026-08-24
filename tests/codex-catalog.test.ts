@@ -3286,6 +3286,32 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  test("Azure identity forces a static catalog without fetch or auth resolution", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("Azure identity catalog must not call /models");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "azure-identity": {
+            adapter: "azure-openai",
+            baseUrl: "https://resource.openai.azure.com/openai",
+            azureCredential: { type: "default-azure-credential" },
+            models: ["gpt-4o"],
+          },
+        },
+      });
+      expect(fetchCalls).toBe(0);
+      expect(models.filter(model => model.provider === "azure-identity").map(model => model.id)).toEqual(["gpt-4o"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("azure-identity");
+    }
+  });
+
   test("Google Antigravity honors an explicit static catalog and suppresses stale discovery", async () => {
     const providerName = "google-antigravity";
     const provider = structuredClone(OAUTH_PROVIDERS[providerName].providerConfig);

@@ -608,7 +608,7 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
   const azureCredentialError = azureCredentialConfigError(raw);
-  if (azureCredentialError) return `provider ${name} ${azureCredentialError}`;
+  if (azureCredentialError) return `provider ${JSON.stringify(redactSecretString(name))} ${azureCredentialError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");

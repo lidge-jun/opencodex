@@ -20,6 +20,7 @@ describe("routeModel registry effort defaults", () => {
     expect(routed.azureCredential).toEqual({ type: "default-azure-credential" });
     expect(routed.apiKey).toBeUndefined();
     expect(routed.keyOptional).toBeUndefined();
+    expect(routed.liveModels).toBe(false);
   });
   test("allows only opted-in OAuth presets to use explicit API-key billing", () => {
     const xaiKey: OcxConfig = {
