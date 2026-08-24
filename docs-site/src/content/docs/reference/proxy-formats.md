@@ -163,25 +163,24 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
-Structured output is part of that translation: `response_format` with `json_object` or
-`json_schema` is forwarded to routed `openai-chat` models and lowered onto routed Google models
-as Gemini JSON mode (`responseMimeType` / `responseSchema`). On `POST /v1/responses` the
-equivalent request field is `text.format`: native Responses routes preserve it in the raw
-Responses body, and it is translated to `response_format` when the model routes to an
-`openai-chat` provider. The `noStructuredOutputModels` opt-out is `openai-chat`-only: a model
-listed in the provider's list omits `response_format` on that wire; sibling models keep the
-translation.
-Other unclassified backends receive the field and return their own error instead of the proxy
-guessing their capability.
+Structured output is part of that translation. `response_format` with `json_object` or
+`json_schema` is forwarded to routed `openai-chat` models, subject to the provider's
+`noStructuredOutputModels` opt-out: listed models omit `response_format`, while sibling models
+keep it. Routed Google models lower supported requests to Gemini JSON mode
+(`responseMimeType` / `responseSchema`), but skip that lowering when the request has tools, the
+selected model is Claude, or the model is image-capable. Kiro rejects structured output.
+Cursor has no structured-output wire field and rejects before transport.
+
+On `POST /v1/responses`, the equivalent request field is `text.format`: native Responses routes
+preserve it in the raw Responses body, and it is translated to `response_format` when the model
+routes to an `openai-chat` provider. Adapter behavior is capability-specific: an adapter may
+forward, skip, ignore, or reject a feature according to its implementation, rather than every
+unrepresentable feature failing closed.
 
 Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE objects with
 `object: "chat.completion.chunk"`, choice deltas, a terminal choice with `finish_reason`, and
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
 them.
-
-Because the internal execution path is Responses-based, a provider adapter can impose a narrower
-feature set. For example, a request feature that cannot be represented by the selected adapter is
-returned as an error instead of silently changing its meaning.
 
 ## `POST /v1/messages` and `count_tokens`
 

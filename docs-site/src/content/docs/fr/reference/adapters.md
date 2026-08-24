@@ -94,6 +94,7 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 **Cibles :** `agent.v1.AgentService/Run` de Cursor, en flux HTTP/2 Connect sur `api2.cursor.sh`.
 **Authentification :** jeton OAuth/d’accès Cursor provenant de `provider.apiKey` ou de l’en-tête d’autorisation transmis.
 
+- La sortie structurée est refusée avant le transport : Cursor n'a pas de champ protobuf de schéma de sortie, donc `text.format` / `response_format` JSON object ou schema (et le drapeau interne de sortie structurée) renvoient `400 invalid_request_error`. Les outils ne contournent pas ce contrôle.
 - Utilise `runTurn` plutôt que le chemin habituel fetch/parse. Les requêtes, événements serveur, arguments d’outil, points de contrôle de l’utilisation et réponses du client sont encodés avec les schémas `@bufbuild/protobuf` de `cursor/gen/agent_pb.ts`, puis encadrés comme messages Connect.
 - Rejoue l’état de la conversation au moyen de blobs adressés par leur contenu, remappe les appels d’outils du serveur vers Codex, découvre les modèles Cursor disponibles en direct au moyen de l’appel RPC protobuf `GetUsableModels` et ne relance une opération qu’avant que la requête d’exécution ait été écrite sur le transport.
 - Expose Cursor Router sous `cursor/auto`, ainsi que les entrées explicites `cursor/auto-cost`, `cursor/auto-balance` et `cursor/auto-intelligence`. Les niveaux explicites sont encodés dans `requested_model.parameters`, tandis que l’ancienne entrée `cursor/auto` conserve la valeur par défaut du compte ou de l’équipe.

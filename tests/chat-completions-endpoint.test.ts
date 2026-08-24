@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { handleChatCompletions } from "../src/server/chat-completions";
 import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -621,6 +622,48 @@ test("chatCompletionsToResponsesBody maps response_format and rejects unknown ty
     messages: [{ role: "user", content: "hi" }],
     response_format: { type: "xml" },
   })).toThrow(ChatCompletionsRequestError);
+});
+
+test("Cursor Chat Completions structured output returns 400 before transport", async () => {
+  const config = {
+    port: 0,
+    defaultProvider: "cursor-fixture",
+    providers: {
+      "cursor-fixture": {
+        adapter: "cursor",
+        baseUrl: "https://api2.cursor.sh",
+        authMode: "key",
+        apiKey: "cursor-key",
+        models: ["m1"],
+      },
+    },
+  } as OcxConfig;
+
+  const response = await handleChatCompletions(
+    new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "cursor-fixture/m1",
+        stream: false,
+        messages: [{ role: "user", content: "return JSON" }],
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "answer", schema: { type: "object" } },
+        },
+      }),
+    }),
+    config,
+    { model: "", provider: "" },
+  );
+
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: {
+      type: "invalid_request_error",
+      message: "Cursor does not support structured output",
+    },
+  });
 });
 
 test("responsesSseToChatCompletionsSse emits parallel tool calls once with stable indices", async () => {

@@ -143,6 +143,7 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 `agent.v1.AgentService/Run`.
 **인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Cursor OAuth/access token.
 
+- 구조화된 출력은 전송 전에 거부됩니다. Cursor에는 protobuf 출력 스키마 필드가 없으므로 `text.format` / `response_format` JSON object 또는 schema(및 내부 structured-output 플래그)는 `400 invalid_request_error`를 반환합니다. 도구로 이 검사를 우회할 수 없습니다.
 - 일반 fetch/parse 경로 대신 `runTurn`을 사용합니다. 요청, 서버 이벤트, 툴 인자, 사용량 checkpoint,
   클라이언트 응답은 `cursor/gen/agent_pb.ts`의 `@bufbuild/protobuf` 스키마로 인코딩한 뒤 Connect
   메시지로 framing합니다.

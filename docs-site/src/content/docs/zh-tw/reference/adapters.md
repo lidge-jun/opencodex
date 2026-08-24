@@ -116,6 +116,7 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 `agent.v1.AgentService/Run`。
 **認證：** `provider.apiKey` 或轉發 authorization header 中的 Cursor OAuth/access token。
 
+- 結構化輸出在傳輸前就會被拒絕：Cursor 沒有 protobuf 輸出 schema 欄位，因此 `text.format` / `response_format` JSON object 或 schema（以及內部 structured-output 旗標）會回傳 `400 invalid_request_error`。工具無法繞過此檢查。
 - 使用 `runTurn`，而不是常規 fetch/parse 路徑。請求、server event、工具引數、usage checkpoint
   和 client reply 由 `cursor/gen/agent_pb.ts` 中的 `@bufbuild/protobuf` schema 編碼，並 frame 成
   Connect message。

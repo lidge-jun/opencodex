@@ -128,10 +128,20 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 转换 function tools、tool choice、图像、reasoning effort 和受支持的 response formats；
 运行标准的 Responses 路由管线；然后再把结果转换回去。
 
+结构化输出是这套转换的一部分。带 `json_object` 或 `json_schema` 的 `response_format` 会转发到
+路由的 `openai-chat` 模型，但受提供方 `noStructuredOutputModels` 的模型级 opt-out 规则约束：
+列出的模型会在该 wire 上省略 `response_format`，其他模型保留转换。路由到 Google 模型时，
+受支持的请求会转换为 Gemini JSON mode（`responseMimeType` / `responseSchema`）；但请求包含
+工具、所选模型是 Claude，或模型支持图像生成时，会跳过这项转换。Kiro 会拒绝结构化输出。
+Cursor 没有结构化输出的线上字段，并在传输前拒绝请求。
+
+在 `POST /v1/responses` 上，对应的请求字段是 `text.format`：原生 Responses 路由会在原始
+Responses body 中保留它，模型路由到 `openai-chat` 提供方时则转换为 `response_format`。
+适配器行为取决于具体能力：某项功能可能按实现被转发、跳过、忽略或拒绝；代理不保证所有
+无法表示的功能都会 fail closed。
+
 非流式输出的 `object: "chat.completion"`。流式输出使用 SSE 对象，`object: "chat.completion.chunk"`、
 choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。工具调用和 usage 信息会在源事件携带它们时被转换回去。
-
-由于内部执行路径基于 Responses，因此提供方适配器可以施加更窄的特性集。例如，若请求中的某个特性无法被所选适配器表示，它会作为错误返回，而不是静默改变其含义。
 
 ## `POST /v1/messages` 和 `count_tokens`
 

@@ -134,6 +134,7 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
 `aiserver.v1.BidiService/BidiAppend` 发送 client message。
 **认证：** `provider.apiKey` 或转发 authorization header 中的 Cursor OAuth/access token。
 
+- 结构化输出在传输前就会被拒绝：Cursor 没有 protobuf 输出 schema 字段，因此 `text.format` / `response_format` JSON object 或 schema（以及内部 structured-output 标志）会返回 `400 invalid_request_error`。工具无法绕过此检查。
 - 使用 `runTurn`，而不是常规 fetch/parse 路径。请求、server event、工具参数、usage checkpoint
   和 client reply 由 `cursor/gen/agent_pb.ts` 中的 `@bufbuild/protobuf` schema 编码，并 frame 成
   Connect message。

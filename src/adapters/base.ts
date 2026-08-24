@@ -25,6 +25,12 @@ export interface ProviderAdapter {
   name: string;
 
   /**
+   * Validate a parsed request before any attempt, sidecar, pacing, queue, or transport work.
+   * Adapters may throw a client-facing validation error when the request is unsupported.
+   */
+  validateRequest?(parsed: OcxParsedRequest): void;
+
+  /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and
    * return fully redacted output: callers may pass untrusted provider headers and payload text.
    */

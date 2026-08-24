@@ -126,6 +126,7 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 `agent.v1.AgentService/Run`。
 **認証:** `provider.apiKey` または転送された authorization ヘッダーの Cursor OAuth/access token。
 
+- 構造化出力は転送前に拒否されます。Cursor には protobuf の出力スキーマフィールドがないため、`text.format` / `response_format` の JSON object または schema（および内部の structured-output フラグ）は `400 invalid_request_error` を返します。ツールではこの検査を迂回できません。
 - 通常の fetch/parse 経路の代わりに `runTurn` を使います。リクエスト、サーバーイベント、ツール引数、使用量 checkpoint、クライアントレスポンスは `cursor/gen/agent_pb.ts` の `@bufbuild/protobuf` スキーマでエンコードしたのち Connect メッセージとして framing します。
 - content-addressed blob で対話状態を再生し、サーバーツール呼び出しを Codex に再マッピングします。protobuf の `GetUsableModels` RPC でリアルタイム Cursor モデルを探し、run リクエストが wire に commit される前だけリトライします。
 - `cursor/grok-4.5-fast` は選択可能なモデルとして維持しつつ、Cursor には正規の `grok-4.5`

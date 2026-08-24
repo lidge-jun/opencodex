@@ -246,9 +246,12 @@ export interface OcxRequestOptions {
    * Responses `text.format` (json_schema / json_object), preserved for adapters whose
    * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
    * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts; the
-   * Google adapter lowers it to Gemini JSON mode (`responseMimeType` / `responseSchema`).
-   * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
-   * keeps rejecting structured output via `_structuredOutput`.
+   * Google adapter lowers supported requests to Gemini JSON mode (`responseMimeType` /
+   * `responseSchema`) but skips requests with tools, Claude models, or image-capable models.
+   * The `openai-chat` adapter can omit it for models in `noStructuredOutputModels`; Kiro
+   * rejects structured output via `_structuredOutput`; and Cursor has no structured-output
+   * wire field and rejects the request before transport.
+   * Native passthrough does not consume this option and forwards `_rawBody.text` verbatim.
    */
   textFormat?: {
     type: "json_schema" | "json_object";

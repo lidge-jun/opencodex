@@ -502,6 +502,34 @@ describe("google adapter — structured output", () => {
     });
   });
 
+  test("Vertex json_schema uses flat JSON mode with a sanitized responseSchema", async () => {
+    const request = await createGoogleAdapter({ ...provider, googleMode: "vertex" as const }).buildRequest(
+      parsedWithTextFormat("gemini-3.7-flash", {
+        type: "json_schema",
+        name: "decision",
+        schema: {
+          type: "object",
+          properties: { keep: { type: "boolean" } },
+          required: ["keep"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    const body = JSON.parse(request.body) as Record<string, any>;
+
+    expect(body.model).toBeUndefined();
+    expect(body.request).toBeUndefined();
+    expect(body.generationConfig).toMatchObject({
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: { keep: { type: "boolean" } },
+        required: ["keep"],
+      },
+    });
+    expect(body.generationConfig.responseSchema.additionalProperties).toBeUndefined();
+  });
+
   test("AI Studio json_object lowers to responseMimeType only", async () => {
     const body = await geminiBody(parsedWithTextFormat("gemini-3-pro", { type: "json_object" }));
 

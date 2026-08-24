@@ -111,13 +111,13 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 此端點接受帶有必填 `model` 與非空 `messages` 陣列的 OpenAI 相容 Chat Completions 請求。它將 system、user、assistant 與 tool 訊息轉譯為內部 Responses 項目；轉譯 function 工具、tool choice、圖片、reasoning effort 與支援的回應格式；執行正常 Responses 路由管線；然後將結果轉譯回來。
 
-結構化輸出是該轉譯的一部分：帶 `json_object` 或 `json_schema` 的 `response_format` 被轉發到路由的 `openai-chat` 模型，並在路由到 Google 模型時降低為 Gemini JSON mode（`responseMimeType` / `responseSchema`）。在 `POST /v1/responses` 上，等效請求欄位是 `text.format`：原生 Responses 路由在原始 Responses body 中保留它，並在模型路由到 `openai-chat` 供應商時轉譯為 `response_format`。列在供應商 `noStructuredOutputModels` 中的模型僅會在 `openai-chat` wire 上省略 `response_format`；同儕模型保留轉譯。其他未分類的後端收到該欄位並回傳自己的錯誤，而非由代理猜測其能力。
+結構化輸出是該轉譯的一部分。帶 `json_object` 或 `json_schema` 的 `response_format` 會轉發到路由的 `openai-chat` 模型，但受供應商 `noStructuredOutputModels` 的模型級 opt-out 規則約束：列出的模型會在該 wire 上省略 `response_format`，其他模型保留轉譯。路由到 Google 模型時，支援的請求會降低為 Gemini JSON mode（`responseMimeType` / `responseSchema`）；但請求帶有工具、選定模型是 Claude，或模型支援圖片生成時，會略過這項降低。Kiro 會拒絕結構化輸出。Cursor 沒有結構化輸出的線上欄位，並在傳輸前拒絕請求。
+
+在 `POST /v1/responses` 上，等效請求欄位是 `text.format`：原生 Responses 路由在原始 Responses body 中保留它，並在模型路由到 `openai-chat` 供應商時轉譯為 `response_format`。Adapter 行為取決於其能力：功能可能依實作被轉發、略過、忽略或拒絕；因此代理不保證所有無法表示的功能都會 fail closed。
 
 非串流輸出有 `object: "chat.completion"`。串流輸出使用帶有
 `object: "chat.completion.chunk"`、choice delta、帶有 `finish_reason` 的終端 choice 與
 `data: [DONE]` 的 SSE 物件。Tool-call 與 usage 資訊在來源事件帶有它們時被轉譯回來。
-
-由於內部執行路徑基於 Responses，供應商 adapter 可施加較窄的功能集。例如，所選 adapter 無法表示的請求功能以錯誤回傳，而非靜默變更其意義。
 
 ## `POST /v1/messages` 與 `count_tokens`
 

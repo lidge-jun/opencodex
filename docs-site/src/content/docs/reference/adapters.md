@@ -219,6 +219,7 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
 `aiserver.v1.BidiService/BidiAppend` for client messages.
 **Auth:** Cursor OAuth/access token from `provider.apiKey` or the forwarded authorization header.
 
+- Structured output is rejected before transport: Cursor has no protobuf output-schema field, so `text.format` / `response_format` JSON object or schema (and the internal structured-output flag) return `400 invalid_request_error`. Tools do not bypass this. `requested_model.parameters` and MCP `input_schema` are not output-format channels.
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests, server events, tool arguments,
   usage checkpoints, and client replies are encoded with `@bufbuild/protobuf` schemas in
   `cursor/gen/agent_pb.ts` and framed as Connect messages.

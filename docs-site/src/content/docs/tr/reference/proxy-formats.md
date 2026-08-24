@@ -159,28 +159,28 @@ araçlarını, araç seçimini, görselleri, akıl yürütme çabasını ve dest
 yanıt formatlarını çevirir; normal Responses yönlendirme işlem hattını
 çalıştırır; ardından sonucu geri çevirir.
 
-Yapılandırılmış çıktı bu çevirinin bir parçasıdır: `json_object` veya
-`json_schema` içeren `response_format`, yönlendirilen `openai-chat` modellerine
-iletilir ve yönlendirilen Google modellerinde Gemini JSON modu olarak
-(`responseMimeType` / `responseSchema`) alt seviyeye çevrilir. `POST
-/v1/responses` üzerinde eşdeğer istek alanı `text.format`'tır: yerel Responses
-rotaları onu ham Responses gövdesinde korur ve model bir `openai-chat`
-sağlayıcısına yönlendiğinde `response_format`'a çevrilir. Sağlayıcının
-`noStructuredOutputModels` listesinde yer alan bir model yalnızca `openai-chat`
-hattında `response_format`'ı atlar; kardeş modeller çeviriyi korur. Diğer
-sınıflandırılmamış arka uçlar alanı alır ve proxy'nin yeteneklerini tahmin
-etmesi yerine kendi hatalarını döndürür.
+Yapılandırılmış çıktı bu çevirinin bir parçasıdır. `json_object` veya
+`json_schema` içeren `response_format`, sağlayıcının
+`noStructuredOutputModels` kapsamındaki model başına opt-out kuralına tabi olarak
+yönlendirilen `openai-chat` modellerine iletilir: listelenen modeller bu alandaki
+`response_format`'ı atlar, diğer modeller çeviriyi korur. Yönlendirilen Google
+modelleri desteklenen istekleri Gemini JSON moduna
+(`responseMimeType` / `responseSchema`) dönüştürür; ancak istekte araçlar varsa,
+seçilen model Claude ise veya model görüntü üretimini destekliyorsa bu dönüşümü
+atlar. Kiro yapılandırılmış çıktıyı reddeder. Cursor'ın yapılandırılmış çıktı için bir tel alanı yoktur ve isteği taşımadan önce reddeder.
+
+`POST /v1/responses` üzerinde eşdeğer istek alanı `text.format`'tır: yerel
+Responses rotaları bunu ham Responses gövdesinde korur ve model bir `openai-chat`
+sağlayıcısına yönlendiğinde `response_format`'a çevirir. Adaptör davranışı
+yeteneklere özeldir: bir özellik uygulamasına bağlı olarak iletilebilir, atlanabilir,
+yok sayılabilir veya reddedilebilir; temsil edilemeyen her özellik proxy tarafından
+fail closed edilmez.
 
 Akışsız çıktı `object: "chat.completion"` içerir. Akışlı çıktı `object:
 "chat.completion.chunk"` içeren SSE nesnelerini, seçenek farklarını,
 `finish_reason` içeren bir terminal seçeneğini ve `data: [DONE]` kullanır. Araç
 çağrısı ve kullanım bilgileri kaynak olayların bunları taşıdığı yerlere geri
 çevrilir.
-
-Dahili yürütme yolu Responses tabanlı olduğundan bir sağlayıcı adaptörü daha dar
-bir özellik kümesi uygulayabilir. Örneğin seçilen adaptör tarafından temsil
-edilemeyen bir istek özelliği anlamı sessizce değiştirilmek yerine bir hata
-olarak döndürülür.
 
 ## `POST /v1/messages` ve `count_tokens`
 
