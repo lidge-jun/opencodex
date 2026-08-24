@@ -1,9 +1,28 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 export interface OwnedServiceHome {
-  /** Add this to child-process environments so Linux never reaches the host bus. */
+  /** Add this to child-process environments so service probes never reach host state. */
   readonly env: Record<string, string>;
+}
+
+const WINDOWS_SERVICE_PROBE_PRELOAD = resolve(import.meta.dir, "owned-service-home-preload.ts");
+const WINDOWS_SERVICE_PROBE_FLAG = "OCX_TEST_SERVICE_HOME_PROBE";
+
+function windowsServiceProbeEnv(): Record<string, string> {
+  // The production Windows probe deliberately resolves schtasks.exe/sc.exe from
+  // System32, so PATH fixtures cannot isolate it. The explicit Bun preload is
+  // attached only to children created by this test fixture; production never
+  // reads this flag or the preload.
+  const preload = `--preload=${WINDOWS_SERVICE_PROBE_PRELOAD}`;
+  const existing = process.env.BUN_OPTIONS?.trim();
+  const bunOptions = existing?.includes(preload)
+    ? existing
+    : [existing, preload].filter(Boolean).join(" ");
+  return {
+    BUN_OPTIONS: bunOptions,
+    [WINDOWS_SERVICE_PROBE_FLAG]: "1",
+  };
 }
 
 /**
@@ -38,6 +57,7 @@ export function claimOwnedServiceHome(
     ].join("\n"));
   }
 
+  if (process.platform === "win32") return { env: windowsServiceProbeEnv() };
   if (process.platform !== "linux") return { env: {} };
 
   const unitDir = join(home, ".config", "systemd", "user");
