@@ -583,4 +583,25 @@ describe("Command Code provider", () => {
     const built = await builtRequest({ ...parsed(), stream: false });
     expect(JSON.parse(built.body).params.stream).toBe(true);
   });
+
+  test("derives a stable UUID only from trusted conversation identities", async () => {
+    const threadTurn = await builtRequest({ ...parsed(), _clientThreadId: "thread-abc" });
+    const threadFollowup = await builtRequest({
+      ...parsed(),
+      _clientThreadId: "thread-abc",
+      context: { ...parsed().context, messages: [...parsed().context.messages, { role: "user", content: "followup", timestamp: 2 }] },
+    });
+    expect(threadTurn.headers["x-session-id"]).toBe(threadFollowup.headers["x-session-id"]);
+    expect(threadTurn.headers["x-session-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+
+    const first = await builtRequest(parsed());
+    const second = await builtRequest({ ...parsed(), context: { ...parsed().context, messages: [...parsed().context.messages, { role: "user", content: "followup", timestamp: 2 }] } });
+    expect(first.headers["x-session-id"]).not.toBe(second.headers["x-session-id"]);
+  });
+
+  test("does not use a shared prompt-cache cohort for session affinity", async () => {
+    const first = await builtRequest({ ...parsed(), options: { ...parsed().options, promptCacheKey: "shared" }, _promptCacheKeyIsSharedCohort: true });
+    const second = await builtRequest({ ...parsed(), options: { ...parsed().options, promptCacheKey: "shared" }, context: { ...parsed().context, messages: [{ role: "user", content: "different", timestamp: 1 }] }, _promptCacheKeyIsSharedCohort: true });
+    expect(first.headers["x-session-id"]).not.toBe(second.headers["x-session-id"]);
+  });
 });
