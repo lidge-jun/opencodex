@@ -169,6 +169,8 @@ describe("all Google GenerateContent modes fail closed consistently", () => {
       for (const events of [streamEvents, responseEvents]) {
         expect(events.at(-1)?.type).toBe("error");
         expect(events.some(event => event.type === "done")).toBe(false);
+        const error = events.at(-1) as Extract<AdapterEvent, { type: "error" }>;
+        expect(error.message).toContain(label === "AI Studio" ? "Google AI Studio" : "Vertex AI");
       }
     });
 
@@ -185,6 +187,7 @@ describe("all Google GenerateContent modes fail closed consistently", () => {
       );
       for (const events of [streamEvents, responseEvents]) {
         expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens" });
+        expect(events.some(event => event.type === "error")).toBe(false);
       }
     });
 

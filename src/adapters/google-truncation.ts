@@ -12,6 +12,11 @@ export function vertexTruncationErrorMessage(reason?: string): string {
   return `Vertex AI response truncated upstream before the turn completed${suffix}`;
 }
 
+export function googleTruncationErrorMessage(reason?: string): string {
+  const suffix = reason ? ` (${redactSecretString(reason).slice(0, 160)})` : "";
+  return `Google AI Studio response truncated upstream before the turn completed${suffix}`;
+}
+
 /**
  * Whether a finished turn must fail closed. A truncation reason arriving mid tool call always
  * does. MALFORMED_FUNCTION_CALL fails closed even with zero started calls: the malformed call
