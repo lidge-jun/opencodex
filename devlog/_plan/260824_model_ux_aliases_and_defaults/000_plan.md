@@ -18,9 +18,9 @@ catalog refresh introduces new models already enabled.
 
 | Doc | Design | Issue |
 |-----|--------|-------|
-| 010 | Provider & model aliases (pencil edit, defaults set, CLI space) | Feature proposal A |
-| 020 | Newly discovered models arrive OFF by default | Feature proposal B |
-| 030 | Latest-only default preset per provider | Feature proposal C |
+| 010 | Provider & model aliases (pencil edit, defaults set, CLI space) | [#2463](https://github.com/lidge-jun/opencodex/issues/2463) |
+| 020 | Newly discovered models arrive OFF by default | [#2464](https://github.com/lidge-jun/opencodex/issues/2464) |
+| 030 | Latest-only default preset per provider | [#2465](https://github.com/lidge-jun/opencodex/issues/2465) |
 
 ## Current behavior (evidence base)
 
