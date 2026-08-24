@@ -7,7 +7,7 @@ import { TranslatorBudgetExceededError } from "../src/lib/translator-budget";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function sourceStream(chunks: string[], opts: { failAfter?: boolean; error?: Error } = {}): ReadableStream<Uint8Array> {
+function sourceStream(chunks: readonly string[], opts: { failAfter?: boolean; error?: Error } = {}): ReadableStream<Uint8Array> {
   let i = 0;
   return new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -47,6 +47,19 @@ function failedMessage(text: string): string {
   const payload = text.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
   if (!payload) throw new Error("missing response.failed payload");
   return (JSON.parse(payload) as { response: { error: { message: string } } }).response.error.message;
+}
+
+function terminalEvents(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .flatMap(line => {
+      const match = line.match(/^event: (response\.(?:completed|failed|incomplete))$/);
+      return match ? [match[1]!] : [];
+    });
+}
+
+function doneEvents(text: string): string[] {
+  return text.split(/\r?\n/).filter(line => line === "data: [DONE]");
 }
 
 describe("relaySseWithFailedTail", () => {
@@ -223,5 +236,75 @@ describe("relaySseWithFailedTail", () => {
     expect(encoder.encode(eager)).toEqual(encoder.encode(legacy));
     expect(failedMessage(eager)).toBe("Upstream stream terminated unexpectedly");
     expect(eager.split("data: [DONE]").length - 1).toBe(1);
+  });
+
+  test.each([
+    [
+      "clean EOF without a terminal",
+      ['event: response.created\ndata: {"type":"response.created"}\n\n'],
+      "incomplete",
+    ],
+    [
+      "premature DONE followed by EOF",
+      ["data: [DONE]\n\n"],
+      "incomplete",
+    ],
+    [
+      "valid delimiter-less terminal with LF",
+      ['event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}'],
+      "completed",
+    ],
+    [
+      "valid delimiter-less terminal with CRLF",
+      ['event: response.completed\r\ndata: {"type":"response.completed","response":{"status":"completed"}}'],
+      "completed",
+    ],
+    [
+      "high-confidence cyber_policy terminal normalization",
+      [`event: error\ndata: ${JSON.stringify({
+        type: "error",
+        response: { id: "resp-policy-parity", status: "failed", output: [] },
+        error: {
+          type: "invalid_request_error",
+          code: "cyber_policy",
+          message: "blocked by upstream policy",
+        },
+      })}\n\n`],
+      "policy-failed",
+    ],
+    [
+      "malformed delimiter-less terminal-shaped JSON",
+      ['data: {"type":"response.completed","response":{"status":"completed"}'],
+      "malformed",
+    ],
+  ] as const)("pull/eager parity: %s", async (_name, chunks, expected) => {
+    const pull = await drain(relaySseWithFailedTail(sourceStream(chunks), new AbortController()));
+    const eager = await drain(relaySseEagerBounded(
+      sourceStream(chunks),
+      new AbortController(),
+      parityHooks,
+    ));
+
+    expect(encoder.encode(eager)).toEqual(encoder.encode(pull));
+
+    for (const text of [pull, eager]) {
+      expect(terminalEvents(text)).toHaveLength(1);
+      expect(doneEvents(text)).toHaveLength(1);
+      if (expected === "incomplete") {
+        expect(terminalEvents(text)).toEqual(["response.incomplete"]);
+        expect(text).toContain('"reason":"adapter_eof"');
+      } else if (expected === "completed") {
+        expect(terminalEvents(text)).toEqual(["response.completed"]);
+      } else if (expected === "policy-failed") {
+        expect(terminalEvents(text)).toEqual(["response.failed"]);
+        expect(text).toContain('"code":"cyber_policy"');
+        expect(text).not.toContain('"reason":"adapter_eof"');
+      } else {
+        expect(terminalEvents(text)).toEqual(["response.incomplete"]);
+        expect(text).not.toContain("event: response.completed");
+        expect(text).toContain('data: {"type":"response.completed","response":{"status":"completed"}');
+        expect(text).toContain('"reason":"adapter_eof"');
+      }
+    }
   });
 });

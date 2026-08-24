@@ -72,6 +72,19 @@ bridge, the same condition emits a 502 `websocket_protocol_error` and cancels th
 A complete Responses terminal frame is authoritative: oversized or malformed trailing bytes after
 that terminal are dropped rather than replacing the completed turn with a transport failure.
 
+:::note
+For native passthrough, a Responses terminal event is authoritative. A premature `data: [DONE]` is
+held until that event; if upstream reaches EOF first, the proxy emits one `response.incomplete` with
+`incomplete_details.reason: "adapter_eof"`, followed by one `data: [DONE]`. Syntactically valid
+delimiter-less terminal JSON at EOF is accepted exactly once; malformed or truncated terminal-shaped
+JSON remains incomplete, and model-scoped terminal repair remains fail-closed for unframed
+terminal-like suffixes. High-confidence `cyber_policy` terminal shapes normalize to
+`response.failed` with `error.code: "cyber_policy"` for semantic logging/accounting (status 400),
+while an already-started streamed HTTP response remains 200. This boundary does not retry or replay
+the committed request and does not resolve [#2423](https://github.com/lidge-jun/opencodex/issues/2423)
+or [#2486](https://github.com/lidge-jun/opencodex/issues/2486).
+:::
+
 For canonical ChatGPT forward streaming, stable Bun 1.4.0 or newer may transparently use
 Codex's upstream WebSocket transport. Bundled Bun 1.3.14, prereleases, and unverifiable runtime
 identities use HTTP/SSE. The upstream WS adapter keeps the same downstream SSE contract, caps both
