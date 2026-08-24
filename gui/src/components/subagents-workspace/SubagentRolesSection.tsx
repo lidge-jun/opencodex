@@ -15,6 +15,7 @@ import type { DelegationModelOption } from "../../pages/use-subagent-delegation"
 const ROLE_MAX = 8;
 
 export type RoleDraft = {
+  key: string;
   id: string;
   description: string;
   model: string;
@@ -22,6 +23,12 @@ export type RoleDraft = {
   developerInstructions: string;
   enabled: boolean;
 };
+
+let roleDraftKey = 0;
+function newRoleDraftKey(): string {
+  roleDraftKey += 1;
+  return `role-${roleDraftKey}`;
+}
 
 export interface SubagentRolesSectionProps {
   apiBase: string;
@@ -34,6 +41,7 @@ export interface SubagentRolesSectionProps {
 
 function emptyRole(model: string): RoleDraft {
   return {
+    key: newRoleDraftKey(),
     id: "",
     description: "",
     model,
@@ -66,6 +74,7 @@ function toPayload(role: RoleDraft) {
 
 function fromServer(row: Record<string, unknown>, fallbackModel: string): RoleDraft {
   return {
+    key: newRoleDraftKey(),
     id: typeof row.id === "string" ? row.id : "",
     description: typeof row.description === "string" ? row.description : "",
     model: typeof row.model === "string" ? row.model : fallbackModel,
@@ -193,7 +202,7 @@ export default function SubagentRolesSection({
           {roles.map((role, index) => {
             const showRoutedWarning = warnRoutedOnV2 && role.enabled && isRoutedRoleModel(role.model, modelOptions);
             return (
-              <div key={index} className="swi-role-card">
+              <div key={role.key} className="swi-role-card">
                 <div className="swi-role-grid">
                   <div className="swi-role-field">
                     <span className="swi-role-label">{t("sub.roles.id")}</span>
