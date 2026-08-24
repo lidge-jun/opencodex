@@ -203,4 +203,73 @@ describe("google adapter — empty content part guard (#420)", () => {
       { role: "user", parts: [{ text: "again" }] },
     ]);
   });
+
+  test("merges adjacent developer and user contents in order, including empty placeholders", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "developer", content: "", timestamp: 0 },
+      { role: "user", content: "hello", timestamp: 0 },
+    ]));
+
+    expect(contents).toEqual([
+      { role: "user", parts: [{ text: "(empty)" }, { text: "hello" }] },
+    ]);
+  });
+
+  test("merges adjacent user contents without changing their part order", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,aGVsbG8=" }], timestamp: 0 },
+      { role: "user", content: [{ type: "text", text: "after image" }], timestamp: 0 },
+    ]));
+
+    expect(contents).toEqual([
+      {
+        role: "user",
+        parts: [
+          { inline_data: { mime_type: "image/png", data: "aGVsbG8=" } },
+          { text: "after image" },
+        ],
+      },
+    ]);
+  });
+
+  test("merges a functionResponse user turn with the following user content", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "snap", arguments: {} }], timestamp: 0 },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "snap",
+        content: [{ type: "image", imageUrl: "data:image/png;base64,aGVsbG8=" }],
+        isError: false,
+        timestamp: 0,
+      },
+      { role: "user", content: "describe it", timestamp: 0 },
+    ]));
+
+    expect(contents).toEqual([
+      { role: "model", parts: [{ functionCall: { name: "snap", args: {}, id: "call_1" } }] },
+      {
+        role: "user",
+        parts: [
+          { functionResponse: { name: "snap", response: { result: "[image]" }, id: "call_1" } },
+          { inline_data: { mime_type: "image/png", data: "aGVsbG8=" } },
+          { text: "describe it" },
+        ],
+      },
+    ]);
+  });
+
+  test("does not merge user contents across an emitted model turn", async () => {
+    const contents = await geminiContents(parsedWith([
+      { role: "user", content: "before", timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "model" }], timestamp: 0 },
+      { role: "user", content: "after", timestamp: 0 },
+    ]));
+
+    expect(contents).toEqual([
+      { role: "user", parts: [{ text: "before" }] },
+      { role: "model", parts: [{ text: "model" }] },
+      { role: "user", parts: [{ text: "after" }] },
+    ]);
+  });
 });

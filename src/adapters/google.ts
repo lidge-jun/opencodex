@@ -140,6 +140,15 @@ const GEMINI_EMPTY_PLACEHOLDER = "(empty)";
 const GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER = "(empty tool output)";
 const GEMINI_MISSING_TOOL_RESULT = "[missing tool_result for this tool_use in history]";
 
+function appendGeminiContent(contents: unknown[], next: { role: string; parts: unknown[] }): void {
+  const previous = contents.at(-1) as { role?: unknown; parts?: unknown[] } | undefined;
+  if (previous?.role === "user" && next.role === "user" && Array.isArray(previous.parts)) {
+    previous.parts.push(...next.parts);
+  } else {
+    contents.push(next);
+  }
+}
+
 /** A Gemini text part, or undefined when the value cannot form a valid non-empty text block. */
 function geminiTextPart(text: unknown): { text: string } | undefined {
   return typeof text === "string" && text.length > 0 ? { text } : undefined;
@@ -227,7 +236,7 @@ function messagesToGeminiFormat(
       case "user":
       case "developer": {
         if (typeof msg.content === "string") {
-          contents.push({ role: "user", parts: [{ text: msg.content || GEMINI_EMPTY_PLACEHOLDER }] });
+          appendGeminiContent(contents, { role: "user", parts: [{ text: msg.content || GEMINI_EMPTY_PLACEHOLDER }] });
         } else {
           const parts: unknown[] = [];
           for (const p of msg.content as OcxContentPart[]) {
@@ -242,7 +251,7 @@ function messagesToGeminiFormat(
             const textPart = geminiTextPart(p.text);
             if (textPart) parts.push(textPart);
           }
-          contents.push({ role: "user", parts: parts.length > 0 ? parts : [{ text: GEMINI_EMPTY_PLACEHOLDER }] });
+          appendGeminiContent(contents, { role: "user", parts: parts.length > 0 ? parts : [{ text: GEMINI_EMPTY_PLACEHOLDER }] });
         }
         break;
       }
@@ -293,7 +302,7 @@ function messagesToGeminiFormat(
         // `parts: []`, which the Anthropic translation rejects. Skip it, as the Anthropic
         // adapter does for its own empty assistant content.
         if (parts.length === 0) break;
-        contents.push({ role: "model", parts });
+        appendGeminiContent(contents, { role: "model", parts });
         if (toolCalls.length > 0) {
           // Gemini/Claude-on-Antigravity requires one adjacent response batch for the whole
           // function-call turn. Replayed histories can be interrupted, reversed, duplicated, or
@@ -322,7 +331,7 @@ function messagesToGeminiFormat(
           for (const orphan of orphanResults) {
             responseParts.push(...geminiOrphanToolResultParts(orphan));
           }
-          contents.push({ role: "user", parts: responseParts });
+          appendGeminiContent(contents, { role: "user", parts: responseParts });
           i = j - 1;
         }
         break;
@@ -333,7 +342,7 @@ function messagesToGeminiFormat(
         // batch never reach here (the assistant branch consumes them). Standalone or
         // barrier-delayed results still have to stay visible — especially image-bearing
         // screenshots — as explicit user text rather than vanishing or 400ing CCA.
-        contents.push({ role: "user", parts: geminiOrphanToolResultParts(msg as OcxToolResultMessage) });
+        appendGeminiContent(contents, { role: "user", parts: geminiOrphanToolResultParts(msg as OcxToolResultMessage) });
         break;
       }
     }
@@ -839,7 +848,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (/claude/i.test(wireModelId)) {
             const last = contents.length > 0 ? contents[contents.length - 1] as { role?: string } : undefined;
             if (strippedModelTail || !last || last.role === "model") {
-              contents.push({ role: "user", parts: [{ text: "(continue)" }] });
+              appendGeminiContent(contents, { role: "user", parts: [{ text: "(continue)" }] });
             }
           }
         }

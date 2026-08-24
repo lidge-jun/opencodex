@@ -141,11 +141,11 @@ describe("google adapter — tool-call ids on the wire", () => {
     ]));
 
     expect(contents.flatMap(content => content.parts).some(part => "functionResponse" in part)).toBe(false);
-    expect(contents.map(content => content.role)).toEqual(["user", "user"]);
+    expect(contents.map(content => content.role)).toEqual(["user"]);
     expect(contents[0].parts).toEqual([
       { text: "[tool_result without adjacent tool_use: missing (orphan)]\ndiscard" },
+      { text: "continue" },
     ]);
-    expect(contents[1].parts).toEqual([{ text: "continue" }]);
   });
 
   test("AI Studio keeps an unmatched trailing tool call", async () => {

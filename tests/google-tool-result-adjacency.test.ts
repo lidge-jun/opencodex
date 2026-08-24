@@ -69,7 +69,7 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       user("continue"),
     ]);
 
-    expect(contents.map(turn => turn.role)).toEqual(["model", "user", "user"]);
+    expect(contents.map(turn => turn.role)).toEqual(["model", "user"]);
     expect(functionResponses(contents[1])).toEqual([
       {
         name: "exec_command",
@@ -77,7 +77,7 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
         id: "call_missing",
       },
     ]);
-    expect(contents[2].parts).toEqual([{ text: "continue" }]);
+    expect(contents[1].parts.at(-1)).toEqual({ text: "continue" });
   });
 
   test("parallel responses are emitted in call order even when history is reversed", async () => {
@@ -159,10 +159,17 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       result("call_1", "bash", "late"),
     ]);
 
-    expect(contents.map(turn => turn.role)).toEqual(["model", "user", "user", "user"]);
+    expect(contents.map(turn => turn.role)).toEqual(["model", "user"]);
     expect(functionResponses(contents[1])[0]).toMatchObject({ id: "call_1" });
-    expect(contents[2].parts).toEqual([{ text: "barrier" }]);
-    expect(contents[3].parts).toEqual([
+    expect(contents[1].parts).toEqual([
+      {
+        functionResponse: {
+          name: "bash",
+          response: { result: "[missing tool_result for this tool_use in history]" },
+          id: "call_1",
+        },
+      },
+      { text: "barrier" },
       { text: "[tool_result without adjacent tool_use: bash (call_1)]\nlate" },
     ]);
   });
