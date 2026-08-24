@@ -37,6 +37,23 @@ const ADAPTER_EOF_INCOMPLETE_PAYLOAD = JSON.stringify({
     incomplete_details: { reason: "adapter_eof" },
   },
 });
+const DONE_SSE_FRAME_TEXT = "data: [DONE]\n\n";
+const FAILED_TAIL_FALLBACK_PAYLOAD = JSON.stringify({
+  type: "response.failed",
+  response: {
+    status: "failed",
+    error: {
+      type: "upstream_error",
+      code: "upstream_reset",
+      message: "Upstream stream terminated unexpectedly",
+    },
+    last_error: {
+      type: "upstream_error",
+      code: "upstream_reset",
+      message: "Upstream stream terminated unexpectedly",
+    },
+  },
+});
 
 export type InspectionCounters = {
   frameBufferHighWaterBytes: number;
@@ -110,6 +127,21 @@ export function buildFailedTailPayload(err: unknown): string {
     type: "response.failed",
     response: { status: "failed", error: failure, last_error: failure },
   });
+}
+
+function buildFailedTailPayloadOrFallback(err: unknown): string {
+  try {
+    return buildFailedTailPayload(err);
+  } catch {
+    // Error.message and String(error) may execute hostile accessors. Preserve a
+    // bounded protocol terminal even when diagnostic serialization is unsafe.
+    return FAILED_TAIL_FALLBACK_PAYLOAD;
+  }
+}
+
+export function failedTailFrame(encoder: TextEncoder, err: unknown): Uint8Array {
+  const payload = buildFailedTailPayloadOrFallback(err);
+  return encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`);
 }
 
 export type SseTerminalOutputBoundary = {
@@ -244,7 +276,7 @@ export function relaySseWithFailedTail(
     // Preserve through the terminal block only, add the conventional sentinel
     // when there was no real [DONE] data event, then stop reading upstream.
     if (!terminalBoundary.doneSeen()) {
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.enqueue(doneFrame(encoder));
     }
     closed = true;
     controller.close();
@@ -300,9 +332,8 @@ export function relaySseWithFailedTail(
           if (tailTerminal) {
             if (!terminalBoundary.doneSeen()) controller.enqueue(doneFrame(encoder));
           } else {
-            const payload = buildFailedTailPayload(err);
             // Leading blank line terminates a partial SSE block so the failed frame parses cleanly.
-            controller.enqueue(encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\ndata: [DONE]\n\n`));
+            controller.enqueue(failedTailFrame(encoder, err));
           }
           controller.close();
         } catch { /* client already torn down */ }
@@ -420,8 +451,11 @@ function policyFailurePayload(message: string, parsed: unknown): string {
   };
   const root = asJsonRecord(parsed);
   const originalResponse = asJsonRecord(root?.response);
+  const preservedResponse = Object.fromEntries(
+    Object.entries(originalResponse ?? {}).filter(([key]) => key !== "incomplete_details"),
+  );
   const response = {
-    ...(originalResponse ?? {}),
+    ...preservedResponse,
     status: "failed",
     error,
     last_error: error,
@@ -444,12 +478,12 @@ function policyFailurePayload(message: string, parsed: unknown): string {
   });
 }
 
-function adapterEofIncompleteFrame(encoder: TextEncoder): Uint8Array {
+export function adapterEofIncompleteFrame(encoder: TextEncoder): Uint8Array {
   return encoder.encode(`event: response.incomplete\ndata: ${ADAPTER_EOF_INCOMPLETE_PAYLOAD}\n\n`);
 }
 
-function doneFrame(encoder: TextEncoder): Uint8Array {
-  return encoder.encode("data: [DONE]\n\n");
+export function doneFrame(encoder: TextEncoder): Uint8Array {
+  return encoder.encode(DONE_SSE_FRAME_TEXT);
 }
 
 export function terminalStatusFromSsePayload(payload: string): ResponsesTerminalStatus | null {

@@ -204,4 +204,24 @@ describe("relaySseWithFailedTail", () => {
       }
     }
   });
+
+  test("legacy and eager use the same bounded fallback when an error message getter throws", async () => {
+    const error = new Error("unreachable");
+    Object.defineProperty(error, "message", {
+      get() { throw new Error("hostile message getter"); },
+    });
+    const legacy = await drain(relaySseWithFailedTail(
+      sourceStream([], { failAfter: true, error }),
+      new AbortController(),
+    ));
+    const eager = await drain(relaySseEagerBounded(
+      sourceStream([], { failAfter: true, error }),
+      new AbortController(),
+      parityHooks,
+    ));
+
+    expect(encoder.encode(eager)).toEqual(encoder.encode(legacy));
+    expect(failedMessage(eager)).toBe("Upstream stream terminated unexpectedly");
+    expect(eager.split("data: [DONE]").length - 1).toBe(1);
+  });
 });

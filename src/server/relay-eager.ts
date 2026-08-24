@@ -24,7 +24,12 @@
  * up to the drain window.
  */
 
-import { buildFailedTailPayload, createSseTerminalOutputBoundary } from "./relay";
+import {
+  adapterEofIncompleteFrame,
+  createSseTerminalOutputBoundary,
+  doneFrame,
+  failedTailFrame,
+} from "./relay";
 import {
   nextSseBlock,
   payloadRewriteAsBlockRewrite,
@@ -81,10 +86,6 @@ export type EagerRelayOptions = {
 const DEFAULT_MAX_QUEUE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_DRAIN_MS = 15_000;
 const DEFAULT_DRAIN_BYTES = 32 * 1024 * 1024;
-const ADAPTER_EOF_INCOMPLETE_FRAME = new TextEncoder().encode(
-  'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"adapter_eof"}}}\n\n',
-);
-const DONE_FRAME = new TextEncoder().encode("data: [DONE]\n\n");
 
 /**
  * Relay `body` to the returned stream with eager bounded reading and inline
@@ -104,20 +105,17 @@ export function relaySseEagerBounded(
   const now = opts?.now ?? Date.now;
 
   const reader = body.getReader();
+  const terminalEncoder = new TextEncoder();
+  const adapterEofFrame = adapterEofIncompleteFrame(terminalEncoder);
+  const terminalSentinel = doneFrame(terminalEncoder);
   const terminalBoundary = createSseTerminalOutputBoundary();
   const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
   const encodeFailedTail = (error: unknown): Uint8Array | null => {
     try {
-      return new TextEncoder().encode(
-        `\n\nevent: response.failed\ndata: ${buildFailedTailPayload(error)}\n\ndata: [DONE]\n\n`,
-      );
+      return failedTailFrame(terminalEncoder, error);
     } catch {
-      // A hostile error accessor may throw while building the diagnostic. Keep
-      // the client contract bounded even then; callers still re-check abort.
-      return new TextEncoder().encode(
-        '\n\nevent: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"type":"upstream_error","code":"upstream_reset","message":"Upstream stream terminated unexpectedly"},"last_error":{"type":"upstream_error","code":"upstream_reset","message":"Upstream stream terminated unexpectedly"}}}\n\ndata: [DONE]\n\n',
-      );
+      return null;
     }
   };
   const rewriteDecoder = activeRewrite ? new TextDecoder() : null;
@@ -181,7 +179,6 @@ export function relaySseEagerBounded(
   let queuedBytes = 0;
   let cancelled = false;
   let done = false;
-  const terminalSentinel = new TextEncoder().encode("data: [DONE]\n\n");
   // Pause gate: resolved by client pull, client cancel, or upstream abort so a
   // paused producer ALWAYS resumes (audit blocker 2 — no deadlock; onDone and
   // turn unregistration stay reachable, drainAndShutdown never hangs).
@@ -213,6 +210,7 @@ export function relaySseEagerBounded(
 
   const producer = async () => {
     let syntheticKind: "incomplete" | "failed" | null = null;
+    let deliveryFallbackSent = false;
     let priorRewriteFailure = false;
     let priorRewriteError: unknown;
     // reader.read() is not intrinsically tied to the upstream AbortController
@@ -275,10 +273,10 @@ export function relaySseEagerBounded(
           } else if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
             // A clean 200 EOF without a Responses terminal must be visible to
             // Codex as one incomplete turn, followed by the normal sentinel.
-            queuedBytes += ADAPTER_EOF_INCOMPLETE_FRAME.byteLength + DONE_FRAME.byteLength;
+            queuedBytes += adapterEofFrame.byteLength + terminalSentinel.byteLength;
             try {
-              controllerRef?.enqueue(ADAPTER_EOF_INCOMPLETE_FRAME);
-              controllerRef?.enqueue(DONE_FRAME);
+              controllerRef?.enqueue(adapterEofFrame);
+              controllerRef?.enqueue(terminalSentinel);
             } catch { /* client already gone */ }
             syntheticKind = "incomplete";
           }
@@ -385,6 +383,7 @@ export function relaySseEagerBounded(
         const safeTail = encodeFailedTail(rewriteError ?? err);
         if (safeTail && !cancelled && !upstream.signal.aborted) {
           if (!hooks.sawTerminal()) syntheticKind = "failed";
+          deliveryFallbackSent = true;
           queuedBytes += safeTail.byteLength;
           try { controllerRef?.enqueue(safeTail); } catch { /* client already torn down */ }
           try { controllerRef?.close(); } catch { /* client already gone */ }
@@ -394,16 +393,19 @@ export function relaySseEagerBounded(
           queuedBytes += terminalSentinel.byteLength;
           try { controllerRef?.enqueue(terminalSentinel); } catch { /* client already gone */ }
         }
-      } else if (!tailTerminal && !hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
+      } else if (!tailTerminal && !cancelled && !upstream.signal.aborted) {
         // Serializing `err` can run user-defined accessors (Error.message
         // getters, toString) that re-entrantly cancel the client or abort the
         // upstream. Build the tail FIRST, then re-check eligibility before
         // committing to the synthetic terminal (adversarial review blocker).
-        const tail = new TextEncoder().encode(
-          `\n\nevent: response.failed\ndata: ${buildFailedTailPayload(err)}\n\ndata: [DONE]\n\n`,
-        );
-        if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
-          syntheticKind = "failed";
+        const tail = encodeFailedTail(err);
+        if (tail && !cancelled && !upstream.signal.aborted) {
+          // Inspection and client framing have separate bounded parsers. If
+          // inspection resynchronized after an oversized frame and observed a
+          // later real terminal, it still must not suppress a terminal delivery
+          // to the client. Only accounting remains tied to the inspected result.
+          if (!hooks.sawTerminal()) syntheticKind = "failed";
+          deliveryFallbackSent = true;
           queuedBytes += tail.byteLength;
           try { controllerRef?.enqueue(tail); } catch { /* client already torn down */ }
           try { controllerRef?.close(); } catch { /* client already torn down */ }
@@ -422,7 +424,7 @@ export function relaySseEagerBounded(
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
       }
-      if (cancelled || upstream.signal.aborted || syntheticKind === "failed") {
+      if (cancelled || upstream.signal.aborted || syntheticKind === "failed" || deliveryFallbackSent) {
         upstream.abort();
         reader.cancel().catch(() => {});
       }
