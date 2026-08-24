@@ -1,0 +1,23 @@
+# Replace the site label and certificate configuration for the real deployment.
+# The hub listener itself must bind to 127.0.0.1 with
+# HUB_TRUST_LOOPBACK_PROXY=1. Caddy is the only public network entry.
+hubapi.example.com {
+  @hubapi_public path \
+    /hub \
+    /hub/* \
+    /v1/responses \
+    /v1/chat/completions \
+    /v1/messages \
+    /v1/models
+
+  handle @hubapi_public {
+    reverse_proxy 127.0.0.1:10400 {
+      header_up X-Hubapi-Client-IP {remote_host}
+    }
+  }
+
+  # Route-default deny: never fall through to OpenCodex or another upstream.
+  handle {
+    respond 404
+  }
+}

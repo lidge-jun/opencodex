@@ -42,14 +42,14 @@ test("registering Dashboard tabs does not disturb the Logs or Providers contract
   expect(hashBelongsToPage("logs/debug", "dashboard")).toBe(false);
 });
 
-test("Codex Auth sits directly after Dashboard in the sidebar", async () => {
+test("Dashboard leads the grouped sidebar information architecture", async () => {
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
-  const nav = app.slice(app.indexOf("const NAV"), app.indexOf("];", app.indexOf("const NAV")));
+  const nav = app.slice(app.indexOf("const NAV_GROUPS"), app.indexOf("];", app.indexOf("const NAV_GROUPS")));
   const order = [...nav.matchAll(/id: "([a-z-]+)"/g)].map((m) => m[1]);
   expect(order[0]).toBe("dashboard");
-  expect(order[1]).toBe("codex-auth");
-  // Order only — no divider markup was introduced (Q3).
-  expect(app).not.toContain("nav-divider");
+  expect(order[1]).toBe("providers");
+  expect(app).toContain('tkey: "navGroup.resources"');
+  expect(app).toContain('tkey: "navGroup.observability"');
 });
 
 test("Dashboard uses the shared page-tabs strip with a tablist", async () => {

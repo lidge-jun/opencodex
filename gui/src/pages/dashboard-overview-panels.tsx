@@ -1,4 +1,5 @@
 import MemoryObservabilityCard from "../components/MemoryObservabilityCard";
+import { DashboardRecentRoutes } from "./dashboard-recent-routes";
 import type { useDashboardData } from "./use-dashboard-data";
 import {
   DashboardEffortCapPanel,
@@ -12,6 +13,7 @@ type Dash = ReturnType<typeof useDashboardData>;
 export function DashboardOverviewPanels(props: Dash) {
   return (
     <>
+      <DashboardRecentRoutes apiBase={props.apiBase} />
       <DashboardEffortCapPanel apiBase={props.apiBase} d={props} />
       <div className="dash-overview-tools">
         <DashboardInjectionPanel apiBase={props.apiBase} d={props} />

@@ -15,6 +15,11 @@ import { Select } from "../src/ui";
 // that document.documentElement.lang tracks the locale.
 
 const NAV_TKEYS = [
+  "navGroup.overview",
+  "navGroup.resources",
+  "navGroup.observability",
+  "navGroup.automation",
+  "navGroup.system",
   "nav.dashboard",
   "nav.providers",
   "nav.models",
@@ -221,6 +226,11 @@ describe("French language switch on the real GUI surface", () => {
     await choose(["Français"]);
 
     expect(navLabels()).toEqual([
+      "Vue d’ensemble",
+      "Ressources",
+      "Observabilité",
+      "Automatisation",
+      "Système",
       "Tableau de bord",
       "Fournisseurs",
       "Modèles",

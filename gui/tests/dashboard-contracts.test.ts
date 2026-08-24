@@ -121,7 +121,16 @@ test("Dashboard workspace pane is a labelled section, not a nested main landmark
   expect(src).toMatch(/<(section)\b[^>]*dashboard-workspace-main/);
 });
 
-test("native Codex subagent defaults stay separate from OpenCodex guidance", async () => {
+test("Dashboard recent routes use persisted history and preserve unknown traces", async () => {
+  const src = await Bun.file(new URL("../src/pages/dashboard-recent-routes.tsx", import.meta.url)).text();
+  const panels = await Bun.file(new URL("../src/pages/dashboard-overview-panels.tsx", import.meta.url)).text();
+  expect(src).toContain("/api/request-history?limit=5");
+  expect(src).toContain("dash.routes.unknown");
+  expect(src).not.toContain("routeDecision:");
+  expect(panels).toContain("DashboardRecentRoutes");
+});
+
+test("native Codex subagent defaults stay separate from hubapi guidance", async () => {
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
   // The controls live on the Subagents tab now; the Dashboard keeps only a link to them.
   const sections = await Bun.file(new URL("../src/components/subagents-workspace/SubagentDelegationSection.tsx", import.meta.url)).text();

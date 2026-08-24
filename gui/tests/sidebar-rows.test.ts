@@ -4,8 +4,8 @@
  * Replaces `sidebar-claude-entry.test.ts`, which asserted the exact Claude shortcut row
  * that has now been removed. Two of its rules outlived it and are kept here: the
  * sidebar carries navigation and nothing else, and no orphaned switch styles are left
- * behind. The third — that exactly one of two rows resolving to the same page lights up
- * — cannot be violated any more, because every row maps one-to-one onto a page again.
+ * behind. Phase one intentionally promotes two existing nested routes (API keys and
+ * routing) without adding new pages or a parallel router.
  */
 import { expect, test } from "bun:test";
 
@@ -18,23 +18,22 @@ const raw = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
  */
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-test("every row maps one-to-one onto a page", () => {
-  // The duplicate-row machinery is gone with the row that needed it.
-  expect(src).not.toContain("activeHashes");
-  expect(src).not.toContain("isNavEntryActive");
+test("grouped rows preserve the phase-one information architecture", () => {
   expect(src).not.toContain('tkey: "nav.claude"');
 
-  const navBlock = src.slice(src.indexOf("const NAV: NavEntry[] = ["), src.indexOf("];", src.indexOf("const NAV: NavEntry[] = [")));
-  const ids = [...navBlock.matchAll(/\{ id: "([^"]+)"/g)].map(m => m[1]);
+  const navBlock = src.slice(src.indexOf("const NAV_GROUPS"), src.indexOf("];", src.indexOf("const NAV_GROUPS")));
+  const targets = [...navBlock.matchAll(/\{ id: "([^"]+)"(?:, subPath: "([^"]+)")?, tkey:/g)]
+    .map(([, id, subPath]) => subPath ? `${id}/${subPath}` : id);
 
-  // The exact nine, in order. A count alone would pass if a row were swapped for
-  // another, and Routing folding into Models is precisely that kind of change.
-  expect(ids).toEqual([
-    "dashboard", "codex-auth", "providers", "models", "subagents",
-    "logs", "usage", "storage", "integrations",
+  expect(targets).toEqual([
+    "dashboard",
+    "providers", "models", "integrations/keys",
+    "usage", "logs",
+    "models/routing", "subagents",
+    "integrations", "startup", "storage",
   ]);
-  // No two rows share a page id, which is what made the correction helper necessary.
-  expect(new Set(ids).size).toBe(ids.length);
+  expect(new Set(targets).size).toBe(targets.length);
+  expect(src).toContain("const exactEntry = NAV.find");
 });
 
 test("the sidebar is navigation only", () => {

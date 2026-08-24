@@ -342,13 +342,19 @@ test("Logs: switching to the Debug tab stops scheduled log requests", async () =
   globalThis.fetch = (async (input) => {
     const url = String(input);
     urls.push(url);
-    if (url.includes("/api/logs")) return jsonResponse([sampleLog]);
+    if (url.includes("/api/request-history")) {
+      return jsonResponse({
+        entries: [sampleLog],
+        hasMore: false,
+        index: { schemaVersion: 1, indexedRows: 1, sourceSize: 1, sourceMtimeMs: 1, builtAtMs: 1, lastError: "" },
+      });
+    }
     return jsonResponse({});
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
   await flushMicrotasks();
-  const afterInitial = urls.filter(u => u.includes("/api/logs")).length;
+  const afterInitial = urls.filter(u => u.includes("/api/request-history")).length;
   expect(afterInitial).toBe(1);
 
   await act(async () => {
@@ -372,7 +378,7 @@ test("Logs: switching to the Debug tab stops scheduled log requests", async () =
   });
   await flushMicrotasks();
 
-  expect(urls.filter(u => u.includes("/api/logs")).length).toBe(afterInitial);
+  expect(urls.filter(u => u.includes("/api/request-history")).length).toBe(afterInitial);
 
   await act(async () => { root.unmount(); });
 });
@@ -533,4 +539,3 @@ test("Logs: an intercepted helper row is badged and filterable", async () => {
 
   await act(async () => { root.unmount(); });
 });
-

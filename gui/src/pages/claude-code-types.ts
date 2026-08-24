@@ -31,7 +31,7 @@ export interface ClaudeCodeState {
   enabled: boolean;
   /** Three-state intent. "auto" resolves from detected Claude auth on every launch. */
   authMode: "auto" | "subscription" | "proxy";
-  /** Resolved: does the opencodex dummy marker get injected. Not a native-auth claim. */
+  /** Resolved: does the local proxy dummy marker get injected. Not a native-auth claim. */
   markerMode?: "proxy" | "subscription";
   authModeOrigin?: "manual" | "auto-present" | "auto-absent" | "auto-unknown";
   authFoundBy?: string;

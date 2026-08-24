@@ -35,6 +35,15 @@ test("ApiKeys uses workspace shell (no classic layout toggle)", async () => {
   expect(css).toContain(".api-test-note--error");
 });
 
+test("ApiKeys exposes the existing runtime as the hubapi proxy gateway", async () => {
+  const page = await Bun.file(new URL("../src/pages/ApiKeys.tsx", import.meta.url)).text();
+  expect(page).toContain("proxy-gateway-summary");
+  expect(page).toContain("gatewayInboundProtocols(claudeCodeEnabled)");
+  expect(page).toContain("endpoints.baseUrl");
+  expect(page).toContain("x-opencodex-api-key");
+  expect(page).not.toContain("/api/proxy");
+});
+
 test("ApiKeys workspace avoids nested main and stacks via container query", async () => {
   const src = await Bun.file(new URL("../src/components/apikeys-workspace/ApiKeysWorkspace.tsx", import.meta.url)).text();
   const page = await Bun.file(new URL("../src/pages/ApiKeys.tsx", import.meta.url)).text();

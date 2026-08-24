@@ -249,6 +249,10 @@ describe("headless GUI parity CLI", () => {
       ["/api/injection", "ocx agent"],
       ["/api/keys", "ocx access"],
       ["/api/logs", "ocx observe"],
+      // The dashboard uses the durable cursor index while the headless surface
+      // exposes the same request evidence through observe/logs and the explicit
+      // route-decision lookup in `ocx observe explain`.
+      ["/api/request-history", "ocx observe logs/explain"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
       ["/api/settings", "ocx system"],

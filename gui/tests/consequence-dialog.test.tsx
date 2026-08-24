@@ -70,9 +70,9 @@ test("renders the four Korean slots in order with the live path and no side effe
   const paragraphs = [...container.querySelectorAll(".integration-consequence-body > p")];
   expect([title.textContent, ...paragraphs.map(paragraph => paragraph.textContent)]).toEqual([
     "Grok Build 연동을 해제할까요?",
-    `${livePath}에서 opencodex가 표시해 둔 블록만 제거합니다. 블록 바깥에 직접 쓴 내용은 그대로 둡니다.`,
-    "해제하면 Grok Build에서 opencodex 모델 별칭이 사라집니다. xAI 계정으로 쓰던 모델은 그대로입니다.",
-    "opencodex가 loopback 주소로 실행 중이면, 다시 켤 때 지금 쓸 수 있는 모델 목록으로 블록을 새로 씁니다.",
+    `${livePath}에서 hubapi가 표시해 둔 블록만 제거합니다. 블록 바깥에 직접 쓴 내용은 그대로 둡니다.`,
+    "해제하면 Grok Build에서 hubapi 모델 별칭이 사라집니다. xAI 계정으로 쓰던 모델은 그대로입니다.",
+    "hubapi가 loopback 주소로 실행 중이면, 다시 켤 때 지금 쓸 수 있는 모델 목록으로 블록을 새로 씁니다.",
   ]);
   expect(container.querySelector(".integration-consequence-body code")?.textContent).toBe(livePath);
   expect(paragraphs).toHaveLength(3);

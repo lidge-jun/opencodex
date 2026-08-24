@@ -22,6 +22,11 @@ import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-tit
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
 import {
+  EMPTY_HISTORY_FILTERS,
+  requestHistoryUrl,
+  type RequestHistoryFilters,
+} from "./logs-request-history";
+import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
 } from "./log-route-decision";
@@ -169,6 +174,45 @@ export interface LogEntry {
     profile?: { id?: string; revision?: string };
     selected?: { provider?: string; model?: string; reason?: string };
     candidates?: Array<{ provider?: string; model?: string; eligible?: boolean; exclusions?: Array<{ code?: string }> }>;
+  };
+}
+
+interface RequestHistoryIndexStatus {
+  schemaVersion: number;
+  indexedRows: number;
+  sourceSize: number;
+  sourceMtimeMs: number;
+  builtAtMs: number;
+  lastError: string;
+}
+
+interface RequestHistoryPage {
+  entries: LogEntry[];
+  nextCursor?: string;
+  hasMore: boolean;
+  index: RequestHistoryIndexStatus;
+}
+
+interface RouteDecisionExplanation {
+  requestId: string;
+  routeDecision: LogEntry["routeDecision"] | null;
+  attemptSequence: LogAttempt[];
+  outcome: {
+    status: number;
+    terminalStatus?: string;
+    closeReason?: string;
+    errorCode?: string;
+    durationMs?: number;
+    usageStatus?: LogUsageStatus;
+  };
+  summary: {
+    requestedModel: string;
+    routeKind: string | null;
+    profileId?: string;
+    revision?: string;
+    selected?: { provider: string; model: string } | null;
+    finalProvider: string;
+    finalModel: string;
   };
 }
 
@@ -368,6 +412,14 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
+  const [historyIndex, setHistoryIndex] = useState<RequestHistoryIndexStatus | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [hasMore, setHasMore] = useState(false);
+  const [olderLogs, setOlderLogs] = useState<LogEntry[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState(false);
+  const [historyFilterDraft, setHistoryFilterDraft] = useState<RequestHistoryFilters>(EMPTY_HISTORY_FILTERS);
+  const [historyFilters, setHistoryFilters] = useState<RequestHistoryFilters>(EMPTY_HISTORY_FILTERS);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The proxy's own zone, so timestamps read the same as the server's logs rather than being
@@ -417,21 +469,37 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const selectTab = selectLogsTab;
 
   const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
-    const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+    let res = await fetch(requestHistoryUrl(apiBase, historyFilters), { signal });
+    // Keep the GUI usable with older local proxies during a rolling upgrade. Current
+    // The routing core uses cursor history; only an absent endpoint falls back to the legacy ring.
+    if (res.status === 404) res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const raw = Array.isArray(body) ? body : (body.logs ?? []);
-    const next = raw.map(sanitizeLogEntryRouteDecision);
+    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] } | RequestHistoryPage;
+    const history = !Array.isArray(body) && "entries" in body ? body : null;
+    let raw: LogEntry[];
+    if (Array.isArray(body)) raw = body;
+    else if ("entries" in body) raw = body.entries;
+    else raw = body.logs ?? [];
+    const next = raw.map(sanitizeLogEntryRouteDecision).toSorted((a, b) => a.timestamp - b.timestamp);
+    if (history) {
+      setHistoryIndex(history.index);
+      setNextCursor(history.nextCursor);
+      setHasMore(history.hasMore);
+    } else {
+      setHistoryIndex(null);
+      setNextCursor(undefined);
+      setHasMore(false);
+    }
     writeSessionListCache(resourceKey, next);
     return next;
-  }, [apiBase, resourceKey]);
+  }, [apiBase, historyFilters, resourceKey]);
 
   // The resource layer owns the request and the 2s poll. It keeps held rows through a quiet
   // poll on its own, which is what the old silent/non-silent split was hand-rolling — and an
   // empty successful response is now a real empty result rather than a cold load.
   const logsResource = useDataSurface<LogEntry[]>(
     resourceKey,
-    [apiBase],
+    [apiBase, historyFilters],
     loadLogs,
     {
       isEmpty: rows => rows.length === 0,
@@ -441,8 +509,49 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     },
   );
   const logsState = logsResource.state;
-  const logs = logsState.data ?? cachedLogs ?? [];
+  const newestLogs = logsState.data ?? cachedLogs ?? [];
+  const logs = [...newestLogs, ...olderLogs]
+    .filter((entry, index, entries) => {
+      const key = entry.requestId;
+      return key ? entries.findIndex(candidate => candidate.requestId === key) === index : true;
+    })
+    .toSorted((a, b) => a.timestamp - b.timestamp);
   const fetchLogs = logsResource.refresh;
+
+  const loadOlder = useCallback(async () => {
+    if (!nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    setOlderError(false);
+    try {
+      const res = await fetch(requestHistoryUrl(apiBase, historyFilters, nextCursor));
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+      const page = await res.json() as RequestHistoryPage;
+      const rows = page.entries.map(sanitizeLogEntryRouteDecision);
+      setOlderLogs(previous => [...previous, ...rows]);
+      setNextCursor(page.nextCursor);
+      setHasMore(page.hasMore);
+      setHistoryIndex(page.index);
+    } catch {
+      setOlderError(true);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [apiBase, historyFilters, loadingOlder, nextCursor]);
+
+  const applyHistoryFilters = () => {
+    setOlderLogs([]);
+    setNextCursor(undefined);
+    setHasMore(false);
+    setHistoryFilters(historyFilterDraft);
+  };
+
+  const clearHistoryFilters = () => {
+    setOlderLogs([]);
+    setNextCursor(undefined);
+    setHasMore(false);
+    setHistoryFilterDraft(EMPTY_HISTORY_FILTERS);
+    setHistoryFilters(EMPTY_HISTORY_FILTERS);
+  };
 
   // A single failed tick on a two-second poll is noise, but an outage that never recovers must not
   // leave the user reading stale rows as if they were current. Count consecutive failures and speak
@@ -561,6 +670,15 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       >
       <p className="page-sub">{t("logs.subtitle")}</p>
 
+      {historyIndex && (
+        <div className="logs-history-status" role="status">
+          <span>{t("logs.history.indexed", { count: historyIndex.indexedRows })}</span>
+          {historyIndex.lastError && historyIndex.lastError !== "created" && (
+            <span className="badge badge-amber">{t("logs.history.repaired")}</span>
+          )}
+        </div>
+      )}
+
       <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
         <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
@@ -609,6 +727,33 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           </button>
         )}
       </div>
+
+      <details className="logs-history-filters">
+        <summary>{t("logs.filter.advanced")}</summary>
+        <form
+          className="logs-history-filter-grid"
+          onSubmit={event => { event.preventDefault(); applyHistoryFilters(); }}
+        >
+          <label>{t("logs.filter.provider")}<input className="input mono" value={historyFilterDraft.provider} onChange={event => setHistoryFilterDraft(value => ({ ...value, provider: event.target.value }))} /></label>
+          <label>{t("logs.filter.model")}<input className="input mono" value={historyFilterDraft.model} onChange={event => setHistoryFilterDraft(value => ({ ...value, model: event.target.value }))} /></label>
+          <label>{t("logs.filter.requestedModel")}<input className="input mono" value={historyFilterDraft.requestedModel} onChange={event => setHistoryFilterDraft(value => ({ ...value, requestedModel: event.target.value }))} /></label>
+          <label>{t("logs.filter.status")}<input className="input mono" inputMode="numeric" pattern="[1-5][0-9]{2}" value={historyFilterDraft.status} onChange={event => setHistoryFilterDraft(value => ({ ...value, status: event.target.value }))} /></label>
+          <label>{t("logs.filter.protocol")}<input className="input mono" value={historyFilterDraft.inboundProtocol} onChange={event => setHistoryFilterDraft(value => ({ ...value, inboundProtocol: event.target.value }))} /></label>
+          <label>{t("logs.filter.apiKey")}<input className="input mono" value={historyFilterDraft.apiKeyId} onChange={event => setHistoryFilterDraft(value => ({ ...value, apiKeyId: event.target.value }))} /></label>
+          <label>{t("logs.filter.profile")}<input className="input mono" value={historyFilterDraft.profileId} onChange={event => setHistoryFilterDraft(value => ({ ...value, profileId: event.target.value }))} /></label>
+          <label>{t("logs.filter.fallback")}
+            <select className="input" value={historyFilterDraft.fallback} onChange={event => setHistoryFilterDraft(value => ({ ...value, fallback: event.target.value as RequestHistoryFilters["fallback"] }))}>
+              <option value="">{t("logs.filter.fallback.any")}</option>
+              <option value="true">{t("logs.filter.fallback.yes")}</option>
+              <option value="false">{t("logs.filter.fallback.no")}</option>
+            </select>
+          </label>
+          <div className="logs-history-filter-actions">
+            <button type="submit" className="btn btn-primary btn-sm">{t("logs.filter.apply")}</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={clearHistoryFilters}>{t("logs.filter.clearAll")}</button>
+          </div>
+        </form>
+      </details>
 
       {conversationTotals && (
         <div className="logs-conversation-totals">
@@ -794,6 +939,19 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             </tbody>
           </table>
         </div>
+        {historyIndex && (hasMore || olderError) && (
+          <div className="logs-history-more">
+            {olderError && <span className="muted">{t("logs.history.loadError")}</span>}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void loadOlder()}
+              disabled={loadingOlder || !nextCursor}
+            >
+              {loadingOlder ? t("common.loading") : olderError ? t("common.retry") : t("logs.history.loadOlder")}
+            </button>
+          </div>
+        )}
         </>
       )}
 
@@ -801,6 +959,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <LogDetailDialog
           detail={detail}
           detailInfo={detailInfo}
+          apiBase={apiBase}
           localeCode={locale}
           localeTag={localeTag}
           serverTimeZone={serverTimeZone}
@@ -829,10 +988,11 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
+  detail, detailInfo, apiBase, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
+  apiBase: string;
   localeCode: string;
   localeTag?: string;
   serverTimeZone?: string;
@@ -842,9 +1002,42 @@ function LogDetailDialog({
 }) {
   const dialogRef = useModalDialog(true);
   const [copied, setCopied] = useState(false);
+  const [routeExplanation, setRouteExplanation] = useState<RouteDecisionExplanation | null>(null);
+  const [routeLoading, setRouteLoading] = useState(Boolean(detail.requestId));
+  const [routeLoadFailed, setRouteLoadFailed] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
   const reasoningWire = reasoningWireLabel(detail);
+
+  useEffect(() => {
+    if (!detail.requestId) return;
+    const controller = new AbortController();
+    fetch(`${apiBase}/api/request-history/${encodeURIComponent(detail.requestId)}/route-decision`, {
+      signal: controller.signal,
+    })
+      .then(async response => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json() as Promise<RouteDecisionExplanation>;
+      })
+      .then(body => {
+        setRouteExplanation({
+          ...body,
+          routeDecision: body.routeDecision
+            ? sanitizeLogEntryRouteDecision({ ...detail, routeDecision: body.routeDecision }).routeDecision ?? null
+            : null,
+        });
+        setRouteLoading(false);
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setRouteLoadFailed(true);
+        setRouteLoading(false);
+      });
+    return () => controller.abort();
+  }, [apiBase, detail]);
+
+  const routeDecision = routeExplanation?.routeDecision ?? (routeExplanation ? undefined : detail.routeDecision);
+  const routeAttempts = routeExplanation?.attemptSequence ?? detail.attempts ?? [];
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -917,23 +1110,31 @@ function LogDetailDialog({
 
         <section className="log-detail-section" aria-labelledby="log-detail-route">
           <h4 id="log-detail-route" className="log-detail-section-title">{t("logs.detail.route.section")}</h4>
-          {detail.routeDecision ? (
+          {routeLoading ? (
+            <p className="log-detail-notes-line muted" role="status">{t("logs.detail.route.loading")}</p>
+          ) : routeLoadFailed ? (
+            <Notice tone="warn">{t("logs.detail.route.loadError")}</Notice>
+          ) : routeDecision ? (
             <div className="log-detail-grid">
-              <span className="muted">{t("logs.detail.route.kind")}</span><span className="mono">{detail.routeDecision.routeKind ?? "–"}</span>
-              {detail.routeDecision.profile?.id && (
-                <><span className="muted">{t("logs.detail.route.profile")}</span>
-                  <span className="mono">{detail.routeDecision.profile.id} ({detail.routeDecision.profile.revision})</span></>
+              {routeExplanation?.summary.requestedModel && (
+                <><span className="muted">{t("logs.detail.route.requested")}</span>
+                  <span className="mono">{routeExplanation.summary.requestedModel}</span></>
               )}
-              {detail.routeDecision.selected?.provider && (
+              <span className="muted">{t("logs.detail.route.kind")}</span><span className="mono">{routeDecision.routeKind ?? "–"}</span>
+              {routeDecision.profile?.id && (
+                <><span className="muted">{t("logs.detail.route.profile")}</span>
+                  <span className="mono">{routeDecision.profile.id} ({routeDecision.profile.revision})</span></>
+              )}
+              {routeDecision.selected?.provider && (
                 <><span className="muted">{t("logs.detail.route.selected")}</span>
                   <span className="mono">
-                    {detail.routeDecision.selected.provider}/{detail.routeDecision.selected.model}
-                    {detail.routeDecision.selected.reason ? ` — ${detail.routeDecision.selected.reason}` : ""}
+                    {routeDecision.selected.provider}/{routeDecision.selected.model}
+                    {routeDecision.selected.reason ? ` — ${routeDecision.selected.reason}` : ""}
                   </span></>
               )}
               <span className="muted">{t("logs.detail.route.candidates")}</span>
               <span className="mono">
-                {(detail.routeDecision.candidates ?? []).map(candidate => {
+                {(routeDecision.candidates ?? []).map(candidate => {
                   const provider = typeof candidate.provider === "string" && candidate.provider.length > 0
                     ? candidate.provider
                     : "–";
@@ -948,6 +1149,14 @@ function LogDetailDialog({
                   return `${provider}/${model}${mark}`;
                 }).join("  ") || "–"}
               </span>
+              {routeExplanation && (
+                <>
+                  <span className="muted">{t("logs.detail.route.final")}</span>
+                  <span className="mono">{routeExplanation.summary.finalProvider}/{routeExplanation.summary.finalModel}</span>
+                  <span className="muted">{t("logs.detail.route.outcome")}</span>
+                  <span className="mono">{routeExplanation.outcome.status}{routeExplanation.outcome.errorCode ? ` · ${routeExplanation.outcome.errorCode}` : ""}</span>
+                </>
+              )}
             </div>
           ) : (
             <p className="log-detail-notes-line muted">{t("logs.detail.route.unknown")}</p>
@@ -1003,7 +1212,7 @@ function LogDetailDialog({
           )}
         </section>
 
-        {detail.attempts?.length ? (
+        {routeAttempts.length ? (
           <section className="log-detail-section" aria-labelledby="log-detail-attempts">
             <h4 id="log-detail-attempts" className="log-detail-section-title">{t("logs.detail.section.attempts")}</h4>
             <p className="log-detail-notes-line muted">{t("logs.detail.attempt.e2eNote")}</p>
@@ -1017,7 +1226,7 @@ function LogDetailDialog({
                   <th className="num">{t("logs.col.estimatedCost")}</th>
                   <th>{t("logs.detail.attempt.reason")}</th>
                 </tr></thead>
-                <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
+                <tbody>{routeAttempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
                   const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;

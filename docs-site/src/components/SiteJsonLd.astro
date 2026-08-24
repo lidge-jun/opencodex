@@ -43,8 +43,8 @@ const graph: GraphNode[] = [
 		url: homeUrl,
 		// `name` matches the visible site name (header wordmark + <title> prefix),
 		// which is what Google requires before it will adopt it over the domain.
-		name: 'opencodex',
-		alternateName: 'ocx',
+		name: 'hubapi',
+		alternateName: 'HubAPI',
 		description: descriptions[inLanguage],
 		inLanguage,
 	},
@@ -56,10 +56,10 @@ if (!locale) {
 	graph.push({
 		'@type': 'SoftwareApplication',
 		'@id': `${SITE_URL}/#software`,
-		name: 'opencodex',
-		alternateName: 'ocx',
+		name: 'hubapi',
+		alternateName: 'HubAPI',
 		description:
-			'Local LLM proxy that lets OpenAI Codex (CLI, App, SDK) and Claude Code run on any model — Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, Ollama, OpenRouter, and more — with streaming, tool calls, reasoning tokens, and images working in both directions.',
+			'Task-routed AI gateway with a private routing core. It lets OpenAI Codex and Claude Code use multiple providers with streaming, tool calls, reasoning tokens, and images working in both directions.',
 		keywords:
 			'codex, claude code, openai codex proxy, claude code proxy, llm proxy, ai gateway, anthropic, gemini, grok, deepseek, ollama, openrouter, responses api, codex cli',
 		featureList: [

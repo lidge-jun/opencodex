@@ -158,7 +158,7 @@ export function isAppliedState(state: VisualIntegrationState): boolean {
  * Codex CLI.
  *
  * `routingInjected` — server-derived as `routingKind === "opencodex-local"` —
- * is the only field that answers "is opencodex in Codex's path right now".
+ * is the only field that answers "is the local routing core in Codex's path right now".
  * `status` mixes in service viability and reboot safety, which is the Startup
  * page's question, so a `protected` status with no injected routing still
  * reads as not applied here.
@@ -308,7 +308,7 @@ function claudeDesktopRow(
   }
   const toggleOn = payload.desiredEnabled;
   // Desired OFF keeps the switch off, but a still-selected gateway is not
-  // "absent": Desktop is still routing through OpenCodex until cleanup lands.
+  // "absent": Desktop is still routing through the local routing core until cleanup lands.
   if (!toggleOn) {
     const gatewayStillSelected = payload.applied === true
       || payload.driftReason === "desired_off_gateway_selected";
