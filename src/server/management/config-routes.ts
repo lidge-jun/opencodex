@@ -75,6 +75,7 @@ import {
   webSearchModelIsRejected,
   webSearchModelOptionsFrom,
   webSearchModelRejection,
+  type WebSearchBackend,
 } from "./web-search-sidecar-options";
 import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -665,10 +666,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
-      const effectiveBackend = body.webSearch.backend === "anthropic"
-        ? "anthropic"
-        : body.webSearch.backend === "openai" || body.webSearch.backend === null
-          ? "openai"
+      const effectiveBackend: WebSearchBackend = body.webSearch.backend === null
+        ? "openai"
+        : typeof body.webSearch.backend === "string" && WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)
+          ? body.webSearch.backend as WebSearchBackend
           : config.webSearchSidecar?.backend ?? "openai";
       const effectiveModel = typeof body.webSearch.model === "string"
         ? body.webSearch.model || undefined

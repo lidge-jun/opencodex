@@ -543,6 +543,7 @@ export const ru: Record<TKey, string> = {
   "models.contextMetadataSource": "Источник",
   "models.contextMetadataLive": "обнаружено",
   "models.contextMetadataRegistry": "реестр",
+  "models.contextMetadataCursorStatic": "подборка Cursor",
   "models.contextMetadataSnapshot": "сохранено",
   "models.contextMetadataFallback": "запасной",
   "models.contextMetadataDerived": "производный",

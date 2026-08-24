@@ -141,6 +141,8 @@ test("compatibility 128k is never a claimed window, even as a fallback", () => {
 test("capped and stale rows expose muted source chips", () => {
   expect(modelContextSourceChipKey({ metadataSource: "live", contextCapped: true }))
     .toBe("models.contextMetadataLive");
+  expect(modelContextSourceChipKey({ provider: "cursor", metadataSource: "registry" }))
+    .toBe("models.contextMetadataCursorStatic");
   expect(modelContextSourceChipKey({ metadataSource: "snapshot", metadataStale: true }))
     .toBe("models.contextMetadataSnapshot");
   expect(modelContextSourceChipKey({ metadataSource: "unknown" }))

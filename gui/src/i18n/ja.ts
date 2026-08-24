@@ -538,6 +538,7 @@ export const ja: Record<TKey, string> = {
   "models.contextMetadataSource": "出典",
   "models.contextMetadataLive": "検出",
   "models.contextMetadataRegistry": "レジストリ",
+  "models.contextMetadataCursorStatic": "Cursor選定",
   "models.contextMetadataSnapshot": "保存済み",
   "models.contextMetadataFallback": "フォールバック",
   "models.contextMetadataDerived": "派生",

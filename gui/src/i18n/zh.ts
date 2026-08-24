@@ -538,6 +538,7 @@ export const zh: Record<TKey, string> = {
   "models.contextMetadataSource": "来源",
   "models.contextMetadataLive": "已检测",
   "models.contextMetadataRegistry": "注册表",
+  "models.contextMetadataCursorStatic": "Cursor 精选",
   "models.contextMetadataSnapshot": "已保存",
   "models.contextMetadataFallback": "回退",
   "models.contextMetadataDerived": "派生",

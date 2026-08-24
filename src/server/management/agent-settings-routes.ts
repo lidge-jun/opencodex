@@ -60,6 +60,7 @@ import {
   webSearchCandidateRows,
   webSearchModelIsRejected,
   webSearchModelRejection,
+  type WebSearchBackend,
 } from "./web-search-sidecar-options";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -1217,13 +1218,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (field === "webSearchSidecar"
         && (section.model !== undefined || section.backend !== undefined)) {
         const stored = config.claudeCode?.webSearchSidecar;
-        const effectiveBackend = section.backend === "anthropic"
-          ? "anthropic"
-          : section.backend === "openai"
-            ? "openai"
-            : section.backend === null
-              ? config.webSearchSidecar?.backend ?? "openai"
-              : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
+        const effectiveBackend = section.backend === null
+          ? config.webSearchSidecar?.backend ?? "openai"
+          : typeof section.backend === "string" && allowedBackends.includes(section.backend)
+            ? section.backend as WebSearchBackend
+            : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
         const effectiveModel = section.model === ""
           ? config.webSearchSidecar?.model
           : typeof section.model === "string"
