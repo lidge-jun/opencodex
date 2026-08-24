@@ -26,6 +26,7 @@ import {
   setActiveAccount,
 } from "../src/oauth/store";
 import type { OAuthCredentials } from "../src/oauth/types";
+import { bindAntigravitySessionAffinity, clearAntigravityRoutingState, resolveAntigravityAccountForSession } from "../src/oauth/antigravity-routing";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
 let previousOpencodexHome: string | undefined;
@@ -279,6 +280,18 @@ describe("multi-account auth store", () => {
     await removeCredential("anthropic"); // active is b
     expect(listAccounts("anthropic").length).toBe(1);
     expect(getCredential("anthropic")?.access).toBe("access-a");
+  });
+
+  test("removing the active Antigravity account clears affinity while leaving the next account available", async () => {
+    await saveCredential("google-antigravity", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
+    await saveCredential("google-antigravity", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    const set = getAccountSet("google-antigravity")!;
+    const active = set.accounts.find(account => account.credential.accountId === "acct-b")!;
+    bindAntigravitySessionAffinity("conversation", active.id);
+    await removeCredential("google-antigravity");
+    expect(resolveAntigravityAccountForSession("conversation").reason).toBe("active");
+    expect(resolveAntigravityAccountForSession("conversation").accountId).toBe(getAccountSet("google-antigravity")!.activeAccountId);
+    clearAntigravityRoutingState();
   });
 
   test("needsReauth flag persists and clears on fresh save", async () => {

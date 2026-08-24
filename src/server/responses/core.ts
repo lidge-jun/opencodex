@@ -2655,6 +2655,11 @@ async function handleResponsesInner(
   let antigravityAccountId: string | null = null;
   let antigravitySessionKey: string | null = null;
   let antigravity429RetryAttempted = false;
+  const observeAntigravityProviderError = isAntigravityOAuth
+    ? (error: { code?: string; status?: number; message?: string }) => {
+        if (antigravityAccountId) recordAntigravitySyntheticFailure(antigravityAccountId, error);
+      }
+    : undefined;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -3272,6 +3277,7 @@ async function handleResponsesInner(
         request = await retryAdapter.buildRequest(parsed, {
           headers: selectedForwardHeaders,
           translatorBudget,
+          ...(observeAntigravityProviderError ? { onProviderError: observeAntigravityProviderError } : {}),
         });
         refreshRoutedNamespaceToolAliases(request);
         recordAdapterReasoning(logCtx, request);
@@ -3393,6 +3399,7 @@ async function handleResponsesInner(
         request = await refreshedAdapter.buildRequest(parsed, {
           headers: selectedForwardHeaders,
           translatorBudget,
+          ...(observeAntigravityProviderError ? { onProviderError: observeAntigravityProviderError } : {}),
         });
         refreshRoutedNamespaceToolAliases(request);
         recordAdapterReasoning(logCtx, request);
@@ -4586,7 +4593,11 @@ async function handleResponsesInner(
   let initialRequest: AdapterRequest | undefined;
   let inputTokenEstimate: number | undefined;
   try {
-    initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
+    initialRequest = await activeAdapter.buildRequest(parsed, {
+      headers: selectedForwardHeaders,
+      translatorBudget,
+      ...(observeAntigravityProviderError ? { onProviderError: observeAntigravityProviderError } : {}),
+    });
     refreshRoutedNamespaceToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
@@ -4703,6 +4714,7 @@ async function handleResponsesInner(
             headers: selectedForwardHeaders,
             translatorBudget,
             ...(imageTierBias > 0 ? { imageTierBias } : {}),
+            ...(observeAntigravityProviderError ? { onProviderError: observeAntigravityProviderError } : {}),
           });
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
@@ -5094,6 +5106,7 @@ async function handleResponsesInner(
             headers: selectedForwardHeaders,
             translatorBudget,
             ...(imageTierBias > 0 ? { imageTierBias } : {}),
+            ...(observeAntigravityProviderError ? { onProviderError: observeAntigravityProviderError } : {}),
           });
           recordAdapterReasoning(logCtx, continuationRequest);
           recordAdapterTier(logCtx, continuationRequest);

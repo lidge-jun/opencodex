@@ -1,4 +1,4 @@
-import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
+import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
@@ -34,6 +34,7 @@ import {
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
+import { normalizeAntigravityProviderError } from "../oauth/antigravity-routing";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -604,6 +605,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
   let antigravitySession: string | undefined;
+  let observeProviderError: ((error: { code?: string; status?: number; message?: string }) => void) | undefined;
   // Vertex returns the same opaque Gemini thought signatures as CCA, but its replay namespace
   // must stay transport-scoped: a signature minted by one Google backend must never be sent to
   // another merely because the public model id and first prompt happen to match.
@@ -626,7 +628,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       : {}),
 
-    async buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+      observeProviderError = provider.googleMode === "cloud-code-assist" ? incoming?.onProviderError : undefined;
       const routedModelId = provider.googleMode === "cloud-code-assist"
         ? resolveAntigravityEffortWireModel(
             parsed.modelId,
@@ -862,7 +865,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
         // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
         if (chunk.error) {
-          const err = chunk.error as { message?: string } | undefined;
+          const error = normalizeAntigravityProviderError(chunk.error);
+          if (provider.googleMode === "cloud-code-assist" && error) observeProviderError?.(error);
+          const err = error ?? { message: "upstream error" };
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
           const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
@@ -872,7 +877,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
             clearAntigravityReplay(replayModel, replaySession);
           }
-          yield { type: "error", message: err?.message ?? "upstream error" };
+          yield {
+            type: "error",
+            ...(error?.status !== undefined ? { status: error.status } : {}),
+            ...(error?.code ? { code: error.code } : {}),
+            message: err.message ?? "upstream error",
+          };
           return "terminate";
         }
 
@@ -1174,8 +1184,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return events;
       };
       if (raw.error) {
-        const err = raw.error as { message?: string };
-        return finish([{ type: "error", message: err.message ?? "upstream error" }]);
+        const error = normalizeAntigravityProviderError(raw.error);
+        if (provider.googleMode === "cloud-code-assist" && error) observeProviderError?.(error);
+        return finish([{
+          type: "error",
+          ...(error?.status !== undefined ? { status: error.status } : {}),
+          ...(error?.code ? { code: error.code } : {}),
+          message: error?.message ?? "upstream error",
+        }]);
       }
       // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.
       let json = raw;

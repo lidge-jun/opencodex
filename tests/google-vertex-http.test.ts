@@ -125,6 +125,16 @@ describe("vertex retry fetch", () => {
     expect(rate.calls).toHaveLength(2);
   });
 
+  test("Antigravity leaves the single 429 retry budget to Responses recovery", async () => {
+    const mock = mockFetch([
+      new Response(vertexError(429, "RESOURCE_EXHAUSTED", "rate limit, try again"), { status: 429, headers: { "Retry-After": "1" } }),
+      new Response("unexpected replay", { status: 200 }),
+    ]);
+    const res = await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+    expect(res.status).toBe(429);
+    expect(mock.calls).toHaveLength(1);
+  });
+
   test("does not retry a non-retryable 400 and classifies the body", async () => {
     const mock = mockFetch([new Response(vertexError(400, "INVALID_ARGUMENT", "bad model"), { status: 400 })]);
     const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });

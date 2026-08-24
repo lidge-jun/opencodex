@@ -13,6 +13,12 @@ const MAX_AFFINITY_COMPONENT_LENGTH = 128;
 type CooldownSource = "retry-after" | "default" | "synthetic";
 export type AntigravitySyntheticFailure = "rate-limit" | "quota" | "geoblock";
 
+export interface AntigravityProviderError {
+  code?: string;
+  status?: number;
+  message?: string;
+}
+
 interface AccountHealth {
   cooldownUntil: number;
   cooldownSource: CooldownSource;
@@ -190,8 +196,37 @@ export function resolveAntigravityAccountForSession(
   };
 }
 
-function failureText(payload: unknown): string {
-  try { return JSON.stringify(payload).toLowerCase(); } catch { return ""; }
+const RATE_LIMIT_CODES = new Set(["RATE_LIMIT_EXCEEDED", "TOO_MANY_REQUESTS"]);
+const QUOTA_CODES = new Set(["QUOTA_EXCEEDED", "RESOURCE_EXHAUSTED"]);
+const GEO_CODES = new Set(["LOCATION_NOT_SUPPORTED", "REGION_NOT_SUPPORTED", "GEO_BLOCKED"]);
+
+export function normalizeAntigravityProviderError(value: unknown): AntigravityProviderError | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const code = typeof record.code === "string" ? record.code.trim().toUpperCase() : undefined;
+  const status = typeof record.status === "number" && Number.isInteger(record.status) ? record.status : undefined;
+  const message = typeof record.message === "string" ? record.message.trim().slice(0, 512) : undefined;
+  if (!code && status === undefined) return null;
+  return {
+    ...(code ? { code } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
+export function classifyAntigravityProviderError(value: unknown): AntigravitySyntheticFailure | null {
+  const error = normalizeAntigravityProviderError(value);
+  if (!error) return null;
+  const message = error.message?.toLowerCase() ?? "";
+  if (QUOTA_CODES.has(error.code ?? "") && /quota|resource[ _-]?exhausted/.test(message)) return "quota";
+  if (error.status === 429 || RATE_LIMIT_CODES.has(error.code ?? "") || (error.code === "RESOURCE_EXHAUSTED" && /rate[- ]limit|too many requests/.test(message))) {
+    return "rate-limit";
+  }
+  if (GEO_CODES.has(error.code ?? "") || (
+    (error.status === 403 || error.code === "PERMISSION_DENIED")
+    && /(?:location|country|region).{0,48}(?:not supported|unavailable|blocked|forbidden)|(?:not supported|unavailable|blocked|forbidden).{0,48}(?:location|country|region)/.test(message)
+  )) return "geoblock";
+  return null;
 }
 
 export function recordAntigravitySyntheticFailure(
@@ -199,22 +234,15 @@ export function recordAntigravitySyntheticFailure(
   payload: unknown,
   now = Date.now(),
 ): AntigravitySyntheticFailure | null {
-  const text = failureText(payload);
-  const geo = text.includes("geoblock")
-    || text.includes("location")
-    || text.includes("country")
-    || text.includes("region is not supported")
-    || text.includes("not available in your region");
-  if (geo) {
+  const failure = classifyAntigravityProviderError(payload);
+  if (failure === "geoblock") {
     accountHealth.set(accountId, { cooldownUntil: now + MAX_COOLDOWN_MS, cooldownSource: "synthetic" });
     return "geoblock";
   }
-  const rateLimit = text.includes("rate limit") || text.includes("ratelimit") || text.includes("too many requests");
-  const quota = text.includes("quota") || text.includes("resource_exhausted") || text.includes("resource exhausted");
-  if (!rateLimit && !quota) return null;
+  if (!failure) return null;
   accountHealth.set(accountId, {
     cooldownUntil: now + DEFAULT_COOLDOWN_MS,
     cooldownSource: "synthetic",
   });
-  return rateLimit ? "rate-limit" : "quota";
+  return failure;
 }

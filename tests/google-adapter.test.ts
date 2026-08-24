@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
 import type { OcxParsedRequest } from "../src/types";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
 
@@ -79,6 +80,51 @@ describe("google adapter — tool result images", () => {
 
     const toolTurn = contents.find(c => c.parts.some(p => "functionResponse" in p));
     expect(toolTurn!.parts.some(p => "inline_data" in p)).toBe(false);
+  });
+});
+
+describe("google adapter — Antigravity structured stream errors", () => {
+  test("observes only a structured CCA error before emitting the adapter error", async () => {
+    const adapter = createGoogleAdapter({
+      adapter: "google",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      apiKey: "key",
+      project: "project",
+    } as never);
+    const observed: unknown[] = [];
+    const parsed = parsedWith([{ role: "user", content: "hello" }]);
+    parsed.stream = true;
+    await adapter.buildRequest(parsed, {
+      headers: new Headers(),
+      translatorBudget: createTranslatorBudget(),
+      onProviderError: error => observed.push(error),
+    });
+    const body = `data: ${JSON.stringify({ error: { code: "RESOURCE_EXHAUSTED", status: 429, message: "quota exceeded" } })}\n\n`;
+    const events = [];
+    for await (const event of adapter.parseStream(new Response(body), createTranslatorBudget())) events.push(event);
+    expect(observed).toEqual([{ code: "RESOURCE_EXHAUSTED", status: 429, message: "quota exceeded" }]);
+    expect(events[0]).toMatchObject({ type: "error", status: 429, code: "RESOURCE_EXHAUSTED" });
+  });
+
+  test("observes a buffered CCA error before returning the adapter error", async () => {
+    const adapter = createGoogleAdapter({
+      adapter: "google",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      apiKey: "key",
+      project: "project",
+    } as never);
+    const observed: unknown[] = [];
+    const parsed = parsedWith([{ role: "user", content: "hello" }]);
+    await adapter.buildRequest(parsed, {
+      headers: new Headers(),
+      translatorBudget: createTranslatorBudget(),
+      onProviderError: error => observed.push(error),
+    });
+    const events = await adapter.parseResponse(new Response(JSON.stringify({ error: { code: "PERMISSION_DENIED", status: 403, message: "region is not supported" } })), createTranslatorBudget());
+    expect(observed).toEqual([{ code: "PERMISSION_DENIED", status: 403, message: "region is not supported" }]);
+    expect(events[0]).toMatchObject({ type: "error", status: 403, code: "PERMISSION_DENIED" });
   });
 });
 

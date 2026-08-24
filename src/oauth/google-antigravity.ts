@@ -51,6 +51,28 @@ interface GoogleTokenPayload {
   id_token?: unknown;
 }
 
+const TERMINAL_OAUTH_ERRORS = new Set([
+  "access_denied",
+  "expired_token",
+  "invalid_grant",
+  "refresh_token_reused",
+  "refresh_token_revoked",
+  "revoked",
+  "revoked_token",
+]);
+
+export class AntigravityTokenRequestError extends Error {
+  readonly httpStatus: number;
+  readonly oauthError?: string;
+
+  constructor(httpStatus: number, oauthError?: string) {
+    super(`Antigravity token request failed: ${httpStatus}`);
+    this.name = "AntigravityTokenRequestError";
+    this.httpStatus = httpStatus;
+    if (oauthError) this.oauthError = oauthError;
+  }
+}
+
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const part = token.split(".")[1];
   if (!part) return undefined;
@@ -75,8 +97,17 @@ async function postToken(body: Record<string, string>, signal?: AbortSignal): Pr
     signal: requestSignal(signal),
   });
   if (!response.ok) {
-    // Status only — the body can carry grant/account details.
-    throw new Error(`Antigravity token request failed: ${response.status}`);
+    let oauthError: string | undefined;
+    if (response.status === 400 || response.status === 401) {
+      try {
+        const body = await response.json() as { error?: unknown };
+        const candidate = typeof body.error === "string" ? body.error.trim().toLowerCase() : "";
+        if (TERMINAL_OAUTH_ERRORS.has(candidate)) oauthError = candidate;
+      } catch {
+        /* Keep status-only errors for malformed or non-JSON responses. */
+      }
+    }
+    throw new AntigravityTokenRequestError(response.status, oauthError);
   }
   return (await response.json()) as GoogleTokenPayload;
 }

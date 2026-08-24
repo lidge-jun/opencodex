@@ -17,6 +17,8 @@ const GOOGLE_RETRY_MAX_MS = 2_000;
 export interface GoogleRetryOptions {
   /** Repair-and-replay structurally invalid 400 bodies (Vertex/Antigravity behavior). */
   repairInvalid400?: boolean;
+  /** Let the Responses layer own Antigravity's single same-account 429 replay. */
+  retry429?: boolean;
 }
 
 async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
@@ -40,6 +42,7 @@ export async function fetchGoogleWithRetry(
   opts: GoogleRetryOptions = {},
 ): Promise<Response> {
   const repairInvalid400 = opts.repairInvalid400 ?? true;
+  const retry429 = opts.retry429 ?? true;
   const timeoutMs = ctx.timeoutMs ?? 200_000;
   const executor = ctx.executor ?? globalThis.fetch;
   let lastError: unknown;
@@ -68,6 +71,9 @@ export async function fetchGoogleWithRetry(
           attempt--; // The changed-request replay is separate from transient retry accounting.
           continue;
         }
+      }
+      if (res.status === 429 && !retry429) {
+        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
       }
       if (!retryableGoogleStatus(res.status) || attempt === GOOGLE_RETRY_ATTEMPTS - 1) {
         return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
@@ -124,5 +130,5 @@ export function fetchVertexWithRetry(request: AdapterRequest, ctx: AdapterFetchC
 
 /** Antigravity (Cloud Code Assist) retry wrapper. */
 export function fetchAntigravityWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
-  return fetchGoogleWithRetry("Antigravity", request, ctx);
+  return fetchGoogleWithRetry("Antigravity", request, ctx, { retry429: false });
 }

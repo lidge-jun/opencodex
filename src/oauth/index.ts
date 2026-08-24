@@ -10,7 +10,7 @@ import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthr
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
-import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
+import { AntigravityTokenRequestError, loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
@@ -510,6 +510,9 @@ function isTerminalRefreshError(err: unknown): boolean {
     || msg.includes("expired_token");
 }
 function terminal(error:unknown):boolean{
+  if (error instanceof AntigravityTokenRequestError) {
+    return (error.httpStatus === 400 || error.httpStatus === 401) && error.oauthError !== undefined;
+  }
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;

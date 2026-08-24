@@ -603,6 +603,10 @@ export async function removeCredential(provider: string): Promise<void> {
     }
     set.activeAccountId = set.accounts[0]!.id;
   }, [provider]);
+  if (provider === "google-antigravity") {
+    const { clearAntigravityRoutingState } = await import("./antigravity-routing");
+    clearAntigravityRoutingState();
+  }
 }
 
 // ---------------------------------------------------------------------------

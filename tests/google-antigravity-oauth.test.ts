@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { discoverAntigravityProject, refreshAntigravityToken } from "../src/oauth/google-antigravity";
+import { AntigravityTokenRequestError, discoverAntigravityProject, refreshAntigravityToken } from "../src/oauth/google-antigravity";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getCredential, saveCredential } from "../src/oauth/store";
+import { getAccountSet, getCredential, saveCredential } from "../src/oauth/store";
+import { getValidAccessTokenForAccount } from "../src/oauth";
 import { ANTIGRAVITY_IDE_VERSION } from "../src/adapters/client-fingerprint";
 
 const realFetch = globalThis.fetch;
@@ -144,6 +145,20 @@ describe("antigravity refresh", () => {
     expect(caught!.message).not.toContain("secret-detail");
   });
 
+  test("preserves only an allowlisted terminal OAuth code", async () => {
+    routeFetch((url) => url.includes("oauth2.googleapis.com/token")
+      ? new Response(JSON.stringify({ error: "invalid_grant", error_description: "private detail" }), { status: 400 })
+      : new Response("no", { status: 404 }));
+    await expect(refreshAntigravityToken("refresh-tok")).rejects.toMatchObject({
+      constructor: AntigravityTokenRequestError,
+      httpStatus: 400,
+      oauthError: "invalid_grant",
+    });
+    try { await refreshAntigravityToken("refresh-tok"); } catch (error) {
+      expect((error as Error).message).not.toContain("private detail");
+    }
+  });
+
   test("refresh preserves an existing project id without another CCA discovery request", async () => {
     const calls: string[] = [];
     routeFetch((url) => {
@@ -182,5 +197,23 @@ describe("antigravity credential persistence (projectId survives the store)", ()
     process.env.OPENCODEX_HOME = join(tmp, "ocx");
     await saveCredential("google-antigravity", { access: "a", refresh: "r", expires: Date.now() + 3_600_000, projectId: "proj-persist" });
     expect(getCredential("google-antigravity")?.projectId).toBe("proj-persist");
+  });
+
+  test("terminal refresh marks only the selected Antigravity account needsReauth", async () => {
+    tmp = join(tmpdir(), `ag-store-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(tmp, { recursive: true });
+    process.env.HOME = tmp;
+    process.env.OPENCODEX_HOME = join(tmp, "ocx");
+    await saveCredential("google-antigravity", { access: "a", refresh: "refresh-a", expires: 0, accountId: "acct-a" });
+    await saveCredential("google-antigravity", { access: "b", refresh: "refresh-b", expires: Date.now() + 3_600_000, accountId: "acct-b" });
+    const set = getAccountSet("google-antigravity")!;
+    const accountA = set.accounts.find(account => account.credential.accountId === "acct-a")!;
+    routeFetch(url => url.includes("oauth2.googleapis.com/token")
+      ? new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })
+      : new Response("no", { status: 404 }));
+    await expect(getValidAccessTokenForAccount("google-antigravity", accountA.id)).rejects.toThrow();
+    const after = getAccountSet("google-antigravity")!;
+    expect(after.accounts.find(account => account.credential.accountId === "acct-a")?.needsReauth).toBe(true);
+    expect(after.accounts.find(account => account.credential.accountId === "acct-b")?.needsReauth).not.toBe(true);
   });
 });

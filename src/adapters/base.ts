@@ -19,6 +19,8 @@ export interface IncomingMeta {
    * anthropic adapter consumes it; others ignore it.
    */
   imageTierBias?: number;
+  /** Provider-scoped structured error observation; never receives ordinary model payloads. */
+  onProviderError?: (error: { code?: string; status?: number; message?: string }) => void;
 }
 
 export interface ProviderAdapter {
