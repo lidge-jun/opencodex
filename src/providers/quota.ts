@@ -2103,9 +2103,11 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     if (!modelInfo) continue;
     for (const quotaInfo of quotaInfoEntries(modelInfo)) {
       const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
-      if (!label || windows.has(label)) continue;
+      if (!label) continue;
       const percent = antigravityUsedPercent(quotaInfo);
       if (percent === undefined) continue;
+      const current = windows.get(label);
+      if (current && current.percent <= percent) continue;
       windows.set(label, {
         label,
         percent,
