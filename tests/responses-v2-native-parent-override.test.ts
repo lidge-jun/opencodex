@@ -114,6 +114,188 @@ describe("v2 native parent override decision", () => {
 });
 
 describe("v2 native parent override runtime", () => {
+  test.each([
+    ["missing", undefined],
+    ["unroutable", "missing/model"],
+    ["canonical", "openai/gpt-5.6-luna"],
+  ] as const)("ordinary fail-closed %s performs no upstream I/O", async (_label, target) => {
+    let upstreamCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("eligible ordinary reject must not fetch");
+    }) as typeof fetch;
+    try {
+      const cfg = config();
+      cfg.v2NativeParentOverride = target === undefined ? { enabled: true } : { enabled: true, model: target };
+      const response = await handleResponses(responseRequest(rootBody()), cfg, { model: "", provider: "" });
+      expect(response.status).toBe(404);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["unroutable", "missing/model"],
+    ["canonical", "openai/gpt-5.6-luna"],
+  ] as const)("compact fail-closed %s keeps source route metadata and performs no upstream I/O", async (_label, target) => {
+    let upstreamCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("eligible compact reject must not fetch");
+    }) as typeof fetch;
+    try {
+      const cfg = config();
+      cfg.v2NativeParentOverride = target === undefined ? { enabled: true } : { enabled: true, model: target };
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponsesCompact(responseRequest(rootBody({ input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+        { type: "compaction_trigger" },
+      ] })), cfg, logCtx);
+      expect(response.status).toBe(404);
+      expect(upstreamCalls).toBe(0);
+      expect(logCtx.requestedModel).toBe("gpt-5.6-luna");
+      expect(logCtx.model).toBe("gpt-5.6-luna");
+      expect(logCtx.provider).toBe("openai");
+      expect(logCtx.routeDecision).toBeDefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.each([
+    ["v1", [{ type: "function", name: "spawn_agent" }, { type: "function", name: "send_input" }], {}],
+    ["non-agent", undefined, {}],
+    ["ambiguous", [{ type: "function", name: "spawn_agent" }, { type: "function", name: "send_input" }, { type: "function", name: "send_message" }], {}],
+    ["helper", undefined, { "x-openai-subagent": "review" }],
+    ["exact child", undefined, { "x-openai-subagent": "collab_spawn" }],
+    ["metadata child", undefined, { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) }],
+  ] as const)("ordinary %s remains on its original route", async (_label, tools, headers) => {
+    const urls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ id: "resp", status: "completed", output: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const body = rootBody();
+      if (tools === undefined) delete body.tools;
+      else body.tools = tools;
+      const response = await handleResponses(responseRequest(body, headers), config(), { model: "", provider: "" });
+      // The minimal fixture has no ChatGPT credential; unchanged native behavior fails auth
+      // before fetch, which is still enough to prove the override did not select the gateway.
+      expect(response.status).toBe(401);
+      expect(urls).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("malformed collab tool input is rejected before any provider fetch", async () => {
+    let upstreamCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("malformed request must not fetch");
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(
+        responseRequest(rootBody({ tools: [{ type: "function", name: 42 }] })),
+        config(),
+        { model: "", provider: "" },
+      );
+      // Parser drops the malformed tool and the unchanged native path then reaches its
+      // expected missing-credential response; importantly, it never selects the gateway.
+      expect(response.status).toBe(401);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("shadow interception runs before parent override", async () => {
+    const urls: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      urls.push(String(url));
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const cfg = config();
+      cfg.shadowCallIntercept = { enabled: true, model: "gw/shadow-model" };
+      await handleResponses(responseRequest(rootBody()), cfg, { model: "", provider: "" });
+      expect(urls).toEqual(["https://gateway.example/v1/chat/completions"]);
+      expect(bodies[0]?.model).toBe("shadow-model");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.each([
+    ["exact child", { "x-openai-subagent": "collab_spawn" }],
+    ["helper", { "x-openai-subagent": "memory" }],
+    ["metadata child", { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) }],
+  ] as const)("compact %s stays on native route", async (_label, headers) => {
+    let upstreamCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("native compact auth should fail before fetch in this fixture");
+    }) as typeof fetch;
+    try {
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponsesCompact(
+        responseRequest(rootBody({ input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+          { type: "compaction_trigger" },
+        ] }), headers),
+        config(),
+        logCtx,
+      );
+      expect(response.status).toBe(401);
+      expect(upstreamCalls).toBe(0);
+      expect(logCtx.model).toBe("gpt-5.6-luna");
+      expect(logCtx.provider).toBe("openai");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("combo dispatch keeps its selected target instead of applying the parent override", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const cfg = config();
+      cfg.combos = { test: { targets: [{ provider: "gw", model: "combo-model" }] } } as typeof cfg.combos;
+      const response = await handleResponses(
+        responseRequest(rootBody({ model: "combo/test" })),
+        cfg,
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      expect(bodies[0]?.model).toBe("combo-model");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("rewrites an eligible native root to the routed provider and keeps caller logging identity", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const urls: string[] = [];

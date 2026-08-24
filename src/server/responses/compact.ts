@@ -299,6 +299,15 @@ export async function handleResponsesCompact(
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   const requestedModel = raw.model;
+  // Populate source-route identity before the opt-in decision can fail closed. This keeps
+  // malformed/unavailable targets observable as the caller's route without exposing any new data.
+  logCtx.requestedModel = requestedModel;
+  logCtx.model = route.modelId;
+  logCtx.routeDecision = route.routeDecision;
+  logCtx.provider = route.codexAccountNamespace
+    ? `${route.providerName}-${route.codexAccountNamespace}`
+    : route.providerName;
+  logCtx.providerAdapter = route.provider.adapter;
   const parentOverride = decideV2NativeParentOverride({
     kind: "compact",
     config,
