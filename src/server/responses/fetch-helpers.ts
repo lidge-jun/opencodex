@@ -9,6 +9,7 @@ import type { OcxProviderConfig } from "../../types";
 import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
+import { providerTlsFetch } from "../../lib/provider-tls-profile";
 
 export { withUpstreamHttpVersion };
 
@@ -67,9 +68,12 @@ export function providerFetch(
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };
+  const transport = options.providerName
+    ? providerTlsFetch(options.providerName, provider, base)
+    : base;
   const httpFetch = Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      base(input, withUpstreamHttpVersion(input, init, provider)),
+      transport(input, withUpstreamHttpVersion(input, init, provider)),
     { preconnect },
   ) as typeof globalThis.fetch;
   // ChatGPT Codex backend: streaming turns ride the responses_websockets

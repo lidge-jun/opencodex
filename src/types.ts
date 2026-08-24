@@ -85,6 +85,7 @@ export type {
 
 export type {
   RefreshPolicy,
+  ProviderTlsProfile,
   OpenRouterProviderRouting,
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,

@@ -65,6 +65,9 @@
     "bun": "1.4.0",
     "zod": "4.4.3"
   },
+  "optionalDependencies": {
+    "wreq-js": "2.3.1"
+  },
   "devDependencies": {
     "@types/bun": "1.4.0",
     "typescript": "7.0.2"

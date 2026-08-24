@@ -8,6 +8,8 @@ import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } 
  */
 export type RefreshPolicy = "proactive" | "lazy-only" | "disabled";
 
+export type ProviderTlsProfile = "antigravity-browser";
+
 export interface OpenRouterProviderRouting {
   /** OpenRouter provider slugs to try first, in priority order. */
   order?: string[];
@@ -138,6 +140,8 @@ export interface OcxProviderConfig {
   codexToolMode?: "code_mode_only" | "shell";
   /** Optional outbound request-start pacing shared by this provider and its model overrides. */
   requestPacing?: ProviderRequestPacingConfig;
+  /** Explicitly acknowledged experimental browser-compatible transport profile. */
+  tlsProfile?: ProviderTlsProfile;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;

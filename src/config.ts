@@ -58,6 +58,7 @@ import {
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { providerDestinationConfigError } from "./lib/destination-policy";
+import { providerTlsProfileConfigError } from "./lib/provider-tls-profile";
 import { redactSecretString } from "./lib/redact";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import {
@@ -481,6 +482,7 @@ const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
   requestPacing: requestPacingSchema.optional().catch(undefined),
+  tlsProfile: z.literal("antigravity-browser").optional(),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
   mcpMaxResultBytes: z.number().int().positive().optional(),
@@ -1038,6 +1040,14 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "responsesPath"],
         message: responsesPathError,
+      });
+    }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
       });
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);

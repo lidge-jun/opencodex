@@ -42,8 +42,10 @@ Responses-compatible streaming output.
 ### Fetch-helper import boundary
 
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
-Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
-the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
+Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, the
+upstream HTTP-version helper, and the provider TLS-profile leaf. Server, provider, and WebSocket data
+types remain type-only edges. The TLS leaf lazy-loads its optional native module and otherwise keeps
+the default Bun executor unchanged; it must not pull OAuth, routing, or adapter code into this boundary.
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 
