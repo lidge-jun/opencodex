@@ -66,7 +66,7 @@ describe("Responses namespace tool compatibility", () => {
       { type: "custom", name: "exec" },
     ]);
     expect([...rewritten.aliases]).toEqual([
-      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent" }],
+      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
   });
 
@@ -123,7 +123,7 @@ describe("Responses namespace tool compatibility", () => {
       },
     });
     expect([...allowed.aliases]).toEqual([
-      ["collaboration__safe", { namespace: "collaboration", name: "safe" }],
+      ["collaboration__safe", { namespace: "collaboration", name: "safe", kind: "function" }],
     ]);
     expect(restoreRoutedNamespaceCalls({
       type: "function_call",
@@ -135,6 +135,132 @@ describe("Responses namespace tool compatibility", () => {
       tool_choice: { type: "function", namespace: "collaboration", name: "safe" },
     }).aliases.has("collaboration__excluded")).toBe(false);
     expect(rewriteRoutedNamespaceToolsForUpstream({ tools, tool_choice: "none" }).aliases.size).toBe(0);
+  });
+
+  // The authorization boundary is per-request, and `allowed_tools` is where it was
+  // leaking: entries are typed `{type: string}` by the schema, so the accepted set is
+  // open-ended, and matching on `name` alone let a selector for a DIFFERENT KIND of
+  // tool authorize a client namespace function call.
+  //
+  // This is not a naming nit. The upstream sees every flattened declaration even when
+  // `tool_choice` narrows what may be called, so a non-canonical upstream can answer
+  // with `{type: "function_call", name: "<wire-name>"}`; if the alias survived, the
+  // restore path rewrites it into `{namespace, name}` and the client executes a tool
+  // the caller never permitted. The undeclared-tool guard does not catch it either —
+  // that guard authorizes from the declared catalog, not from `tool_choice`.
+  describe("allowed_tools authorization is restricted by tool type", () => {
+    const namespaceTools = [{
+      type: "namespace",
+      name: "collaboration",
+      tools: [{ type: "function", name: "safe" }],
+    }];
+    const wireName = "collaboration__safe";
+
+    // Every non-function/custom kind the runtime and schema know about, plus an
+    // unknown future one. The whitelist has to close all of them, including kinds
+    // nobody has written yet — which is exactly why it is a whitelist.
+    test.each([
+      "file_search",
+      "web_search",
+      "web_search_preview",
+      "computer_use",
+      "computer_use_preview",
+      "code_interpreter",
+      "image_generation",
+      "image_gen",
+      "mcp",
+      "tool_search",
+      "local_shell",
+      "x_search",
+      "namespace",
+      "some_future_tool_kind",
+    ])("a %s entry naming the wire tool authorizes nothing", kind => {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "allowed_tools", mode: "required", tools: [{ type: kind, name: wireName }] },
+      });
+      expect(aliases.size).toBe(0);
+      // The map is the whole authorization surface, so an upstream call carrying that
+      // wire name must stay unrestored rather than becoming a namespaced client call.
+      const restored = restoreRoutedNamespaceCalls({ type: "function_call", name: wireName }, aliases);
+      expect(restored.changed).toBe(false);
+      expect((restored.value as { namespace?: unknown }).namespace).toBeUndefined();
+    });
+
+    test.each(["function", "custom"])("a %s entry authorizes a tool declared that same kind", kind => {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: [{ type: "namespace", name: "collaboration", tools: [{ type: kind, name: "safe" }] }],
+        tool_choice: { type: "allowed_tools", mode: "required", tools: [{ type: kind, name: wireName }] },
+      });
+      // Proving the whitelist is not deny-all: without this, a filter that rejected
+      // everything would pass every test above.
+      expect(aliases.get(wireName)).toEqual({ namespace: "collaboration", name: "safe", kind });
+      expect(restoreRoutedNamespaceCalls({ type: "function_call", name: wireName }, aliases).changed).toBe(true);
+    });
+
+    // A wire name says WHICH tool, not what kind of call may carry it. Selecting a
+    // tool as the wrong kind is the same name/kind mismatch as selecting it with a
+    // foreign selector — narrower, but the same class, and reachable because
+    // `allowed_tools[].type` accepts any string.
+    test.each([
+      ["function", "custom"],
+      ["custom", "function"],
+    ])("a tool declared %s is not authorized by a %s selector", (declared, selected) => {
+      const build = (choice: unknown) => rewriteRoutedNamespaceToolsForUpstream({
+        tools: [{ type: "namespace", name: "collaboration", tools: [{ type: declared, name: "safe" }] }],
+        tool_choice: choice,
+      }).aliases;
+
+      const viaAllowed = build({ type: "allowed_tools", mode: "required", tools: [{ type: selected, name: wireName }] });
+      expect(viaAllowed.size).toBe(0);
+      expect(restoreRoutedNamespaceCalls({ type: "function_call", name: wireName }, viaAllowed).changed).toBe(false);
+
+      // The forced-selector branch has to agree, or the narrowing only holds for
+      // one of the two shapes a caller can write.
+      const viaForced = build({ type: selected, name: wireName });
+      expect(viaForced.size).toBe(0);
+    });
+
+    test("a foreign entry cannot ride alongside an authorized one", () => {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: [{
+          type: "namespace",
+          name: "collaboration",
+          tools: [{ type: "function", name: "safe" }, { type: "function", name: "excluded" }],
+        }],
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [
+            { type: "function", name: wireName },
+            { type: "file_search", name: "collaboration__excluded" },
+          ],
+        },
+      });
+      expect([...aliases.keys()]).toEqual([wireName]);
+    });
+  });
+
+  test("default and absent tool_choice keep every alias", () => {
+    const tools = [{
+      type: "namespace",
+      name: "collaboration",
+      tools: [{ type: "function", name: "safe" }, { type: "function", name: "other" }],
+    }];
+    // Narrowing only applies when the caller actually narrowed. These three are the
+    // "no restriction stated" cases and must not be collapsed by the filter.
+    for (const choice of [undefined, "auto", "required"]) {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream(
+        choice === undefined ? { tools } : { tools, tool_choice: choice },
+      );
+      expect(aliases.size).toBe(2);
+    }
+    // A top-level selector for another tool kind states a restriction that no
+    // namespace call satisfies, so it authorizes nothing.
+    expect(rewriteRoutedNamespaceToolsForUpstream({
+      tools,
+      tool_choice: { type: "file_search" },
+    }).aliases.size).toBe(0);
   });
 
   test("fails closed when flattening would collide with a declared wire name", () => {
@@ -271,7 +397,7 @@ describe("Responses namespace tool compatibility", () => {
 
   test("restores only aliases authorized by this request in JSON and SSE payloads", () => {
     const aliases = new Map([
-      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent" }],
+      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
     const payload = {
       type: "response.completed",
