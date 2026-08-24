@@ -14,6 +14,7 @@ import {
   resolveEnvValue,
 } from "../../config";
 import { parseRequest } from "../../responses/parser";
+import { googleProviderOptionsRouteError } from "../../responses/google-provider-options";
 import {
   bindReasoningReplayScope,
   commitReasoningReplayServingIdentity,
@@ -2900,6 +2901,22 @@ async function handleResponsesInner(
     delete logCtx.accountLogLabel;
   }
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
+  const googleOptionsError = googleProviderOptionsRouteError(parsed, {
+    providerName: route.providerName,
+    provider: adapterProvider,
+    adapterName: adapter.name,
+  });
+  if (googleOptionsError) {
+    return formatErrorResponse(400, "invalid_request_error", googleOptionsError);
+  }
+  const assertGoogleOptionsRoute = (candidate: { name: string }, provider: OcxProviderConfig): void => {
+    const message = googleProviderOptionsRouteError(parsed, {
+      providerName: route.providerName,
+      provider,
+      adapterName: candidate.name,
+    });
+    if (message) throw new Error(message);
+  };
   bindRouteReasoningReplayScope({
     parsed,
     providerName: route.providerName,
@@ -3420,6 +3437,12 @@ async function handleResponsesInner(
       if (!("passthrough" in retryAdapter) || !retryAdapter.passthrough) {
         upstream.abort();
         return { failed: formatErrorResponse(502, "upstream_error", "Recovery changed the provider wire unexpectedly") };
+      }
+      try {
+        assertGoogleOptionsRoute(retryAdapter, route.provider);
+      } catch (err) {
+        upstream.abort();
+        return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(err instanceof Error ? err.message : String(err))) };
       }
       try {
         request = await retryAdapter.buildRequest(parsed, {

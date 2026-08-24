@@ -5,6 +5,15 @@ type JsonObject = Record<string, unknown>;
 
 const GOOGLE_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const GOOGLE_THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+const GOOGLE_SAFETY_CATEGORIES = new Set([
+  "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT",
+  "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_CIVIC_INTEGRITY", "HARM_CATEGORY_JAILBREAK",
+]);
+const GOOGLE_SAFETY_THRESHOLDS = new Set([
+  "HARM_BLOCK_THRESHOLD_UNSPECIFIED", "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE",
+  "BLOCK_ONLY_HIGH", "BLOCK_NONE", "OFF",
+]);
+const GOOGLE_CACHED_CONTENT = /^(?:cachedContents\/[^/?#\s]+|projects\/[^/?#\s]+\/locations\/[^/?#\s]+\/cachedContents\/[^/?#\s]+)$/;
 
 function isObject(value: unknown): value is JsonObject {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -158,12 +167,18 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
     ))].slice(0, 5);
     if (stopSequences.length > 0) out.stopSequences = stopSequences;
   }
-  if (isObject(value.thinkingConfig) && typeof value.thinkingConfig.thinkingLevel === "string") {
-    const raw = value.thinkingConfig.thinkingLevel.toLowerCase();
-    const thinkingLevel = GOOGLE_THINKING_LEVELS.has(raw)
-      ? raw
-      : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
-    if (thinkingLevel) out.thinkingConfig = { thinkingLevel };
+  if (isObject(value.thinkingConfig)) {
+    const config: JsonObject = {};
+    if (typeof value.thinkingConfig.thinkingBudget === "number"
+      && Number.isSafeInteger(value.thinkingConfig.thinkingBudget)
+      && value.thinkingConfig.thinkingBudget >= -1) config.thinkingBudget = value.thinkingConfig.thinkingBudget;
+    if (typeof value.thinkingConfig.includeThoughts === "boolean") config.includeThoughts = value.thinkingConfig.includeThoughts;
+    if (typeof value.thinkingConfig.thinkingLevel === "string") {
+      const raw = value.thinkingConfig.thinkingLevel.toLowerCase();
+      const thinkingLevel = GOOGLE_THINKING_LEVELS.has(raw) ? raw : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
+      if (thinkingLevel && config.thinkingBudget === undefined) config.thinkingLevel = thinkingLevel;
+    }
+    if (Object.keys(config).length > 0) out.thinkingConfig = config;
   }
   if (Array.isArray(value.responseModalities)) {
     const valid = value.responseModalities.filter((m): m is string => typeof m === "string" && ["TEXT", "IMAGE", "AUDIO"].includes(m));
@@ -178,6 +193,20 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
     if (hasProperties || hasRequired) out.responseSchema = responseSchema;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function compileSafetySettings(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value) || value.length > 16) return undefined;
+  const seen = new Set<string>();
+  const out: JsonObject[] = [];
+  for (const setting of value) {
+    if (!isObject(setting) || typeof setting.category !== "string" || !GOOGLE_SAFETY_CATEGORIES.has(setting.category)
+      || typeof setting.threshold !== "string" || !GOOGLE_SAFETY_THRESHOLDS.has(setting.threshold)
+      || seen.has(setting.category)) return undefined;
+    seen.add(setting.category);
+    out.push({ category: setting.category, threshold: setting.threshold });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 function compileToolConfig(value: unknown, toWireName: (name: string) => string): JsonObject | undefined {
@@ -216,6 +245,9 @@ export function compileGoogleWireBody(input: unknown): {
   if (generationConfig) body.generationConfig = generationConfig;
   const toolConfig = compileToolConfig(source.toolConfig, names.toWire);
   if (toolConfig) body.toolConfig = toolConfig;
+  const safetySettings = compileSafetySettings(source.safetySettings);
+  if (safetySettings) body.safetySettings = safetySettings;
+  if (typeof source.cachedContent === "string" && GOOGLE_CACHED_CONTENT.test(source.cachedContent)) body.cachedContent = source.cachedContent;
   if (typeof source.sessionId === "string" && source.sessionId.length > 0) body.sessionId = source.sessionId;
   return { body, restoreToolName: names.fromWire };
 }

@@ -715,6 +715,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     : googleTruncationErrorMessage;
   return {
     name: "google",
+    validateRequest(parsed: OcxParsedRequest) {
+      if (provider.googleMode === "cloud-code-assist" && parsed.options.providerOptions?.google) {
+        throw new Error("provider_options.google is not supported on Google Cloud Code Assist routes");
+      }
+    },
 
     // Vertex + Antigravity get Kiro-style retry/timeout + classified, redacted errors.
     // Direct AI-Studio uses the canonical server transport (fetchWithTransientRetry), which
@@ -755,6 +760,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // catalog is a guaranteed upstream 400.
       const toolConfig = tools ? toolChoiceToGeminiToolConfig(parsed) : undefined;
       if (toolConfig) body.toolConfig = toolConfig;
+      const googleOptions = parsed.options.providerOptions?.google;
+      if (googleOptions?.safetySettings) body.safetySettings = googleOptions.safetySettings;
+      if (googleOptions?.cachedContent) body.cachedContent = googleOptions.cachedContent;
 
       const generationConfig: Record<string, unknown> = {};
       if (parsed.options.maxOutputTokens) generationConfig.maxOutputTokens = parsed.options.maxOutputTokens;
@@ -776,7 +784,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const thinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
-      if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
+      if (!isImageCapableModel(parsed.modelId)) {
+        const thinkingConfig: Record<string, unknown> = {};
+        if (googleOptions?.thinkingBudget !== undefined) thinkingConfig.thinkingBudget = googleOptions.thinkingBudget;
+        else if (thinkingLevel) thinkingConfig.thinkingLevel = thinkingLevel;
+        if (googleOptions?.includeThoughts !== undefined) thinkingConfig.includeThoughts = googleOptions.includeThoughts;
+        if (Object.keys(thinkingConfig).length > 0) generationConfig.thinkingConfig = thinkingConfig;
+      }
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }

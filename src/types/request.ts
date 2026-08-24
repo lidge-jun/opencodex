@@ -273,6 +273,32 @@ export interface OcxRequestOptions {
     schema?: Record<string, unknown>;
     strict?: boolean;
   };
+  providerOptions?: { google?: GoogleProviderOptions };
+}
+
+export type GoogleSafetyCategory =
+  | "HARM_CATEGORY_HATE_SPEECH"
+  | "HARM_CATEGORY_SEXUALLY_EXPLICIT"
+  | "HARM_CATEGORY_DANGEROUS_CONTENT"
+  | "HARM_CATEGORY_HARASSMENT"
+  | "HARM_CATEGORY_CIVIC_INTEGRITY"
+  | "HARM_CATEGORY_JAILBREAK";
+export type GoogleSafetyThreshold =
+  | "HARM_BLOCK_THRESHOLD_UNSPECIFIED"
+  | "BLOCK_LOW_AND_ABOVE"
+  | "BLOCK_MEDIUM_AND_ABOVE"
+  | "BLOCK_ONLY_HIGH"
+  | "BLOCK_NONE"
+  | "OFF";
+export interface GoogleSafetySetting {
+  category: GoogleSafetyCategory;
+  threshold: GoogleSafetyThreshold;
+}
+export interface GoogleProviderOptions {
+  thinkingBudget?: number;
+  includeThoughts?: boolean;
+  safetySettings?: GoogleSafetySetting[];
+  cachedContent?: string;
 }
 
 export type OcxMessagePhase = "commentary" | "final_answer";
