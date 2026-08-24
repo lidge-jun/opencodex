@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +10,7 @@ import {
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../src/codex/catalog/kinds";
 import { buildCatalogEntriesFromObservedState } from "../src/codex/catalog/sync";
 import { cmdV2 } from "../src/cli/v2";
-import { loadConfig } from "../src/config";
+import { loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 import type { OcxConfig } from "../src/types";
@@ -111,6 +111,10 @@ function putV2(body: unknown): Request {
     headers: { "content-type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   });
+}
+
+function putNativeParentOverride(body: unknown): Request {
+  return putV2({ v2NativeParentOverride: body });
 }
 
 describe("keep-native-v1 restamp path", () => {
@@ -281,5 +285,89 @@ describe("/api/v2 keepNativeChatGptOnV1", () => {
     );
     expect(bad?.status).toBe(400);
     expect(converges).toBe(3);
+  });
+});
+
+describe("/api/v2 v2NativeParentOverride", () => {
+  test("GET defaults inactive and PUT persists only the override without catalog convergence", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+      },
+      hostname: "127.0.0.1",
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+      unrelated: "preserve",
+    } as OcxConfig;
+    saveConfig(config);
+    let converges = 0;
+    const deps = { createManagementConvergeCodex: catalogConvergenceFactory(() => { converges++; }) };
+
+    const initial = await handleManagementAPI(getV2(), new URL("http://localhost/api/v2"), config, deps);
+    expect((await initial?.json()).v2NativeParentOverride).toEqual({ enabled: false, model: null, active: false });
+
+    const saved = await handleManagementAPI(
+      putNativeParentOverride({ enabled: true, model: "  relay/parent  " }),
+      new URL("http://localhost/api/v2"), config, deps,
+    );
+    expect(saved?.status).toBe(200);
+    expect((await saved?.json()).v2NativeParentOverride).toEqual({ enabled: true, model: "relay/parent", active: true });
+    expect(converges).toBe(0);
+    expect(loadConfig()).toMatchObject({
+      unrelated: "preserve",
+      v2NativeParentOverride: { enabled: true, model: "relay/parent" },
+    });
+  });
+
+  test("PUT rejects an ineligible or malformed complete object atomically", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+      },
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+      unrelated: "preserve",
+    } as OcxConfig;
+    saveConfig(config);
+    const before = JSON.stringify(loadConfig());
+    for (const body of [
+      { enabled: true },
+      { enabled: true, model: "gpt-5.6-sol" },
+      { enabled: true, model: "unknown-provider/model" },
+      { enabled: "yes", model: "relay/parent" },
+    ]) {
+      const response = await handleManagementAPI(
+        putNativeParentOverride(body), new URL("http://localhost/api/v2"), config,
+      );
+      expect(response?.status).toBe(400);
+      expect(JSON.stringify(loadConfig())).toBe(before);
+    }
+  });
+
+  test("disabled override retains its selected target", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: { relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" } },
+      port: 10100,
+      defaultProvider: "relay",
+      multiAgentMode: "v2",
+      v2NativeParentOverride: { enabled: true, model: "relay/parent" },
+    } as OcxConfig;
+    saveConfig(config);
+    const response = await handleManagementAPI(
+      putNativeParentOverride({ enabled: false, model: "relay/parent" }),
+      new URL("http://localhost/api/v2"), config,
+    );
+    expect(response?.status).toBe(200);
+    expect((await response?.json()).v2NativeParentOverride).toEqual({ enabled: false, model: "relay/parent", active: false });
   });
 });

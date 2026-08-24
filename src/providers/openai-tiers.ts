@@ -237,6 +237,7 @@ function hasKnownLegacyOpenAiReference(config: OcxConfig): boolean {
     || matchesList(config.subagentModels)
     || (config.subagentRoles ?? []).some(role => matches(role.model))
     || matches(config.injectionModel)
+    || matches(config.v2NativeParentOverride?.model)
     || matches(config.shadowCallIntercept?.model)
     || matches(config.webSearchSidecar?.model)
     || matches(config.visionSidecar?.model)
@@ -260,6 +261,9 @@ function rewriteLegacyOpenAiReferences(config: OcxConfig, warnings: string[]): v
     }
   }
   if (config.injectionModel) config.injectionModel = rewriteLegacyOpenAiSelectedId(config.injectionModel);
+  if (config.v2NativeParentOverride?.model) {
+    config.v2NativeParentOverride.model = rewriteLegacyOpenAiSelectedId(config.v2NativeParentOverride.model);
+  }
   if (config.shadowCallIntercept?.model) {
     config.shadowCallIntercept.model = rewriteLegacyOpenAiSelectedId(config.shadowCallIntercept.model);
   }
@@ -305,6 +309,7 @@ function isKnownLegacyValuePath(path: readonly string[]): boolean {
   if (/^providers\.(openai|openai-multi)\.selectedModels\.\d+$/.test(joined)) return true;
   return new Set([
     "injectionModel",
+    "v2NativeParentOverride.model",
     "shadowCallIntercept.model",
     "webSearchSidecar.model",
     "visionSidecar.model",
