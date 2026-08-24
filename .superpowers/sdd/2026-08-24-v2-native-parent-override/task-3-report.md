@@ -87,3 +87,36 @@ After implementation and the additional inactive-state case:
 ## Concerns
 
 - `bun run build` reports the pre-existing Vite warning that the main JavaScript chunk exceeds 500 kB. It does not fail the build and is unrelated to this scoped change.
+
+## Review fix round 1
+
+### Changes
+
+- Clearing the model now sends `{ enabled: false, model: null }`, preserving the server's complete-state contract and avoiding an invalid enabled-without-model request.
+- Added a ref-backed in-flight guard in `Subagents.tsx`; the existing saving state continues to disable the controls after React commits, while the ref closes the same-render/stale-handler gap before a second PUT can start.
+- Added regression coverage for persisted enabled/inactive conflicts, atomic clearing, and rapid mutation attempts.
+
+### TDD evidence
+
+RED command:
+
+```text
+cd gui && bun test tests/subagents-ultra-mode.test.tsx
+```
+
+Before the fix, 13 tests passed and the new clearing test failed with:
+
+```text
+Expected: { enabled: false, model: null }
+Received: [{ enabled: true, model: null }]
+```
+
+The conflict and rapid-mutation tests were already green against the rendered pending-state behavior; the ref guard hardens the same contract for stale/same-render handlers.
+
+GREEN command:
+
+```text
+cd gui && bun test tests/subagents-ultra-mode.test.tsx
+```
+
+After the fix: `14 pass`, `0 fail`, `38 expect() calls`.

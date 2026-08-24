@@ -203,7 +203,7 @@ export default function SubagentDelegationSection({
               })),
             ]}
             onChange={value => onNativeParentOverrideSave({
-              enabled: nativeParentOverride.enabled,
+              enabled: value ? nativeParentOverride.enabled : false,
               model: value || null,
               active: nativeParentOverride.active,
             })}

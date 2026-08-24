@@ -351,3 +351,64 @@ test("shows inactive guidance when the upstream V2 flag is off", async () => {
   expect(nativeParentSwitch().disabled).toBe(true);
   expect(container.textContent).toContain("Requires explicit V2");
 });
+
+test("keeps deactivation available for a persisted enabled but inactive conflict", async () => {
+  injectionAvailable = [{ provider: "relay", model: "parent-model", namespaced: "relay/parent-model" }];
+  v2Responses = [{ ok: true, body: {
+    enabled: true,
+    multiAgentMode: "default",
+    keepNativeChatGptOnV1: true,
+    v2NativeParentOverride: { enabled: true, model: "relay/parent-model", active: false },
+  } }];
+  await mount();
+
+  expect(nativeParentSwitch().disabled).toBe(false);
+  expect(nativeParentSwitch().getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { nativeParentSwitch().click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(nativeParentPuts()).toContainEqual({ enabled: false, model: "relay/parent-model" });
+});
+
+test("clearing the selected model atomically disables native parent routing", async () => {
+  injectionAvailable = [{ provider: "relay", model: "parent-model", namespaced: "relay/parent-model" }];
+  v2Responses = [{ ok: true, body: {
+    enabled: true,
+    multiAgentMode: "v2",
+    keepNativeChatGptOnV1: false,
+    v2NativeParentOverride: { enabled: true, model: "relay/parent-model", active: true },
+  } }];
+  await mount();
+
+  await act(async () => { nativeParentSelect().click(); });
+  const none = [...testWindow.document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find(candidate => candidate.textContent?.trim() === "None");
+  expect(none).toBeTruthy();
+  await act(async () => { none!.click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+
+  expect(nativeParentPuts()).toContainEqual({ enabled: false, model: null });
+});
+
+test("ignores rapid native parent mutations while one save is pending", async () => {
+  injectionAvailable = [
+    { provider: "relay", model: "first-model", namespaced: "relay/first-model" },
+    { provider: "relay", model: "second-model", namespaced: "relay/second-model" },
+  ];
+  v2Responses = [{ ok: true, body: {
+    enabled: false,
+    multiAgentMode: "default",
+    keepNativeChatGptOnV1: true,
+    v2NativeParentOverride: { enabled: false, model: "relay/first-model", active: false },
+  } }];
+  await mount();
+
+  await act(async () => { nativeParentSelect().click(); });
+  const second = [...testWindow.document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find(candidate => candidate.textContent?.includes("second-model"));
+  await act(async () => {
+    second!.click();
+    nativeParentSwitch().click();
+  });
+
+  expect(nativeParentPuts()).toEqual([{ enabled: false, model: "relay/second-model" }]);
+});

@@ -33,6 +33,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const [childInstructionsSaving, setChildInstructionsSaving] = useState(false);
   const [ultraSaving, setUltraSaving] = useState(false);
   const [nativeParentOverrideSaving, setNativeParentOverrideSaving] = useState(false);
+  const nativeParentOverrideSavingRef = useRef(false);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
   const currentUltraApiBase = useRef(apiBase);
@@ -118,7 +119,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   };
 
   const saveNativeParentOverride = async (next: V2NativeParentOverrideState) => {
-    if (nativeParentOverrideSaving) return;
+    if (nativeParentOverrideSavingRef.current) return;
+    nativeParentOverrideSavingRef.current = true;
     const requestApiBase = apiBase;
     setNativeParentOverrideSaving(true);
     setStatus("");
@@ -137,6 +139,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
     } finally {
+      nativeParentOverrideSavingRef.current = false;
       setNativeParentOverrideSaving(false);
     }
   };
