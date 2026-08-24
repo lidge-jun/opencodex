@@ -11,6 +11,8 @@ import {
   XAI_GROK_CLIENT_VERSION,
 } from "../src/providers/xai-transport";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { XAI_RESPONSES_OPT_IN_MODELS } from "../src/providers/xai-responses-opt-in";
+import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import type { OcxAssistantMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -604,7 +606,7 @@ describe("xAI outbound compatibility headers", () => {
 });
 
 describe("xAI reasoning_content cache preservation", () => {
-  test("registry preset replays reasoning_content for grok reasoning models only", () => {
+  test("registry preset exposes multi-agent only on Responses without claiming replay material", () => {
     const entry = getProviderRegistryEntry("xai");
     expect(entry?.preserveReasoningContentModels).toEqual([
       "grok-4.6",
@@ -612,7 +614,28 @@ describe("xAI reasoning_content cache preservation", () => {
       "grok-4.3",
       "grok-4.20-0309-reasoning",
     ]);
-    expect(entry?.models).not.toContain("grok-4.20-multi-agent-0309");
+    expect(entry?.models).toContain("grok-4.20-multi-agent-0309");
+    expect(entry?.preserveReasoningContentModels).not.toContain("grok-4.20-multi-agent-0309");
+    expect(entry?.modelSupportsReasoningSummaries?.["grok-4.20-multi-agent-0309"]).toBeUndefined();
+    expect(resolveWireProtocolOverride(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      provider("oauth"),
+      "responses",
+    ).adapter).toBe("openai-responses");
+    expect(resolveWireProtocolOverride(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      provider("key"),
+      "responses",
+    ).adapter).toBe("openai-responses");
+    expect(resolveWireProtocolOverride(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      provider("oauth"),
+      "chat",
+    ).adapter).toBe("openai-chat");
+    expect(XAI_RESPONSES_OPT_IN_MODELS).not.toContain("grok-4.20-multi-agent-0309");
     expect(entry?.models).toContain("grok-build-0.1");
     for (const noReasoning of entry?.noReasoningModels ?? []) {
       expect(entry?.preserveReasoningContentModels).not.toContain(noReasoning);
