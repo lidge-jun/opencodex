@@ -73,6 +73,9 @@ export function createDraftPullRequestClient(
 
   return {
     async upsert({ event, result }) {
+      if (result.status !== "merged") {
+        throw new Error("merged prepare result is required for a draft PR");
+      }
       const branch = result.branch;
       if (!branch) throw new Error("merged prepare result is missing a branch");
       const title = `sync: upstream ${publicValue(event.latestTag) || "unknown-release"}`;

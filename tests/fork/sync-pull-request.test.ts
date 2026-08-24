@@ -110,4 +110,27 @@ describe("fork sync draft pull requests", () => {
 
     expect(requests.join("\n")).not.toContain("/merge");
   });
+
+  test("does not create a PR for an unresolved prepare result", async () => {
+    let requestCount = 0;
+    const fetchImpl: FetchImplementation = async () => {
+      requestCount++;
+      return response([]);
+    };
+
+    await expect(createDraftPullRequestClient({
+      repository: "yansigit/opencodex",
+      token: "secret-token",
+      fetchImpl,
+    }).upsert({
+      event,
+      result: {
+        status: "hotspot-handoff",
+        branch: "sync/upstream-20260824",
+        resolutions: [],
+        unresolved: ["src/server/responses/core.ts"],
+      },
+    })).rejects.toThrow("merged prepare result");
+    expect(requestCount).toBe(0);
+  });
 });
