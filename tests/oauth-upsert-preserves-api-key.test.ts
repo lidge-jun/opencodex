@@ -60,6 +60,27 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(config.providers.xai!.modelCosts).toEqual(costs);
   });
 
+  test("carries Command Code projectContext across a re-login upsert", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          adapter: "command-code",
+          baseUrl: "https://api.commandcode.ai",
+          authMode: "oauth",
+          commandCodeVersion: "0.52.1",
+          projectContext: "on",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "command-code");
+
+    expect(config.providers["command-code"]?.commandCodeVersion).toBe("0.52.1");
+    expect(config.providers["command-code"]?.projectContext).toBe("on");
+  });
+
   test("carries the key over without changing oauth billing when the user did not pick key mode", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     config.providers.xai!.authMode = "oauth";

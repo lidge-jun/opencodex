@@ -130,6 +130,8 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
+| `commandCodeVersion?` | `string` | Command Code OAuth (`adapter: "command-code"`) only. Pins the `x-command-code-version` header on `/alpha/generate` requests. Absent uses the adapter default (`0.52.1`). Not read by the API-key `commandcode` preset (`openai-chat` / `/provider/v1`). |
+| `projectContext?` | `"off" \| "on"` | Command Code OAuth (`adapter: "command-code"`) only. When `"on"`, copies bounded project files from the proxy process working directory into the `/alpha/generate` `memory`, `taste`, and `skills` envelope. Absent or `"off"` keeps today's empty envelope even when those files exist on disk. Not read by the API-key `commandcode` preset. Set on `providers.command-code`, not at the top level. In the dashboard use **Providers → Command Code → Edit JSON**. Start the proxy from the trusted Codex project directory so `process.cwd()` is the repo you intend. Fail-soft: missing, unreadable, timed-out, or path-escape conditions omit that piece rather than failing the turn. Does not read `~/.commandcode/skills` or other home trees. `x-taste-learning` stays `"false"` regardless of this flag. |
 
 ### FastWire B1 capability migration
 

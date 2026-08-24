@@ -115,6 +115,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `desktopExecutor?` | `DesktopExecutorConfig` |カーソルのみ: 外部コンピュータ使用および画面録画コマンド。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
+| `commandCodeVersion?` | `string` | Command Code OAuth (`adapter: "command-code"`) のみ。`/alpha/generate` リクエストの `x-command-code-version` ヘッダーを固定します。未設定時はアダプターのデフォルト (`0.52.1`) を使います。API キーの `commandcode` プリセット (`openai-chat` / `/provider/v1`) では読みません。 |
+| `projectContext?` | `"off" \| "on"` | Command Code OAuth (`adapter: "command-code"`) のみ。`"on"` のとき、プロキシプロセスの作業ディレクトリから上限付きのプロジェクトファイルを `/alpha/generate` の `memory` / `taste` / `skills` エンベロープへコピーします。未設定または `"off"` のときは、ディスク上にファイルがあっても空のエンベロープのままです。API キーの `commandcode` プリセットでは読みません。`providers.command-code` に設定し、トップレベルには置きません。ダッシュボードでは **Providers → Command Code → Edit JSON** を使います。`process.cwd()` が意図したリポジトリになるよう、信頼できる Codex プロジェクトディレクトリからプロキシを起動してください。fail-soft: 欠落・読取不能・タイムアウト・パス逸脱はその部分を省略し、ターン全体は失敗しません。`~/.commandcode/skills` などホーム配下の skill は読みません。このフラグに関係なく `x-taste-learning` は `"false"` のままです。 |
 
 API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/reference/configuration/server/#claude-code) で構成されます。
 

@@ -3,7 +3,7 @@ import { jcsStringify } from "../digest";
 import type { LabBehaviorSource, LabBehaviorValues } from "../live/types";
 
 const CLOSED_KEYS = new Set([
-  "wire.adapter", "wire.upstreamProtocol", "wire.responsesPath", "wire.commandCodeVersion", "wire.modelSuffixMode",
+  "wire.adapter", "wire.upstreamProtocol", "wire.responsesPath", "wire.commandCodeVersion", "wire.commandCodeProjectContext", "wire.modelSuffixMode",
   "auth.mode", "auth.transport",
   "responses.stateful", "responses.upstreamStreaming", "responses.serviceTier", "responses.fastWireKind", "responses.fastWireValue", "responses.snapshotRepair", "responses.itemIdRepair",
   "limits.contextWindow", "limits.maxInputTokens", "limits.maxOutputTokens",

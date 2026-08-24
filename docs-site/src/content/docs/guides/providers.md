@@ -401,6 +401,13 @@ account bearer; the Provider-API key preset (`commandcode`) uses the active conf
 key. A user-edited lookalike base URL is never probed. Remaining monthly, purchased, and
 free credits are shown as a USD window when Command Code also reports period spend.
 
+**Command Code project context.** Optional `projectContext: "on"` on the OAuth `command-code` provider
+only (not the API-key `commandcode` preset) fills `/alpha/generate` `memory`, `taste`, and `skills`
+from the proxy working directory. Set it on `providers.command-code` via **Providers → Command Code →
+Edit JSON**, start the proxy from the trusted Codex project, and restart after saving. Absent or
+`"off"` keeps the empty envelope even when `AGENTS.md` or taste files exist. See
+[Adapters](/reference/adapters/#command-code) for file paths, caps, and fail-soft behavior.
+
 **SambaNova Cloud discovery.** The preset reads SambaNova Cloud's public `/v1/models` list from the fixed API
 host, preserves provider-native ids, and caps discovery at 128 KiB and 128 raw rows. Because the
 catalog is unauthenticated, the CLI login flow reports the key as unverifiable instead of treating

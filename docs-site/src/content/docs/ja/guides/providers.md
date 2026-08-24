@@ -277,6 +277,8 @@ discovery エンドポイントから取得します。チャットリクエス�
 
 **Command Code の quota:** ダッシュボードと `ocx account refresh` は、正規ホスト `https://api.commandcode.ai` 上の `/alpha/billing/credits` ウィンドウ（5時間と週次）を照会します。OAuth プリセット (`command-code`) は保存済みアカウント bearer を使い、Provider-API キープリセット (`commandcode`) は設定済みの有効キーを使います。ユーザーが編集した類似ホストは照会しません。期間支出が返る場合は、残りの monthly / purchased / free credits を USD ウィンドウとして表示します。
 
+**Command Code プロジェクトコンテキスト。** OAuth `command-code` プロバイダーのみ（API キー `commandcode` プリセットではない）で、任意の `projectContext: "on"` がプロキシ作業ディレクトリから `/alpha/generate` の `memory` / `taste` / `skills` を埋めます。**Providers → Command Code → Edit JSON** で `providers.command-code` に設定し、信頼できる Codex プロジェクトからプロキシを起動して保存後に再起動してください。未設定または `"off"` のときは `AGENTS.md` や taste ファイルがあっても空のエンベロープのままです。ファイルパス、上限、fail-soft の挙動は [Adapters](/ja/reference/adapters/#command-code) を参照してください。
+
 **SambaNova Cloud の discovery:** preset は固定 API ホスト上の SambaNova Cloud の公開 `/v1/models` 一覧を読み、
 プロバイダー固有の ID を保持し、discovery を 128 KiB と raw 128 行に制限します。カタログは認証不要のため、
 CLI の login flow は公開レスポンスをキーの有効性の証拠にせず、キーを検証不能として報告します。chat リクエストは

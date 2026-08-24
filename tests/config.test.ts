@@ -937,6 +937,32 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("codexToolMode");
   });
 
+  test("accepts both projectContext values and rejects non-enum spellings", () => {
+    for (const projectContext of ["off", "on"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: { adapter: "command-code", baseUrl: "https://example.test", projectContext },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().config.providers.custom.projectContext).toBe(projectContext);
+      expect(readConfigDiagnostics().error).toBeNull();
+    }
+
+    for (const projectContext of ["true", true, "yes"] as const) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: { adapter: "command-code", baseUrl: "https://example.test", projectContext },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("projectContext");
+    }
+  });
+
   test("accepts the exact responsesItemIdRepair shape and rejects the old nested placeholderIds proposal", () => {
     writeConfig({
       port: 12345,

@@ -404,6 +404,14 @@ URL de base modifiée ressemblant à l'original n'est jamais sondée. Les crédi
 gratuits restants sont affichés sous forme de fenêtre en USD lorsque Command Code signale également les
 dépenses de la période.
 
+**Contexte de projet Command Code.** `projectContext: "on"` optionnel sur le fournisseur OAuth `command-code`
+uniquement (pas le préréglage à clé API `commandcode`) remplit `memory`, `taste` et `skills` de
+`/alpha/generate` depuis le répertoire de travail du proxy. Définissez-le sur `providers.command-code` via
+**Providers → Command Code → Edit JSON**, démarrez le proxy depuis le projet Codex de confiance et
+redémarrez après enregistrement. Absent ou `"off"` conserve l'enveloppe vide même si `AGENTS.md` ou des
+fichiers taste existent. Voir [Adapters](/fr/reference/adapters/#command-code) pour les chemins, plafonds
+et le comportement fail-soft.
+
 **Découverte SambaNova Cloud.** Le préréglage lit la liste publique `/v1/models` de SambaNova Cloud depuis
 l'hôte API fixe, préserve les identifiants natifs du fournisseur et limite la découverte à 128 KiB et 128
 lignes brutes. Le catalogue n'étant pas authentifié, le parcours de connexion de la CLI signale que la clé ne

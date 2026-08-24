@@ -261,6 +261,8 @@ inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制
 
 **Command Code 配额：**仪表盘和 `ocx account refresh` 会在规范主机 `https://api.commandcode.ai` 上探测 `/alpha/billing/credits` 窗口（5 小时和每周）。OAuth 预设 (`command-code`) 使用已保存的账户 bearer；Provider-API 密钥预设 (`commandcode`) 使用当前配置的有效密钥。用户改写后的仿冒 base URL 不会被探测。当 Command Code 同时返回周期消耗时，剩余的 monthly / purchased / free credits 会显示为 USD 窗口。
 
+**Command Code 项目上下文。** 仅在 OAuth `command-code` 提供商上（不是 API 密钥 `commandcode` 预设）可选的 `projectContext: "on"` 会从代理工作目录填充 `/alpha/generate` 的 `memory`、`taste` 和 `skills`。通过 **Providers → Command Code → Edit JSON** 设置在 `providers.command-code` 上，从受信任的 Codex 项目启动代理，保存后重启。未设置或 `"off"` 时即使存在 `AGENTS.md` 或 taste 文件也保持空信封。文件路径、上限和 fail-soft 行为见 [Adapters](/zh-cn/reference/adapters/#command-code)。
+
 **SambaNova Cloud 发现：**该预设从固定 API 主机读取 SambaNova Cloud 的公开 `/v1/models` 列表，保留提供商原生
 模型 id，并将发现限制为 128 KiB 和 128 条原始记录。该目录无需鉴权，因此 CLI 登录流程不会把公开响应
 当作密钥有效性的证明，而会将密钥报告为无法验证。chat 请求仍使用已配置的 Bearer 密钥；由于 SambaNova

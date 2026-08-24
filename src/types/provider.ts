@@ -170,6 +170,13 @@ export interface OcxProviderConfig {
    */
   commandCodeVersion?: string;
   /**
+   * Command Code OAuth `/alpha/generate` project-context envelope. When `"on"`, the adapter
+   * fills `memory`, `taste`, and `skills` from bounded files under `process.cwd()`. Absent or
+   * `"off"` keeps the empty envelope (`memory: ""`, `taste: null`, `skills: null`). Does not
+   * enable taste learning (`x-taste-learning` stays `"false"`).
+   */
+  projectContext?: "off" | "on";
+  /**
    * Responses upstream that stores nothing server-side (DeepSeek documents "the API
    * is stateless"). Stateful request parameters are dropped, `store` is pinned false,
    * and orphaned tool results left by a replay miss are repaired rather than

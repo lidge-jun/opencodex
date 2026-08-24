@@ -300,6 +300,8 @@ Service token Nscale создаётся в [Nscale Console](https://console.nsca
 
 **Квота Command Code.** Дашборд и `ocx account refresh` опрашивают окна `/alpha/billing/credits` (5 часов и неделя) на каноническом хосте `https://api.commandcode.ai`. OAuth-пресет (`command-code`) использует сохранённый bearer аккаунта; пресет Provider-API ключа (`commandcode`) — активный настроенный ключ. Пользовательски изменённый похожий base URL не опрашивается. Если Command Code также сообщает расход за период, оставшиеся monthly / purchased / free credits показываются как USD-окно.
 
+**Контекст проекта Command Code.** Необязательный `projectContext: "on"` только на OAuth-провайдере `command-code` (не на пресете API-ключа `commandcode`) заполняет `memory`, `taste` и `skills` в `/alpha/generate` из рабочей директории прокси. Задайте на `providers.command-code` через **Providers → Command Code → Edit JSON**, запустите прокси из доверенного проекта Codex и перезапустите после сохранения. Если отсутствует или `"off"`, пустой конверт сохраняется, даже когда есть `AGENTS.md` или taste-файлы. Пути, лимиты и fail-soft — в [Adapters](/ru/reference/adapters/#command-code).
+
 **Discovery для SambaNova Cloud.** Пресет читает общедоступный список SambaNova Cloud `/v1/models` на
 фиксированном API-хосте, сохраняет нативные id провайдера и ограничивает discovery размером 128 KiB
 и 128 исходными строками. Каталог не требует аутентификации, поэтому процедура входа CLI сообщает, что

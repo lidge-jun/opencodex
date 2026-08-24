@@ -343,6 +343,8 @@ endpoint 取得。Chat request 使用設定的 Bearer key。可在
 
 **Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
 
+**Command Code 專案上下文。** 僅在 OAuth `command-code` 供應商上（不是 API 金鑰 `commandcode` 預設）可選的 `projectContext: "on"` 會從代理工作目錄填充 `/alpha/generate` 的 `memory`、`taste` 和 `skills`。請透過 **Providers → Command Code → Edit JSON** 設在 `providers.command-code` 上，從受信任的 Codex 專案啟動代理，儲存後重新啟動。未設定或 `"off"` 時即使已有 `AGENTS.md` 或 taste 檔案也保持空信封。檔案路徑、上限與 fail-soft 行為見 [Adapters](/zh-tw/reference/adapters/#command-code)。
+
 **SambaNova Cloud 探索。** preset 從固定 API host 讀取 SambaNova Cloud 公開的 `/v1/models` 列表，保留
 provider-native id，並把 discovery 限制在 128 KiB／128 個 raw row。因 catalog 不需要認證，CLI login
 流程會把 key 回報為 unverifiable，而不會把公開 response 當成有效 key 的證明。Chat request 仍使用
