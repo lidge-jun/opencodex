@@ -90,6 +90,12 @@ describe("hub hosted portal", () => {
     expect(source).toContain('name="expiresAt" type="datetime-local"');
     expect(source).toContain('String(row.supportReference || "N/A")');
     expect(source).not.toContain('String(index + 1).padStart(3, "0")');
+    expect(source.match(/batches: "/g)).toHaveLength(9);
+    expect(source.match(/codeInventory: "/g)).toHaveLength(9);
+    expect(source.match(/noRecords: "/g)).toHaveLength(9);
+    expect(source).toContain('<h2>${escapeHtml(t("usersTotal"))}</h2>');
+    expect(source).toContain('<label for="adjust-units">${escapeHtml(t("creditUnit"))}</label>');
+    expect(source).not.toContain('<label for="adjust-units">${escapeHtml(t("units"))}</label>');
     expect(source).toContain('api("/hub/auth/sessions")');
     expect(source).toContain('api("/hub/auth/status")');
     expect(source).toContain('api("/hub/auth/password"');
