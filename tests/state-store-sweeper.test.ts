@@ -113,6 +113,7 @@ describe("state-store sweeper", () => {
       "provider-quota-history",
       "codex-routing-health",
       "model-cache-history",
+      "model-metadata-snapshot",
       "pool-rotation",
       "combo-rotation",
       "guardian-backoff",
