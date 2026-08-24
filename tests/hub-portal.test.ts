@@ -93,7 +93,8 @@ describe("hub hosted portal", () => {
     expect(source.match(/batches: "/g)).toHaveLength(9);
     expect(source.match(/codeInventory: "/g)).toHaveLength(9);
     expect(source.match(/noRecords: "/g)).toHaveLength(9);
-    expect(source).toContain('<h2>${escapeHtml(t("usersTotal"))}</h2>');
+    expect(source.match(/noUserKeys: "/g)).toHaveLength(9);
+    expect(source).toContain('<h2>${escapeHtml(t("users"))}</h2>');
     expect(source).toContain('<label for="adjust-units">${escapeHtml(t("creditUnit"))}</label>');
     expect(source).not.toContain('<label for="adjust-units">${escapeHtml(t("units"))}</label>');
     expect(source).toContain('api("/hub/auth/sessions")');
