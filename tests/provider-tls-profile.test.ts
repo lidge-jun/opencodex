@@ -10,6 +10,7 @@ import {
   providerTlsFetch,
 } from "../src/lib/provider-tls-profile";
 import { proxyForUrl } from "../src/lib/proxy-env";
+import { PROXY_ENV_KEYS } from "../src/lib/proxy-env";
 import { providerFetch } from "../src/server/responses/fetch-helpers";
 
 const canonicalProvider = {
@@ -22,8 +23,14 @@ const canonicalProvider = {
 const userInfoUrl = new URL("https://daily-cloudcode-pa.googleapis.com/v1internal");
 userInfoUrl.username = "user";
 userInfoUrl.password = "secret";
+const originalProxyEnv = Object.fromEntries(PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]).map(key => [key, process.env[key]]));
 
 afterEach(() => {
+  for (const key of Object.keys(originalProxyEnv)) {
+    const previous = originalProxyEnv[key];
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
   resetProviderTlsProfileForTests();
   setProviderTlsRuntimeForTest(undefined);
 });
@@ -235,8 +242,10 @@ describe("Antigravity TLS transport gate", () => {
 
   test("falls back once when import or construction fails and never replays post-dispatch errors", async () => {
     let bunCalls = 0;
-    const bunFetch = mock(async () => {
+    const fallbackInits: RequestInit[] = [];
+    const bunFetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
       bunCalls += 1;
+      if (init) fallbackInits.push(init);
       return new Response("bun");
     }) as typeof globalThis.fetch;
     setProviderTlsRuntimeForTest({
@@ -249,18 +258,72 @@ describe("Antigravity TLS transport gate", () => {
     expect(await executor("https://daily-cloudcode-pa.googleapis.com/v1internal")).toBeInstanceOf(Response);
     expect(await executor("https://daily-cloudcode-pa.googleapis.com/v1internal")).toBeInstanceOf(Response);
     expect(bunCalls).toBe(2);
+    expect(fallbackInits).toHaveLength(2);
+    expect(fallbackInits.every(init => init.redirect === "manual")).toBe(true);
     expect(getProviderTlsProfileStatus("google-antigravity")).toBe("fallback");
 
     resetProviderTlsProfileForTests();
     setProviderTlsRuntimeForTest({
       importWreq: async () => ({
         createTransport: async () => ({ close: async () => undefined }),
-        fetch: async () => { throw new Error("post-dispatch failure"); },
+        fetch: async () => { throw new Error("post-dispatch failure at http://proxy-user:proxy-secret@example.test:8080/path?access_token=BearerSecret"); },
       }),
     });
     const noReplay = providerTlsFetch("google-antigravity", canonicalProvider, bunFetch);
     await expect(noReplay("https://daily-cloudcode-pa.googleapis.com/v1internal")).rejects.toThrow("post-dispatch failure");
+    await expect(noReplay("https://daily-cloudcode-pa.googleapis.com/v1internal")).rejects.not.toThrow(/proxy-user|proxy-secret|BearerSecret|access_token/);
     expect(bunCalls).toBe(2);
+  });
+
+  test("rejects private and metadata DNS answers before native dispatch", async () => {
+    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) delete process.env[key];
+    process.env.NO_PROXY = "";
+    process.env.no_proxy = "";
+    for (const detail of ["private-network address", "blocked metadata endpoint"]) {
+      let nativeCalls = 0;
+      let bunCalls = 0;
+      setProviderTlsRuntimeForTest({
+        resolveDestination: async () => { throw new Error(`Antigravity profile URL targets ${detail}`); },
+        importWreq: async () => ({
+          createTransport: async () => ({ close: async () => undefined }),
+          fetch: async () => { nativeCalls += 1; return new Response("must not send"); },
+        }),
+      });
+      const bunFetch = mock(async () => { bunCalls += 1; return new Response("bun"); }) as typeof globalThis.fetch;
+      const executor = providerTlsFetch("google-antigravity", canonicalProvider, bunFetch);
+      await expect(executor("https://daily-cloudcode-pa.googleapis.com/v1internal", {
+        method: "POST",
+        headers: { authorization: "Bearer should-not-send" },
+        body: "{}",
+      })).rejects.toThrow(detail);
+      expect(nativeCalls).toBe(0);
+      expect(bunCalls).toBe(0);
+      resetProviderTlsProfileForTests();
+    }
+  });
+
+  test("does not locally resolve proxied destinations", async () => {
+    process.env.HTTPS_PROXY = "http://proxy-user:proxy-secret@example.test:8080";
+    delete process.env.https_proxy;
+    process.env.NO_PROXY = "";
+    delete process.env.no_proxy;
+    let resolverCalls = 0;
+    let nativeCalls = 0;
+    let transportProxy: string | undefined;
+    setProviderTlsRuntimeForTest({
+      resolveDestination: async () => { resolverCalls += 1; throw new Error("must not resolve through proxy"); },
+      importWreq: async () => ({
+        createTransport: async options => {
+          transportProxy = options.proxy;
+          return { close: async () => undefined };
+        },
+        fetch: async () => { nativeCalls += 1; return new Response("ok"); },
+      }),
+    });
+    await providerTlsFetch("google-antigravity", canonicalProvider, globalThis.fetch)("https://daily-cloudcode-pa.googleapis.com/v1internal");
+    expect(resolverCalls).toBe(0);
+    expect(nativeCalls).toBe(1);
+    expect(transportProxy).toContain("proxy-user");
   });
 });
 

@@ -1227,6 +1227,46 @@ test("CCA image generation uses the opted-in profiled executor", async () => {
   }
 });
 
+test("CCA image native errors redact proxy credentials", async () => {
+  setProviderTlsRuntimeForTest({
+    importWreq: async () => ({
+      createTransport: async () => ({ close: async () => undefined }),
+      fetch: async () => {
+        throw new Error("native image failure at http://proxy-user:proxy-secret@example.test:8080/?api_key=image-secret");
+      },
+    }),
+  });
+  const config = {
+    ...ccaConfig(),
+    providers: {
+      ...ccaConfig().providers,
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
+        tlsProfile: "antigravity-browser",
+      },
+    },
+  } as OcxConfig;
+  saveConfig(config);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+  const response = await handleImages(
+    new Request("http://127.0.0.1/v1/images/generations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a neon cat" }),
+    }),
+    config,
+    "generations",
+    { model: "", provider: "" },
+  );
+  expect(response.status).toBe(502);
+  const json = await response.json() as { error: { message: string } };
+  expect(json.error.message).toContain("CCA image generation failed");
+  expect(json.error.message).not.toMatch(/proxy-user|proxy-secret|image-secret|api_key/);
+});
+
 test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
   const registryHits: CcaFetchRequest[] = [];
   const otherHits: CcaFetchRequest[] = [];

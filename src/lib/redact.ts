@@ -494,6 +494,14 @@ export function redactUrlForLog(url: string): string {
   }
 }
 
+/** Redact credentials and userinfo from arbitrary diagnostic text. */
+export function redactErrorMessage(value: string): string {
+  return redactSecretString(value).replace(
+    /https?:\/\/[^\s"'<>]+/gi,
+    match => redactUrlForLog(match),
+  );
+}
+
 const USER_HOME_PATH_PATTERNS: Array<[RegExp, string]> = [
   // Windows: C:\Users\<name>\...  ->  C:\Users\[USER]\...
   [/([A-Za-z]:\\Users\\)[^\\/]+/gi, "$1[USER]"],

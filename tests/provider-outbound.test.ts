@@ -63,6 +63,11 @@ describe("provider outbound GET transport", () => {
       return new Response(null, { status: 200 });
     }) as typeof fetch;
     setProviderTlsRuntimeForTest({
+      resolveDestination: mock(async () => ({
+        hostname: "daily-cloudcode-pa.googleapis.com",
+        addresses: [{ address: "142.250.1.1", family: 4 }],
+        privateNetwork: false,
+      })),
       importWreq: async () => ({
         createTransport: async () => ({ close: async () => undefined }),
         fetch: async () => {
@@ -84,6 +89,11 @@ describe("provider outbound GET transport", () => {
         },
         "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         { headers: { authorization: "Bearer redacted" }, body: "{}" },
+        { resolveAddresses: mock(async () => ({
+          hostname: "daily-cloudcode-pa.googleapis.com",
+          addresses: [{ address: "142.250.1.1", family: 4 }],
+          privateNetwork: false,
+        })) },
       );
       expect(response.status).toBe(200);
       expect(nativeCalls).toBe(1);
@@ -91,6 +101,44 @@ describe("provider outbound GET transport", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+
+  test("rejects unsafe profiled DNS answers before native bearer dispatch", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    let nativeCalls = 0;
+    setProviderTlsRuntimeForTest({
+      resolveDestination: mock(async () => ({
+        hostname: "daily-cloudcode-pa.googleapis.com",
+        addresses: [{ address: "142.250.1.1", family: 4 }],
+        privateNetwork: false,
+      })),
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          nativeCalls += 1;
+          return new Response("must not send");
+        },
+      }),
+    });
+    const { providerOutboundPost } = await import("../src/lib/provider-outbound");
+    await expect(providerOutboundPost(
+      "google-antigravity",
+      {
+        adapter: "google",
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        tlsProfile: "antigravity-browser",
+      },
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      { headers: { authorization: "Bearer must-not-send" }, body: "{}" },
+      {
+        resolveAddresses: mock(async () => {
+          throw new Error("provider URL hostname daily-cloudcode-pa.googleapis.com resolves to a private-network address");
+        }),
+      },
+    )).rejects.toThrow(/private-network/);
+    expect(nativeCalls).toBe(0);
   });
 
   test("direct HTTPS connects only to the validated address with TLS verification", async () => {

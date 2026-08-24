@@ -36,6 +36,7 @@ import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
+import { redactErrorMessage } from "../lib/redact";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
 import type { AdmissionLease } from "../lib/admission";
@@ -252,7 +253,7 @@ async function tryCcaImageGeneration(
       // so no upstream-rejected credential or query param can reach the client,
       // and strip the internal base URL host from the surfaced message.
       const rawMsg = err instanceof Error ? err.message : String(err);
-      const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(
+      const safeMsg = redactErrorMessage(sanitizeUpstreamErrorText(rawMsg)).replace(
         /https?:\/\/[^\s"'<>]+/gi,
         "[upstream-url]",
       );
@@ -304,7 +305,7 @@ async function tryCcaImageGeneration(
         return formatErrorResponse(504, "upstream_error", "CCA image response timed out during body read");
       }
       const rawMsg = err instanceof Error ? err.message : String(err);
-      const safeMsg = sanitizeUpstreamErrorText(rawMsg).replace(/https?:\/\/[^\s"'<>]+/gi, "[upstream-url]");
+      const safeMsg = redactErrorMessage(sanitizeUpstreamErrorText(rawMsg)).replace(/https?:\/\/[^\s"'<>]+/gi, "[upstream-url]");
       return formatErrorResponse(502, "upstream_error", `CCA image body read failed: ${safeMsg}`);
     }
 

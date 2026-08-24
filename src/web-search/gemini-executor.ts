@@ -14,7 +14,7 @@ import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { redactSecretString } from "../lib/redact";
+import { redactErrorMessage, redactSecretString } from "../lib/redact";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -111,7 +111,7 @@ export async function runGeminiWebSearch(
   } catch (e) {
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[web-search] gemini sidecar ${kind} (${Date.now() - t0}ms)`);
-    return { text: "", sources: [], error: redactSecretString(e instanceof Error ? e.message : String(e)) };
+    return { text: "", sources: [], error: redactErrorMessage(e instanceof Error ? e.message : String(e)) };
   } finally {
     sidecarExit();
     linkedSignal.cleanup();

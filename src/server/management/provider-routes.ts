@@ -49,6 +49,7 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaRepo
 import { clearKeyCooldowns } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { getProviderTlsProfileStatus } from "../../lib/provider-tls-profile";
+import { redactErrorMessage } from "../../lib/redact";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -412,7 +413,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       tlsProfile: p.tlsProfile,
-      tlsProfileStatus: getProviderTlsProfileStatus(name),
+      tlsProfileStatus: p.tlsProfile === undefined ? "disabled" : getProviderTlsProfileStatus(name),
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
@@ -861,7 +862,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         latencyMs: Date.now() - started,
         error: err instanceof ProviderOutboundPolicyError
           ? `upstream /models blocked by destination policy: ${err.message}`
-          : err instanceof Error ? err.message : "Connection test failed",
+          : err instanceof Error ? redactErrorMessage(err.message) : "Connection test failed",
       });
     }
   }

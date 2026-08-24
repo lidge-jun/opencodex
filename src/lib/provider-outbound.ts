@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { outboundProxyConfigured } from "./proxy-env";
+import { outboundProxyConfigured, proxyForUrl } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 import { isCanonicalAntigravityUrl, providerTlsFetch } from "./provider-tls-profile";
 import { waitForProviderRequestSlot } from "../providers/request-pacing";
@@ -142,6 +142,19 @@ async function providerOutboundRequest(
   }
   const profiledFetch = antigravityProfileFetch(name, provider, url);
   const fetchOverride = provider.fetch ?? profiledFetch;
+  if (profiledFetch) {
+    // Keep the profiled executor behind the same pre-dispatch DNS boundary as
+    // the pinned path. A proxy owns peer selection, so match the existing
+    // providerOutbound proxy boundary and deliberately skip local resolution.
+    if (!proxyForUrl(url)) {
+      const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
+      await resolveAddresses(url, {
+        context: "provider URL",
+        allowPrivateNetwork: false,
+      });
+    }
+    return fetchOverride!(url, { ...init, method, redirect: "manual" });
+  }
   if (fetchOverride) {
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of

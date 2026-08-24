@@ -150,6 +150,29 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
     }
   });
 
+  test("redacts proxy credentials from profiled native errors", async () => {
+    accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          throw new Error("native connect failed at http://proxy-user:proxy-secret@example.test:8080/?access_token=gem-token-abc");
+        },
+      }),
+    });
+    try {
+      const out = await runGeminiWebSearch("q", "google-antigravity", {
+        ...cca,
+        googleMode: "cloud-code-assist",
+        tlsProfile: "antigravity-browser",
+      }, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 });
+      expect(out.error).toContain("native connect failed");
+      expect(out.error).not.toMatch(/proxy-user|proxy-secret|gem-token-abc|access_token/);
+    } finally {
+      resetProviderTlsProfileForTests();
+    }
+  });
+
   test("malicious baseUrl ignored: registry destination, manual redirect, bearer + IDE UA, full envelope, thinkingConfig", async () => {
     accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
     const captured: Array<{ url: string; init: RequestInit }> = [];

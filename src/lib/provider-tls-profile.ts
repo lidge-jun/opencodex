@@ -1,6 +1,8 @@
 import type { OcxProviderConfig, ProviderTlsProfile } from "../types";
+import { resolvePublicAddresses } from "./destination-policy";
 import { registerOptionalShutdownHook } from "./optional-shutdown-hooks";
 import { proxyForUrl } from "./proxy-env";
+import { redactErrorMessage } from "./redact";
 
 export const ANTIGRAVITY_TLS_HOSTS = new Set([
   "daily-cloudcode-pa.googleapis.com",
@@ -29,6 +31,7 @@ interface InitializedTransport {
 
 export interface ProviderTlsRuntimeForTest {
   importWreq: () => Promise<WreqModule>;
+  resolveDestination?: typeof resolvePublicAddresses;
 }
 
 const defaultRuntime: ProviderTlsRuntimeForTest = {
@@ -43,6 +46,11 @@ let fallbackWarned = false;
 
 function setStatus(providerName: string, status: ProviderTlsProfileStatus): void {
   statusByProvider.set(providerName, status);
+}
+
+function safeProviderTlsError(error: unknown): Error {
+  const raw = error instanceof Error ? error.message : String(error);
+  return new Error(redactErrorMessage(raw));
 }
 
 function warnFallbackOnce(): void {
@@ -162,11 +170,22 @@ export function providerTlsFetch(
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" || input instanceof URL ? input : input.url;
     if (!isCanonicalAntigravityUrl(url)) return bunFetch(input, init);
-    const initialized = await getTransport(proxyForUrl(url));
+    const proxy = proxyForUrl(url);
+    // A direct profiled request must pass the same public-destination gate as the
+    // ordinary provider executor before wreq can send its bearer-bearing request.
+    // Proxied requests deliberately leave peer selection to the configured proxy,
+    // matching providerOutbound's proxy boundary (and its inability to pin a peer).
+    if (!proxy) {
+      await (runtime.resolveDestination ?? resolvePublicAddresses)(String(url), {
+        context: "Antigravity profile URL",
+        allowPrivateNetwork: false,
+      });
+    }
+    const initialized = await getTransport(proxy);
     if (!initialized) {
       setStatus(providerName, "fallback");
       warnFallbackOnce();
-      return bunFetch(input, init);
+      return bunFetch(input, { ...init, redirect: "manual" });
     }
     setStatus(providerName, "active");
     const wreqInit = {
@@ -176,12 +195,33 @@ export function providerTlsFetch(
       cookieMode: "ephemeral" as const,
       redirect: "manual" as const,
     };
-    return await initialized.module.fetch(input, wreqInit) as Response;
+    try {
+      return await initialized.module.fetch(input, wreqInit) as Response;
+    } catch (error) {
+      // Native errors are post-dispatch failures. Redact at this boundary and
+      // never replay through Bun, since generation may already have started.
+      throw safeProviderTlsError(error);
+    }
   }) as typeof globalThis.fetch;
 }
 
 export function setProviderTlsRuntimeForTest(next: ProviderTlsRuntimeForTest | undefined): void {
-  runtime = next ?? defaultRuntime;
+  if (next === undefined) {
+    runtime = defaultRuntime;
+    return;
+  }
+  // Test callers normally replace only the native module. Keep those tests
+  // deterministic in offline sandboxes while allowing explicit DNS policy
+  // regressions to inject a rejecting resolver.
+  runtime = {
+    ...defaultRuntime,
+    resolveDestination: async (url: string) => ({
+      hostname: new URL(url).hostname,
+      addresses: [{ address: "142.250.1.1", family: 4 }],
+      privateNetwork: false,
+    }),
+    ...next,
+  };
 }
 
 export function resetProviderTlsProfileForTests(): void {
