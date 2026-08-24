@@ -52,6 +52,66 @@ non-empty `model`. `input` may be a string or an array of Responses items.
 | Service and execution | `stream`, `service_tier`, `parallel_tool_calls`, `instructions`, `metadata`, and `user` |
 | Extended Responses fields | `background`, `include`, `prompt`, `text`, and `truncation` are accepted for compatible routes |
 
+### Google provider options
+
+Responses requests may opt into a strict Google GenerateContent extension under
+`provider_options.google`:
+
+```json
+{
+  "model": "gemini-3.7-flash",
+  "input": "Explain this result",
+  "provider_options": {
+    "google": {
+      "thinking_budget": 4096,
+      "include_thoughts": false,
+      "safety_settings": [
+        {
+          "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+          "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+        }
+      ],
+      "cached_content": "cachedContents/my-cache"
+    }
+  }
+}
+```
+
+The accepted keys are exactly `thinking_budget`, `include_thoughts`,
+`safety_settings`, and `cached_content`; unknown keys at either nested level,
+or unknown safety-setting keys, fail request validation. The parser maps these
+snake-case request fields to typed internal fields; they are not arbitrary
+provider passthrough data.
+
+- `thinking_budget` must be a safe integer greater than or equal to `-1`.
+  An explicit budget takes precedence over the routed model's derived thinking
+  level. `include_thoughts` augments the resulting thinking configuration, and
+  an explicit `false` is preserved.
+- `safety_settings` accepts at most 16 entries, with no duplicate categories.
+  Categories are `HARM_CATEGORY_HATE_SPEECH`,
+  `HARM_CATEGORY_SEXUALLY_EXPLICIT`, `HARM_CATEGORY_DANGEROUS_CONTENT`,
+  `HARM_CATEGORY_HARASSMENT`, `HARM_CATEGORY_CIVIC_INTEGRITY`, and
+  `HARM_CATEGORY_JAILBREAK`. Thresholds are
+  `HARM_BLOCK_THRESHOLD_UNSPECIFIED`, `BLOCK_LOW_AND_ABOVE`,
+  `BLOCK_MEDIUM_AND_ABOVE`, `BLOCK_ONLY_HIGH`, `BLOCK_NONE`, and `OFF`.
+- `cached_content` must be exactly one of these Google resource-name forms:
+  `cachedContents/{id}` for AI Studio, or
+  `projects/{project}/locations/{location}/cachedContents/{cachedContent}` for
+  Vertex. Each segment must be non-empty; whitespace, query strings, fragments,
+  and extra segments are rejected.
+
+The extension is supported only when the final route uses the Google adapter in
+AI Studio or Vertex mode. Cloud Code Assist (including the
+`google-antigravity` provider) and every non-Google route are rejected with a
+400 before an upstream request is made. This check is applied after routing and
+adapter overrides are resolved, including retry and fallback paths.
+
+`cached_content` opts into reuse of a provider-side Google cache that already
+exists; it is not a local prompt-cache key. The resource name identifies
+provider-managed content, so use it only when the caller is authorized to reuse
+that content and accepts Google's retention and access policies. opencodex does
+not create, inspect, or delete the provider cache through this field.
+
 Unknown item types are accepted as loose typed items for forward compatibility. Translated adapters
 handle only the item types they recognize, and may reject a feature their provider cannot represent.
 
