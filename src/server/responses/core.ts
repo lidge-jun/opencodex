@@ -2909,8 +2909,12 @@ async function handleResponsesInner(
   if (googleOptionsError) {
     return formatErrorResponse(400, "invalid_request_error", googleOptionsError);
   }
-  const assertGoogleOptionsRoute = (candidate: { name: string }, provider: OcxProviderConfig): void => {
-    const message = googleProviderOptionsRouteError(parsed, {
+  const assertGoogleOptionsRoute = (
+    candidate: { name: string },
+    provider: OcxProviderConfig,
+    requestParsed: Pick<OcxParsedRequest, "options"> = parsed,
+  ): void => {
+    const message = googleProviderOptionsRouteError(requestParsed, {
       providerName: route.providerName,
       provider,
       adapterName: candidate.name,
@@ -2931,6 +2935,7 @@ async function handleResponsesInner(
   }
   logCtx.providerAdapter = adapter.name;
   try {
+    assertGoogleOptionsRoute(adapter, adapterProvider);
     adapter.validateRequest?.(parsed);
   } catch (err) {
     return formatErrorResponse(
@@ -3159,6 +3164,7 @@ async function handleResponsesInner(
     );
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
+      assertGoogleOptionsRoute(adapter, adapterProvider);
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     } catch (error) {
       releaseCodexAuthContextProbeLease(authCtx);
@@ -3559,6 +3565,7 @@ async function handleResponsesInner(
         logCtx.accountLogLabel,
       );
       try {
+        assertGoogleOptionsRoute(refreshedAdapter, refreshedProvider);
         request = await refreshedAdapter.buildRequest(parsed, {
           headers: selectedForwardHeaders,
           translatorBudget,
@@ -4776,6 +4783,7 @@ async function handleResponsesInner(
   let initialRequest: AdapterRequest | undefined;
   let inputTokenEstimate: number | undefined;
   try {
+    assertGoogleOptionsRoute(activeAdapter, route.provider);
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     refreshRoutedNamespaceToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
@@ -4884,6 +4892,13 @@ async function handleResponsesInner(
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
     ): Promise<Response | { failed: Response }> => {
+      try {
+        assertGoogleOptionsRoute(activeAdapter, route.provider);
+      } catch (err) {
+        cleanupUpstreamAbort();
+        upstream.abort();
+        return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(err instanceof Error ? err.message : String(err))) };
+      }
       let retryRequest: AdapterRequest;
       if (sameTargetRequest !== undefined && sameTargetParsed === parsed && sameTargetToken === transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
@@ -5410,6 +5425,7 @@ async function handleResponsesInner(
      */
     const fetchContinuation = async (recoveryKind?: AttemptRecoveryKind): Promise<Response> => {
       let continuationRequest: AdapterRequest | undefined;
+      assertGoogleOptionsRoute(activeAdapter, route.provider, nextParsed);
       if (sameTargetRequest !== undefined && sameTargetParsed === nextParsed && sameTargetToken === transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
         continuationRequest = sameTargetRequest;
