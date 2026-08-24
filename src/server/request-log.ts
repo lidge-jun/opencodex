@@ -1289,7 +1289,9 @@ export function addFinalRequestLog(
     // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
     if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
     else delete logCtx.activeAttempt.errorCode;
-    if (logCtx.streamTimeline) logCtx.activeAttempt.streamTimeline = { ...logCtx.streamTimeline };
+    if (logCtx.streamTimeline && !logCtx.activeAttempt.streamTimeline) {
+      logCtx.activeAttempt.streamTimeline = { ...logCtx.streamTimeline };
+    }
     if (logCtx.failureSide) logCtx.activeAttempt.failureSide = logCtx.failureSide;
     if (logCtx.failureStage) logCtx.activeAttempt.failureStage = logCtx.failureStage;
     if (logCtx.transportPhase) logCtx.activeAttempt.transportPhase = logCtx.transportPhase;

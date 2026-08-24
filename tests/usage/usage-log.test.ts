@@ -1182,4 +1182,102 @@ describe("usage log", () => {
     expect(row?.failureStage).toBe("upstream_read");
     expect(row?.streamTimeline?.upstreamFirstByteMs).toBeGreaterThanOrEqual(0);
   });
+
+  test("synthetic clean EOF sets transportPhase to mid_stream", async () => {
+    const { addFinalRequestLog } = await import("../src/server/request-log");
+    const { consumeForInspection } = await import("../src/server/relay");
+    const requestId = "ocx-stream-clean-eof-test";
+    const start = Date.now() - 50;
+    const logCtx: RequestLogContext = {
+      requestId,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      requestStartedAt: start,
+      activeAttemptStartedAt: start,
+      activeAttempt: {
+        ordinal: 1,
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        adapter: "anthropic",
+        status: 200,
+        durationMs: 50,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+      },
+    };
+
+    // An empty SSE stream that terminates with clean EOF without a completed terminal event
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(
+        stream,
+        (terminalStatus, httpStatusOverride) => {
+          addFinalRequestLog(
+            requestId,
+            start,
+            logCtx,
+            httpStatusOverride ?? 502,
+            { terminalStatus },
+          );
+          resolve();
+        },
+        undefined,
+        () => resolve(),
+        logCtx,
+      );
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === requestId);
+    expect(row).toBeDefined();
+    expect(row?.transportPhase).toBe("mid_stream");
+    expect(row?.terminalSource).toBe("synthetic");
+    expect(row?.failureSide).toBe("upstream");
+    expect(row?.failureStage).toBe("upstream_read");
+  });
+
+  test("preserves distinct attempt-relative and request-relative streamTimeline on retry", async () => {
+    const { addFinalRequestLog, noteStreamTimelineEvent } = await import("../src/server/request-log");
+    const requestId = "ocx-stream-retry-timeline-test";
+    const requestStart = 10000;
+    const attemptStart = 12000; // attempt starts 2000ms after request
+    const now = 13500;
+
+    const attempt: PersistedUsageAttempt = {
+      ordinal: 2,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      adapter: "anthropic",
+      status: 200,
+      durationMs: 1500,
+      sendCount: 2,
+      recoveryKinds: ["retry"],
+      usageStatus: "reported",
+    };
+    const logCtx: RequestLogContext = {
+      requestId,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      requestStartedAt: requestStart,
+      activeAttemptStartedAt: attemptStart,
+      activeAttempt: attempt,
+      attempts: [attempt],
+    };
+
+    noteStreamTimelineEvent(logCtx, "upstreamFirstByteMs", requestStart, now);
+    expect(logCtx.streamTimeline?.upstreamFirstByteMs).toBe(3500); // 13500 - 10000
+    expect(logCtx.activeAttempt?.streamTimeline?.upstreamFirstByteMs).toBe(1500); // 13500 - 12000
+
+    addFinalRequestLog(requestId, requestStart, logCtx, 200, { terminalStatus: "completed" });
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === requestId);
+    expect(row?.streamTimeline?.upstreamFirstByteMs).toBe(3500);
+    expect(row?.attempts?.[0]?.streamTimeline?.upstreamFirstByteMs).toBe(1500);
+  });
 });

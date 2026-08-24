@@ -1452,6 +1452,7 @@ export function consumeForInspection(
     onCleanEof: () => {
       if (!inspector.reported()) {
         if (logCtx) {
+          logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
           logCtx.failureSide = "upstream";
           logCtx.failureStage = "upstream_read";
