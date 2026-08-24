@@ -25,4 +25,10 @@ describe("google antigravity failure health", () => {
     expect(recordAntigravitySyntheticFailure("account-a", { message: "location is not supported" }, 1000)).toBeNull();
     expect(recordAntigravitySyntheticFailure("account-a", { code: "SOME_NEW_CODE", status: 499, message: "quota exceeded" }, 1000)).toBeNull();
   });
+
+  test("classifies the actual Google numeric-code enum-status envelope", () => {
+    expect(recordAntigravitySyntheticFailure("account-a", { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded" }, 1000)).toBe("quota");
+    expect(recordAntigravitySyntheticFailure("account-b", { code: 429, status: "RESOURCE_EXHAUSTED", message: "Rate limit exceeded" }, 1000)).toBe("rate-limit");
+    expect(recordAntigravitySyntheticFailure("account-c", { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" }, 1000)).toBe("geoblock");
+  });
 });

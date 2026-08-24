@@ -593,9 +593,11 @@ export async function upsertCredentialByIdentity(
 
 /** Remove the ACTIVE account; remaining accounts promote the first one. */
 export async function removeCredential(provider: string): Promise<void> {
+  let removedAccountId: string | undefined;
   await mutateStore(store => {
     const set = store[provider];
     if (!set) return;
+    removedAccountId = set.activeAccountId;
     set.accounts = set.accounts.filter(a => a.id !== set.activeAccountId);
     if (set.accounts.length === 0) {
       delete store[provider];
@@ -603,9 +605,9 @@ export async function removeCredential(provider: string): Promise<void> {
     }
     set.activeAccountId = set.accounts[0]!.id;
   }, [provider]);
-  if (provider === "google-antigravity") {
-    const { clearAntigravityRoutingState } = await import("./antigravity-routing");
-    clearAntigravityRoutingState();
+  if (provider === "google-antigravity" && removedAccountId) {
+    const { clearAntigravityRoutingStateForAccount } = await import("./antigravity-routing");
+    clearAntigravityRoutingStateForAccount(removedAccountId);
   }
 }
 

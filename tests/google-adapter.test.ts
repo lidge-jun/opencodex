@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
+import { classifyAntigravityProviderError } from "../src/oauth/antigravity-routing";
 import type { OcxParsedRequest } from "../src/types";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
 
@@ -125,6 +126,102 @@ describe("google adapter — Antigravity structured stream errors", () => {
     const events = await adapter.parseResponse(new Response(JSON.stringify({ error: { code: "PERMISSION_DENIED", status: 403, message: "region is not supported" } })), createTranslatorBudget());
     expect(observed).toEqual([{ code: "PERMISSION_DENIED", status: 403, message: "region is not supported" }]);
     expect(events[0]).toMatchObject({ type: "error", status: 403, code: "PERMISSION_DENIED" });
+  });
+
+  test("normalizes actual Google numeric-code enum-status errors in streaming and buffered paths", async () => {
+    const cases = [
+      { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded", failure: "quota" },
+      { code: 429, status: "RESOURCE_EXHAUSTED", message: "Rate limit exceeded", failure: "rate-limit" },
+      { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported", failure: "geoblock" },
+    ] as const;
+    for (const mode of ["stream", "buffer"] as const) {
+      for (const expected of cases) {
+        const adapter = createGoogleAdapter({
+          adapter: "google",
+          googleMode: "cloud-code-assist",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          apiKey: "key",
+          project: "project",
+        } as never);
+        const observed: Array<{ code?: string; status?: number; message?: string }> = [];
+        const parsed = parsedWith([{ role: "user", content: "hello" }]);
+        parsed.stream = mode === "stream";
+        await adapter.buildRequest(parsed, {
+          headers: new Headers(),
+          translatorBudget: createTranslatorBudget(),
+          onProviderError: error => observed.push(error),
+        });
+        const payload = { error: { code: expected.code, status: expected.status, message: expected.message } };
+        const events = mode === "stream"
+          ? await (async () => {
+              const result = [];
+              for await (const event of adapter.parseStream(new Response(`data: ${JSON.stringify(payload)}\n\n`), createTranslatorBudget())) result.push(event);
+              return result;
+            })()
+          : await adapter.parseResponse!(new Response(JSON.stringify(payload)), createTranslatorBudget());
+        expect(observed).toHaveLength(1);
+        expect(classifyAntigravityProviderError(observed[0])).toBe(expected.failure);
+        expect(events[0]).toMatchObject({ type: "error", status: expected.code, code: expected.status });
+      }
+    }
+  });
+
+  test("preserves bounded message-only errors for replay invalidation in streaming and buffered paths", async () => {
+    for (const mode of ["stream", "buffer"] as const) {
+      const adapter = createGoogleAdapter({
+        adapter: "google",
+        googleMode: "cloud-code-assist",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        apiKey: "key",
+        project: "project",
+      } as never);
+      const parsed = parsedWith([{ role: "user", content: "hello" }]);
+      parsed.stream = mode === "stream";
+      await adapter.buildRequest(parsed, { headers: new Headers(), translatorBudget: createTranslatorBudget() });
+      const payload = { error: { message: "Invalid argument: signature rejected" } };
+      const events = mode === "stream"
+        ? await (async () => {
+            const result = [];
+            for await (const event of adapter.parseStream(new Response(`data: ${JSON.stringify(payload)}\n\n`), createTranslatorBudget())) result.push(event);
+            return result;
+          })()
+        : await adapter.parseResponse!(new Response(JSON.stringify(payload)), createTranslatorBudget());
+      expect(events[0]).toMatchObject({ type: "error", message: "Invalid argument: signature rejected" });
+    }
+  });
+
+  test("redacts secrets from inline streaming and buffered errors before observation", async () => {
+    const message = "Bearer secret-token api_key=secret-api https://user:secret-password@example.test/path?api_key=secret-url";
+    for (const mode of ["stream", "buffer"] as const) {
+      const adapter = createGoogleAdapter({
+        adapter: "google",
+        googleMode: "cloud-code-assist",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        apiKey: "key",
+        project: "project",
+      } as never);
+      const observed: Array<{ message?: string }> = [];
+      const parsed = parsedWith([{ role: "user", content: "hello" }]);
+      parsed.stream = mode === "stream";
+      await adapter.buildRequest(parsed, {
+        headers: new Headers(),
+        translatorBudget: createTranslatorBudget(),
+        onProviderError: error => observed.push(error),
+      });
+      const payload = { error: { code: 429, status: "RESOURCE_EXHAUSTED", message } };
+      const events = mode === "stream"
+        ? await (async () => {
+            const result = [];
+            for await (const event of adapter.parseStream(new Response(`data: ${JSON.stringify(payload)}\n\n`), createTranslatorBudget())) result.push(event);
+            return result;
+          })()
+        : await adapter.parseResponse!(new Response(JSON.stringify(payload)), createTranslatorBudget());
+      const serialized = JSON.stringify({ events, observed });
+      expect(serialized).not.toContain("secret-token");
+      expect(serialized).not.toContain("secret-api");
+      expect(serialized).not.toContain("secret-url");
+      expect(serialized).not.toContain("secret-password");
+    }
   });
 });
 

@@ -19,6 +19,7 @@ import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
+import { sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { compileGoogleWireBody } from "./google-wire-compiler";
@@ -35,6 +36,15 @@ import {
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 import { normalizeAntigravityProviderError } from "../oauth/antigravity-routing";
+
+const INLINE_ERROR_URL_USERINFO = /https?:\/\/[^\s"'<>]*@/gi;
+
+function safeAntigravityInlineErrorMessage(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return sanitizeUpstreamErrorText(value)
+    .replace(INLINE_ERROR_URL_USERINFO, "[REDACTED_URL]")
+    .slice(0, 500);
+}
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -865,9 +875,15 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
         // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
         if (chunk.error) {
-          const error = normalizeAntigravityProviderError(chunk.error);
+          const rawError = chunk.error as { code?: unknown; status?: unknown; message?: unknown };
+          const safeMessage = safeAntigravityInlineErrorMessage(rawError.message);
+          const error = normalizeAntigravityProviderError({
+            code: rawError.code,
+            status: rawError.status,
+            message: safeMessage,
+          });
           if (provider.googleMode === "cloud-code-assist" && error) observeProviderError?.(error);
-          const err = error ?? { message: "upstream error" };
+          const err = { ...(error ?? {}), message: error?.message ?? safeMessage ?? "upstream error" };
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
           const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
@@ -1184,13 +1200,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return events;
       };
       if (raw.error) {
-        const error = normalizeAntigravityProviderError(raw.error);
+        const rawError = raw.error as { code?: unknown; status?: unknown; message?: unknown };
+        const safeMessage = safeAntigravityInlineErrorMessage(rawError.message);
+        const error = normalizeAntigravityProviderError({
+          code: rawError.code,
+          status: rawError.status,
+          message: safeMessage,
+        });
         if (provider.googleMode === "cloud-code-assist" && error) observeProviderError?.(error);
         return finish([{
           type: "error",
           ...(error?.status !== undefined ? { status: error.status } : {}),
           ...(error?.code ? { code: error.code } : {}),
-          message: error?.message ?? "upstream error",
+          message: error?.message ?? safeMessage ?? "upstream error",
         }]);
       }
       // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.

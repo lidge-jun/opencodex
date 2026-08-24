@@ -294,6 +294,21 @@ describe("multi-account auth store", () => {
     clearAntigravityRoutingState();
   });
 
+  test("removing an active Antigravity account preserves affinity for a surviving middle account", async () => {
+    await saveCredential("google-antigravity", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
+    await saveCredential("google-antigravity", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("google-antigravity", cred({ email: "c@example.com", accountId: "acct-c", access: "access-c" }));
+    const set = getAccountSet("google-antigravity")!;
+    const middle = set.accounts.find(account => account.credential.accountId === "acct-b")!;
+    bindAntigravitySessionAffinity("conversation-middle", middle.id);
+    await removeCredential("google-antigravity"); // removes c; a becomes active
+    expect(resolveAntigravityAccountForSession("conversation-middle")).toMatchObject({
+      accountId: middle.id,
+      reason: "affinity",
+    });
+    clearAntigravityRoutingState();
+  });
+
   test("needsReauth flag persists and clears on fresh save", async () => {
     await saveCredential("xai", cred({ email: "a@example.com", accountId: "acct-a" }));
     const id = getAccountSet("xai")!.activeAccountId;

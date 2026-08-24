@@ -223,10 +223,6 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
-    if (provider === "google-antigravity") {
-      const { clearAntigravityRoutingState } = await import("../../oauth/antigravity-routing");
-      clearAntigravityRoutingState();
-    }
     reconcileLiveStateStores();
     clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");

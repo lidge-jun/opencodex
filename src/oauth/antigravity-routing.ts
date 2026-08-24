@@ -108,6 +108,12 @@ export function clearAntigravitySessionAffinityForAccount(accountId: string): vo
   }
 }
 
+/** Remove only the local routing state owned by one deleted Antigravity account. */
+export function clearAntigravityRoutingStateForAccount(accountId: string): void {
+  clearAntigravityAccountCooldown(accountId);
+  clearAntigravitySessionAffinityForAccount(accountId);
+}
+
 export function getAntigravityAccountHealthSnapshot(
   accountId: string,
   now = Date.now(),
@@ -203,8 +209,15 @@ const GEO_CODES = new Set(["LOCATION_NOT_SUPPORTED", "REGION_NOT_SUPPORTED", "GE
 export function normalizeAntigravityProviderError(value: unknown): AntigravityProviderError | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  const code = typeof record.code === "string" ? record.code.trim().toUpperCase() : undefined;
-  const status = typeof record.status === "number" && Number.isInteger(record.status) ? record.status : undefined;
+  // Google JSON errors use `{ code: <HTTP number>, status: <enum string>, message }`.
+  // Keep accepting the internal `{ code: <enum>, status: <HTTP number> }` shape for
+  // existing callers and fixtures, but normalize both to one observer contract.
+  const numericCode = typeof record.code === "number" && Number.isInteger(record.code) ? record.code : undefined;
+  const numericStatus = typeof record.status === "number" && Number.isInteger(record.status) ? record.status : undefined;
+  const enumCode = typeof record.code === "string" ? record.code.trim().toUpperCase() : undefined;
+  const enumStatus = typeof record.status === "string" ? record.status.trim().toUpperCase() : undefined;
+  const code = enumStatus ?? enumCode;
+  const status = numericCode ?? numericStatus;
   const message = typeof record.message === "string" ? record.message.trim().slice(0, 512) : undefined;
   if (!code && status === undefined) return null;
   return {
@@ -218,7 +231,8 @@ export function classifyAntigravityProviderError(value: unknown): AntigravitySyn
   const error = normalizeAntigravityProviderError(value);
   if (!error) return null;
   const message = error.message?.toLowerCase() ?? "";
-  if (QUOTA_CODES.has(error.code ?? "") && /quota|resource[ _-]?exhausted/.test(message)) return "quota";
+  if ((QUOTA_CODES.has(error.code ?? "") || error.code === "RESOURCE_EXHAUSTED")
+    && /quota|resource[ _-]?exhausted/.test(message)) return "quota";
   if (error.status === 429 || RATE_LIMIT_CODES.has(error.code ?? "") || (error.code === "RESOURCE_EXHAUSTED" && /rate[- ]limit|too many requests/.test(message))) {
     return "rate-limit";
   }
