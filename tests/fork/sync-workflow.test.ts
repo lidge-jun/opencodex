@@ -21,10 +21,10 @@ describe("fork upstream sync workflow contract", () => {
     expect(workflow).toContain("persist-credentials: true");
   });
 
-  test("has only vendor and issue write permissions", () => {
+  test("grants vendor, issue, and draft PR write permissions", () => {
     expect(workflow).toContain("contents: write");
     expect(workflow).toContain("issues: write");
-    expect(workflow).not.toMatch(/pull-requests:\s*write/);
+    expect(workflow).toContain("pull-requests: write");
   });
 
   test("passes the two Cursor secrets only to emit", () => {
@@ -39,6 +39,24 @@ describe("fork upstream sync workflow contract", () => {
     expect(workflow).toContain("history-diverged");
     expect(workflow).toContain("Fork sync lane: $kind");
     expect(workflow).toContain("if: steps.pin.outputs.kind != 'already-current'");
+  });
+
+  test("prepares daily merges and opens draft PRs only for merged branches", () => {
+    expect(workflow).toContain("bun scripts/fork/sync/cli.ts prepare");
+    expect(workflow).toContain("bun scripts/fork/sync/cli.ts draft-pr");
+    expect(workflow).toContain("steps.prepare.outputs.status == 'merged'");
+    expect(workflow).toContain("refs/heads/$branch:refs/heads/$branch");
+  });
+
+  test("starts Cursor only for hotspot or history handoff", () => {
+    expect(workflow).toContain("steps.prepare.outputs.status == 'hotspot-handoff'");
+    expect(workflow).toContain("steps.pin.outputs.kind == 'history-diverged'");
+    expect(workflow).toContain("FORK_SYNC_COORDINATORS: cursor-webhook");
+  });
+
+  test("asserts pinning did not move the default branch HEAD", () => {
+    expect(workflow).toContain("git rev-parse --abbrev-ref HEAD");
+    expect(workflow).toContain("github.event.repository.default_branch");
   });
 
   test("does not merge or force-push from the action", () => {

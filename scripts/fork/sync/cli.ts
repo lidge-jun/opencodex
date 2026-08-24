@@ -2,6 +2,7 @@ import { detectLatestVTag } from "./detect";
 import { annotateMainLane } from "./lane";
 import { pinVendorRefs } from "./pin";
 import { prepareSync } from "./prepare";
+import { createDraftPullRequestClient } from "./pull-request";
 import { enabledCoordinators, enabledNotifiers, registerCoordinator, registerNotifier } from "./registry";
 import { createCliCoordinator } from "./coordinators/cli";
 import { createCursorWebhookCoordinator } from "./coordinators/cursor-webhook";
@@ -10,6 +11,7 @@ import { createGitHubIssueNotifier } from "./notifiers/github-issue";
 import type {
   CommandResult,
   CommandRunner,
+  DraftPullRequestClient,
   FetchImplementation,
   GitHubIssuesClient,
   ProcessRunner,
@@ -17,7 +19,7 @@ import type {
 } from "./types";
 
 const DEFAULT_UPSTREAM_REPO = "https://github.com/lidge-jun/opencodex.git";
-const usage = "usage: bun scripts/fork/sync/cli.ts detect|pin|prepare|emit";
+const usage = "usage: bun scripts/fork/sync/cli.ts detect|pin|prepare|draft-pr|emit";
 
 export interface CliOptions {
   env?: Record<string, string | undefined>;
@@ -25,6 +27,7 @@ export interface CliOptions {
   stdin?: string;
   write?: (value: string) => void;
   githubClient?: GitHubIssuesClient;
+  draftClient?: DraftPullRequestClient;
   fetchImpl?: FetchImplementation;
   processRunner?: ProcessRunner;
 }
@@ -173,6 +176,7 @@ export async function runCli(
     command !== "detect"
     && command !== "pin"
     && command !== "prepare"
+    && command !== "draft-pr"
     && command !== "emit"
   ) {
     throw new Error(usage);
@@ -209,6 +213,29 @@ export async function runCli(
     const event = JSON.parse(input) as SyncEvent;
     const result = await prepareSync(event, { runner });
     write(JSON.stringify(result));
+    return;
+  }
+  if (command === "draft-pr") {
+    const input = options.stdin ?? await readStdin();
+    const envelope = JSON.parse(input) as {
+      event: SyncEvent;
+      result: Parameters<DraftPullRequestClient["upsert"]>[0]["result"];
+    };
+    let client = options.draftClient;
+    if (!client) {
+      const repository = env.GITHUB_REPOSITORY;
+      const token = env.GITHUB_TOKEN;
+      if (!repository || !token) {
+        throw new Error("GITHUB_REPOSITORY and GITHUB_TOKEN are required for draft-pr");
+      }
+      client = createDraftPullRequestClient({
+        repository,
+        token,
+        fetchImpl: options.fetchImpl ?? fetch,
+      });
+    }
+    const pullRequestNumber = await client.upsert(envelope);
+    write(JSON.stringify({ pullRequestNumber }));
     return;
   }
 

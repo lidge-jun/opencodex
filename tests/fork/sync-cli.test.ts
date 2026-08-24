@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { CommandResult, CommandRunner, SyncEvent } from "../../scripts/fork/sync/types";
+import type {
+  CommandResult,
+  CommandRunner,
+  DraftPullRequestClient,
+  PrepareResult,
+  SyncEvent,
+} from "../../scripts/fork/sync/types";
 import { registerCoordinator, registerNotifier } from "../../scripts/fork/sync/registry";
 import { runCli } from "../../scripts/fork/sync/cli";
 
@@ -352,6 +358,42 @@ describe("fork sync CLI", () => {
       ["switch", "-c", "sync/upstream-20260824"],
       ["merge", "--no-ff", "vendor/main"],
     ]);
+  });
+
+  test("draft-pr reads an event/result envelope and returns the PR number", async () => {
+    const output: string[] = [];
+    const received: Array<{ event: SyncEvent; result: PrepareResult }> = [];
+    const draftClient: DraftPullRequestClient = {
+      async upsert(input) {
+        received.push(input);
+        return 29;
+      },
+    };
+    const prepareResult: PrepareResult = {
+      status: "merged",
+      branch: "sync/upstream-20260824",
+      resolutions: [],
+      unresolved: [],
+    };
+    const draftEvent: SyncEvent = {
+      kind: "pin-updated",
+      upstreamRepo: "upstream",
+      latestTag: "v2.29.0",
+      latestTagSha: TAG_SHA,
+      vendorMainSha: MAIN_SHA,
+      vendorDevSha: DEV_SHA,
+      detectedAt: "2026-08-24T12:00:00.000Z",
+      recommendedLane: "daily-merge",
+    };
+    await runCli(["draft-pr"], {
+      env: {},
+      stdin: JSON.stringify({ event: draftEvent, result: prepareResult }),
+      draftClient,
+      write: value => output.push(value),
+    });
+
+    expect(received).toEqual([{ event: draftEvent, result: prepareResult }]);
+    expect(JSON.parse(output[0]!)).toEqual({ pullRequestNumber: 29 });
   });
 
   test("emit still starts coordinators when a notifier fails", async () => {

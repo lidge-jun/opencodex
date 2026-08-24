@@ -6,15 +6,16 @@ description: Use when performing an opencodex public-fork sync, updating vendor/
 # opencodex fork sync
 
 Read `docs/fork/OWNED.md` before resolving any conflict. The GitHub Action
-owns stages 1–2 (detect and ff-only pin); the Cursor Automation owns stages 3–7
-(rebuild, conflict analysis, tests, and draft PR). Agents analyze, recommend,
-and test; a human confirms and lands `origin/main`.
+owns detection, ref-only pinning, and the ordinary daily merge through a
+mergeable draft PR. Cursor Automation owns only shared-hotspot handoff and
+disconnected-history recovery; agents analyze, recommend, and test; a human
+confirms and lands `origin/main`.
 
 ## Roles
 
 | Role | Does | Must not |
 |---|---|---|
-| Coordinator | Fetches, opens the sync branch, lists conflicts, dispatches workers, assembles the decision table, pushes, and leaves the draft PR mergeable | Resolve hunks itself or use whole-tree `-X ours` |
+| Coordinator | Reviews hotspot or emergency handoffs, assembles the decision table, and leaves the draft PR mergeable | Resolve Action-owned daily hunks itself or use whole-tree `-X ours` |
 | File worker | Owns one conflict domain and reports 3-way intent, options, recommendation, and tests | Touch another domain or commit `main` |
 | Test worker | Runs named tests; runs typecheck/full suite for shared runtime, routing, config, or server changes | Claim green without command output |
 | Absorbed-patch worker | Compares `fork:` commits on `origin/main` with upstream and identifies duplicates to drop | Keep a patch merely because the fork wrote it first |
@@ -22,21 +23,24 @@ and test; a human confirms and lands `origin/main`.
 Parallelize independent domains. Serialize `src/adapters/google.ts` and `src/server/responses/core.ts`.
 Workers must be **Composer 2.5** or **GPT 5.6 Luna**.
 
-## Action stages 1–2
+## Action stages 1–5
 
 The fork workflow polls released `v*` tags on `lidge-jun/opencodex`. It checks
 out the repository default branch, fetches `upstream/main`, `upstream/dev`,
-and tags, then runs:
+and tags, then pins refs without moving `HEAD`, prepares daily merges, and
+opens or updates a draft PR:
 
 ```bash
 bun scripts/fork/sync/cli.ts pin > "$RUNNER_TEMP/fork-sync-event.json"
-bun scripts/fork/sync/cli.ts emit < "$RUNNER_TEMP/fork-sync-event.json"
+bun scripts/fork/sync/cli.ts prepare < "$RUNNER_TEMP/fork-sync-event.json"
+bun scripts/fork/sync/cli.ts draft-pr < "$RUNNER_TEMP/fork-sync-draft-pr.json"
 ```
 
 Only `vendor/main` and `vendor/dev` are allowlisted, and both updates use
-`--ff-only`. `vendor/dev` moves only when a new main tag is pinned. The Action
-has `contents: write` and `issues: write`, never `pull-requests: write`, and
-never merges or force-pushes `origin/main`. `already-current` is silent only
+fast-forward-only fetch refspecs. `vendor/dev` moves only when a new main tag
+is pinned. The Action has `contents: write`, `issues: write`, and
+`pull-requests: write`, and never merges or force-pushes `origin/main`.
+`already-current` is silent only
 when `vendor/main` is already contained in `main`; otherwise lane annotation
 emits `main-behind` or `history-diverged`.
 `pin-diverged` creates the tracking issue but does not start the webhook.
@@ -45,10 +49,8 @@ emits `main-behind` or `history-diverged`.
 
 ```bash
 git fetch upstream origin --prune
-git switch vendor/main
-git merge --ff-only upstream/main
-git switch vendor/dev
-git merge --ff-only upstream/dev
+git fetch . upstream/main:refs/heads/vendor/main
+git fetch . upstream/dev:refs/heads/vendor/dev
 # PR-base only; do not merge vendor/dev into origin/main
 git switch -c sync/upstream-YYYYMMDD origin/main
 git merge --no-ff vendor/main
@@ -119,11 +121,15 @@ recommendation, just like Cursor.
 
 ## Cursor Automation stages 3–8
 
-The webhook-triggered Cursor Automation starts for `pin-updated`,
-`main-behind`, and `history-diverged`. The daily-merge path starts at
-`origin/main`: create
-`sync/upstream-YYYYMMDD` from it, merge `origin/vendor/main`, use Mergiraf
-where available, and read `docs/fork/OWNED.md` before resolving conflicts.
+The webhook-triggered Cursor Automation starts only for `hotspot-handoff` or
+`history-diverged`. The Action already creates `sync/upstream-YYYYMMDD` from
+the checked-out default branch, merges `vendor/main`, resolves fork-owned and
+upstream-owned files, applies recipes, pushes the sync branch, and opens or
+updates a draft PR.
+
+For a hotspot handoff, start at the aborted Action branch context and read
+`docs/fork/OWNED.md` before resolving conflicts. For `history-diverged`, use
+the disconnected `run/main` rebuild only.
 Replay `fork:` commits on `origin/main` or feature patches only when they are not already contained,
 using `scripts/fork/sync/contained.ts` or
 `git merge-base --is-ancestor`; do not rely on patch-id alone. Run the exact
