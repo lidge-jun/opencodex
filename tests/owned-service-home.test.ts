@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { claimOwnedServiceHome } from "./helpers/owned-service-home";
+import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
@@ -18,15 +18,42 @@ test("Windows owned-service-home fixture masks manager queries in a real child",
     const fixture = claimOwnedServiceHome(codexHome, opencodexHome, home);
     if (process.platform !== "win32") return;
 
-    const child = Bun.spawn([process.execPath, "--eval", `
+    // Copy the test preload below a path that contains spaces. Passing it as a
+    // separate argv element is the regression under test; BUN_OPTIONS tokenizes
+    // this same path before Bun 1.4 ever sees it.
+    const spacedCheckout = join(root, "checkout with spaces");
+    mkdirSync(spacedCheckout, { recursive: true });
+    const spacedPreload = join(spacedCheckout, "owned-service-home-preload.ts");
+    copyFileSync(join(import.meta.dir, "helpers", "owned-service-home-preload.ts"), spacedPreload);
+
+    const child = Bun.spawn([process.execPath, ...withOwnedServiceHomePreload(["--eval", `
+      import { join } from "node:path";
+      import { resolveTrustedWindowsSystemDirectory } from "./src/lib/windows-elevation.ts";
+      import { spawnSync } from "node:child_process";
       import { inspectServiceManagerInstallation } from "./src/service-manager-probe.ts";
+      const system = resolveTrustedWindowsSystemDirectory();
+      const schtasks = join(system, "schtasks.exe");
+      const sc = join(system, "sc.exe");
+      const text = (value: unknown) => Buffer.isBuffer(value) ? value.toString("utf8") : String(value ?? "");
+      const exactScheduler = spawnSync(schtasks, ["/query", "/tn", "opencodex-proxy", "/xml"], { encoding: "buffer" });
+      const foreignScheduler = spawnSync(schtasks, ["/query", "/tn", "foreign-opencodex-proxy", "/xml"], { encoding: "buffer" });
+      const extraScheduler = spawnSync(schtasks, ["/query", "/tn", "opencodex-proxy", "/xml", "/extra"], { encoding: "buffer" });
+      const exactNative = spawnSync(sc, ["query", "opencodex-proxy-native"], { encoding: "buffer" });
+      const extraNative = spawnSync(sc, ["query", "opencodex-proxy-native", "extra"], { encoding: "buffer" });
       const result = inspectServiceManagerInstallation({
         platform: "win32",
         home: process.env.USERPROFILE,
         configDir: process.env.OPENCODEX_HOME,
       });
-      console.log(JSON.stringify(result));
-    `], {
+      console.log(JSON.stringify({
+        result,
+        exactScheduler: { status: exactScheduler.status, stderr: text(exactScheduler.stderr) },
+        foreignScheduler: { status: foreignScheduler.status, stderr: text(foreignScheduler.stderr) },
+        extraScheduler: { status: extraScheduler.status, stderr: text(extraScheduler.stderr) },
+        exactNative: { status: exactNative.status, stderr: text(exactNative.stderr) },
+        extraNative: { status: extraNative.status, stderr: text(extraNative.stderr) },
+      }));
+    `], spacedPreload)], {
       cwd: repoRoot,
       env: {
         ...process.env,
@@ -45,7 +72,22 @@ test("Windows owned-service-home fixture masks manager queries in a real child",
       new Response(child.stderr).text(),
     ]);
     expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout.trim())).toEqual({ kind: "absent" });
+    const payload = JSON.parse(stdout.trim()) as {
+      result: { kind: string };
+      exactScheduler: { status: number | undefined; stderr: string };
+      foreignScheduler: { status: number | undefined; stderr: string };
+      extraScheduler: { status: number | undefined; stderr: string };
+      exactNative: { status: number | undefined; stderr: string };
+      extraNative: { status: number | undefined; stderr: string };
+    };
+    expect(payload.result).toEqual({ kind: "absent" });
+    expect(payload.exactScheduler.status).toBe(1);
+    expect(payload.exactScheduler.stderr).toContain("OCX_TEST_SERVICE_HOME");
+    expect(payload.foreignScheduler.stderr).not.toContain("OCX_TEST_SERVICE_HOME");
+    expect(payload.extraScheduler.stderr).not.toContain("OCX_TEST_SERVICE_HOME");
+    expect(payload.exactNative.status).toBe(1);
+    expect(payload.exactNative.stderr).toContain("OCX_TEST_SERVICE_HOME");
+    expect(payload.extraNative.stderr).not.toContain("OCX_TEST_SERVICE_HOME");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

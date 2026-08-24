@@ -22,12 +22,19 @@ if (ENABLED) {
     const name = typeof file === "string"
       ? file.replaceAll("\\", "/").split("/").pop()?.toLowerCase()
       : undefined;
-    const first = typeof args[0] === "string" ? args[0].toLowerCase() : "";
-    const secondArg = typeof args[1] === "string" ? args[1].toLowerCase() : "";
-    const isSchedulerQuery = name === "schtasks.exe" && first === "/query";
+    // Keep this seam to the exact read-only argv emitted by production. A
+    // foreign task, a listing/error query, or extra arguments must reach the
+    // real manager instead of being silently declared absent.
+    const isSchedulerQuery = name === "schtasks.exe"
+      && args.length === 4
+      && args[0] === "/query"
+      && args[1] === "/tn"
+      && args[2] === "opencodex-proxy"
+      && args[3] === "/xml";
     const isNativeServiceQuery = name === "sc.exe"
-      && first === "query"
-      && secondArg === "opencodex-proxy-native";
+      && args.length === 2
+      && args[0] === "query"
+      && args[1] === "opencodex-proxy-native";
 
     if (!isSchedulerQuery && !isNativeServiceQuery) return realSpawnSync(...input);
 
@@ -36,8 +43,8 @@ if (ENABLED) {
       && "encoding" in options
       && options.encoding === "buffer";
     const message = isNativeServiceQuery
-      ? "[SC] OpenService FAILED 1060: The specified service does not exist."
-      : "ERROR: The system cannot find the file specified.";
+      ? "[OCX_TEST_SERVICE_HOME] [SC] OpenService FAILED 1060: The specified service does not exist."
+      : "[OCX_TEST_SERVICE_HOME] ERROR: The system cannot find the file specified.";
     const stdout = raw ? Buffer.alloc(0) : "";
     const stderr = raw ? Buffer.from(message, "utf8") : message;
     return {

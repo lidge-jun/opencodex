@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claimOwnedServiceHome } from "./helpers/owned-service-home";
+import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -19,7 +19,7 @@ function ownedEnvironment(codexHome: string, ocxHome: string): Record<string, st
 }
 
 function runCli(args: string[], env: Record<string, string>) {
-  return spawnSync(process.execPath, ["run", "src/cli/index.ts", ...args], {
+  return spawnSync(process.execPath, withOwnedServiceHomePreload(["run", "src/cli/index.ts", ...args]), {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf8",
