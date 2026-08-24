@@ -88,7 +88,7 @@
    and `:last-child` would shrink its model picker too. `:nth-child(2)` only ever
    matches a real second control. */
 .dash-sidecar-row-card .dash-delegation-controls .custom-select:nth-child(2) {
-  min-width: 6.5rem;
+  min-width: min(100%, 6.5rem);
   max-width: 9rem;
 }
 
@@ -97,13 +97,21 @@
   flex: 1 1 auto;
 }
 
-/* The hint must wrap inside its own column, never run under the controls. The
-   copy block is the flex item that yields, so it needs a real basis: without
-   one, `flex-basis: auto` lets its max-content width win the negotiation and the
-   text overlaps the control group in longer locales (ko/ru/ja). */
+/* The hint must wrap inside its own column, never run under the controls, so the copy
+   block needs a real basis AND a real floor.
+
+   With `flex: 1 1 0` and no floor its used width is whatever the control group leaves
+   over — which goes negative once the ko control row (168px select + 8 + ~108px label +
+   8 + 34px switch = 326px) exceeds the track. Copy then rendered 0px wide and
+   `overflow-wrap: anywhere` authorised a break after every CJK glyph: the title became a
+   one-character vertical stripe and the card grew from 157px to 618px. The 14rem floor
+   makes that state unreachable; `min()` keeps the floor from exceeding the card itself.
+   `break-word` still rescues an unbreakable token (a long model id) without shredding
+   prose. */
 .dash-sidecar-row-card .dash-sidecar-copy {
   flex: 1 1 0;
-  overflow-wrap: anywhere;
+  min-width: min(100%, 14rem);
+  overflow-wrap: break-word;
 }
 
 /* The copy block yields; the control group holds its intrinsic width. Letting the
@@ -115,12 +123,25 @@
 .dash-sidecar-row-card .dash-delegation-controls {
   flex: 0 0 auto;
   flex-wrap: nowrap;
+  /* Both control groups reserve the same band AND pack from its top, so the first Select
+     of each card lands on one line. Without the band the web-search group is one 34px
+     select row while the vision group is a 59px column (select row + 12px gap + the
+     "advanced" disclosure); without the top packing the shorter group centres inside that
+     band and its Select still sits 13.5px low.
+
+     `align-items`, not `align-content`: the web-search group is a single flex line, and
+     `align-content` has no effect on one line. */
+  min-height: 3.6875rem;
+  align-items: flex-start;
 }
 
 /* The model select carries the long value: give it a floor wide enough to read a
    real model id, and ellipsize inside rather than growing without bound. */
 .dash-sidecar-row-card .dash-delegation-controls .custom-select:first-child {
-  min-width: 10.5rem;
+  /* `min()` so the floor can never exceed the box it is a floor for. A hard 10.5rem
+     pushed the control past the panel edge once the card fell under ~11.5rem — the
+     narrow end the container queries above now reach. */
+  min-width: min(100%, 10.5rem);
   max-width: 14rem;
 }
 
@@ -143,9 +164,45 @@
   min-width: 0;
 }
 
-.dash-vision-sidecar-card {
+/* BOTH cards wrap, and neither overrides the shared centre alignment.
+
+   Wrapping only the vision card put its control group on a second flex line while the
+   web-search group stayed on the first, so the two Selects sat ~16-30px apart at every
+   width. `align-items: flex-start` on one card made it worse for the same reason: the
+   two cards resolved their control groups against different rules. Symmetry is the fix —
+   both cards wrap, both keep the shared `center`, so both resolve identically and the
+   Selects share a baseline. */
+.dash-sidecar-row-card {
   flex-wrap: wrap;
-  align-items: flex-start;
+  /* The responsive axis is the CARD, not the window.
+
+     This grid is `repeat(auto-fit, ...)`, so card width is decoupled from viewport
+     width: a 336px card exists inside a 992px window. Every `@media` rule that used to
+     stack these cards was therefore measuring the wrong box — it fired at widths where
+     the card was already comfortable, and stayed silent at widths where the card was
+     cramped.
+
+     Layout containment is safe here. The hazard was never the overlays: both portal to
+     document.body (Select defaults to `portal`, VisionAdvancedPopover uses
+     `createPortal`), and the sticky table header lives on .dashboard-workspace-main,
+     outside this card. The one real conflict was with `grid-template-rows: subgrid`,
+     which cannot read its parent's rows through containment — and the shipped layout is
+     flex, not subgrid. Do NOT lift the container to the workspace shell: that WOULD trap
+     the sticky header. */
+  container-type: inline-size;
+  container-name: sidecar-card;
+}
+
+/* Both cards wrap their control group onto a second line, so that line must start at the
+   same y in both. It does not by default: the copy blocks are different heights (the ko
+   hints are 30 vs 41 chars and wrap to a different line count in every locale), and each
+   card's control line simply follows its own copy. Reserving the same copy band in both
+   cards is what puts the two Selects on one line.
+
+   3.9375rem = 63px = 21px title + 3px hint margin + two 19.5px hint lines — the longest
+   shipped hint at the narrowest two-column card. */
+.dash-sidecar-row-card .dash-sidecar-copy {
+  min-height: 3.9375rem;
 }
 
 /* The shared sidecar copy rule is `flex: 1 1 0` so a one-row control group can
@@ -180,13 +237,13 @@
 
 .dash-vision-select-row .custom-select:first-child {
   flex: 1 1 70%;
-  min-width: 9rem;
+  min-width: min(100%, 9rem);
   max-width: 16rem;
 }
 
 .dash-vision-select-row .custom-select:nth-child(2) {
   flex: 1 1 30%;
-  min-width: 6rem;
+  min-width: min(100%, 6rem);
   max-width: 9rem;
 }
 
@@ -272,48 +329,49 @@
   gap: 4px;
 }
 
-@media (max-width: 36rem) {
-  .dash-vision-sidecar-card {
-    flex-direction: column;
-    align-items: stretch;
-  }
+/* Narrow-CARD rules. These were `@media (max-width: 36rem / 30rem / 22rem)` — viewport
+   queries on cards whose width comes from an auto-fit grid, so they fired at the wrong
+   times or never. The widths below are the same intent measured against the card.
 
-  .dash-vision-sidecar-card .dash-sidecar-copy,
-  .dash-vision-sidecar-card .dash-delegation-controls {
+   Every selector is at least two classes deep on purpose: a bare `.dash-sidecar-copy` is
+   specificity 0,1,0 and would silently lose to the 0,2,0 base rules above, leaving a
+   query that reads as correct in review but does nothing. */
+@container sidecar-card (max-width: 36rem) {
+  /* Applied to BOTH cards, not just vision. Stacking one card's control group while the
+     other kept a different basis is the same asymmetry that broke the shared baseline in
+     the first place — it reintroduced a 1.19px offset when this query was vision-only. */
+  .dash-sidecar-row-card .dash-sidecar-copy,
+  .dash-sidecar-row-card .dash-delegation-controls {
     flex: 0 1 auto;
     min-width: 0;
+    flex-basis: 100%;
   }
 
-  .dash-vision-sidecar-card .dash-delegation-controls {
+  .dash-sidecar-row-card .dash-delegation-controls {
     align-items: stretch;
   }
 
-  .dash-vision-select-row {
+  .dash-vision-sidecar-card .dash-vision-select-row {
     justify-content: flex-start;
   }
 }
 
-@media (max-width: 30rem) {
-  .dash-vision-number .codex-auto-switch-input-wrap {
-    width: 100%;
-  }
-}
+/* The old `@media (max-width: 30rem)` block that widened .dash-vision-number is simply
+   gone: those inputs now render only inside the portaled popover, which already sets
+   `width: 100%` on them (see .dash-vision-advanced-popover above). It was dead code, not
+   a rule to convert. */
 
-/* Below the width where a row can hold copy + two selects, stack instead of
-   overflowing. Measured: the row is clean down to ~320px viewport; under that the
-   controls would push past the panel edge. */
-@media (max-width: 22rem) {
-  .dash-sidecar-row-card {
-    flex-direction: column;
-    align-items: stretch;
+/* Below the width where a row can hold copy + the control group, stack instead of
+   overflowing. Measured against the CARD: the row is clean down to ~22rem of card. */
+@container sidecar-card (max-width: 22rem) {
+  .dash-sidecar-row-card .dash-sidecar-copy,
+  .dash-sidecar-row-card .dash-delegation-controls {
+    flex-basis: 100%;
+    min-width: 0;
   }
 
   .dash-sidecar-row-card .dash-delegation-controls {
     justify-content: flex-start;
-    /* Stacking gives the group the full card width, but the two selects still floor at
-       10.5rem + 6.5rem, which is wider than the viewport this query targets. Once the
-       controls own their own line, wrapping is free — the reason to hold `nowrap` in the
-       row layout (children sliding under the hint) no longer applies. */
     flex-wrap: wrap;
   }
 }

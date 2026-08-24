@@ -14,7 +14,7 @@ import type {
   OcxToolResultMessage,
   OcxUsage,
 } from "../types";
-import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
+import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
@@ -346,11 +346,8 @@ function toolsToGeminiFormat(
   wireModelId: string,
 ): unknown[] | undefined {
   const grounding = parsed._ccaInTurnGrounding;
-  const allowed = isAllowedToolChoice(parsed.options.toolChoice)
-    ? new Set(parsed.options.toolChoice.allowedTools)
-    : undefined;
-  const tools = allowed
-    ? parsed.context.tools?.filter(t => toolAllowedByChoice(t, allowed, parsed.context.tools)) ?? []
+  const tools = isAllowedToolChoice(parsed.options.toolChoice)
+    ? parsed.context.tools?.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools)) ?? []
     : parsed.context.tools ?? [];
   const functionDeclarations = tools.map(t => ({
     name: namespacedToolName(t.namespace, t.name),
@@ -1077,7 +1074,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
         if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
           && parts && replayModel && replaySession) {
-          pendingStreamThoughtSig = observeAntigravityReplay(
+          // Observation may scan the whole frame, so use it only for replay-cache side effects.
+          // The source-order loop below exclusively owns stream carry and cannot pair backwards.
+          observeAntigravityReplay(
             replayModel,
             replaySession,
             parts as unknown[],

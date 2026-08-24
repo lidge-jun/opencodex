@@ -14,7 +14,7 @@ import type {
   OcxToolResultMessage,
   OcxUsage,
 } from "../types";
-import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
+import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
@@ -796,11 +796,8 @@ function messagesToAnthropicFormat(
 
 function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
-  const allowed = isAllowedToolChoice(parsed.options.toolChoice)
-    ? new Set(parsed.options.toolChoice.allowedTools)
-    : undefined;
-  const tools = allowed
-    ? parsed.context.tools.filter(t => toolAllowedByChoice(t, allowed, parsed.context.tools))
+  const tools = isAllowedToolChoice(parsed.options.toolChoice)
+    ? parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools))
     : parsed.context.tools;
   if (tools.length === 0) return undefined;
   const converted = tools.map(t => ({
@@ -938,9 +935,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // output, so high effort needs the same total-token headroom as budget thinking or a
           // default 8192-token request can spend everything on thought and return empty text.
           body.thinking = { type: "adaptive" };
-          body.output_config = { effort: adaptiveEffort(parsed.options.reasoning) };
+          const effort = adaptiveEffort(parsed.options.reasoning);
+          body.output_config = { effort };
           const explicitMaxOut = parsed.options.maxOutputTokens;
-          const wantBudget = reasoningBudget(parsed.options.reasoning);
+          const wantBudget = reasoningBudget(effort);
           const floor = wantBudget + OUTPUT_HEADROOM;
           // Preserve explicit caller limits as-is; for omitted limits use the adaptive ceiling
           // so effort=max (budget=32k) still leaves OUTPUT_HEADROOM tokens for visible output.

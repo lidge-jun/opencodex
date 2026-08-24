@@ -18,6 +18,10 @@ archaeology, debugging, or source research.
 | [`06_docs-and-release.md`](06_docs-and-release.md) | Public docs site, GitHub Pages, the workflow map, branch and devlog policy, README ownership, release flow. |
 | [`07_design-methodology.md`](07_design-methodology.md) | Design process discipline for new GUI, CLI, and user-facing surfaces. |
 | [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md) | OpenAI Pool/Direct account-mode and API credential/routing invariants. |
+| [`09_client-integrations.md`](09_client-integrations.md) | Third-party client config ownership, state classification, snapshots, refresh, disable, and restore. |
+| [`09_compatibility-lab.md`](09_compatibility-lab.md) | Optional Compatibility Lab evidence, automation, and core-runtime isolation. |
+| [`10_adapter-registry.md`](10_adapter-registry.md) | Adapter construction authority and registry-derived contract inheritance. |
+| [`11_compatibility-contracts.md`](11_compatibility-contracts.md) | Versioned provider compatibility claims and fixture-evidence boundaries. |
 
 ## Product boundary
 

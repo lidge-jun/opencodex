@@ -36,8 +36,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "recover-history",
-    usage: "ocx recover-history --legacy-openai",
-    summary: "Explicitly recover pre-backup syncResumeHistory rows.",
+    usage: "ocx recover-history --legacy-openai --yes",
+    summary: "Force all user-message opencodex rows to OpenAI for legacy recovery.",
   },
   {
     name: "uninstall",
@@ -88,20 +88,22 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "ensure", usage: "ocx ensure", summary: "Ensure the proxy is running and Codex config/cache are current." },
   {
     name: "sync",
-    usage: "ocx sync [--restart-codex]",
+    usage: "ocx sync [--restart-codex] [--restart-desktop-app]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
+      "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
     ],
   },
   {
     name: "sync-cache",
-    usage: "ocx sync-cache [--restart-codex]",
+    usage: "ocx sync-cache [--restart-codex] [--restart-desktop-app]",
     summary: "Refresh Codex's model cache from the active catalog.",
     details: [
       "Warns when Codex app-server processes still hold an in-memory model list.",
       "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
+      "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
     ],
   },
   { name: "status", usage: "ocx status", summary: "Check proxy server status." },
@@ -209,7 +211,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl]", summary: "Alias of ocx observe logs." },
   {
     name: "usage",
-    usage: "ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]",
     summary: "Alias of ocx observe usage.",
   },
   { name: "storage", usage: "ocx storage [--json]", summary: "Alias of ocx observe storage." },

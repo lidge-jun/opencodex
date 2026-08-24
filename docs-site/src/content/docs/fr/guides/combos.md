@@ -259,6 +259,11 @@ flux de travail des tâches.
 Ouvrez le tableau de bord local et choisissez **Modèles → Combos**. L'espace de travail crée, modifie, renomme et supprime
 combos, et son sélecteur de cible exclut les modèles désactivés et les combos imbriqués.
 
+Chaque cible affiche aussi un badge de quota en direct : **Disponible**, **Quota épuisé** ou **Quota inconnu**.
+Enregistrer et Créer ne sont désactivés que lorsque chaque cible activée dispose de preuves fraîches et complètes
+que son quota est épuisé. Les données manquantes, obsolètes, mal formées ou agrégées de façon incomplète restent
+inconnues et ne verrouillent jamais un contrôle. La récupération du quota réactive automatiquement l’action.
+
 ### CLI
 
 Les commandes principales sont :

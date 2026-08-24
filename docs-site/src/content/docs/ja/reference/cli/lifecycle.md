@@ -47,9 +47,11 @@ ocx restore back
 ocx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
+### `ocx recover-history --legacy-openai --yes`
 
 可逆バックアップ サポートが存在する前に Codex App 履歴を再マップした古い開発ビルドの明示的なリカバリ。履歴データベースがロックされている場合は、まず Codex を閉じてください。
+
+これは広範囲で破壊的な再ラベル付けです。ユーザーメッセージを持ち、現在 `opencodex` とタグ付けされているすべてのスレッドを `openai` に変更し、`exec` を `cli` に正規化してイベントマーカーを設定します。正当な専用プロバイダー履歴も対象です。状態をバックアップし、この全範囲を意図する場合にのみ実行してください。
 
 ### `ocx uninstall`・`ocx remove`
 

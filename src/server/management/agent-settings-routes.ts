@@ -155,7 +155,7 @@ function runGrokApplyFlight(): Promise<unknown> {
   flight.promise = (grokApplyTestHooks?.run ?? (async () => {
     const [{ syncGrokConfig }, { readRuntimePort }] = await Promise.all([
       import("../../grok/sync"),
-      import("../../config"),
+      import("../../config/process-state"),
     ]);
     const currentConfig = loadConfig();
     const runtime = readRuntimePort(process.pid);

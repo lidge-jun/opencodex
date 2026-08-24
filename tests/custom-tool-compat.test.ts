@@ -32,6 +32,68 @@ describe("routed custom-tool compatibility", () => {
     expect(rewritten.body).toBe(raw);
     expect(JSON.stringify(rewritten.body)).toBe(before);
     expect(rewritten.names).toEqual(new Set());
+    expect(rewritten.repairNames).toEqual(new Set(["apply_patch"]));
+  });
+
+  test("repairs apply_patch only when bare or in the reserved functions namespace", () => {
+    const rewritten = rewriteRoutedCustomToolsForUpstream({
+      tools: [
+        {
+          type: "namespace",
+          name: "mcp",
+          tools: [{ type: "custom", name: "apply_patch", description: "Remote patch grammar" }],
+        },
+        {
+          type: "namespace",
+          name: "functions",
+          tools: [{ type: "custom", name: "apply_patch", description: "Built-in patch grammar" }],
+        },
+      ],
+    });
+
+    expect(rewritten.repairNames).toEqual(new Set(["apply_patch"]));
+  });
+
+  test.each([
+    ["none", "none"],
+    ["a forced other tool", { type: "function", name: "ordinary" }],
+    ["a same-name function selector", { type: "function", name: "apply_patch" }],
+    ["an allowlist exclusion", {
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "ordinary" }],
+    }],
+    ["a same-name function allowlist", {
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "apply_patch" }],
+    }],
+  ] as const)("does not arm apply_patch repair under %s", (_label, toolChoice) => {
+    const rewritten = rewriteRoutedCustomToolsForUpstream({
+      tools: [
+        { type: "custom", name: "apply_patch", description: "Apply a patch", format: { type: "text" } },
+        { type: "function", name: "ordinary", parameters: { type: "object" } },
+      ],
+      tool_choice: toolChoice,
+    });
+
+    expect(rewritten.repairNames).toEqual(new Set());
+  });
+
+  test.each([
+    { type: "custom", name: "apply_patch" },
+    {
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "custom", name: "apply_patch" }],
+    },
+  ] as const)("arms apply_patch repair when the selector authorizes it", toolChoice => {
+    const rewritten = rewriteRoutedCustomToolsForUpstream({
+      tools: [{ type: "custom", name: "apply_patch", description: "Apply a patch", format: { type: "text" } }],
+      tool_choice: toolChoice,
+    });
+
+    expect(rewritten.repairNames).toEqual(new Set(["apply_patch"]));
   });
 
   test("lowers apply_patch declarations and replay items on an explicit capability denial", () => {
@@ -47,6 +109,7 @@ describe("routed custom-tool compatibility", () => {
     const body = rewritten.body as typeof raw;
 
     expect(rewritten.names).toEqual(new Set(["apply_patch"]));
+    expect(rewritten.repairNames).toEqual(new Set());
     expect(body.tools[0]).toMatchObject({
       type: "function",
       name: "apply_patch",
@@ -73,6 +136,7 @@ describe("routed custom-tool compatibility", () => {
 
     expect(body.tools[0]).toMatchObject({ type: "function", name: "review_patch" });
     expect(rewritten.names).toEqual(new Set(["review_patch"]));
+    expect(rewritten.repairNames).toEqual(new Set());
   });
 
   test("converted exec preserves the JavaScript input contract", () => {

@@ -76,6 +76,8 @@ export interface AdapterRequest {
     body: string;
     /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
+    /** Native custom-tool wire names authorized for representation-only response repair. */
+    routedCustomToolRepairNames?: ReadonlySet<string>;
     /** Client tool-search names actually lowered to upstream function calls for this request. */
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Upstream-only aliases for namespace tools flattened in this request. */

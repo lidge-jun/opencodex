@@ -107,12 +107,27 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
 ```bash
 ocx observe usage --range 30d --json
+```
+
+`--range today` (alias `1d`) reports the current local day. `--provider` and
+`--model` narrow the report to one upstream target — distinct from
+`--surface`, which selects the calling client (Codex, Claude Code, Grok)
+rather than the provider serving the request.
+
+The default view prints request, token and estimated-cost totals plus
+per-provider and per-model breakdowns. Costs are API list-price equivalents,
+not a billing receipt: subscription plans and provider credits are billed
+separately, and requests with no matching price row are counted as
+`unpriced`/`unmetered` rather than folded in as zero.
+
+```bash
+ocx usage --range today --provider xai
 ```
 
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
@@ -243,6 +258,16 @@ The MCode, ZCode and Prime exports are loopback-only for the same reason and lik
 differs. A relative path in any of those three environment overrides is refused, because the proxy
 and the client can have different working directories and would otherwise disagree about which
 file is meant.
+
+ZCode 3.8.1 may save runtime-derived `reasoning`, `limit.output`, and default context metadata back
+into the generated `provider.opencodex.models` entries. Managed integration status treats only
+those documented additions as refreshable drift. Provider identity and connection settings,
+including `options.baseURL`, model membership, names, modalities, and any context limit OpenCodex
+emitted authoritatively remain protected; editing them reports `conflict / foreign-edit` instead of
+overwriting the file. An ownership record created by an older OpenCodex version can recover
+automatically when the generated catalog is otherwise unchanged. If both the catalog and the block
+changed, re-apply only after reviewing the file because the older record cannot prove which change
+was ZCode-derived.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by

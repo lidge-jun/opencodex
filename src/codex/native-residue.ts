@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   closeSync,
   fstatSync,
@@ -17,6 +16,7 @@ import { Database } from "bun:sqlite";
 
 import { getConfigDir } from "../config";
 import { catalogHasRoutedEntries, parseCatalogJson } from "./catalog/parsing";
+import { codexHistoryBackupId, validateCodexHistoryBackupManifest } from "./history-manifest";
 import {
   hasInjectedCodexRouting,
   OCX_SECTION_MARKER,
@@ -559,18 +559,22 @@ function classifyHistoryDatabase(path: string): NativeRoutedResidueResult {
         return indeterminate("history", resolved.path, "history row has no provider metadata");
       }
     }
+    // A bare opencodex row is not proof that OpenCodex owns a reversible transition: it may
+    // belong to any routed provider and has no native target without the backup manifest.
+    // Keep detecting interrupted metadata on native rows, but let the manifest classifier
+    // below be the authority for provenance-backed routed rows.
     const rollouts = classifyReferencedRollouts(
       "history",
-      rows.map(row => ({ id: row.id, path: row.rollout_path })),
+      rows
+        .filter(row => row.model_provider !== "opencodex")
+        .map(row => ({ id: row.id, path: row.rollout_path })),
     );
     if (rollouts.kind !== "clean") return rollouts;
     const after = statSync(resolved.path);
     if (!sameStat(resolved.stat, after)) {
       return indeterminate("history", resolved.path, "history database changed while it was being observed");
     }
-    return rows.some(row => row.model_provider === "opencodex")
-      ? { kind: "residue", surface: "history", path: resolved.path }
-      : { kind: "clean" };
+    return { kind: "clean" };
   } catch (error) {
     return indeterminate("history", resolved.path, `unreadable history database: ${errorReason(error)}`);
   } finally {
@@ -579,11 +583,7 @@ function classifyHistoryDatabase(path: string): NativeRoutedResidueResult {
 }
 
 function historyBackupPath(stateDatabasePath: string): string {
-  const normalized = process.platform === "win32"
-    ? resolve(stateDatabasePath).toLowerCase()
-    : resolve(stateDatabasePath);
-  const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-  return join(getConfigDir(), `codex-history-backup-${id}.json`);
+  return join(getConfigDir(), `codex-history-backup-${codexHistoryBackupId(stateDatabasePath)}.json`);
 }
 
 function classifyHistoryBackup(path: string, stateDatabasePath: string): NativeRoutedResidueResult {
@@ -596,32 +596,25 @@ function classifyHistoryBackup(path: string, stateDatabasePath: string): NativeR
   } catch (error) {
     return indeterminate("history-backup", read.path, `malformed history backup JSON: ${errorReason(error)}`);
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return indeterminate("history-backup", read.path, "history backup has an unknown shape");
+  const validated = validateCodexHistoryBackupManifest(parsed, stateDatabasePath);
+  if (!validated.ok && validated.reason === "foreign-database") {
+    return indeterminate("history-backup", read.path, "history backup names a different state database");
   }
-  const manifest = parsed as Record<string, unknown>;
-  if (manifest.version !== 1 || !manifest.entries || typeof manifest.entries !== "object" || Array.isArray(manifest.entries)) {
-    return indeterminate("history-backup", read.path, "history backup has an unknown shape");
+  if (!validated.ok) {
+    return indeterminate(
+      "history-backup",
+      read.path,
+      validated.scope === "entry-shape"
+        ? "history backup entry has an unknown shape"
+        : validated.scope === "entry-provenance"
+          ? "history backup entry has invalid provenance metadata"
+          : "history backup has an unknown shape",
+    );
   }
-  if (typeof manifest.stateDbPath === "string") {
-    const expected = process.platform === "win32" ? resolve(stateDatabasePath).toLowerCase() : resolve(stateDatabasePath);
-    const actual = process.platform === "win32" ? resolve(manifest.stateDbPath).toLowerCase() : resolve(manifest.stateDbPath);
-    if (actual !== expected) {
-      return indeterminate("history-backup", read.path, "history backup names a different state database");
-    }
-  }
-  const entries = Object.values(manifest.entries as Record<string, unknown>);
+  const entries = Object.entries(validated.manifest.entries);
   const references: RolloutReference[] = [];
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return indeterminate("history-backup", read.path, "history backup entry has an unknown shape");
-    }
-    const candidate = entry as Record<string, unknown>;
-    if (typeof candidate.id !== "string" || !candidate.id
-      || typeof candidate.rolloutPath !== "string" || !candidate.rolloutPath) {
-      return indeterminate("history-backup", read.path, "history backup entry has an unknown rollout reference");
-    }
-    references.push({ id: candidate.id, path: candidate.rolloutPath });
+  for (const entry of Object.values(validated.manifest.entries)) {
+    references.push({ id: entry.id, path: entry.rolloutPath });
   }
   const rollouts = classifyReferencedRollouts("history-backup", references);
   if (rollouts.kind !== "clean") return rollouts;

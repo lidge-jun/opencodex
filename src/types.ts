@@ -5,6 +5,7 @@ export type { OcxTool, OcxToolChoice } from "./types/tools";
 export {
   namespacedToolName,
   toolChoiceAliases,
+  createToolChoiceResolver,
   toolChoiceCandidates,
   toolAllowedByChoice,
   resolveToolChoiceWireName,
@@ -103,4 +104,3 @@ export type {
   CodexAccountCredentials,
   CodexAccountCredentialRecord,
 } from "./types/accounts";
-

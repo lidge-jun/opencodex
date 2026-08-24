@@ -676,6 +676,103 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(frames.some(f => f.event === "response.function_call_arguments.done")).toBe(false);
   });
 
+  test("repairs a complete decorated top-level apply_patch payload", () => {
+    const body = `*** Begin Patch ***
+*** Update File: README.md
+@@
+-old
++new
+*** End Patch ***`;
+    const json = buildResponseJSON([
+      { type: "tool_call_start", id: "c1", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: body }) },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "model", { freeformToolNames: new Set(["apply_patch"]) });
+
+    const output = json.output as Record<string, unknown>[];
+    expect(output[0]).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+    expect(output[0].input).toContain("*** Begin Patch\n");
+    expect(output[0].input).toContain("*** End Patch");
+    expect(output[0].input).not.toContain("*** Begin Patch ***");
+  });
+
+  test("preserves namespaced apply_patch payloads across streaming and buffered bridges", async () => {
+    const decorated = `*** Begin Patch ***
+*** Update File: README.md
+@@
+-old
++new
+*** End Patch ***`;
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "c1", name: "mcp__apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: decorated }) },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+    const toolNsMap = new Map([
+      ["mcp__apply_patch", { namespace: "mcp", name: "apply_patch", freeform: true as const }],
+    ]);
+
+    const json = buildResponseJSON(events, "model", { toolNsMap });
+    const output = json.output as Record<string, unknown>[];
+    expect(output[0]).toMatchObject({
+      type: "custom_tool_call",
+      namespace: "mcp",
+      name: "apply_patch",
+      input: decorated,
+    });
+
+    const frames = await collectSse(bridgeToResponsesSSE(replay(events), "model", toolNsMap));
+    const itemAdded = frames.find(frame => frame.event === "response.output_item.added")?.data.item as Record<string, unknown>;
+    expect(itemAdded).toMatchObject({ type: "custom_tool_call", namespace: "mcp", name: "apply_patch" });
+    const inputDone = frames.find(frame => frame.event === "response.custom_tool_call_input.done")?.data;
+    expect(inputDone).toMatchObject({ namespace: "mcp", input: decorated });
+    const itemDone = frames.find(frame => frame.event === "response.output_item.done")?.data.item as Record<string, unknown>;
+    expect(itemDone).toMatchObject({
+      type: "custom_tool_call",
+      namespace: "mcp",
+      name: "apply_patch",
+      input: decorated,
+    });
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect((completed.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "custom_tool_call",
+      namespace: "mcp",
+      name: "apply_patch",
+      input: decorated,
+    });
+
+    const incompleteEvents: AdapterEvent[] = [
+      { type: "tool_call_start", id: "c2", name: "mcp__apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: decorated }) },
+      { type: "incomplete", reason: "upstream_truncated", retryable: true },
+    ];
+    const incompleteJson = buildResponseJSON(incompleteEvents, "model", { toolNsMap });
+    expect((incompleteJson.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "custom_tool_call",
+      namespace: "mcp",
+      name: "apply_patch",
+      status: "incomplete",
+    });
+
+    const incompleteFrames = await collectSse(bridgeToResponsesSSE(replay(incompleteEvents), "model", toolNsMap));
+    const incompleteItem = incompleteFrames.find(frame => frame.event === "response.output_item.done")?.data.item;
+    expect(incompleteItem).toMatchObject({
+      type: "custom_tool_call",
+      namespace: "mcp",
+      name: "apply_patch",
+      status: "incomplete",
+    });
+    const incompleteResponse = incompleteFrames.find(frame => frame.event === "response.incomplete")?.data.response as Record<string, unknown>;
+    expect((incompleteResponse.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "custom_tool_call",
+      namespace: "mcp",
+      name: "apply_patch",
+      status: "incomplete",
+    });
+  });
+
   test("non-streaming error produces failed status", () => {
     const json = buildResponseJSON([
       {

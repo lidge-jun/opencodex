@@ -59,6 +59,35 @@ function declaresString(schema: SchemaNode): boolean {
   return Array.isArray(type) && type.includes("string");
 }
 
+// Issue #2316: Codex advertises `multi_agent_v1__wait_agent`'s `timeout_ms` as a JSON
+// Schema `number`, but its Rust runtime deserializes the field as `u64` and rejects
+// `120000.0` with "invalid type: floating point `120000.0`, expected u64" before the
+// tool ever runs. The schema lookup is not the problem — the error text comes from
+// Codex's own deserializer, so the call reached it — the problem is that `number`
+// alone never authorizes the integral-float repair below.
+//
+// This allowlist is deliberately one field wide. It names only what has a live
+// reproduction against a real `u64`, because the repair is only unambiguous for a
+// field that cannot legitimately hold a fraction. Generic names (`start`, `end`,
+// `priority`, `port`) would silently rewrite a third-party tool's fractional value,
+// so a new entry needs its own evidence, not a plausible-sounding name.
+//
+// Cursor's sibling `yield_time_ms` (src/adapters/cursor/tool-definitions.ts) is also
+// declared `number`; it is NOT included here because no rejection has been captured
+// against it. It gets its own change when it gets its own reproduction.
+const U64_NUMBER_FIELDS = new Set(["timeout_ms"]);
+
+// Issue #2443 / #2451: Codex Desktop's bare `wait` tool has the same schema/runtime
+// split for `yield_time_ms` and `max_tokens`. Scope these names to that bare tool so a
+// third-party or namespaced tool can still use fractional values legitimately.
+// #2448 allowlisted the hyphenated `yield-time_ms`; live Grok 4.6 calls and the
+// advertised wait schema both use the underscore form, so that name is the one
+// with a captured u64 rejection. Cursor still uses the same underscore name on a
+// namespaced tool; the wait-only map keeps that path byte-identical.
+const U64_NUMBER_FIELDS_BY_TOOL = new Map<string, ReadonlySet<string>>([
+  ["wait", new Set(["yield_time_ms", "max_tokens"])],
+]);
+
 /** True when the node accepts a JSON number (`integer` or `number`), so a numeric
  * value is already schema-valid and must not be rewritten into a string. */
 function declaresNumeric(schema: SchemaNode): boolean {
@@ -118,7 +147,14 @@ interface CoerceResult {
   changed: boolean;
 }
 
-function coerceValue(value: unknown, schema: SchemaNode | undefined, root: SchemaNode, depth: number): CoerceResult {
+function coerceValue(
+  value: unknown,
+  schema: SchemaNode | undefined,
+  root: SchemaNode,
+  depth: number,
+  toolName?: string,
+  propertyName?: string,
+): CoerceResult {
   // A hostile or deeply nested schema must not blow the stack.
   if (depth > 64) return { value, changed: false };
   const resolved = schema ? resolveRef(schema, root, new Set()) : undefined;
@@ -126,7 +162,19 @@ function coerceValue(value: unknown, schema: SchemaNode | undefined, root: Schem
   if (typeof value === "number") {
     if (!resolved) return { value, changed: false };
     const branches = compositionBranches(resolved);
-    const integerDeclared = declaresInteger(resolved) || branches.some(declaresInteger);
+    // #2316: a known Codex-native u64 field counts as integer-declared even when the
+    // advertised schema says `number`, but only when the field really is numeric —
+    // an allowlisted name over a string-typed field is a disagreement, not a repair.
+    const nativeU64Field = propertyName !== undefined
+      && (
+        U64_NUMBER_FIELDS.has(propertyName)
+        || U64_NUMBER_FIELDS_BY_TOOL.get(toolName ?? "")?.has(propertyName) === true
+      );
+    const nativeU64Declared = nativeU64Field
+      && (declaresNumeric(resolved) || branches.some(declaresNumeric));
+    const integerDeclared = declaresInteger(resolved)
+      || branches.some(declaresInteger)
+      || nativeU64Declared;
     if (!integerDeclared && safelyIntegral(value)) {
       // Issue #1938: a bare integer in a string-only field has exactly one faithful
       // string reading. A field that also accepts a numeric type keeps the number.
@@ -148,7 +196,9 @@ function coerceValue(value: unknown, schema: SchemaNode | undefined, root: Schem
     const itemSchema = resolved ? asSchema(resolved.items) : undefined;
     let changed = false;
     const next = value.map(entry => {
-      const result = coerceValue(entry, itemSchema, root, depth + 1);
+      // Array items have no property name of their own; passing the array's key would
+      // let `timeout_ms: [1.5]` inherit the allowlist. Items are judged by schema only.
+      const result = coerceValue(entry, itemSchema, root, depth + 1, toolName);
       if (result.changed) changed = true;
       return result.value;
     });
@@ -164,7 +214,7 @@ function coerceValue(value: unknown, schema: SchemaNode | undefined, root: Schem
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(object)) {
     const childSchema = asSchema(properties?.[key]) ?? additional;
-    const result = coerceValue(entry, childSchema, root, depth + 1);
+    const result = coerceValue(entry, childSchema, root, depth + 1, toolName, key);
     if (result.changed) changed = true;
     next[key] = result.value;
   }
@@ -182,6 +232,7 @@ function coerceValue(value: unknown, schema: SchemaNode | undefined, root: Schem
 export function coerceIntegerToolArguments(
   args: string,
   parameters: Record<string, unknown> | undefined,
+  toolName?: string,
 ): string {
   if (!parameters || !args) return args;
   // Cheap reject: a payload with no digit cannot need either repair (integral-float
@@ -196,7 +247,7 @@ export function coerceIntegerToolArguments(
     return args;
   }
   const root = parameters as SchemaNode;
-  const result = coerceValue(parsed, root, root, 0);
+  const result = coerceValue(parsed, root, root, 0, toolName);
   if (!result.changed) return args;
   return JSON.stringify(result.value);
 }

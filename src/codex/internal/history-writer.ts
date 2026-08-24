@@ -5,9 +5,10 @@
  * This module exists because the mutations are spread across three surfaces that
  * do not share a transaction: SQLite rows, the backup manifest, and the rollout
  * files. `syncCodexHistoryProvider` writes the manifest BEFORE its database
- * transaction and patches rollouts inside it; restore writes rollouts, then the
- * database, then the manifest, then ejects again
- * (`src/codex/history-provider.ts:606-648,656-698`). A SQLite busy timeout
+ * transaction and patches rollouts inside it; restore preflights every rollout,
+ * applies database CAS before file changes in one SQLite transaction, then consumes the
+ * manifest after exact readback (`src/codex/history-provider.ts`). A
+ * SQLite busy timeout
  * serializes exactly one of those three, which is why an opposite-direction
  * process could overtake through the other two.
  *

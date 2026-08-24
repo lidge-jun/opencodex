@@ -154,6 +154,10 @@ of the HTTP retry loop.
 
 - Builds Kiro `conversationState`, maps Codex tools and tool results, and sends image blocks supported
   by the Kiro wire.
+- Treats a client `parallel_tool_calls: true` value as permission rather than a wire requirement.
+  Kiro remains serialized: the routed catalog advertises no parallel-tool capability and the
+  adapter sends no parallel-control field upstream, but ordinary Codex tool turns are not rejected
+  solely because the client permits parallel calls.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
 - Uses the configured `baseUrl` verbatim when it is custom. A canonical

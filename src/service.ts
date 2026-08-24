@@ -10,8 +10,8 @@ import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, posix, resolve, win32 } from "node:path";
-import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
-import { loadConfig } from "./config";
+import { expandUserPath, getConfigDir, loadConfig } from "./config";
+import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config/process-state";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "./codex/home";
@@ -97,11 +97,15 @@ function defaultOpenCodexHome(): string {
   return resolve(join(homedir(), ".opencodex"));
 }
 
-function serviceStatePaths(): string[] {
-  const paths = [serviceStatePath()];
+export function serviceStatePathsForOpenCodexHome(opencodexHome: string): string[] {
+  const paths = [join(opencodexHome, "service-state.json")];
   const defaultPath = join(defaultOpenCodexHome(), "service-state.json");
   if (normalizePathForCompare(defaultPath) !== normalizePathForCompare(paths[0])) paths.push(defaultPath);
   return paths;
+}
+
+function serviceStatePaths(): string[] {
+  return serviceStatePathsForOpenCodexHome(currentOpenCodexHome());
 }
 
 function currentCodexHome(deps: CodexHomeDeps = {}): string {

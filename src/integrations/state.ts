@@ -13,6 +13,11 @@ import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
 import { canonicalContribution, fingerprint, type OwnershipRecord } from "./ownership";
+import {
+  protectedContributionFingerprint,
+  refreshablePathsOf,
+  validRefreshablePaths,
+} from "./ownership-policy";
 import { INTEGRATION_CLIENTS, type IntegrationClientId } from "./registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 
@@ -106,10 +111,10 @@ export function blockedContainerPath(
  * values lets another integration or a user add a sibling without blocking a
  * later refresh, while a change inside our block still fails closed.
  */
-function recordedFragmentFingerprint(
+function recordedContribution(
   doc: unknown,
   record: OwnershipRecord,
-): string | null {
+): ManagedContribution | null {
   if (
     !Array.isArray(record.fragmentPaths)
     || record.fragmentPaths.length === 0
@@ -125,10 +130,44 @@ function recordedFragmentFingerprint(
     if (value === undefined) return null;
     fragments.push({ path, value });
   }
-  return fingerprint(canonicalContribution({
+  return {
     clientId: record.clientId,
     fragments,
-  }));
+  };
+}
+
+/**
+ * Prove that every protected field still matches what OpenCodex wrote.
+ *
+ * New records carry an operation-scoped protected fingerprint and the exact
+ * paths excluded from it. Legacy records can recover only when the desired
+ * contribution has not moved since apply; otherwise catalog drift and a
+ * foreign edit are indistinguishable, so the classifier keeps failing closed.
+ */
+function recordedBlockIsOwned(
+  doc: unknown,
+  record: OwnershipRecord,
+  desired: ManagedContribution,
+): boolean {
+  const observed = recordedContribution(doc, record);
+  if (!observed) return false;
+  if (fingerprint(canonicalContribution(observed)) === record.blockFingerprint) return true;
+
+  if (
+    typeof record.protectedBlockFingerprint === "string"
+    && validRefreshablePaths(observed, record.refreshablePaths)
+    && record.refreshablePaths.length > 0
+  ) {
+    return protectedContributionFingerprint(observed, record.refreshablePaths)
+      === record.protectedBlockFingerprint;
+  }
+
+  const desiredFingerprint = fingerprint(canonicalContribution(desired));
+  if (desiredFingerprint !== record.blockFingerprint) return false;
+  const legacyPaths = refreshablePathsOf(desired);
+  return legacyPaths.length > 0
+    && protectedContributionFingerprint(observed, legacyPaths)
+      === protectedContributionFingerprint(desired, legacyPaths);
 }
 
 /**
@@ -191,7 +230,7 @@ export function classifyIntegration(input: {
    * conflict no matter what the rest of the file looks like, so the sibling-
    * edit exemption below can never mask it.
    */
-  if (recordedFragmentFingerprint(input.parsed, input.record) !== input.record.blockFingerprint) {
+  if (!recordedBlockIsOwned(input.parsed, input.record, input.contribution)) {
     return { state: "conflict", reason: "foreign-edit" };
   }
   if (!INTEGRATION_CLIENTS[clientId].sourcePreservingYaml

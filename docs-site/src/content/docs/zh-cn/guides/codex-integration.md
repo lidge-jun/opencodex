@@ -159,9 +159,13 @@ opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有
 ## 线程标识与历史记录
 
 默认的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要
-重映射。首次 sync 时，它还会把旧版 opencodex 标记过的线程迁回 `openai`。非 loopback 的专用 provider 模式
-在运行期间仍会把历史记录镜像到 `opencodex` provider 名下，并在退出时恢复已备份的 metadata。
-如需保持历史记录完全不变，请设置 `syncResumeHistory: false`。
+重映射。sync 和 restore 只应用与当前状态数据库匹配的备份 manifest，并精确恢复每个线程原来的 provider、
+source 和 event marker。没有 manifest 的 `opencodex` 行会保持不变；只有明确要强制执行旧式重标记时，才使用
+`ocx recover-history --legacy-openai --yes`。此命令的作用范围有意设置得很广：它会把所有包含用户消息且当前标记为
+`opencodex` 的线程改标为 `openai`，将 `exec` 规范化为 `cli`，并设置事件标记；正常的专用提供方历史记录也在
+范围内。请先备份状态，并且仅在确实需要这一完整范围时使用。非 loopback 的专用 provider 模式在运行期间仍会把历史记录镜像到
+`opencodex` provider 名下，并在退出时恢复已备份的 metadata。如需保持历史记录完全不变，请设置
+`syncResumeHistory: false`。
 
 ## 模型目录同步
 
@@ -235,7 +239,7 @@ display name 是 **仅用于显示且在重新生成时保持稳定的**。每�
 ### 外部 provider 管理器
 
 如果 `config.toml` 已经选择了 `openai` 或 `opencodex` 之外的 provider，OpenCodex 会保持文件不变，
-并跳过 profile 写入、catalog/cache 刷新，以及立即和后台两种 Codex 历史迁移。管理自定义 provider 的工具
+并跳过 profile 写入、catalog/cache 刷新，以及立即和后台两种 Codex 历史元数据恢复。管理自定义 provider 的工具
 通常会把现有会话标记为那个 provider id；如果替换活动 id，Codex 历史视图里那些完整会话可能会消失。
 同样的保护也适用于由旧版 root profile 选择的外部 provider。
 

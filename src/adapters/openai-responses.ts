@@ -1684,6 +1684,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
+      let routedCustomToolRepairNames: Set<string> | undefined;
       let convertedRoutedToolSearchNames: Set<string> | undefined;
       let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string }> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
@@ -1741,6 +1742,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         );
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
+        routedCustomToolRepairNames = rewritten.repairNames;
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         // Run after custom-tool lowering so the search compatibility layer can choose a
@@ -1811,6 +1813,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         body,
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
+        ...(routedCustomToolRepairNames ? { routedCustomToolRepairNames } : {}),
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
         ...(tierLog ? { tierLog } : {}),

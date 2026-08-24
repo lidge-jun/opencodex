@@ -203,7 +203,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   sync: async deps => {
-    const restartCodex = deps.args.slice(1).includes("--restart-codex");
+    const syncArgs = deps.args.slice(1);
+    const restartCodex = syncArgs.includes("--restart-codex");
+    // Separate flag on purpose: --restart-codex promises app-server-only scope,
+    // and quitting the desktop app ends live conversations.
+    const restartDesktopApp = syncArgs.includes("--restart-desktop-app");
     const live = await deps.findLiveProxy();
     const synced = await syncModelsToCodex(
       live?.port,
@@ -229,6 +233,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // exactly when a long-lived app-server is holding the stale list.
     if (synced.catalogWritten || synced.cacheSynced) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+      if (restartDesktopApp) await handleDesktopAppRestart(console);
     }
     // `ocx sync` is a direct CLI path; it does not call the management
     // `/api/sync` route. Refresh the already-connected MCode block here too,
@@ -259,7 +264,9 @@ const commandRunners: Record<string, CommandRunner> = {
     return await cmdV2(deps.args.slice(1), {}, async () => (await deps.findLiveProxy())?.port);
   },
   "sync-cache": async deps => {
-    const restartCodex = deps.args.slice(1).includes("--restart-codex");
+    const cacheArgs = deps.args.slice(1);
+    const restartCodex = cacheArgs.includes("--restart-codex");
+    const restartDesktopApp = cacheArgs.includes("--restart-desktop-app");
     const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
     const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
     const { getCodexHome } = await import("../codex/paths");
@@ -270,6 +277,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // Only warn/restart when models_cache was actually rewritten from a readable catalog.
     if (invalidated.kind === "completed" && invalidated.value) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+      if (restartDesktopApp) await handleDesktopAppRestart(console);
     } else if (desiredDisabled) {
       console.log("Codex integration is OFF; cache sync skipped (no catalog or cache write).");
     }
@@ -583,3 +591,43 @@ export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Pro
   }
   return await runner(deps);
 }
+
+/**
+ * Report the outcome of an opt-in desktop-app restart. Kept next to the two
+ * callers so `sync` and `sync-cache` cannot drift in what they tell the user.
+ */
+async function handleDesktopAppRestart(log: Pick<Console, "log" | "error">): Promise<void> {
+  const { restartCodexDesktopApp } = await import("../codex/desktop-app-restart");
+  const result = restartCodexDesktopApp();
+  switch (result.reason) {
+    case "windows_only":
+      log.error("--restart-desktop-app is supported on Windows only; nothing was stopped.");
+      return;
+    case "package_discovery_failed":
+      log.error(
+        "Could not identify the installed Codex desktop package. Quit and relaunch the desktop app "
+        + "manually to refresh the model picker.",
+      );
+      return;
+    case "self_ancestry":
+      log.error(
+        "Refusing to restart the desktop app because this command is running inside it. "
+        + "Run 'ocx sync --restart-desktop-app' from an external terminal instead.",
+      );
+      return;
+    case "no_targets":
+      log.log("Codex desktop app is not running; nothing to restart.");
+      return;
+    case "targets_survived":
+      log.error(
+        `Codex desktop app PID(s) ${result.surviving.join(", ")} did not exit, so it was not relaunched. `
+        + "Quit the desktop app manually to refresh the model picker.",
+      );
+      return;
+    default:
+      if (result.relaunch === "started") {
+        log.log("Codex desktop app restarted; its model picker will re-read the catalog.");
+      }
+  }
+}
+

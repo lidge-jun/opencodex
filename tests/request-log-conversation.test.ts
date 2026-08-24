@@ -6,6 +6,7 @@ import {
   conversationIdFromResponsesRequest,
   matchesLogConversationId,
   normalizeLogConversationId,
+  reasoningReplayConversationIdFromResponsesRequest,
   sessionIdHeaderFromRequest,
   summarizeConversationLogs,
 } from "../src/server/request-log-conversation";
@@ -91,6 +92,51 @@ describe("conversationIdFromResponsesRequest", () => {
     expect(conversationIdFromResponsesRequest({
       cursorConversationId: "cursor",
     })).toBe(digest32("cursor"));
+  });
+});
+
+describe("reasoningReplayConversationIdFromResponsesRequest", () => {
+  test("keeps the raw identity instead of the hashed log id", () => {
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
+    })).toBe("parent-thread");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      sessionIdHeader: "session",
+    })).not.toBe(digest32("session"));
+  });
+
+  test("prefers parent thread, then thread-id, then cursor, then session_id", () => {
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
+      threadIdHeader: "thread",
+      cursorConversationId: "cursor",
+      sessionIdHeader: "session",
+    })).toBe("parent-thread");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      threadIdHeader: "thread",
+      cursorConversationId: "cursor",
+      sessionIdHeader: "session",
+    })).toBe("thread");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      cursorConversationId: "cursor",
+      sessionIdHeader: "session",
+    })).toBe("cursor");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      sessionIdHeader: "session",
+    })).toBe("session");
+  });
+
+  test("skips empty, control-bearing, and overlong fallbacks", () => {
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      threadIdHeader: "  ",
+      cursorConversationId: "cursor",
+    })).toBe("cursor");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      sessionIdHeader: "bad\nid",
+    })).toBeUndefined();
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      sessionIdHeader: "x".repeat(4097),
+    })).toBeUndefined();
   });
 });
 

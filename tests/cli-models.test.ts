@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { configuredReasoningEfforts } from "../src/reasoning-effort";
 import { isModelTextOnly } from "../src/vision";
 import type { OcxProviderConfig } from "../src/types";
 
@@ -198,6 +199,48 @@ describe("ocx models richer metadata", () => {
       expect(row.inputModalities).toEqual(["text"]);
       expect(row.contextWindow).toBe(131000);
       expect(row.reasoningEfforts).toEqual(["low", "high"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the effort ladder is the one the runtime resolves, as with the modality", () => {
+    // `configuredReasoningEfforts` is what the catalog and the effort cap resolve
+    // through. Restating part of it here reported a ladder for a model the proxy
+    // strips reasoning from, and echoed a level Codex does not declare.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-models-efforts-"));
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "http://localhost:8080/v1",
+      allowPrivateNetwork: true,
+      defaultModel: "model-a",
+      models: ["model-a", "model-b", "model-c"],
+      reasoningEfforts: ["low", "medium", "high"],
+      noReasoningModels: ["model-b"],
+      modelReasoningEfforts: { "model-c": ["high", "bogus", "low"] },
+    };
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ port: 10122, providers: { test: provider }, defaultProvider: "test" }),
+      "utf8",
+    );
+    try {
+      const config = provider as unknown as OcxProviderConfig;
+      // Ground truth first: what the proxy itself will do with this config.
+      expect(configuredReasoningEfforts(config, "model-a")).toEqual(["low", "medium", "high"]);
+      // An empty ladder is not the same claim as "no override": it says this model
+      // intentionally exposes no effort control, which is why it must survive to the row.
+      expect(configuredReasoningEfforts(config, "model-b")).toEqual([]);
+      expect(configuredReasoningEfforts(config, "model-c")).toEqual(["low", "high"]);
+
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models as { model: string; reasoningEfforts: unknown }[];
+      const ladderOf = (model: string) => rows.find((m) => m.model === model)?.reasoningEfforts;
+
+      expect(ladderOf("model-a")).toEqual(["low", "medium", "high"]);
+      expect(ladderOf("model-b")).toEqual([]);
+      expect(ladderOf("model-c")).toEqual(["low", "high"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

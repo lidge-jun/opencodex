@@ -11,7 +11,7 @@ import type {
   OcxToolCall,
   OcxReasoningReplayScopeRef,
 } from "../types";
-import { namespacedToolName, toolChoiceCandidates } from "../types";
+import { createToolChoiceResolver, namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
@@ -758,8 +758,9 @@ export function parseRequest(
   const tc = mapToolChoice(data.tool_choice);
   if (tc && typeof tc === "object") {
     const selectors = "allowedTools" in tc ? tc.allowedTools : [tc.name];
+    const resolver = createToolChoiceResolver(mergedTools);
     for (const selector of selectors) {
-      if (toolChoiceCandidates(mergedTools, selector).length > 1) {
+      if (resolver.candidateCount(selector) > 1) {
         throw new Error(`ambiguous tool_choice name: ${selector}`);
       }
     }

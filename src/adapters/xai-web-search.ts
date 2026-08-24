@@ -60,10 +60,15 @@ function normalizeToolGroup(tools: unknown[]): ToolGroupRewrite {
       : undefined;
     const enableImageSearch = searchContentTypes?.includes("image") === true;
     const next: Record<string, unknown> = { ...tool, type: CODEX_WEB_SEARCH_TOOL };
+    // Only the two fields xAI actually refuses are removed. Probed 2026-08-22, one field per
+    // request, against BOTH xAI destinations (api.x.ai and cli-chat-proxy.grok.com): they behave
+    // identically — `external_web_access` 400s on every value including `true`, and
+    // `search_context_size` 400s, while `user_location`, `search_content_types`, `filters` and
+    // `enable_image_search` are all accepted. Deleting the accepted ones was a silent capability
+    // loss, and it contradicted the sibling layer, whose own probe note already records
+    // user_location/filters as accepted (tests/responses-routed-web-search-fields.test.ts).
     delete next.external_web_access;
     delete next.search_context_size;
-    delete next.search_content_types;
-    delete next.user_location;
     if (enableImageSearch && !Object.hasOwn(next, "enable_image_search")) {
       next.enable_image_search = true;
     }

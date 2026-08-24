@@ -3,7 +3,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { opendir } from "node:fs/promises";
 import type { AdapterEvent, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxUsage } from "../types";
-import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
+import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -157,8 +157,7 @@ function visibleTools(parsed: OcxParsedRequest): OcxTool[] {
   if (choice === "none") return [];
   const tools = parsed.context.tools ?? [];
   if (isAllowedToolChoice(choice)) {
-    const allowed = new Set(choice.allowedTools);
-    return tools.filter(tool => toolAllowedByChoice(tool, allowed, tools));
+    return tools.filter(toolChoiceToolPredicate(choice, tools));
   }
   if (choice && typeof choice !== "string") {
     const selected = resolveToolChoiceWireName(tools, choice.name);

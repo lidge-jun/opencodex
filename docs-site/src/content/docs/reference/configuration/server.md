@@ -31,7 +31,9 @@ runs helper features around provider requests.
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
 
 If an older development build changed resume-history metadata before backup support existed, run
-`ocx recover-history --legacy-openai` to force native-provider recovery.
+`ocx recover-history --legacy-openai --yes` to force native-provider recovery.
+It force-relabels every user-message `opencodex` row, including legitimate dedicated-provider
+history; review the full-scope warning in the lifecycle reference before running it.
 
 ## Remote access
 
