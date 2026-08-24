@@ -40,7 +40,7 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
-import { claimOwnedServiceHome } from "./helpers/owned-service-home";
+import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = resolve(import.meta.dir, "..");
@@ -118,6 +118,7 @@ class Fixture {
   readonly lockPath: string;
   readonly lockAllowlist: string[];
   readonly serviceManagerEnv: Record<string, string>;
+  readonly serviceManagerPreloadPath: string | undefined;
   readonly children: Array<ReturnType<typeof Bun.spawn>> = [];
 
   constructor() {
@@ -130,10 +131,16 @@ class Fixture {
       if (existsSync(path)) throw new Error(`lock preflight found pre-existing case path: ${path}`);
     }
     writeFileSync(join(this.codex, "config.toml"), 'model = "gpt-5"\n');
-    this.serviceManagerEnv = claimOwnedServiceHome(this.codex, this.ocx, this.homeA).env;
+    const serviceHome = claimOwnedServiceHome(this.codex, this.ocx, this.homeA);
+    this.serviceManagerEnv = serviceHome.env;
+    this.serviceManagerPreloadPath = serviceHome.preloadPath;
   }
 
-  env(home = this.homeA, userprofile = this.userprofileA): Record<string, string> {
+  env(
+    home = this.homeA,
+    userprofile = this.userprofileA,
+    includeServiceProbe = false,
+  ): Record<string, string> {
     // Do not inherit ambient homes or proxy configuration.  `process.execPath`
     // is absolute, so a PATH is intentionally unnecessary for CLI children.
     return {
@@ -156,7 +163,7 @@ class Fixture {
       // without this the child spawned by a CI runner refuses with "Windows effective-account
       // lookup timed out" while powershell.exe is still starting.
       ...(process.env.CI === "true" ? { CI: "true" } : {}),
-      ...this.serviceManagerEnv,
+      ...(includeServiceProbe ? this.serviceManagerEnv : {}),
     };
   }
 
@@ -182,9 +189,9 @@ class Fixture {
   }
 
   spawnCli(argv: string[], home = this.homeA, userprofile = this.userprofileA) {
-    const child = Bun.spawn([process.execPath, cliPath, ...argv], {
+    const child = Bun.spawn([process.execPath, ...withOwnedServiceHomePreload([cliPath, ...argv], this.serviceManagerPreloadPath)], {
       cwd: this.root,
-      env: this.env(home, userprofile),
+      env: this.env(home, userprofile, true),
       stdout: "pipe",
       stderr: "pipe",
     });
