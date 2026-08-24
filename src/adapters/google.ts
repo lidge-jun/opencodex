@@ -19,6 +19,7 @@ import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
+import { sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { repairGoogleToolPairs, stripTrailingClaudePrefill } from "./google-antigravity-tools";
@@ -393,6 +394,13 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
     ...(usage.cachedContentTokenCount !== undefined ? { cachedInputTokens: usage.cachedContentTokenCount } : {}),
     ...(usage.thoughtsTokenCount !== undefined ? { reasoningOutputTokens: usage.thoughtsTokenCount } : {}),
   };
+}
+
+function googlePromptFeedbackError(root: Record<string, unknown>): Extract<AdapterEvent, { type: "error" }> | undefined {
+  const feedback = root.promptFeedback;
+  if (!isGoogleRecord(feedback) || typeof feedback.blockReason !== "string" || !feedback.blockReason.trim()) return undefined;
+  const reason = sanitizeUpstreamErrorText(feedback.blockReason).slice(0, 160);
+  return { type: "error", message: `google response blocked by prompt feedback: ${reason}` };
 }
 
 /**
@@ -1010,7 +1018,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // absent key and an empty array are already skipped here; `null` joins them. A non-null
         // non-array container is still claimed structure the parser cannot read, and stays
         // terminal.
-        if (rawCandidates === undefined || rawCandidates === null) return "continue";
+        if (rawCandidates === undefined || rawCandidates === null) {
+          const feedbackError = googlePromptFeedbackError(root);
+          if (feedbackError) {
+            yield feedbackError;
+            return "terminate";
+          }
+          return "continue";
+        }
         if (!Array.isArray(rawCandidates)) {
           yield invalidGoogleShapeEvent({
             reason: "candidates_not_array",
@@ -1018,7 +1033,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           });
           return "terminate";
         }
-        if (rawCandidates.length === 0) return "continue";
+        if (rawCandidates.length === 0) {
+          const feedbackError = googlePromptFeedbackError(root);
+          if (feedbackError) {
+            yield feedbackError;
+            return "terminate";
+          }
+          return "continue";
+        }
         const rawCandidate = rawCandidates[0];
         if (!isGoogleRecord(rawCandidate)) {
           // Unlike a root `data: null` keepalive, this is a claimed response candidate. Treat it
@@ -1191,8 +1213,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
-        if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-          && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
+        if (isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
           yield { type: "error", message: vertexTruncationErrorMessage(lastFinishReason) };
           return;
         }
@@ -1345,6 +1366,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const candidates = rawCandidates as { finishReason?: string }[] | undefined;
       if (!candidates?.length) {
+        const feedbackError = googlePromptFeedbackError(json);
+        if (feedbackError) return finish([feedbackError]);
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
       const rawCandidate: unknown = candidates[0];
@@ -1417,8 +1440,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if (provider.googleMode === "vertex"
-        && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
+      if (isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidate.finishReason) }]);
       }
 
