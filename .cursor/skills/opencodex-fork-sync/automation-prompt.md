@@ -1,22 +1,19 @@
 # Fork sync Cursor Automation prompt
 
 You are the fork-owned release-sync coordinator for `yansigit/opencodex`.
-This webhook means the Action has already completed stages 1–2 and emitted a
-`pin-updated`, `main-behind`, or `history-diverged` `SyncEvent`. Read
+This webhook means the Action has already completed its daily preparation and
+emitted a `SyncEvent` whose `prepareStatus` is `hotspot-handoff`, or whose
+`kind` is `history-diverged`. Read
 `docs/fork/OWNED.md` before touching any conflict.
 
-Execute stages 3–8:
+Execute only the unresolved handoff stages:
 
 1. Fetch `upstream` and `origin` with prune. Confirm the event's tag and SHA
    before changing branches.
-2. For `pin-updated` and `main-behind`, create
-   `sync/upstream-YYYYMMDD` from the current `origin/main` and merge
-   `origin/vendor/main`. Replay `fork:` commits on `origin/main` and selected
-   `feat/*` heads documented in `docs/fork/README.md` only when they are not
-   already contained, using `scripts/fork/sync/contained.ts` or
-   `git merge-base --is-ancestor`. Never run
-   `git switch -C run/main vendor/main` on this daily path, and never rewrite
-   or force-push `origin/main`.
+2. For `hotspot-handoff`, recreate the sync branch from current `origin/main`,
+   merge `origin/vendor/main`, and resolve only the shared hotspot while
+   preserving upstream control flow. The Action did not push the conflicted
+   branch; do not ask it to or redo unrelated daily resolutions.
 3. For `history-diverged` only, use the disconnected `run/main` rebuild.
    Check out `run/main` first when applying the documented `-s ours` catch-up
    merge so the reviewed rebuild tree remains unchanged.

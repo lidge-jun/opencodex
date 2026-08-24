@@ -6,6 +6,24 @@ export type SyncEventKind =
   | "main-behind"
   | "history-diverged";
 
+export type PathClass =
+  | "fork-owned"
+  | "upstream-owned"
+  | "shared-hotspot"
+  | "recipe";
+
+export interface PrepareResult {
+  status: "merged" | "hotspot-handoff" | "history-diverged" | "skipped";
+  branch?: string;
+  resolutions: Array<{
+    path: string;
+    classification: PathClass;
+    action: string;
+  }>;
+  unresolved: string[];
+  pullRequestNumber?: number;
+}
+
 export interface SyncEvent {
   kind: SyncEventKind;
   upstreamRepo: string;
@@ -16,6 +34,7 @@ export interface SyncEvent {
   vendorContainedInMain?: boolean;
   mergeBaseCount?: number;
   recommendedLane?: "noop" | "daily-merge" | "emergency-rebuild";
+  prepareStatus?: PrepareResult["status"];
   detectedAt: string;
   error?: string;
 }
@@ -71,4 +90,21 @@ export interface GitHubIssuesClient {
     body: string;
     labels: string[];
   }): Promise<void>;
+}
+
+export interface GitHubPullRequest {
+  number: number;
+  title: string;
+  body?: string;
+  state: string;
+  draft?: boolean;
+  head: { ref: string };
+  base: { ref: string };
+}
+
+export interface DraftPullRequestClient {
+  upsert(input: {
+    event: SyncEvent;
+    result: PrepareResult;
+  }): Promise<number>;
 }

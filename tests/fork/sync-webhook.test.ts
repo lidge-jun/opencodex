@@ -61,6 +61,21 @@ describe("fork sync Cursor webhook coordinator", () => {
     expect(postedKinds).toEqual(["main-behind", "history-diverged"]);
   });
 
+  test("preserves the prepare status on a hotspot handoff", async () => {
+    let posted: SyncEvent | undefined;
+    await createCursorWebhookCoordinator({
+      url: "https://cursor.example/hook",
+      secret: SECRET,
+      fetchImpl: async (_url, init) => {
+        posted = JSON.parse(String(init?.body)) as SyncEvent;
+        return new Response(null, { status: 200 });
+      },
+    }).start({ ...event(), prepareStatus: "hotspot-handoff" });
+
+    expect(posted?.kind).toBe("pin-updated");
+    expect(posted?.prepareStatus).toBe("hotspot-handoff");
+  });
+
   test("does not post issue-only events", async () => {
     let calls = 0;
     const fetchImpl = async () => {

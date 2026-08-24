@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { CommandResult, CommandRunner, SyncEvent } from "../../scripts/fork/sync/types";
+import type {
+  CommandResult,
+  CommandRunner,
+  DraftPullRequestClient,
+  PrepareResult,
+  SyncEvent,
+} from "../../scripts/fork/sync/types";
 import { registerCoordinator, registerNotifier } from "../../scripts/fork/sync/registry";
 import { runCli } from "../../scripts/fork/sync/cli";
 
@@ -160,9 +166,7 @@ describe("fork sync CLI", () => {
       result(""),
       result(DEFAULT_MAIN_SHA),
       result(""),
-      result(""),
       result(TAG_SHA),
-      result(""),
       result(""),
       result(DEV_SHA),
       result("", 1),
@@ -176,8 +180,16 @@ describe("fork sync CLI", () => {
       },
       write: value => output.push(value),
     });
-    expect(calls).toContainEqual(["merge", "--ff-only", TAG_SHA]);
-    expect(calls).toContainEqual(["merge", "--ff-only", "refs/remotes/upstream/dev"]);
+    expect(calls).toContainEqual([
+      "fetch",
+      ".",
+      `${TAG_SHA}:refs/heads/vendor/main`,
+    ]);
+    expect(calls).toContainEqual([
+      "fetch",
+      ".",
+      "refs/remotes/upstream/dev:refs/heads/vendor/dev",
+    ]);
     expect(calls).toEqual([
       ["ls-remote", "--tags", "--refs", "upstream", "v*"],
       ["rev-parse", "refs/heads/vendor/main"],
@@ -186,11 +198,9 @@ describe("fork sync CLI", () => {
       ["merge-base", "--is-ancestor", TAG_SHA, MAIN_SHA],
       ["merge-base", "--is-ancestor", MAIN_SHA, TAG_SHA],
       ["rev-parse", "HEAD"],
-      ["switch", "vendor/main"],
-      ["merge", "--ff-only", TAG_SHA],
+      ["fetch", ".", `${TAG_SHA}:refs/heads/vendor/main`],
       ["rev-parse", "refs/heads/vendor/main"],
-      ["switch", "vendor/dev"],
-      ["merge", "--ff-only", "refs/remotes/upstream/dev"],
+      ["fetch", ".", "refs/remotes/upstream/dev:refs/heads/vendor/dev"],
       ["rev-parse", "refs/heads/vendor/dev"],
       ["merge-base", "--is-ancestor", TAG_SHA, DEFAULT_MAIN_SHA],
       ["merge-base", "--all", DEFAULT_MAIN_SHA, TAG_SHA],
@@ -315,6 +325,78 @@ describe("fork sync CLI", () => {
       args: ["nanobot", "trigger", "fork-sync"],
       stdin: JSON.stringify(event),
     });
+  });
+
+  test("prepare reads an event from stdin and prints its result", async () => {
+    const output: string[] = [];
+    const calls: string[][] = [];
+    const prepareEvent: SyncEvent = {
+      kind: "pin-updated",
+      upstreamRepo: "upstream",
+      latestTag: "v2.29.0",
+      latestTagSha: TAG_SHA,
+      vendorMainSha: MAIN_SHA,
+      vendorDevSha: DEV_SHA,
+      detectedAt: "2026-08-24T12:00:00.000Z",
+      recommendedLane: "daily-merge",
+    };
+    const results = [result(""), result("")];
+    await runCli(["prepare"], {
+      env: {},
+      stdin: JSON.stringify(prepareEvent),
+      runner: async args => {
+        calls.push([...args]);
+        return results.shift() ?? result("", 1, "unexpected command");
+      },
+      write: value => output.push(value),
+    });
+
+    expect(JSON.parse(output[0]!)).toEqual({
+      status: "merged",
+      branch: "sync/upstream-20260824",
+      resolutions: [],
+      unresolved: [],
+    });
+    expect(calls).toEqual([
+      ["switch", "-c", "sync/upstream-20260824"],
+      ["merge", "--no-ff", "vendor/main"],
+    ]);
+  });
+
+  test("draft-pr reads an event/result envelope and returns the PR number", async () => {
+    const output: string[] = [];
+    const received: Array<{ event: SyncEvent; result: PrepareResult }> = [];
+    const draftClient: DraftPullRequestClient = {
+      async upsert(input) {
+        received.push(input);
+        return 29;
+      },
+    };
+    const prepareResult: PrepareResult = {
+      status: "merged",
+      branch: "sync/upstream-20260824",
+      resolutions: [],
+      unresolved: [],
+    };
+    const draftEvent: SyncEvent = {
+      kind: "pin-updated",
+      upstreamRepo: "upstream",
+      latestTag: "v2.29.0",
+      latestTagSha: TAG_SHA,
+      vendorMainSha: MAIN_SHA,
+      vendorDevSha: DEV_SHA,
+      detectedAt: "2026-08-24T12:00:00.000Z",
+      recommendedLane: "daily-merge",
+    };
+    await runCli(["draft-pr"], {
+      env: {},
+      stdin: JSON.stringify({ event: draftEvent, result: prepareResult }),
+      draftClient,
+      write: value => output.push(value),
+    });
+
+    expect(received).toEqual([{ event: draftEvent, result: prepareResult }]);
+    expect(JSON.parse(output[0]!)).toEqual({ pullRequestNumber: 29 });
   });
 
   test("emit still starts coordinators when a notifier fails", async () => {
