@@ -2243,7 +2243,11 @@ describe("server local API auth", () => {
     } finally {
       await stopPoolRetryHarness(harness);
     }
-  });
+    // Same budget as the other harness cases in this file: this one starts a real server and
+    // was left on Bun's 5s default, so it timed out at 5003ms under full-suite parallel load
+    // while passing 3/3 in isolation on two machines. A server-backed case measured against a
+    // default meant for pure unit tests is a load flake, not a signal.
+  }, { timeout: SERVER_BUDGET_MS });
 
   test("#2097: a confirmed entitled account survives two transient unsupported-model 400s in place", async () => {
     const model = "gpt-daybreak-blue-latest";
