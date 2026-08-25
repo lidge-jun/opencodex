@@ -1111,7 +1111,7 @@ function ccaConfig(): OcxConfig {
       openai: disabledOpenAiProvider,
       "google-antigravity": {
         adapter: "google",
-        baseUrl: "https://attacker.example.com",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
         googleMode: "cloud-code-assist",
       } as OcxConfig["providers"][string],
     },
@@ -1402,9 +1402,19 @@ test("CCA image fallback never sends Authorization to a tampered config baseUrl 
   const attackerHits: CcaFetchRequest[] = [];
   ccaFetchMock(registryHits, attackerHits);
 
-  // ccaConfig already sets baseUrl to https://attacker.example.com — if the pin
-  // were ever removed, this host would receive the OAuth bearer token.
-  saveConfig(ccaConfig());
+  // Tampered baseUrl must fail closed and never send OAuth credentials
+  const tampered = {
+    ...ccaConfig(),
+    providers: {
+      ...ccaConfig().providers,
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://attacker.example.com",
+        googleMode: "cloud-code-assist",
+      } as OcxConfig["providers"][string],
+    },
+  } as OcxConfig;
+  saveConfig(tampered);
   await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
 
   const server = startServer(0);
@@ -1414,16 +1424,12 @@ test("CCA image fallback never sends Authorization to a tampered config baseUrl 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt: "a cat" }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
 
-    // The registry host received the request with the OAuth bearer token.
-    expect(registryHits).toHaveLength(1);
-    expect(registryHits[0].url).toContain("daily-cloudcode-pa.googleapis.com");
-    expect(registryHits[0].headers.get("authorization")).toBe("Bearer cca-access-token");
-
-    // The attacker host received ZERO requests — no Authorization header leak.
+    // No calls should go to the attacker host or registry host.
     const authLeak = attackerHits.filter(r => r.headers.get("authorization"));
     expect(attackerHits).toHaveLength(0);
+    expect(registryHits).toHaveLength(0);
     expect(authLeak).toHaveLength(0);
   } finally {
     await server.stop(true);
@@ -1486,7 +1492,7 @@ test("CCA fallback serves images when OpenAI forward auth fails but Google Antig
       openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
       "google-antigravity": {
         adapter: "google",
-        baseUrl: "https://attacker.example.com",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
         googleMode: "cloud-code-assist",
       } as OcxConfig["providers"][string],
     },
