@@ -5418,6 +5418,16 @@ async function handleResponsesInner(
     nextParsed: OcxParsedRequest,
     initialRecoveryKind?: AttemptRecoveryKind,
   ): AsyncGenerator<AdapterEvent> {
+    const requestValidationEvent = (error: unknown): AdapterEvent | undefined => {
+      if (!(error instanceof OcxRequestValidationError)) return undefined;
+      return {
+        type: "error",
+        status: error.status,
+        errorType: "invalid_request_error",
+        code: "invalid_request_error",
+        message: error.message,
+      };
+    };
     let response: Response | undefined;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined = initialRecoveryKind;
@@ -5518,7 +5528,10 @@ async function handleResponsesInner(
         nextContinuationRecoveryKind = undefined;
         response = await fetchContinuation(recoveryKind);
       } catch (error) {
-        if (options.abortSignal?.aborted || upstream.signal.aborted) {
+        const validationEvent = requestValidationEvent(error);
+        if (validationEvent) {
+          yield validationEvent;
+        } else if (options.abortSignal?.aborted || upstream.signal.aborted) {
           yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
         } else {
           yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
@@ -5564,7 +5577,10 @@ async function handleResponsesInner(
         try {
           response = await fetchContinuation("rate-limit-429");
         } catch (error) {
-          if (options.abortSignal?.aborted || upstream.signal.aborted) {
+          const validationEvent = requestValidationEvent(error);
+          if (validationEvent) {
+            yield validationEvent;
+          } else if (options.abortSignal?.aborted || upstream.signal.aborted) {
             yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
           } else {
             yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
@@ -5795,7 +5811,10 @@ async function handleResponsesInner(
         detachContinuationBodyGuard();
       }
     } catch (error) {
-      if (options.abortSignal?.aborted) {
+      const validationEvent = requestValidationEvent(error);
+      if (validationEvent) {
+        yield validationEvent;
+      } else if (options.abortSignal?.aborted) {
         yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
       } else {
         yield { type: "error", message: `Provider continuation parse failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };

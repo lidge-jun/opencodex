@@ -231,6 +231,13 @@ export async function* guardEmptyCompletionEventStream(
         return;
       }
       if (event.type === "error") {
+        // A local route/request validation failure from a continuation is already a complete,
+        // typed client error. Do not collapse it into the generic empty-completion retry failure.
+        if (event.status === 400 && event.errorType === "invalid_request_error") {
+          yield* releaseHeld();
+          yield withUsage(event);
+          return;
+        }
         if (retries > 0 && event.status !== 499) {
           // The retry failed upstream. Its body cannot reach the client (the
           // 200 head went out with the first attempt), so state the failure in

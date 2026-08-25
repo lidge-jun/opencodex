@@ -453,6 +453,25 @@ describe("web-search timeout runtime contracts", () => {
     expect(fetches).toBe(1);
   });
 
+  test("preserves an upstream HTTP 400 as upstream_error", async () => {
+    const adapter: ProviderAdapter = {
+      name: "upstream-400",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("provider rejected request", { status: 400 }),
+      async *parseStream() { yield { type: "done" }; },
+      async parseResponse() { return [{ type: "done" }]; },
+    };
+    const response = await runWithWebSearch(deps(adapter, { maxSearches: 0 }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        message: "Provider error 400",
+        type: "upstream_error",
+        code: null,
+      },
+    });
+  });
+
   test("a streamed web-search rotation failure is a typed 400 terminal", async () => {
     let builds = 0;
     let rotatedBuilds = 0;
@@ -510,5 +529,34 @@ describe("web-search timeout runtime contracts", () => {
     expect(sse).toContain('"type":"invalid_request_error"');
     expect(sse).not.toContain('"code":"upstream_server_error"');
     expect(sse).not.toContain("event: response.completed");
+  });
+
+  test("a streamed upstream HTTP 400 remains upstream_error", async () => {
+    let fetches = 0;
+    let parses = 0;
+    const adapter: ProviderAdapter = {
+      name: "upstream-400-stream",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => {
+        fetches += 1;
+        return new Response(fetches === 1 ? "ok" : "provider rejected request", { status: fetches === 1 ? 200 : 400 });
+      },
+      async *parseStream() {
+        parses += 1;
+        if (parses === 1) {
+          yield { type: "tool_call_start", id: "search_1", name: "web_search" };
+          yield { type: "tool_call_delta", arguments: JSON.stringify({ query: "docs" }) };
+          yield { type: "tool_call_end" };
+        }
+        yield { type: "done" };
+      },
+      async parseResponse() { return [{ type: "done" }]; },
+    };
+    const response = await runWithWebSearch(deps(adapter, { backend: "xai" }));
+    const sse = await response.text();
+    expect(response.status).toBe(200);
+    expect(sse).toContain("event: response.failed");
+    expect(sse).toContain('"type":"upstream_error"');
+    expect(sse).not.toContain('"type":"invalid_request_error"');
   });
 });

@@ -119,7 +119,9 @@ function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>
   }
   const fallback = adapterFailureFromMessage(event.message);
   let httpStatus = event.status ?? fallback.httpStatus;
-  const error = classifyError(httpStatus, event.errorType ?? fallback.error.type, event.message);
+  const error = httpStatus === 400 && event.errorType === "upstream_error"
+    ? { message: event.message, type: "upstream_error", code: event.code ?? null }
+    : classifyError(httpStatus, event.errorType ?? fallback.error.type, event.message);
   if (event.errorType !== undefined) error.type = event.errorType;
   if (event.code !== undefined) error.code = event.code;
   // Codex maps cyber_policy on HTTP 400 (body) or mid-stream code; never leave it as 502.

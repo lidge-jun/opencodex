@@ -80,6 +80,7 @@ describe("Google provider options", () => {
     const provider = {
       adapter: "google",
       googleMode: "ai-studio",
+      googleMode: "ai-studio",
       baseUrl: "https://generativelanguage.googleapis.com",
       apiKey: "key-a",
       apiKeyPool: [{ id: "a", key: "key-a" }, { id: "b", key: "key-b" }],
@@ -101,6 +102,54 @@ describe("Google provider options", () => {
       }), providerConfig("google", provider), { model: "", provider: "" });
       expect(response.status).toBe(400);
       expect(fetches).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("keeps continuation route validation typed after an empty completion", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetches = 0;
+    const provider = {
+      adapter: "google",
+      googleMode: "ai-studio",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "key",
+      apiKeyPool: [{ id: "a", key: "key" }, { id: "b", key: "key-b" }],
+      modelAdapters: { "gemini-3.5-flash": "google" },
+    } as Record<string, unknown>;
+    const continuationConfig = providerConfig("google", provider);
+    continuationConfig.emptyCompletionRetry = true;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        return Response.json({ candidates: [{ content: { parts: [] }, finishReason: "STOP" }] });
+      }
+      ((continuationConfig.providers.google as Record<string, unknown>).modelAdapters as Record<string, string>)["gemini-3.5-flash"] = "openai-chat";
+      return new Response("rate limited", { status: 429 });
+    }) as typeof fetch;
+    try {
+      // Make the hidden empty-completion retry rotate to a non-Google adapter. The continuation
+      // route gate must fail before a second provider request and preserve its typed 400.
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-3.5-flash",
+          input: "hello",
+          stream: false,
+          provider_options: { google: { cached_content: "cachedContents/cache-1" } },
+        }),
+      }), continuationConfig, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(fetches).toBe(2);
+      expect(await response.json()).toMatchObject({
+        status: "failed",
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_request_error",
+        },
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

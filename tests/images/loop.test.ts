@@ -659,6 +659,26 @@ describe("runWithImageBridge", () => {
     expect(seen).toEqual({ inputTokens: 1, outputTokens: 2 });
   });
 
+  test("preserves an upstream HTTP 400 as upstream_error", async () => {
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: {
+        ...mockAdapter,
+        fetchResponse: async () => new Response("provider rejected request", { status: 400 }),
+      },
+      plan,
+      maxRounds: 0,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        message: "Provider error 400",
+        type: "upstream_error",
+        code: null,
+      },
+    });
+  });
+
   test("validates a rotated adapter before the second image-bridge build", async () => {
     let builds = 0;
     let fetches = 0;
@@ -746,6 +766,24 @@ describe("runWithImageBridge", () => {
     expect(sse).toContain('"type":"invalid_request_error"');
     expect(sse).not.toContain('"code":"upstream_server_error"');
     expect(sse).not.toContain("event: response.completed");
+  });
+
+  test("a streamed upstream HTTP 400 remains upstream_error", async () => {
+    let fetches = 0;
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      fetchResponse: async () => {
+        fetches += 1;
+        return new Response(fetches === 1 ? "ok" : "provider rejected request", { status: fetches === 1 ? 200 : 400 });
+      },
+    };
+    streamQueue = [[...imageCallEvents]];
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan, maxRounds: 1 });
+    const sse = await response.text();
+    expect(response.status).toBe(200);
+    expect(sse).toContain("event: response.failed");
+    expect(sse).toContain('"type":"upstream_error"');
+    expect(sse).not.toContain('"type":"invalid_request_error"');
   });
 
   test("onUsage does not double-count hiddenUsage across image iterations", async () => {

@@ -210,13 +210,12 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   return parts;
 }
 
-function jsonError(status: number, message: string): Response {
-  const invalidRequest = status === 400;
+function jsonError(status: number, message: string, errorType = "upstream_error", code: string | null = null): Response {
   return new Response(JSON.stringify({
     error: {
       message,
-      type: invalidRequest ? "invalid_request_error" : "upstream_error",
-      code: invalidRequest ? "invalid_request_error" : null,
+      type: errorType,
+      code,
     },
   }), {
     status,
@@ -227,7 +226,12 @@ function jsonError(status: number, message: string): Response {
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-2xx jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly errorType?: string,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = "LoopError";
   }
@@ -622,7 +626,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       return prepared;
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
-      if (error instanceof OcxRequestValidationError) throw new LoopError(error.status, error.message);
+      if (error instanceof OcxRequestValidationError) {
+        throw new LoopError(error.status, error.message, "invalid_request_error", "invalid_request_error");
+      }
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
@@ -692,7 +698,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-      if (e instanceof LoopError) return jsonError(e.status, e.message);
+      if (e instanceof LoopError) return jsonError(e.status, e.message, e.errorType, e.code ?? null);
       throw e;
     }
   }
@@ -938,7 +944,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             yield {
               type: "error",
               message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
-              ...(e instanceof LoopError ? { status: e.status } : {}),
+              ...(e instanceof LoopError ? {
+                status: e.status,
+                ...(e.errorType !== undefined || e.status === 400
+                  ? { errorType: e.errorType ?? "upstream_error" }
+                  : {}),
+                ...(e.code !== undefined ? { code: e.code } : {}),
+              } : {}),
               ...(hiddenUsage ? { usage: hiddenUsage } : {}),
             };
           }
