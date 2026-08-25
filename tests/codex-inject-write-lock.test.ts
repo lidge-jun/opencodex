@@ -15,7 +15,7 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
-import { STABLE_ZERO_BYTE_COORDINATOR_AGE_MS } from "../src/codex/inject-coordination";
+import { boundProvenanceEntries, STABLE_ZERO_BYTE_COORDINATOR_AGE_MS } from "../src/codex/inject-coordination";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -464,5 +464,48 @@ describe("the transition is resolved, not left pending", () => {
     // Opt-out is a completed decision, not a failure: converged, never blocked,
     // and never left pending for a job that chose to do nothing.
     expect(row.state?.history?.status).toBe("converged");
+  });
+});
+
+/**
+ * The ledger is evidence, not an archive (#2622).
+ *
+ * Each admitted transaction appends three entries, and a `present` baseline carries the artifact's
+ * exact bytes as base64 — a 25 KB `config.toml` is roughly 100 KB per transaction. Unbounded, a
+ * machine that syncs on every start grows this file forever, and since the record is re-read and
+ * re-serialized on every append, the cost is quadratic rather than merely large.
+ */
+describe("provenance ledger bound", () => {
+  const entry = (txId: string, kind: "config" | "generated-profile" | "injection-journal") => ({
+    artifact: { kind },
+    baseline: { kind: "absent" as const },
+    postImage: null,
+    txId,
+    at: "2026-08-26T00:00:00.000Z",
+  });
+  const transaction = (txId: string) => [
+    entry(txId, "config"),
+    entry(txId, "generated-profile"),
+    entry(txId, "injection-journal"),
+  ];
+
+  test("keeps the newest transactions and drops the oldest whole", () => {
+    const entries = Array.from({ length: 20 }, (_, i) => transaction(`tx-${i}`)).flat();
+    const bounded = boundProvenanceEntries(entries, 16);
+
+    const kept = [...new Set(bounded.map(e => e.txId))];
+    expect(kept).toHaveLength(16);
+    expect(kept[0]).toBe("tx-4");
+    expect(kept.at(-1)).toBe("tx-19");
+    // Whole transactions only. A half-trimmed transaction would claim it touched two artifacts
+    // when it touched three, which reads as complete and is worse than dropping it.
+    for (const txId of kept) {
+      expect(bounded.filter(e => e.txId === txId)).toHaveLength(3);
+    }
+  });
+
+  test("a ledger within the window is returned unchanged", () => {
+    const entries = Array.from({ length: 16 }, (_, i) => transaction(`tx-${i}`)).flat();
+    expect(boundProvenanceEntries(entries, 16)).toBe(entries);
   });
 });

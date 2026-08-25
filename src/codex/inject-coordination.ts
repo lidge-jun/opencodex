@@ -183,6 +183,19 @@ export function captureCodexPreImages(): CodexPreImages {
   };
 }
 
+/**
+ * How many transactions of evidence the ledger keeps.
+ *
+ * Each transaction appends three entries, and a `present` baseline embeds the artifact's exact
+ * bytes as base64 — a 25 KB `config.toml` is ~34 KB per entry, so roughly 100 KB per transaction.
+ * A machine that syncs on every start would grow this file without limit, and it is re-read and
+ * re-serialized on every append, so the cost is quadratic rather than merely large.
+ *
+ * A ledger is evidence, not an archive. The most recent transactions are the ones anyone
+ * diagnoses against, so the window keeps those and drops the oldest.
+ */
+export const CODEX_PROVENANCE_MAX_TRANSACTIONS = 16;
+
 function provenanceBaseline(bytes: string | null): CodexProvenanceEntry["baseline"] {
   if (bytes === null) return { kind: "absent" };
   return {
@@ -198,6 +211,25 @@ function provenancePostImage(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Keep the newest `CODEX_PROVENANCE_MAX_TRANSACTIONS` transactions, whole.
+ *
+ * Trimming by ENTRY count would cut a transaction in half and leave evidence that says a
+ * transaction touched two artifacts when it touched three — worse than dropping it outright,
+ * because a partial record still reads as complete. Order is preserved; only whole leading
+ * transactions are removed.
+ */
+export function boundProvenanceEntries(
+  entries: readonly CodexProvenanceEntry[],
+  maxTransactions = CODEX_PROVENANCE_MAX_TRANSACTIONS,
+): readonly CodexProvenanceEntry[] {
+  const order: string[] = [];
+  for (const entry of entries) if (!order.includes(entry.txId)) order.push(entry.txId);
+  if (order.length <= maxTransactions) return entries;
+  const keep = new Set(order.slice(order.length - maxTransactions));
+  return entries.filter(entry => keep.has(entry.txId));
 }
 
 /** Append evidence for an already-committed native transaction, best-effort. */
@@ -221,7 +253,8 @@ export function recordCodexNativeTransactionProvenance(
   return updateIntegrationRecord(record => ({
     ...record,
     provenance: {
-      entries: [...(record.provenance?.entries ?? []), ...entries],
+      ...record.provenance,
+      entries: boundProvenanceEntries([...(record.provenance?.entries ?? []), ...entries]),
     },
   }));
 }
