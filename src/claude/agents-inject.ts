@@ -218,7 +218,14 @@ function isOwnedFile(path: string): boolean {
 export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir = claudeConfigDir()): string[] | null {
   try {
     const dir = join(configDir, "agents");
-    mkdirSync(dir, { recursive: true });
+    if (defs.length === 0) {
+      try { lstatSync(dir); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+    } else {
+      mkdirSync(dir, { recursive: true });
+    }
     const keep = new Set(defs.map(d => d.file));
     for (const existing of readdirSync(dir)) {
       if (!existing.startsWith(OWNED_PREFIX) || !existing.endsWith(".md")) continue;

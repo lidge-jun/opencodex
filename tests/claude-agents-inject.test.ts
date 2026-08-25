@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeAgentDefs, injectClaudeAgentDefs, syncClaudeAgentDefs } from "../src/claude/agents-inject";
@@ -269,6 +269,12 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
 });
 
 describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
+  test("empty sync leaves an absent agents directory absent", () => {
+    const dir = tempDir();
+    expect(syncClaudeAgentDefs([], dir)).toEqual([]);
+    expect(existsSync(join(dir, "agents"))).toBe(false);
+  });
+
   test("writes, overwrites, and prunes ONLY marker-verified ocx files", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
