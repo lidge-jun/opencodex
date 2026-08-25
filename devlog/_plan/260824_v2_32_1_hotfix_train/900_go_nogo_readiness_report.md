@@ -1,6 +1,10 @@
 # 900 — v2.32.1 release-candidate readiness: GO/NO-GO
 
-Frozen `dev` SHA: **`faaa78dc05489625e5c9bf450050a46a7fa91d1f`**
+Frozen `dev` SHA (code): **`faaa78dc05489625e5c9bf450050a46a7fa91d1f`**
+Head at report close: `03c988cf3` — this report and two closeout docs, devlog only.
+`git diff --name-only faaa78dc0 03c988cf3` lists three `devlog/` files and nothing
+else, so every gate below still describes the tree that is shipping. CI does not
+run on a devlog-only push by design; the code evidence is pinned to `faaa78dc0`.
 Train started from: `origin/dev` `c44e43f00`, `origin/main` `96e2f67c3` (v2.32.0)
 Report written: 2026-08-25. Supersedes an earlier draft frozen at `02c302a54`,
 which a freeze audit rejected — see "What the audit changed" below.
@@ -115,4 +119,3 @@ Left to a human, per `MAINTAINERS.md`: the `dev` → `main` promotion and its
 version bump to `2.32.1`, fresh Cross-platform CI **and** Service lifecycle runs at
 the promoted `main` SHA (the `package.json` bump activates that gate), the tag, and
 `npm publish` with dry-run and install verification.
-
