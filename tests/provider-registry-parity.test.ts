@@ -79,6 +79,10 @@ describe("provider registry parity", () => {
         "kimi-k3": { none: "none", low: "low", medium: "high", high: "high", xhigh: "max", max: "max" },
       },
     });
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].modelReasoningEfforts?.["gpt-5.6-luna"])
+      .toEqual(KEY_LOGIN_PROVIDERS["openai-apikey"].modelReasoningEfforts?.["gpt-5.6-luna"]);
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].modelReasoningEfforts?.["qwen3.8-max"])
+      .toEqual(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].modelReasoningEfforts?.["qwen3.8-max"]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noTemperatureModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noTopPModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
