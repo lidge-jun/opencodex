@@ -22,6 +22,7 @@ import {
 } from "../src/codex/catalog";
 import { handleManagementAPI } from "../src/server/management-api";
 import { applyMultiAgentMode, applyNativeOpenAiContextOverride } from "../src/codex/catalog/parsing";
+import { NATIVE_GPT56_CONTEXT_WINDOW, NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW, nativeOpenAiContextWindow } from "../src/codex/catalog";
 import type { OcxConfig } from "../src/types";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 import {
@@ -696,3 +697,56 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
+
+describe("#2574 a stale on-disk row is what a subagent reads", () => {
+  /**
+   * Reproduced against a live install: the resolver returns 922,000 for gpt-5.6-sol while
+   * ~/.codex/opencodex-catalog.json still held 272,000 from an earlier sync. With
+   * effective_context_window_percent = 95 that renders as 258,400 — the exact number reported.
+   *
+   * The subagent roster reads the persisted catalog rather than re-deriving from config, so a
+   * row that predates the current limits is served verbatim. The override is correct; what is
+   * missing is any assertion that the WRITTEN row matches what the resolver would produce.
+   */
+  test("a raised cap opts the family into the wider window, and the row follows", () => {
+    // The 1M opt-in is expressed as a raised providerContextCaps.openai, not a per-model
+    // window. With the default cap the family stays at 272k; raising it past the opt-in
+    // threshold is what makes 922k the correct width.
+    const optedIn = nativeContextLimits({ providerContextCaps: { openai: 1_050_000 } } as never);
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", optedIn)).toBe(NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW);
+
+    // A row written before that opt-in carries the narrow width. Re-applying the override with
+    // the current limits is what repairs it — which is exactly what a stale on-disk catalog
+    // never gets, because the subagent roster reads the file rather than re-deriving.
+    const stale: Record<string, unknown> = {
+      slug: "gpt-5.6-sol",
+      context_window: NATIVE_GPT56_CONTEXT_WINDOW,
+      effective_context_window_percent: 95,
+    };
+    applyNativeOpenAiContextOverride(stale as never, optedIn);
+    expect(stale.context_window).toBe(NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW);
+
+    // 272,000 x 95% = 258,400 — the number reported in the issue, and what a client renders
+    // from the stale row.
+    expect(Math.floor(NATIVE_GPT56_CONTEXT_WINDOW * 0.95)).toBe(258_400);
+  });
+
+  test("the written row agrees with the resolver for the whole 5.6 family", () => {
+    // This is the invariant whose absence let a stale row survive unnoticed: whatever a
+    // subagent reads from disk must equal what the request path would compute.
+    const limits = nativeContextLimits({ providerContextCaps: { openai: 1_050_000 } } as never);
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      const row: Record<string, unknown> = { slug, context_window: NATIVE_GPT56_CONTEXT_WINDOW };
+      applyNativeOpenAiContextOverride(row as never, limits);
+      expect(row.context_window).toBe(nativeOpenAiContextWindow(slug, limits));
+    }
+  });
+
+  test("a provider cap still narrows the family below the opt-in window", () => {
+    // The lift must not become unconditional: an operator cap is still authoritative.
+    const capped = nativeContextLimits({ providerContextCaps: { openai: 300_000 } } as never);
+    const row: Record<string, unknown> = { slug: "gpt-5.6-sol", context_window: NATIVE_GPT56_CONTEXT_WINDOW };
+    applyNativeOpenAiContextOverride(row as never, capped);
+    expect(row.context_window).toBe(300_000);
+  });
+});
