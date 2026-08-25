@@ -103,7 +103,7 @@ function ensureRootObjectType(schema: unknown): Record<string, unknown> {
   // Seed with the root's own properties/required so a schema like
   // { type:"object", properties:{path}, required:["path"], oneOf:[...] } keeps them.
   if (obj.properties && typeof obj.properties === "object") {
-    Object.assign(props, sanitizeKiroSchema(obj.properties) as Record<string, unknown>);
+    Object.assign(props, sanitizeSchemaMap(obj.properties) as Record<string, unknown>);
   }
   if (Array.isArray(obj.required)) {
     for (const r of obj.required) if (typeof r === "string") required.add(r);
@@ -118,7 +118,7 @@ function ensureRootObjectType(schema: unknown): Record<string, unknown> {
       if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
       const v = variant as Record<string, unknown>;
       if (v.properties && typeof v.properties === "object") {
-        Object.assign(props, sanitizeKiroSchema(v.properties) as Record<string, unknown>);
+        Object.assign(props, sanitizeSchemaMap(v.properties) as Record<string, unknown>);
       }
       if (mergeRequired && Array.isArray(v.required)) {
         for (const r of v.required) if (typeof r === "string") required.add(r);

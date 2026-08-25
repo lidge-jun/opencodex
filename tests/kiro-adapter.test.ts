@@ -675,6 +675,16 @@ describe("kiro adapter — buildRequest", () => {
     const withDefs = await pick({ $defs: { X: { type: "string" } }, anyOf: [{ properties: { a: { $ref: "#/$defs/X" } } }] });
     expect(withDefs.$defs).toEqual({ X: { type: "string" } });
     expect(withDefs.properties).toEqual({ a: { $ref: "#/$defs/X" } });
+
+    // Property names remain data while flattening, even when they collide with rejected keywords.
+    const keywordNames = await pick({
+      properties: { format: { type: "string", format: "uuid" } },
+      required: ["format"],
+      oneOf: [{ properties: { pattern: { type: "string", pattern: "^x" } } }],
+    });
+    expect(keywordNames.properties.format).toEqual({ type: "string" });
+    expect(keywordNames.properties.pattern).toEqual({ type: "string" });
+    expect(keywordNames.required).toEqual(["format"]);
   });
 
   test("tool descriptions use deterministic model-specific caps without prompt injection", async () => {
