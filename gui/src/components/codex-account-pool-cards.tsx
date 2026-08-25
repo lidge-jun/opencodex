@@ -100,7 +100,7 @@ export function CodexAccountPoolCards({
                 </span>
               )}
             </span>
-            {!a.paused && !isNext(a) && !showReauth && !inCooldown && (
+            {!a.paused && (!isNext(a) || pinnedId !== a.id) && !showReauth && !inCooldown && (
               <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(a)}>
                 {switchActionLabel}
               </button>

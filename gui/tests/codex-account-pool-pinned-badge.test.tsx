@@ -141,12 +141,17 @@ function hasPinnedHint(scope: ParentNode): boolean {
   return [...scope.querySelectorAll(".card-sub")].some((el) => (el.textContent ?? "").trim() === en["codexAuth.pinnedHint"]);
 }
 
+function switchAction(scope: ParentNode): HTMLButtonElement | null {
+  return scope.querySelector<HTMLButtonElement>("button.codex-account-switch");
+}
+
 test("a pinned pool account says so, and only on its own card", async () => {
   await mountPool(makeController({ activeId: "pool-1", activePinnedId: "pool-1" }));
 
   const pooled = cardFor("pool@example.test");
   expect(hasPinnedBadge(pooled)).toBe(true);
   expect(hasPinnedHint(pooled)).toBe(false);
+  expect(switchAction(pooled)).toBeNull();
 
   const main = cardFor("main@example.test");
   expect(hasPinnedBadge(main)).toBe(false);
@@ -159,6 +164,7 @@ test("a pinned app login says so, and only on its own card", async () => {
   const main = cardFor("main@example.test");
   expect(hasPinnedBadge(main)).toBe(true);
   expect(hasPinnedHint(main)).toBe(false);
+  expect(switchAction(main)).toBeNull();
 
   const pooled = cardFor("pool@example.test");
   expect(hasPinnedBadge(pooled)).toBe(false);
@@ -193,6 +199,42 @@ test("an account rotation picked carries no pin", async () => {
   expect(hasPinnedHint(host)).toBe(false);
 });
 
+test("an active unpinned pool account keeps the manual pin action", async () => {
+  await mountPool(makeController({ activeId: "pool-1", activePinnedId: null }));
+
+  const action = switchAction(cardFor("pool@example.test"));
+  expect(action).toBeTruthy();
+  expect(action!.textContent).toContain(en["codexAuth.setAsNext"]);
+
+  await act(async () => { action!.click(); });
+  expect(host.querySelector("dialog")?.textContent).toContain("pool@example.test");
+});
+
+test("an active unpinned app login keeps the manual pin action", async () => {
+  await mountPool(makeController({ activeId: null, activePinnedId: null }));
+
+  const action = switchAction(cardFor("main@example.test"));
+  expect(action).toBeTruthy();
+  expect(action!.textContent).toContain(en["codexAuth.setAsNext"]);
+});
+
+test("an active account that already owns the pin hides the redundant action", async () => {
+  await mountPool(makeController({ activeId: "pool-1", activePinnedId: "pool-1" }));
+
+  expect(switchAction(cardFor("pool@example.test"))).toBeNull();
+});
+
+test("an active account can replace a sibling's pin", async () => {
+  const sibling: CodexAccountEntry = { ...account, id: "pool-2", email: "sibling@example.test" };
+  await mountPool(makeController({
+    accounts: [mainAccount, account, sibling],
+    activeId: "pool-2",
+    activePinnedId: "pool-1",
+  }));
+
+  expect(switchAction(cardFor("sibling@example.test"))).toBeTruthy();
+});
+
 test("a paused account is never shown as pinned", async () => {
   // Pausing releases the pin server-side, so a pin that still names an excluded account is
   // a stale read. Routing cannot be sitting on it, so the card must not claim otherwise.
@@ -204,6 +246,25 @@ test("a paused account is never shown as pinned", async () => {
 
   expect(hasPinnedBadge(host)).toBe(false);
   expect(hasPinnedHint(host)).toBe(false);
+  expect(switchAction(cardFor("pool@example.test"))).toBeNull();
+});
+
+test("reauth and cooldown guards still hide the pin action", async () => {
+  const needsReauth: CodexAccountEntry = { ...account, needsReauth: true };
+  const coolingDown: CodexAccountEntry = {
+    ...account,
+    id: "pool-2",
+    email: "cooldown@example.test",
+    health: { status: "cooldown", reason: "rate_limit", until: "2099-01-01T00:00:00.000Z" },
+  };
+  await mountPool(makeController({
+    accounts: [mainAccount, needsReauth, coolingDown],
+    activeId: "pool-1",
+    activePinnedId: null,
+  }));
+
+  expect(switchAction(cardFor("pool@example.test"))).toBeNull();
+  expect(switchAction(cardFor("cooldown@example.test"))).toBeNull();
 });
 
 test("healthy account cards omit log-label and 30-day usage copy", async () => {

@@ -105,7 +105,7 @@ export function CodexAccountPoolMainCard({
             </span>
           )}
         </span>
-        {!main?.paused && !isMainActive && !showReauth && !inCooldown && (
+        {!main?.paused && (!isMainActive || pinnedId !== "__main__") && !showReauth && !inCooldown && (
           <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(mainSwitchEntry)}>
             {switchActionLabel}
           </button>
