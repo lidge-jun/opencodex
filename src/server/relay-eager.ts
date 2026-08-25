@@ -184,7 +184,16 @@ export function relaySseEagerBounded(
   // turn unregistration stay reachable, drainAndShutdown never hangs).
   let wake: (() => void) | null = null;
   const wakeUp = () => { const w = wake; wake = null; w?.(); };
-  const paused = () => new Promise<void>(resolve => { wake = resolve; });
+  const paused = () => new Promise<void>(resolve => {
+    wake = resolve;
+    // A pull, cancel, or abort can win the tiny window between the loop's
+    // predicate check and installing this resolver. Re-check every wake
+    // predicate after installation so that an already-fired wake cannot leave
+    // the producer parked forever.
+    if (queuedBytes <= maxQueueBytes || cancelled || upstream.signal.aborted) {
+      wakeUp();
+    }
+  });
   upstream.signal.addEventListener("abort", wakeUp, { once: true });
 
   let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;

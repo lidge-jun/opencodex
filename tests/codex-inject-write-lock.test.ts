@@ -24,6 +24,12 @@ const LOCK_CHILD = join(repoRoot, "tests", "helpers", "codex-write-lock-child.ts
 // Leave teardown and assertion headroom inside the surrounding test budget. A real
 // Bun child can take several seconds to start and settle on a loaded Windows runner.
 const SPAWN_TIMEOUT_MS = SPAWN_BUDGET_MS - 5_000;
+// The contender uses a much shorter bound because production contention is
+// fail-fast (lockTimeoutMs=0). Keep the holder alive well beyond that bound so a
+// slow child launch cannot turn an intended busy result into a post-release apply.
+const CONTENTION_CHILD_TIMEOUT_MS = 10_000;
+const CONTENTION_HOLDER_MARGIN_MS = 5_000;
+const CONTENTION_HOLD_MS = SPAWN_TIMEOUT_MS - CONTENTION_HOLDER_MARGIN_MS;
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
@@ -37,12 +43,16 @@ function seedNative(): void {
   writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5"\n');
 }
 
-function runChild(args: string[], env: NodeJS.ProcessEnv): ReturnType<typeof spawnSync> {
+function runChild(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs = SPAWN_TIMEOUT_MS,
+): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, args, {
     cwd: repoRoot,
     encoding: "utf8",
     env,
-    timeout: SPAWN_TIMEOUT_MS,
+    timeout: timeoutMs,
     windowsHide: true,
   });
 }
@@ -85,14 +95,18 @@ function parseChildJson<T>(result: ReturnType<typeof spawnSync>, label: string):
   }
 }
 
-function runInject(port: number, lockTimeoutMs = 0): { success: boolean; status?: "skipped"; retryable: boolean; message: string } {
+function runInject(
+  port: number,
+  lockTimeoutMs = 0,
+  timeoutMs = SPAWN_TIMEOUT_MS,
+): { success: boolean; status?: "skipped"; retryable: boolean; message: string } {
   return parseChildJson<{ success: boolean; status?: "skipped"; retryable: boolean; message: string }>(
     runChild([CHILD], {
       ...process.env,
       CODEX_HOME: codexHome,
       OPENCODEX_HOME: opencodexHome,
       OCX_INJECT_RACE_PAYLOAD: JSON.stringify({ port, lockTimeoutMs }),
-    }),
+    }, timeoutMs),
     `inject child (port=${port})`,
   );
 }
@@ -198,7 +212,7 @@ describe("the lock is on the production path", () => {
           releaseMarker,
           // Keep a slow Windows contender from outliving the hold, while staying
           // below the 40s child bound and the 45s test budget.
-          holdMs: SPAWN_TIMEOUT_MS - 5_000,
+          holdMs: CONTENTION_HOLD_MS,
         }),
       },
       stdout: "pipe",
@@ -213,15 +227,19 @@ describe("the lock is on the production path", () => {
 
     // PROCESS-UNIQUE bytes: a different port means different candidate bytes, so
     // the loser's work is identifiable rather than assumed.
-    const contender = runInject(20200);
-
-    writeFileSync(releaseMarker, "go");
-    // AWAIT the holder. Dropping its exit on the floor left a live child owning the
-    // coordinator database while afterEach removed the temp root, and Windows refuses
-    // to unlink a file another process still has open -- so teardown failed with EBUSY
-    // and blamed this test for a race it had already won. POSIX unlinks regardless,
-    // which is why only Windows ever saw it, and only under full-suite load.
-    await holder.exited;
+    let contender: ReturnType<typeof runInject>;
+    try {
+      contender = runInject(20200, 0, CONTENTION_CHILD_TIMEOUT_MS);
+    } finally {
+      try {
+        writeFileSync(releaseMarker, "go");
+      } finally {
+        // Always release and reap the holder, including when the contender
+        // times out or its diagnostics throw. Otherwise teardown races a live
+        // child that still owns the coordinator database on Windows.
+        await holder.exited;
+      }
+    }
 
     expect(contender.success).toBeFalse();
     expect(contender.retryable).toBeTrue();

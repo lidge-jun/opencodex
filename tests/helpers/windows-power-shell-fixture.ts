@@ -7,8 +7,6 @@ export interface WindowsPowerShellFixture {
   cleanup: () => void | Promise<void>;
 }
 
-let sharedFixture: Promise<WindowsPowerShellFixture> | undefined;
-
 /**
  * Build a real Windows executable for tests that exercise the default execFile path.
  *
@@ -20,11 +18,11 @@ let sharedFixture: Promise<WindowsPowerShellFixture> | undefined;
  * explicitly faked by the tests.
  */
 export function createWindowsPowerShellFixture(): Promise<WindowsPowerShellFixture> {
-  if (sharedFixture) return sharedFixture;
-  sharedFixture = process.platform === "win32"
+  // Each suite owns its fixture. Sharing one directory across suites lets the
+  // first cleanup remove the executable while another suite is still using it.
+  return process.platform === "win32"
     ? buildWindowsExecutableFixture()
     : Promise.resolve(createPosixShellFixture());
-  return sharedFixture;
 }
 
 async function buildWindowsExecutableFixture(): Promise<WindowsPowerShellFixture> {
