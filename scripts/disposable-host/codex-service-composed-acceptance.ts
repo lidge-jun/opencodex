@@ -128,18 +128,32 @@ function coordinatorPath(codexHome: string): string {
 
 class Fixture {
   readonly root = mkdtempSync(join(tmpdir(), "ocx-service-composed-"));
-  readonly home = join(this.root, "home");
+  /**
+   * The REAL account home, deliberately.
+   *
+   * Every other path here is a fixture path, and a fake HOME was the obvious symmetry — but
+   * `systemctl --user` resolves its unit directory from the running user manager, not from
+   * `$HOME`. With a fake home, `ocx service install` wrote a unit file the user manager never
+   * reads and then failed on `systemctl --user enable`: "Unit file opencodex-proxy.service does
+   * not exist". Verified directly on the host — the same install against the real home succeeds
+   * and lists as `enabled`.
+   *
+   * That is precisely why these rows are disposable-host-only. A globally addressed service
+   * cannot be redirected into a temp root, so the safety property cannot come from isolation;
+   * it comes from the sentinel plus the empty-registration gate on both sides of every row.
+   */
+  readonly home = homedir();
   readonly userprofile = join(this.root, "userprofile");
   readonly codex = join(this.root, "codex");
   readonly ocx = join(this.root, "ocx");
   readonly runtime = `/run/user/${process.getuid!()}`;
-  readonly unit = join(this.home, ".config/systemd/user", UNIT);
+  readonly unit = accountUnit;
   readonly lock: string;
   readonly lockAllowlist: string[];
   readonly baselineOutside: Record<string, string>;
 
   constructor(readonly row: RowId) {
-    for (const path of [this.home, this.userprofile, this.codex, this.ocx]) mkdirSync(path, { recursive: true, mode: 0o700 });
+    for (const path of [this.userprofile, this.codex, this.ocx]) mkdirSync(path, { recursive: true, mode: 0o700 });
     writeFileSync(join(this.codex, "config.toml"), 'model = "gpt-5"\n');
     writeFileSync(join(this.ocx, "config.json"), JSON.stringify({
       port: 0,
