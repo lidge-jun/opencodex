@@ -37,19 +37,19 @@ function queuedRunner(results: CommandResult[]) {
 }
 
 describe("fork sync daily preparation", () => {
-  test("creates and merges a dated branch when there are no conflicts", async () => {
+  test("creates and merges an upstream-identified branch when there are no conflicts", async () => {
     const queued = queuedRunner([ok(), ok()]);
 
     const result = await prepareSync(event(), { runner: queued.runner });
 
     expect(result).toEqual({
       status: "merged",
-      branch: "sync/upstream-20260824",
+      branch: "sync/upstream-v2.32.0-tagsha",
       resolutions: [],
       unresolved: [],
     });
     expect(queued.calls).toEqual([
-      ["switch", "-c", "sync/upstream-20260824"],
+      ["switch", "-C", "sync/upstream-v2.32.0-tagsha"],
       ["merge", "--no-ff", "vendor/main"],
     ]);
   });
@@ -73,7 +73,7 @@ describe("fork sync daily preparation", () => {
       action: "checkout --ours",
     }]);
     expect(queued.calls).toEqual([
-      ["switch", "-c", "sync/upstream-20260824"],
+      ["switch", "-C", "sync/upstream-v2.32.0-tagsha"],
       ["merge", "--no-ff", "vendor/main"],
       ["diff", "--name-only", "--diff-filter=U"],
       ["checkout", "--ours", "--", "scripts/fork/sync/cli.ts"],
@@ -119,7 +119,7 @@ describe("fork sync daily preparation", () => {
 
     expect(result).toEqual({
       status: "hotspot-handoff",
-      branch: "sync/upstream-20260824",
+      branch: "sync/upstream-v2.32.0-tagsha",
       resolutions: [{
         path: "src/server/responses/core.ts",
         classification: "shared-hotspot",
@@ -128,7 +128,7 @@ describe("fork sync daily preparation", () => {
       unresolved: ["src/server/responses/core.ts"],
     });
     expect(queued.calls).toEqual([
-      ["switch", "-c", "sync/upstream-20260824"],
+      ["switch", "-C", "sync/upstream-v2.32.0-tagsha"],
       ["merge", "--no-ff", "vendor/main"],
       ["diff", "--name-only", "--diff-filter=U"],
       ["merge", "--abort"],

@@ -183,6 +183,7 @@ export async function runCli(
   }
   const env = options.env ?? process.env;
   const write = options.write ?? (value => process.stdout.write(`${value}\n`));
+  if (env.FORK_SYNC_WORKTREE) process.chdir(env.FORK_SYNC_WORKTREE);
   const runner = options.runner ?? commandRunner;
   if (command === "emit") {
     registerBuiltins(env, options);

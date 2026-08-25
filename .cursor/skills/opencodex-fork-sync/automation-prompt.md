@@ -10,12 +10,12 @@ Execute only the unresolved handoff stages:
 
 1. Fetch `upstream` and `origin` with prune. Confirm the event's tag and SHA
    before changing branches.
-2. For `hotspot-handoff`, recreate the sync branch from current `origin/main`,
+2. For `hotspot-handoff`, recreate the sync branch from current `origin/dev`,
    merge `origin/vendor/main`, and resolve only the shared hotspot while
    preserving upstream control flow. The Action did not push the conflicted
    branch; do not ask it to or redo unrelated daily resolutions.
-3. For `history-diverged` only, use the disconnected `run/main` rebuild.
-   Check out `run/main` first when applying the documented `-s ours` catch-up
+3. For `history-diverged` only, use the disconnected `run/dev` rebuild.
+   Check out `run/dev` first when applying the documented `-s ours` catch-up
    merge so the reviewed rebuild tree remains unchanged.
 4. Resolve conflicts by ownership: take upstream for upstream-owned files,
    take the fork for fork-owned files, and manually preserve upstream control
@@ -27,7 +27,7 @@ Execute only the unresolved handoff stages:
 6. Assemble a decision table for every conflict with file/hunk, upstream
    intent, overlay intent, classification, options, recommendation, and test
    commands.
-7. Push the sync branch as needed and open or update a draft PR into `main`.
+7. Push the sync branch as needed and open or update a draft PR into `dev`.
    Fill Summary, Verification, and Checklist from the PR template. Include the
    decision table and the tag SHA. Run
    `gh pr view <number> --json mergeable -q .mergeable` and do not stop or ping
@@ -36,11 +36,11 @@ Execute only the unresolved handoff stages:
    merge the PR, close issues, change repository settings, or force-push
    `main`/`origin/main`.
 
-If histories diverge again, use the disconnected `run/main` rebuild only as an
-emergency recipe. Check out `run/main` first, then record the old parent with
-`git merge --no-ff -s ours origin/main` so the reviewed rebuild tree is
+If histories diverge again, use the disconnected `run/dev` rebuild only as an
+emergency recipe. Check out `run/dev` first, then record the old parent with
+`git merge --no-ff -s ours origin/dev` so the reviewed rebuild tree is
 unchanged. This is the documented catch-up exception; do not recursively merge
-old `main` into the rebuild.
+old `dev` into the rebuild.
 
 A timeout-only `macos-launchd` check flake may be retried with `gh run rerun`;
 do not edit the upstream lifecycle workflow for that flake.

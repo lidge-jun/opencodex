@@ -1,6 +1,6 @@
 # Fork path ownership
 
-Agents read this before resolving sync conflicts. Three-way merge: base = last common ancestor; **ours** = `origin/main`; **theirs** = `vendor/main`.
+Agents read this before resolving sync conflicts. Three-way merge: base = last common ancestor; **ours** = `origin/dev`; **theirs** = `vendor/main`.
 
 Do not open this document or the fork overlay (the conflict class, not a git branch) as an upstream PR.
 
@@ -48,7 +48,7 @@ Everything not listed above. Re-apply fork intent as a **new small commit** only
 
 | Path | Recipe |
 |---|---|
-| `package.json` | Take `version` and every remaining field from upstream, but preserve our `name` as `@yansigit/opencodex`; write valid formatted JSON |
+| `package.json` | Take every non-release field from upstream, but preserve our `name` as `@yansigit/opencodex` and current `version`; write valid formatted JSON |
 
 ## Conflict defaults
 
@@ -57,7 +57,7 @@ Everything not listed above. Re-apply fork intent as a **new small commit** only
 | `upstream-owned` | Take theirs | Re-apply fork intent as a new small commit only if still needed |
 | `fork-owned` | Take ours | Files only the fork added |
 | `shared-hotspot` | Manual / agent report | Keep upstream control flow; re-fit fork behavior; never “accept all ours” |
-| `recipe` | Run the named recipe | `package.json` keeps fork identity while taking upstream metadata |
+| `recipe` | Run the named recipe | `package.json` keeps fork identity and release version while taking upstream metadata |
 | Lockfiles | Take theirs | Regenerate if the fork added deps |
 | File deleted by them, edited by us | Decide restore vs abandon | Record in merge message |
 | Rename | Follow new path | `--find-renames`; do not keep a zombie old path |

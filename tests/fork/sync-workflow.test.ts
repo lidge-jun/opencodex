@@ -42,10 +42,19 @@ describe("fork upstream sync workflow contract", () => {
   });
 
   test("prepares daily merges and opens draft PRs only for merged branches", () => {
-    expect(workflow).toContain("bun scripts/fork/sync/cli.ts prepare");
-    expect(workflow).toContain("bun scripts/fork/sync/cli.ts draft-pr");
+    expect(workflow).toContain("/scripts/fork/sync/cli.ts\" prepare");
+    expect(workflow).toContain("/scripts/fork/sync/cli.ts\" draft-pr");
     expect(workflow).toContain("steps.prepare.outputs.status == 'merged'");
     expect(workflow).toContain("refs/heads/$branch:refs/heads/$branch");
+  });
+
+  test("prepares from dev while keeping trusted scripts on the default branch", () => {
+    expect(workflow).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(workflow).toContain("git fetch origin dev");
+    expect(workflow).toContain("git worktree add");
+    expect(workflow).toContain("FORK_SYNC_WORKTREE");
+    expect(workflow).not.toContain("base=main");
+    expect(workflow).not.toContain("base: main");
   });
 
   test("starts Cursor only for hotspot or history handoff", () => {
