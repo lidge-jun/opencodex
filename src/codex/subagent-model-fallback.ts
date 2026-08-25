@@ -39,6 +39,7 @@ import { routeModel, type RouteResult } from "../router";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
+import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
   getUpstreamHostHealth,
   normalizeUpstreamHostCircuitThreshold,
@@ -276,31 +277,68 @@ export function isSubagentModelUnavailable(
     poolAccountPreview,
     candidateAccountUsabilityOptions?.modelEligibleAccountIds,
   );
-  if (isModelHealthBlocked(model, config, resolvedAccountId, now)) return true;
-  if (!isPoolCodexRoute(route)) return false;
+  const accountUnavailable = (
+    candidateAccountId: string | null,
+    usabilityOptions: CodexAccountUsabilityOptions | undefined,
+    includeQuotaExhaustion: boolean,
+  ): boolean => {
+    if (isModelHealthBlocked(model, config, candidateAccountId, now)) return true;
+    if (!isPoolCodexRoute(route)) return false;
 
-  // Pool candidates need a usable account. Derive requirement from the resolved
-  // route (canonical openai defaults to pool even when codexAccountMode is omitted).
-  if (!resolvedAccountId) return true;
-  if (isCodexAccountPaused(config, resolvedAccountId)) return true;
-  if (!isCodexAccountUsable(config, resolvedAccountId, candidateAccountUsabilityOptions)) return true;
-  if (route.codexAccountId !== undefined) {
-    // An account-qualified route is pinned and cannot consume Pool's recovery-probe
-    // escape hatch. Honor both account-wide and model-scoped cooldowns so fallback
-    // advances instead of selecting a candidate that exact auth will reject.
-    const quotaScope = codexQuotaScopeForModel(route.modelId);
-    if (getCodexQuotaHealthSnapshot(resolvedAccountId, quotaScope, now) !== null) return true;
-  } else {
-    const quotaScope = codexQuotaScopeForModel(route.modelId);
-    const cooldown = getCodexQuotaHealthSnapshot(resolvedAccountId, quotaScope, now);
-    if (cooldown !== null) {
-      const probeAvailable = cooldown.quotaScope
-        ? canAcquireCodexQuotaScopeProbeLease(resolvedAccountId, cooldown.quotaScope, now)
-        : canAcquireCodexQuotaProbeLease(resolvedAccountId, now);
-      if (!probeAvailable) return true;
+    // Pool candidates need a usable account. Derive requirement from the resolved
+    // route (canonical openai defaults to pool even when codexAccountMode is omitted).
+    if (!candidateAccountId) return true;
+    if (isCodexAccountPaused(config, candidateAccountId)) return true;
+    if (!isCodexAccountUsable(config, candidateAccountId, usabilityOptions)) return true;
+    if (route.codexAccountId !== undefined) {
+      // An account-qualified route is pinned and cannot consume Pool's recovery-probe
+      // escape hatch. Honor both account-wide and model-scoped cooldowns so fallback
+      // advances instead of selecting a candidate that exact auth will reject.
+      const quotaScope = codexQuotaScopeForModel(route.modelId);
+      if (getCodexQuotaHealthSnapshot(candidateAccountId, quotaScope, now) !== null) return true;
+    } else {
+      const quotaScope = codexQuotaScopeForModel(route.modelId);
+      const cooldown = getCodexQuotaHealthSnapshot(candidateAccountId, quotaScope, now);
+      if (cooldown !== null) {
+        const probeAvailable = cooldown.quotaScope
+          ? canAcquireCodexQuotaScopeProbeLease(candidateAccountId, cooldown.quotaScope, now)
+          : canAcquireCodexQuotaProbeLease(candidateAccountId, now);
+        if (!probeAvailable) return true;
+      }
     }
-  }
-  return isNativeModelQuotaExhausted(model, config, resolvedAccountId, now);
+    if (
+      !includeQuotaExhaustion
+      || (
+        candidateAccountId === MAIN_CODEX_ACCOUNT_ID
+        && usabilityOptions?.nativeMainSelectionOnly === true
+      )
+    ) return false;
+    return isNativeModelQuotaExhausted(model, config, candidateAccountId, now);
+  };
+
+  // Prefer a genuinely usable entitled pool account. Preview can deliberately return
+  // the configured active account even when no selectable candidate exists, so a
+  // null/main-only check is not enough to detect the temporary-drain case.
+  if (!accountUnavailable(resolvedAccountId, candidateAccountUsabilityOptions, true)) return false;
+
+  // During a temporary native-main drain, entitlement discovery excludes main to
+  // preserve the credential fence. If no non-main candidate can serve an unqualified
+  // gated model, retain main only as a read-free sentinel: final auth owns the atomic
+  // claim and returns maintenance instead of letting a routed fallback bypass it.
+  const preserveDrainingMainCandidate = route.codexAccountId === undefined
+    && candidateAccountUsabilityOptions?.nativeMainSelectionOnly === true
+    && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId);
+  if (!preserveDrainingMainCandidate) return true;
+  const drainingMainUsabilityOptions: CodexAccountUsabilityOptions = {
+    ...candidateAccountUsabilityOptions,
+    modelEligibleAccountIds: new Set([
+      ...(modelEligibleAccountIds ?? []),
+      MAIN_CODEX_ACCOUNT_ID,
+    ]),
+  };
+  // Quota scoring main would lazily read the native credential/plan. Cached health,
+  // pause, reauth, and cooldown state are safe; defer physical scoring to final auth.
+  return accountUnavailable(MAIN_CODEX_ACCOUNT_ID, drainingMainUsabilityOptions, false);
 }
 
 export function selectAvailableSubagentModel(

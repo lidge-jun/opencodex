@@ -36,7 +36,11 @@ import {
   saveCodexAccountCredential,
 } from "../src/codex/account-store";
 import { ConfigMutationLockError, getConfigPath } from "../src/config";
-import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import {
+  getMainAccountPlan,
+  MAIN_CODEX_ACCOUNT_ID,
+  setMainAccountPlan,
+} from "../src/codex/main-account";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
@@ -86,6 +90,7 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  setMainAccountPlan(null);
   __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
@@ -97,6 +102,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  setMainAccountPlan(null);
   __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
@@ -120,6 +126,12 @@ function config(): OcxConfig {
       { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool_acc" },
     ],
   };
+}
+
+function chatgptPlanJwt(plan: string): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({ chatgpt_plan_type: plan })).toString("base64url");
+  return `${header}.${body}.sig`;
 }
 
 function guardianConfig(): OcxConfig {
@@ -325,10 +337,90 @@ describe("Codex auth context", () => {
         primeCodexPoolQuotas: async () => { throw new Error("must not prime"); },
       })).rejects.toBeInstanceOf(CodexMainProfileDrainingError);
       expect(nativeReads).toBe(0);
+      // Selection-only quota scoring must not lazily read/cache the fenced main
+      // plan before the atomic claim rejects the request.
+      writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+        tokens: { access_token: chatgptPlanJwt("pro"), account_id: "main-account" },
+      }));
+      expect(getMainAccountPlan()).toBe("pro");
     } finally {
       turn?.release();
       drain?.release();
     }
+  });
+
+  test("gated main selection preserves the temporary drain classification without entitlement reads", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
+    cfg.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID;
+    let nativeReads = 0;
+    let entitlementCalls = 0;
+    const drain = acquireNativeMainProfileDrain("auth-context-gated-main-test");
+    const turn = tryAdmitTurn();
+    try {
+      await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+        modelId: "gpt-daybreak-blue-latest",
+        beginCodexAccountSelection: codexAccountSelectionForTurn(turn!),
+        isMainAccountTokenLive: () => { nativeReads += 1; return true; },
+        getMainAccountToken: () => {
+          nativeReads += 1;
+          return { accessToken: "main", chatgptAccountId: "main-account" };
+        },
+        resolveCodexModelEntitlements: async (_config, options) => {
+          entitlementCalls += 1;
+          expect(options?.excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+          return {
+            modelsByAccount: new Map(),
+            confirmedAccountIds: new Set(),
+            credentialIdentities: new Map(),
+          };
+        },
+      })).rejects.toBeInstanceOf(CodexMainProfileDrainingError);
+      expect(entitlementCalls).toBe(1);
+      expect(nativeReads).toBe(0);
+      expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+      // Pin retirement must not lazily score/read main while the drain fence is up.
+      // A prior plan read against the intentionally missing auth.json would cache
+      // `undefined` and make this post-fence JWT fallback fail.
+      writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+        tokens: { access_token: chatgptPlanJwt("pro"), account_id: "main-account" },
+      }));
+      expect(getMainAccountPlan()).toBe("pro");
+    } finally {
+      turn?.release();
+      drain?.release();
+    }
+  });
+
+  test("gated no-active drain reaches the atomic main claim before maintenance classification", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = undefined;
+    let nativeReads = 0;
+    let claimCalls = 0;
+    let selectionReleases = 0;
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: "gpt-daybreak-blue-latest",
+      beginCodexAccountSelection: () => ({
+        mainProfileDraining: true,
+        claimMainProfile: () => { claimCalls += 1; return false; },
+        release: () => { selectionReleases += 1; },
+      }),
+      isMainAccountTokenLive: () => { nativeReads += 1; return true; },
+      getMainAccountToken: () => {
+        nativeReads += 1;
+        return { accessToken: "main", chatgptAccountId: "main-account" };
+      },
+      resolveCodexModelEntitlements: async () => ({
+        modelsByAccount: new Map(),
+        confirmedAccountIds: new Set(),
+        credentialIdentities: new Map(),
+      }),
+    })).rejects.toBeInstanceOf(CodexMainProfileDrainingError);
+
+    expect(claimCalls).toBe(1);
+    expect(selectionReleases).toBe(1);
+    expect(nativeReads).toBe(0);
   });
 
   test("direct mode returns caller-owned main context without touching pool selection", async () => {
@@ -390,6 +482,7 @@ describe("Codex auth context", () => {
 
   test("account-gated native routing skips an active account without the model grant", async () => {
     const cfg = config();
+    cfg.activeCodexAccountPinned = "pool-a";
     writeFileSync(join(testDir, "auth.json"), JSON.stringify({
       tokens: { access_token: "main-token", account_id: "main-account" },
     }));
@@ -417,6 +510,20 @@ describe("Codex auth context", () => {
     })).resolves.toMatchObject({
       kind: "main-pool",
       accountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+    expect(cfg.activeCodexAccountId).toBe("pool-a");
+    expect(cfg.activeCodexAccountPinned).toBe("pool-a");
+
+    // The preceding model-only detour must not replace the operator's shared
+    // selection; a following ordinary request still uses the pinned pool account.
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: "gpt-5.5",
+      isMainAccountTokenLive: () => true,
+      getMainAccountToken: () => ({ accessToken: "main-token", chatgptAccountId: "main-account" }),
+      primeCodexPoolQuotas: async () => {},
+    })).resolves.toMatchObject({
+      kind: "pool",
+      accountId: "pool-a",
     });
   });
 

@@ -383,6 +383,8 @@ export async function resolveCodexAuthContext(
   const nativeMainTrafficBlocked = isNativeMainTrafficBlocked();
   const selectionAdmission = options.beginCodexAccountSelection?.();
   const nativeMainReadsForbidden = nativeMainTrafficBlocked || selectionAdmission?.mainProfileDraining === true;
+  const nativeMainSelectionOnly = !nativeMainTrafficBlocked
+    && selectionAdmission?.mainProfileDraining === true;
   let accountId: string;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
   try {
@@ -401,8 +403,7 @@ export async function resolveCodexAuthContext(
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
-      nativeMainSelectionOnly: !nativeMainTrafficBlocked
-        && selectionAdmission?.mainProfileDraining === true,
+      nativeMainSelectionOnly,
       isMainAccountTokenLive: options.isMainAccountTokenLive,
       modelEligibleAccountIds,
     };
@@ -436,12 +437,13 @@ export async function resolveCodexAuthContext(
             : "Selected Codex account is unavailable",
         );
       }
-      // Recovery deliberately makes physical main ineligible. If no healthy
-      // pool route is configured and main is the intended route, report the
-      // temporary fence rather than misclassifying that credential as invalid.
+      // Recovery or a turn drain deliberately makes physical main unobservable.
+      // If no healthy pool route is available, report the temporary fence rather
+      // than turning a credential we were forbidden to inspect into a permanent
+      // model-entitlement denial.
       // A configured pool retry/exclusion that finds no alternate preserves its
       // ordinary pool-auth failure instead of being mislabeled as a main fence.
-      if (nativeMainTrafficBlocked && !options.excludeAccountId) {
+      if (nativeMainReadsForbidden && !options.excludeAccountId) {
         throw new CodexMainProfileDrainingError();
       }
       throw new CodexPoolAuthenticationError(
