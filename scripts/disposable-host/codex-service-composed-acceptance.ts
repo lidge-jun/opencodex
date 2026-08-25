@@ -273,7 +273,21 @@ class Fixture {
     const tokenPath = join(this.ocx, "admin-api-token");
     if (!existsSync(tokenPath)) fail(`${this.row}: service did not mint an admin token at ${tokenPath}`);
     const token = readFileSync(tokenPath, "utf8").trim();
-    const script = `const r=await fetch(${JSON.stringify(`http://127.0.0.1:${runtime.port}/api/stop`)},{method:"POST",headers:{"x-opencodex-api-key":${JSON.stringify(token)}}});console.log(r.status,await r.text());if(!r.ok)process.exit(1)`;
+    // A reset is an ACCEPTABLE outcome here, not a failure. `POST /api/stop` stops the service
+    // and drains this very process, so the socket can close before a response is flushed — the
+    // more thoroughly the endpoint does its job, the likelier that is. A 401/4xx still fails.
+    // The authoritative oracle is the +1 remove transaction the caller asserts either way.
+    const script = [
+      `try {`,
+      `  const r = await fetch(${JSON.stringify(`http://127.0.0.1:${runtime.port}/api/stop`)}, { method: "POST", headers: { "x-opencodex-api-key": ${JSON.stringify(token)} } });`,
+      `  console.log(r.status, await r.text());`,
+      `  if (!r.ok) process.exit(1);`,
+      `} catch (error) {`,
+      `  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";`,
+      `  if (code !== "ECONNRESET" && code !== "ConnectionClosed") { console.error(String(error)); process.exit(1); }`,
+      `  console.log("stop-closed-connection", code);`,
+      `}`,
+    ].join("\n");
     const result = await spawnResult([process.execPath, "--eval", script], { cwd: this.root, env: this.env() });
     if (result.exitCode !== 0) fail(`${this.row}: POST /api/stop failed\n${result.stderr}\n${result.stdout}`);
     return result;
