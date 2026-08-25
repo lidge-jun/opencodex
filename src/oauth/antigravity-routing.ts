@@ -11,7 +11,8 @@ const MAX_AFFINITY_ENTRIES = 2_000;
 const MAX_AFFINITY_COMPONENT_LENGTH = 128;
 
 type CooldownSource = "retry-after" | "default" | "synthetic";
-export type AntigravitySyntheticFailure = "rate-limit" | "quota" | "geoblock";
+export type AntigravityCooldownKind = "rate-limit" | "quota" | "geoblock";
+export type AntigravitySyntheticFailure = AntigravityCooldownKind;
 
 export interface AntigravityProviderError {
   code?: string;
@@ -22,6 +23,7 @@ export interface AntigravityProviderError {
 interface AccountHealth {
   cooldownUntil: number;
   cooldownSource: CooldownSource;
+  cooldownKind: AntigravityCooldownKind;
 }
 
 interface AffinityEntry {
@@ -49,7 +51,7 @@ function parseRetryAfterMs(value: string | null | undefined, now: number): numbe
   if (!text) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(text)) {
     const seconds = Number(text);
-    if (Number.isFinite(seconds) && seconds > 0) return Math.min(Math.max(Math.ceil(seconds * 1000), 1), MAX_COOLDOWN_MS);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.ceil(seconds * 1000), MAX_COOLDOWN_MS);
   }
   const timestamp = Date.parse(text);
   if (!Number.isFinite(timestamp)) return undefined;
@@ -117,7 +119,7 @@ export function clearAntigravityRoutingStateForAccount(accountId: string): void 
 export function getAntigravityAccountHealthSnapshot(
   accountId: string,
   now = Date.now(),
-): { cooldownUntil: number; cooldownSource: CooldownSource } | null {
+): { cooldownUntil: number; cooldownSource: CooldownSource; cooldownKind: AntigravityCooldownKind } | null {
   const health = accountHealth.get(accountId);
   if (!health) return null;
   if (health.cooldownUntil <= now) {
@@ -131,11 +133,13 @@ export function recordAntigravityCooldown(
   accountId: string,
   retryAfterHeader?: string | null,
   now = Date.now(),
+  cooldownKind: AntigravityCooldownKind = "rate-limit",
 ): number {
   const delay = parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
   accountHealth.set(accountId, {
     cooldownUntil: now + delay,
     cooldownSource: retryAfterHeader?.trim() ? "retry-after" : "default",
+    cooldownKind,
   });
   sweepExpiredOnWrite(now);
   return now + delay;
@@ -165,6 +169,7 @@ export interface AntigravityAccountSelection {
   accountId: string | null;
   reason: AntigravityAccountSelectionReason;
   cooldownUntil?: number;
+  cooldownKind?: AntigravityCooldownKind;
 }
 
 export function resolveAntigravityAccountForSession(
@@ -250,13 +255,14 @@ export function recordAntigravitySyntheticFailure(
 ): AntigravitySyntheticFailure | null {
   const failure = classifyAntigravityProviderError(payload);
   if (failure === "geoblock") {
-    accountHealth.set(accountId, { cooldownUntil: now + MAX_COOLDOWN_MS, cooldownSource: "synthetic" });
+    accountHealth.set(accountId, { cooldownUntil: now + MAX_COOLDOWN_MS, cooldownSource: "synthetic", cooldownKind: "geoblock" });
     return "geoblock";
   }
   if (!failure) return null;
   accountHealth.set(accountId, {
     cooldownUntil: now + DEFAULT_COOLDOWN_MS,
     cooldownSource: "synthetic",
+    cooldownKind: failure,
   });
   return failure;
 }

@@ -183,7 +183,26 @@ describe("Antigravity Responses integration", () => {
     expect(seen).toHaveLength(1);
     expect(await response.text()).toContain("quota exceeded");
     const accountId = getAccountSet("google-antigravity")!.activeAccountId;
-    expect(getAntigravityAccountHealthSnapshot(accountId)?.cooldownSource).toBe("synthetic");
+    expect(getAntigravityAccountHealthSnapshot(accountId)).toMatchObject({ cooldownSource: "synthetic", cooldownKind: "quota" });
+  });
+
+  test("preserves 403 after a geoblock arrives as a 200 SSE error", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(`data: ${JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" } })}\n\n`, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const first = await handleResponses(request(true), fastConfig(), { model: "", provider: "" }, {});
+    expect(first.status).toBe(200);
+    await first.text();
+    const accountId = getAccountSet("google-antigravity")!.activeAccountId;
+    expect(getAntigravityAccountHealthSnapshot(accountId)).toMatchObject({ cooldownKind: "geoblock" });
+    const second = await handleResponses(request(), fastConfig(), { model: "", provider: "" }, {});
+    expect(second.status).toBe(403);
+    expect(calls).toBe(1);
   });
 
   test("records cooldowns for actual Google envelopes in streaming and buffered Responses", async () => {
@@ -204,7 +223,7 @@ describe("Antigravity Responses integration", () => {
         const response = await handleResponses(request(stream), fastConfig(), { model: "", provider: "" }, {});
         expect(response.status).toBe(200);
         const accountId = getAccountSet("google-antigravity")!.activeAccountId;
-        expect(getAntigravityAccountHealthSnapshot(accountId)?.cooldownSource).toBe("synthetic");
+        expect(getAntigravityAccountHealthSnapshot(accountId)).toMatchObject({ cooldownSource: "synthetic", cooldownKind: expected.source });
       }
     }
   });

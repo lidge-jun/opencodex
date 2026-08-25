@@ -8,6 +8,7 @@ import {
   clearAntigravityRoutingState,
   getAntigravityAccountHealthSnapshot,
   recordAntigravityCooldown,
+  recordAntigravitySyntheticFailure,
   resolveAntigravityAccountForSession,
   retryableAntigravity429DelayMs,
 } from "../src/oauth/antigravity-routing";
@@ -59,13 +60,22 @@ describe("google antigravity strict account affinity", () => {
     const ids = accountIds();
     await setActiveAccount("google-antigravity", ids.a);
     recordAntigravityCooldown(ids.a, "60", 1000);
-    expect(resolveAntigravityAccountForSession("new-conversation", 2000)).toMatchObject({ accountId: ids.a, reason: "active-cooled" });
+    expect(resolveAntigravityAccountForSession("new-conversation", 2000)).toMatchObject({ accountId: ids.a, reason: "active-cooled", cooldownKind: "rate-limit" });
   });
 
   test("short retry-after is retryable once and longer cooldowns are not", () => {
+    expect(retryableAntigravity429DelayMs("0", 1000)).toBe(0);
     expect(retryableAntigravity429DelayMs("5", 1000)).toBe(5000);
     expect(retryableAntigravity429DelayMs("5.1", 1000)).toBeNull();
     expect(retryableAntigravity429DelayMs("60", 1000)).toBeNull();
     expect(retryableAntigravity429DelayMs(null, 1000)).toBeNull();
+  });
+
+  test("preserves synthetic failure kind in account health and selection", async () => {
+    const ids = accountIds();
+    await setActiveAccount("google-antigravity", ids.a);
+    expect(recordAntigravitySyntheticFailure(ids.a, { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" }, 1000)).toBe("geoblock");
+    expect(getAntigravityAccountHealthSnapshot(ids.a, 2000)).toMatchObject({ cooldownKind: "geoblock" });
+    expect(resolveAntigravityAccountForSession("new-conversation", 2000)).toMatchObject({ accountId: ids.a, reason: "active-cooled", cooldownKind: "geoblock" });
   });
 });
