@@ -73,6 +73,25 @@ describe("Responses bridge reasoning and usage parity", () => {
     }
   });
 
+  test("incomplete diagnostics fingerprint upstream-controlled reasons instead of logging them", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const reason = "upstream err.message fixture-secret";
+    try {
+      await collectSse(bridgeToResponsesSSE(replay([
+        { type: "incomplete", reason },
+      ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+        diagnostic: { requestId: "req-incomplete", adapterName: "openai-responses", attempt: 1 },
+      }));
+      const line = getDebugLogEntries().map(entry => entry.line).find(entry => entry.includes('"stage":"bridge"')) ?? "";
+      expect(line).not.toContain(reason);
+      expect(line).toContain(`"reasonByteLength":${Buffer.byteLength(reason)}`);
+      expect(line).toContain('"reasonFingerprint"');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("first-output callback fires once on first non-empty delta (heartbeat/empty skipped)", async () => {
     let firstOutputs = 0;
     await collectSse(bridgeToResponsesSSE(replay([

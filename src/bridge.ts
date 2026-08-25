@@ -215,7 +215,8 @@ export function adapterEventDiagnosticDetails(event: AdapterEvent): Record<strin
     case "incomplete":
       return {
         ...(event.message !== undefined ? { byteLength: Buffer.byteLength(event.message), fingerprint: debugFingerprint(event.message) } : {}),
-        reason: event.reason,
+        reasonByteLength: Buffer.byteLength(event.reason),
+        reasonFingerprint: debugFingerprint(event.reason),
         ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
       };
     case "done":
