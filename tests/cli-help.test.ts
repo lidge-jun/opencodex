@@ -174,6 +174,11 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).toContain("Service:");
       expect(result.stdout).toContain(join(opencodexHome, "service.log"));
       expect(result.stdout).toContain("Codex autostart shim");
+      // #2411: status must name the routing kind it already computes. The
+      // proxy is down in this fixture, so the unused-proxy warning must stay
+      // quiet — that warning is for a LIVE proxy nothing routes through.
+      expect(result.stdout).toContain("routing=");
+      expect(result.stdout).not.toContain("the running proxy is unused");
     } finally {
       rmSync(opencodexHome, { recursive: true, force: true });
     }

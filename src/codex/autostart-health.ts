@@ -154,3 +154,19 @@ export function startupHealthSummary(health: StartupHealth): string {
   if (health.serviceInstalled && !health.serviceViable) return `AT RISK after restart (installed service is disabled, stopped, or unhealthy; run '${command}')`;
   return `AT RISK after restart (no viable background service; run '${command}')`;
 }
+
+/**
+ * The routing/service/shim token `ocx doctor` prints under restart safety.
+ * Extracted so `ocx status` can show the same string rather than growing a
+ * second copy that drifts (#2411). Two management routes computing the same
+ * thing separately is exactly how #2457 happened.
+ */
+export function formatStartupRoutingDetail(health: StartupHealth): string {
+  const service = health.serviceViable
+    ? "viable"
+    : health.serviceInstalled ? "installed-but-unhealthy" : "absent";
+  const shim = health.shimHealthy
+    ? "healthy"
+    : health.shimInstalled ? "stale" : "absent";
+  return `routing=${health.routingKind}, service=${service}, shim=${shim}`;
+}

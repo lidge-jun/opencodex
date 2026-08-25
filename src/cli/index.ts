@@ -25,7 +25,7 @@ import {
   writePid,
   writeRuntimePort,
 } from "../config/process-state";
-import { collectStatus } from "./status";
+import { collectStatus, unusedProxyWarningLines } from "./status";
 
 import {
   discoverStableProxyForRestart,
@@ -46,7 +46,7 @@ import { runCli } from "./root";
 import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
-import { startupHealthSummary } from "../codex/autostart-health";
+import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
@@ -848,6 +848,12 @@ async function handleStatus() {
     console.log(`❌ Proxy: ${status.proxyLabel}`);
   }
   console.log(`   Health: ${status.healthLabel}`);
+  for (const line of unusedProxyWarningLines({
+    proxyUp: Boolean(status.json.proxy.pid || status.json.proxy.health.ok),
+    routingKind: status.json.startup.routingKind,
+  })) {
+    console.log(`   ${line}`);
+  }
   if (!(status.json.proxy.pid || status.json.proxy.health.ok)) {
     console.log("   ↳ Not running — Codex/Claude requests will fail with connection errors.");
     // The service summary a few lines below already tells a registered-but-not-serving
@@ -867,6 +873,7 @@ async function handleStatus() {
   console.log(`   Default provider: ${status.json.defaultProvider}`);
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}`);
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}`);
+  console.log(`   ${formatStartupRoutingDetail(status.json.startup)}`);
   console.log(`   Service: ${status.json.service.summary}`);
   console.log(`   ${status.json.codexShim.summary}`);
   console.log(`   Codex runtime: ${status.json.codexRuntime.path}`);
