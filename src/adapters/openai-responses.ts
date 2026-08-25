@@ -1686,7 +1686,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let convertedRoutedCustomToolNames: Set<string> | undefined;
       let routedCustomToolRepairNames: Set<string> | undefined;
       let convertedRoutedToolSearchNames: Set<string> | undefined;
-      let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string }> | undefined;
+      let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string; kind: "function" | "custom" }> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,

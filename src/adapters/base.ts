@@ -81,7 +81,7 @@ export interface AdapterRequest {
     /** Client tool-search names actually lowered to upstream function calls for this request. */
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Upstream-only aliases for namespace tools flattened in this request. */
-    convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string }>;
+    convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string; kind: "function" | "custom" }>;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */

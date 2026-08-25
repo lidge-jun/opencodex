@@ -579,7 +579,7 @@ describe("routed compaction lowering order", () => {
     expect([...(built.convertedRoutedCustomToolNames ?? [])]).toEqual(["apply_patch"]);
     expect([...(built.convertedRoutedToolSearchNames ?? [])]).toEqual(["opencodex_tool_search"]);
     expect([...(built.convertedRoutedNamespaceToolAliases ?? new Map()).entries()]).toEqual([
-      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent" }],
+      ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
   });
 
