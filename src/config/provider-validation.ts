@@ -11,6 +11,7 @@ import {
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const SENSITIVE_PROVIDER_HEADERS = new Set([
   "authorization",
+  "api-key",
   "cookie",
   "set-cookie",
   "proxy-authorization",

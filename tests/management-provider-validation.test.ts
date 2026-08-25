@@ -2766,6 +2766,14 @@ describe("provider management validation", () => {
     expect(clearTransport?.status).toBe(200);
     expect(liveConfig.providers.gateway.apiKeyTransport).toBeUndefined();
 
+    // Credential header names are case-insensitive at the HTTP boundary and must never persist.
+    for (const name of ["API-KEY", "api-key"]) {
+      const rejected = await patch("extra", { headers: { [name]: "should-not-persist" } });
+      expect(rejected?.status).toBe(400);
+      expect(liveConfig.providers.extra.headers).toBeUndefined();
+      expect(loadConfig().providers.extra?.headers).toBeUndefined();
+    }
+
     // authMode local is guarded by the registry: nvidia (key) → 400; ollama (local) → ok.
     const nvidiaLocal = await patch("nvidia", { authMode: "local" });
     expect(nvidiaLocal?.status).toBe(400);

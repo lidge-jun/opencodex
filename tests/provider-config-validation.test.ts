@@ -42,6 +42,9 @@ describe("provider config validation leaf", () => {
   test("rejects sensitive, malformed, non-string, and multiline headers", () => {
     expect(providerHeadersConfigError({ "X-Custom": "ok" })).toBeNull();
     expect(providerHeadersConfigError({ Authorization: "Bearer secret" })).toContain("sensitive header");
+    for (const name of ["API-KEY", "api-key"]) {
+      expect(providerHeadersConfigError({ [name]: "secret" })).toContain("sensitive header");
+    }
     expect(providerHeadersConfigError({ "Bad Header": "x" })).toContain("valid HTTP header names");
     expect(providerHeadersConfigError({ "X-Count": 1 })).toContain("must be a string");
     expect(providerHeadersConfigError({ "X-Custom": "ok\r\nInjected: yes" })).toContain("line breaks");
