@@ -144,8 +144,10 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 
 ## `cursor`
 
-**Назначение:** `agent.v1.AgentService/Run` Cursor поверх потокового HTTP/2 Connect на
-`api2.cursor.sh`.
+**Назначение:** по умолчанию `agent.v1.AgentService/Run` Cursor поверх потокового HTTP/2 Connect
+на `api2.cursor.sh`. При `upstreamHttpVersion: "http1.1"` (или `"h1"`) используется совместимый
+транспорт HTTP/1.1: `agent.v1.AgentService/RunSSE` для вывода сервера и
+`aiserver.v1.BidiService/BidiAppend` для сообщений клиента.
 **Аутентификация:** Cursor OAuth/access token из `provider.apiKey` или из переданного заголовка
 authorization.
 
@@ -159,8 +161,8 @@ authorization.
   локально в процессе и повторно использует checkpoint для проверенного линейного продолжения. Ходы
   с результатом инструмента используют checkpoint последнего завершённого хода и только ещё не
   охваченный suffix, когда известна граница охваченных сообщений. Поиск по префиксу без ref разрешён
-  только при наличии запомненного разговора Cursor или стабильного клиентского потока (включая
-  ограниченный fallback по Desktop session/thread) и единственного совпадающего checkpoint,
+  только при наличии запомненного разговора Cursor или стабильного идентификатора client thread
+  (включая ограниченный fallback по Desktop session/thread) и единственного совпадающего checkpoint,
   принадлежащего тому же разговору provider; иначе выполняется full replay. Compaction, изоляция
   helper/shadow, несовпадение account/model, отсутствие ref, ошибки decode, forced-fresh recovery и
   повтор после invalid_argument также используют full replay. Перезапуск процесса удаляет хранилище
