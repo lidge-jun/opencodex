@@ -264,6 +264,11 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   const providerAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/alias$/);
   if (providerAliasMatch && req.method === "PUT") {
     const name = decodeURIComponent(providerAliasMatch[1]!);
+    // `keys` is not a provider name: `/api/providers/keys/alias` is the API-KEY POOL's rename
+    // endpoint (oauth-account-routes.ts), and model routes are dispatched BEFORE it. Without
+    // this guard the alias route matched `name = "keys"`, found no such provider, and returned
+    // 404 for every key-pool rename.
+    if (name === "keys") return null;
     const provider = config.providers[name];
     if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
     let raw: unknown;
@@ -286,6 +291,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   const modelAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-aliases$/);
   if (modelAliasMatch && req.method === "PUT") {
     const name = decodeURIComponent(modelAliasMatch[1]!);
+    if (name === "keys") return null;
     const provider = config.providers[name];
     if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
     let raw: unknown;
