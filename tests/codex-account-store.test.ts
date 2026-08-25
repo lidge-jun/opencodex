@@ -261,6 +261,39 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  test("refresh rejects a 200 token response without a usable access token", async () => {
+    const {
+      getCodexAccountCredential,
+      getValidCodexToken,
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+      TokenRefreshError,
+    } = await import("../src/codex/account-store");
+    saveCodexAccountCredential("refresh-malformed-access", {
+      accessToken: "old",
+      refreshToken: "old-r",
+      expiresAt: 0,
+      chatgptAccountId: "acc",
+    });
+    const startGeneration = readCodexAccountRecord("refresh-malformed-access")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      refresh_token: "new-r",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    try {
+      await expect(getValidCodexToken("refresh-malformed-access")).rejects.toBeInstanceOf(TokenRefreshError);
+      expect(getCodexAccountCredential("refresh-malformed-access")).toMatchObject({
+        accessToken: "old",
+        refreshToken: "old-r",
+      });
+      expect(readCodexAccountRecord("refresh-malformed-access")!.generation).toBe(startGeneration);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("refresh with a non-finite expires_in falls back to the 3600s default", async () => {
     const {
       getCodexAccountCredential,

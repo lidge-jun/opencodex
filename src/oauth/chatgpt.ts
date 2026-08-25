@@ -2,9 +2,9 @@ import { OAuthCallbackFlow } from "./callback-server";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { generatePKCE } from "./pkce";
 
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+export const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_URL = "https://auth.openai.com/oauth/authorize";
-const TOKEN_URL = "https://auth.openai.com/oauth/token";
+export const CHATGPT_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
@@ -48,7 +48,8 @@ export function extractEmail(idToken?: string, accessToken?: string): string | u
 
 function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
   const idToken = typeof data.id_token === "string" ? data.id_token : undefined;
-  const accessToken = data.access_token as string;
+  const accessToken = requiredTokenResponseString(data, "access_token");
+  const refreshToken = optionalTokenResponseString(data, "refresh_token");
   // ?? only guards null/undefined; NaN or a string expires_in would otherwise
   // produce a NaN expiry that never compares as expired, and a negative duration
   // would stamp an already-past expiry — both block refresh semantics.
@@ -62,11 +63,43 @@ function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
   const expires = Number.isFinite(computedExpires) ? computedExpires : Date.now() + 3600 * 1000;
   return {
     access: accessToken,
-    refresh: (data.refresh_token as string) ?? "",
+    refresh: refreshToken ?? "",
     expires,
     accountId: extractAccountId(idToken, accessToken),
     email: extractEmail(idToken, accessToken),
   };
+}
+
+function requiredTokenResponseString(
+  data: Record<string, unknown>,
+  field: "access_token",
+): string {
+  const value = tokenResponseString(data, field);
+  if (value === undefined) {
+    throw new Error(`ChatGPT token response missing ${field}`);
+  }
+  return value;
+}
+
+function optionalTokenResponseString(
+  data: Record<string, unknown>,
+  field: "refresh_token",
+): string | undefined {
+  return tokenResponseString(data, field);
+}
+
+function tokenResponseString(
+  data: Record<string, unknown>,
+  field: "access_token" | "refresh_token",
+): string | undefined {
+  const value = data[field];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`ChatGPT token response contains invalid ${field}`);
+  }
+  return value;
 }
 
 export class ChatGPTOAuthFlow extends OAuthCallbackFlow {
@@ -88,7 +121,7 @@ export class ChatGPTOAuthFlow extends OAuthCallbackFlow {
     this.#verifier = pkce.verifier;
     const params = new URLSearchParams({
       response_type: "code",
-      client_id: CLIENT_ID,
+      client_id: CHATGPT_CLIENT_ID,
       redirect_uri: redirectUri,
       scope: SCOPE,
       code_challenge: pkce.challenge,
@@ -107,12 +140,12 @@ export class ChatGPTOAuthFlow extends OAuthCallbackFlow {
 
   async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
     if (!this.#verifier) throw new Error("ChatGPT PKCE verifier not initialized");
-    const resp = await fetch(TOKEN_URL, {
+    const resp = await fetch(CHATGPT_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "authorization_code",
-        client_id: CLIENT_ID,
+        client_id: CHATGPT_CLIENT_ID,
         code,
         redirect_uri: redirectUri,
         code_verifier: this.#verifier,
@@ -135,6 +168,40 @@ function safeErrorDescription(resp: Response): Promise<string> {
   });
 }
 
+interface OAuthErrorDetails {
+  description: string;
+  error?: string;
+  errorDescription?: string;
+}
+
+async function oauthErrorDetails(resp: Response): Promise<OAuthErrorDetails> {
+  const text = await resp.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; error_description?: unknown };
+    const error = typeof parsed.error === "string" ? parsed.error : undefined;
+    const errorDescription = typeof parsed.error_description === "string" ? parsed.error_description : undefined;
+    return {
+      description: [error, errorDescription].filter(Boolean).join(": ") || `HTTP ${resp.status}`,
+      ...(error ? { error } : {}),
+      ...(errorDescription ? { errorDescription } : {}),
+    };
+  } catch {
+    return { description: `HTTP ${resp.status}` };
+  }
+}
+
+export class ChatGPTTokenRefreshError extends Error {
+  constructor(
+    readonly status: number,
+    readonly oauthError: string | undefined,
+    readonly oauthErrorDescription: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ChatGPTTokenRefreshError";
+  }
+}
+
 export async function loginChatGPT(ctrl: OAuthController, opts?: { forceLogin?: boolean }): Promise<OAuthCredentials> {
   const flow = new ChatGPTOAuthFlow(ctrl);
   if (opts?.forceLogin) flow.forceLogin = true;
@@ -143,19 +210,28 @@ export async function loginChatGPT(ctrl: OAuthController, opts?: { forceLogin?: 
 
 // Note: uses form-urlencoded per OAuth 2.0 spec (RFC 6749 §6).
 // Codex-rs uses JSON for refresh — intentional divergence; both accepted by auth.openai.com.
-export async function refreshChatGPTToken(refreshToken: string): Promise<OAuthCredentials> {
-  const resp = await fetch(TOKEN_URL, {
+export async function refreshChatGPTToken(
+  refreshToken: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<OAuthCredentials> {
+  const resp = await fetch(CHATGPT_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      client_id: CLIENT_ID,
+      client_id: CHATGPT_CLIENT_ID,
       refresh_token: refreshToken,
     }).toString(),
+    signal: options.signal,
   });
   if (!resp.ok) {
-    const errDesc = await safeErrorDescription(resp);
-    throw new Error(`ChatGPT refresh failed: ${resp.status} ${errDesc}`);
+    const details = await oauthErrorDetails(resp);
+    throw new ChatGPTTokenRefreshError(
+      resp.status,
+      details.error,
+      details.errorDescription,
+      `ChatGPT refresh failed: ${resp.status} ${details.description}`,
+    );
   }
   return credsFromToken((await resp.json()) as Record<string, unknown>);
 }

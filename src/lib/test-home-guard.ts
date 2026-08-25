@@ -58,13 +58,18 @@ function canonicalize(path: string): string {
  * `homedir()` later would return the sandbox and leave the real home unprotected — the
  * guard would be perfectly inverted while its tests still looked green.
  */
-const PROTECTED_HOME = canonicalize(
-  join(process.env[REAL_HOME_ENV]?.trim() || homedir(), ".opencodex"),
-);
+const REAL_HOME = process.env[REAL_HOME_ENV]?.trim() || homedir();
+const PROTECTED_HOME = canonicalize(join(REAL_HOME, ".opencodex"));
+const PROTECTED_CODEX_HOME = canonicalize(join(REAL_HOME, ".codex"));
 
 /** The production home this process protects. Exported for the guard's own tests. */
 export function protectedHomeForTests(): string {
   return PROTECTED_HOME;
+}
+
+/** The production Codex home this process protects when tests write native credentials. */
+export function protectedCodexHomeForTests(): string {
+  return PROTECTED_CODEX_HOME;
 }
 
 export function isTestHomeGuardArmed(): boolean {
@@ -86,5 +91,15 @@ export function assertNotRealHomeUnderTest(dir: string): void {
     `refusing to write the real OpenCodex home (${PROTECTED_HOME}) from a test process. `
     + "Point OPENCODEX_HOME at a temp directory for this test, or inject persistence "
     + "instead of calling the global writer (see devlog 260730_codex_rs_upstream_v2_live_handoff/070).",
+  );
+}
+
+/** Throw when an armed test process is about to write the real native Codex home. */
+export function assertNotRealCodexHomeUnderTest(dir: string): void {
+  if (!isTestHomeGuardArmed()) return;
+  if (canonicalize(dir) !== PROTECTED_CODEX_HOME) return;
+  throw new Error(
+    `refusing to write the real Codex home (${PROTECTED_CODEX_HOME}) from a test process. `
+    + "Point CODEX_HOME at a temp directory for this test before writing native auth.json.",
   );
 }

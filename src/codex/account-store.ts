@@ -11,13 +11,15 @@ import {
   withConfigMutationLockSync,
 } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { CHATGPT_CLIENT_ID, CHATGPT_TOKEN_URL } from "../oauth/chatgpt";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 
 type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
 type RawCodexAccountStore = Record<string, CodexAccountCredentials | CodexAccountCredentialRecord>;
 
-const REFRESH_SKEW_MS = 60_000;
+export const CODEX_REFRESH_SKEW_MS = 60_000;
+const REFRESH_SKEW_MS = CODEX_REFRESH_SKEW_MS;
 const REFRESH_LOCK_STALE_MS = 60_000;
 const REFRESH_LOCK_WAIT_MS = REFRESH_LOCK_STALE_MS + 5_000;
 const REFRESH_LOCK_POLL_MS = 50;
@@ -45,6 +47,23 @@ function isCredential(value: unknown): value is CodexAccountCredentials {
     && typeof value.refreshToken === "string"
     && typeof value.expiresAt === "number"
     && typeof value.chatgptAccountId === "string";
+}
+
+function requiredTokenResponseString(data: Record<string, unknown>, field: string): string {
+  const value = data[field];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TokenRefreshError("unknown", `Codex token refresh returned a malformed ${field}.`);
+  }
+  return value;
+}
+
+function optionalTokenResponseString(data: Record<string, unknown>, field: string): string | undefined {
+  const value = data[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TokenRefreshError("unknown", `Codex token refresh returned a malformed ${field}.`);
+  }
+  return value;
 }
 
 function isCredentialRecord(value: unknown): value is CodexAccountCredentialRecord {
@@ -229,13 +248,10 @@ export function tombstoneCodexAccount(id: string): number {
   });
 }
 
-const CHATGPT_TOKEN_URL = "https://auth.openai.com/oauth/token";
-const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-
 export class TokenRefreshError extends Error {
   reason: "expired" | "revoked" | "unknown";
-  constructor(reason: "expired" | "revoked" | "unknown", message: string) {
-    super(message);
+  constructor(reason: "expired" | "revoked" | "unknown", message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "TokenRefreshError";
     this.reason = reason;
   }
@@ -331,7 +347,7 @@ function isRefreshLockStale(path: string): boolean {
   }
 }
 
-async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
+export async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
   hardenConfigDir();
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -372,18 +388,66 @@ async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal,
   }
 }
 
-function findFreshCredentialForGrant(
-  refreshGrantFingerprint: string,
-  excludeId: string,
-): CodexAccountCredentials | null {
-  const now = Date.now();
+export function findFreshCredentialForGrant(query: {
+  refreshGrantFingerprint: string;
+  excludeId?: string;
+  now?: number;
+}): CodexAccountCredentials | null {
+  const now = query.now ?? Date.now();
   const records = loadCodexAccountRecordStore();
   for (const [candidateId, candidate] of Object.entries(records)) {
-    if (candidateId === excludeId || candidate.deletedAt != null || !candidate.credential) continue;
-    if (recordGrantFingerprint(candidate) !== refreshGrantFingerprint) continue;
+    if (candidateId === query.excludeId || candidate.deletedAt != null || !candidate.credential) continue;
+    if (recordGrantFingerprint(candidate) !== query.refreshGrantFingerprint) continue;
     if (candidate.credential.expiresAt > now + REFRESH_SKEW_MS) return candidate.credential;
   }
   return null;
+}
+
+export function findUniqueFreshCredentialForChatgptAccount(query: {
+  chatgptAccountId: string;
+  excludeId?: string;
+  now?: number;
+}): CodexAccountCredentials | null {
+  const chatgptAccountId = query.chatgptAccountId.trim();
+  if (!chatgptAccountId) return null;
+  const now = query.now ?? Date.now();
+  const records = loadCodexAccountRecordStore();
+  let match: CodexAccountCredentials | null = null;
+  for (const [candidateId, candidate] of Object.entries(records)) {
+    if (candidateId === query.excludeId || candidate.deletedAt != null || !candidate.credential) continue;
+    if (candidate.credential.chatgptAccountId !== chatgptAccountId) continue;
+    if (candidate.credential.expiresAt <= now + REFRESH_SKEW_MS) continue;
+    if (match) return null;
+    match = candidate.credential;
+  }
+  return match;
+}
+
+export function publishFreshCredentialForGrant(query: {
+  refreshGrantFingerprint: string;
+  credential: CodexAccountCredentials;
+  excludeId?: string;
+}): void {
+  withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    let changed = false;
+    for (const [candidateId, candidate] of Object.entries(store)) {
+      if (candidateId === query.excludeId || candidate.deletedAt != null || !candidate.credential) continue;
+      if (recordGrantFingerprint(candidate) !== query.refreshGrantFingerprint) continue;
+      store[candidateId] = {
+        credential: {
+          ...query.credential,
+          chatgptAccountId: candidate.credential.chatgptAccountId || query.credential.chatgptAccountId,
+        },
+        generation: candidate.generation + 1,
+        refreshGrantFingerprint: refreshGrantFingerprintForToken(query.credential.refreshToken),
+        replacedAt: candidate.replacedAt,
+        ...preservedValidationMetadata(candidate),
+      };
+      changed = true;
+    }
+    if (changed) persist(store);
+  });
 }
 
 async function notePlanFromRefreshedAccessToken(
@@ -471,7 +535,7 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
         credential: lockedCred,
       };
     }
-    const sameGrantFreshCredential = findFreshCredentialForGrant(refreshGrantFingerprint, id);
+    const sameGrantFreshCredential = findFreshCredentialForGrant({ refreshGrantFingerprint, excludeId: id });
     if (sameGrantFreshCredential) {
       if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, sameGrantFreshCredential)) {
         throw new CodexCredentialGenerationConflictError();
@@ -505,7 +569,9 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
         : "unknown" as const;
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
     }
-    const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+    const data = (await res.json()) as Record<string, unknown>;
+    const accessToken = requiredTokenResponseString(data, "access_token");
+    const refreshToken = optionalTokenResponseString(data, "refresh_token");
     // Guard against a missing/non-finite/negative expires_in (malformed upstream
     // response): a NaN expiry would never compare as expired, and a negative
     // duration would stamp an already-past expiry — both block refresh semantics.
@@ -519,8 +585,8 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
     const safeExpiresAt = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 3600 * 1000;
 
     const updated: CodexAccountCredentials = {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token ?? lockedCred.refreshToken,
+      accessToken,
+      refreshToken: refreshToken ?? lockedCred.refreshToken,
       expiresAt: safeExpiresAt,
       chatgptAccountId: lockedCred.chatgptAccountId,
     };

@@ -4,6 +4,7 @@ import {
   CodexCredentialRefreshLockTimeoutError,
   CodexCredentialRefreshBusyError,
   CodexCredentialRefreshStaleError,
+  TokenRefreshError,
   getValidCodexToken,
   isCodexAccountGenerationLive,
 } from "./account-store";
@@ -12,7 +13,14 @@ import { isCodexAccountPaused } from "./account-pause";
 import { ConfigMutationLockError } from "../config";
 import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
-import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken, isMainAccountTokenLive } from "./main-account";
+import {
+  MAIN_CODEX_ACCOUNT_ID,
+  MainAuthJsonChangedDuringRefreshError,
+  getMainAccountToken,
+  getValidMainAccountToken,
+  isMainAccountTokenLive,
+  type NativeMainRefreshDependencies,
+} from "./main-account";
 import { isNativeMainTrafficBlocked, nativeMainStartupGateSnapshot } from "./native-profile-startup";
 import type { NativeMainStartupBlockReason } from "./native-profile-startup";
 import {
@@ -29,6 +37,7 @@ import {
   entitledCodexAccountIdsForModel,
   isDirectCallerEntitledToCodexModel,
   resolveCodexModelEntitlements,
+  type CodexModelEntitlementResolveOptions,
   type CodexModelEntitlementSnapshot,
 } from "./model-entitlements";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
@@ -318,8 +327,15 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
     && !(cause instanceof CodexCredentialRefreshLockTimeoutError)
     && !(cause instanceof CodexCredentialRefreshBusyError)
     && !(cause instanceof CodexCredentialRefreshStaleError)
+    && !(cause instanceof MainAuthJsonChangedDuringRefreshError)
+    && !(cause instanceof TokenRefreshError && cause.reason === "unknown")
     && !(cause instanceof ConfigMutationLockError);
 }
+
+type ResolveCodexModelEntitlementsForAuthContext = (
+  config: Pick<OcxConfig, "codexAccounts">,
+  options?: Pick<CodexModelEntitlementResolveOptions, "nativeMainRefreshDependencies" | "signal">,
+) => Promise<CodexModelEntitlementSnapshot>;
 
 export interface ResolveCodexAuthContextOptions {
   excludeAccountId?: string;
@@ -332,15 +348,25 @@ export interface ResolveCodexAuthContextOptions {
   /** Test-only native credential read seams. */
   isMainAccountTokenLive?: () => boolean;
   getMainAccountToken?: typeof getMainAccountToken;
+  getValidMainAccountToken?: typeof getValidMainAccountToken;
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+  signal?: AbortSignal;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
   /** Test seam for account-gated native model discovery. */
-  resolveCodexModelEntitlements?: (
-    config: Pick<OcxConfig, "codexAccounts">,
-  ) => Promise<CodexModelEntitlementSnapshot>;
+  resolveCodexModelEntitlements?: ResolveCodexModelEntitlementsForAuthContext;
   /** Direct requests admitted with a proxy bearer substitute the stored native-main credential. */
   substituteMainCredentialForDirect?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
   isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
+}
+
+function entitlementOptionsForAuthContext(
+  options: Pick<ResolveCodexAuthContextOptions, "nativeMainRefreshDependencies" | "signal">,
+): Pick<CodexModelEntitlementResolveOptions, "nativeMainRefreshDependencies" | "signal"> {
+  return {
+    ...(options.nativeMainRefreshDependencies ? { nativeMainRefreshDependencies: options.nativeMainRefreshDependencies } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -367,7 +393,10 @@ export async function resolveCodexAuthContext(
     if (options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)) {
       const entitled = options.substituteMainCredentialForDirect
         ? entitledCodexAccountIdsForModel(
-            await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config),
+            await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(
+              config,
+              entitlementOptionsForAuthContext(options),
+            ),
             options.modelId,
           )?.has(MAIN_CODEX_ACCOUNT_ID) === true
         : await (options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel)(
@@ -382,7 +411,10 @@ export async function resolveCodexAuthContext(
   }
   const affinityKey = fixedAccountId === undefined ? codexPoolAffinityKey(headers) : undefined;
   const entitlementSnapshot = options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
-    ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config)
+    ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(
+      config,
+      entitlementOptionsForAuthContext(options),
+    )
     : undefined;
   const modelEligibleAccountIds = entitlementSnapshot
     ? entitledCodexAccountIdsForModel(entitlementSnapshot, options.modelId)
@@ -486,7 +518,12 @@ export async function resolveCodexAuthContext(
   // best-effort prime so the NEXT routing decision has real scores. This never
   // blocks the current request, and the helper's single-flight guard collapses
   // repeated triggers into one pass.
-  if (fixedAccountId === undefined && !nativeMainReadsForbidden && !getAccountQuota(accountId)) {
+  if (
+    accountId !== MAIN_CODEX_ACCOUNT_ID
+    && fixedAccountId === undefined
+    && !nativeMainReadsForbidden
+    && !getAccountQuota(accountId)
+  ) {
     if (options.primeCodexPoolQuotas) {
       void options.primeCodexPoolQuotas(config, "pre-route").catch(() => {});
     } else {
@@ -520,8 +557,21 @@ export async function resolveCodexAuthContext(
   }
 
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    // Main account in rotation: inject the read-only auth.json token and fail closed if it vanished.
-    const token = (options.getMainAccountToken ?? getMainAccountToken)();
+    // Main account in rotation: refresh auth.json before upstream I/O and fail closed if it vanished.
+    let token: { accessToken: string; chatgptAccountId: string } | null;
+    try {
+      token = await (options.getValidMainAccountToken ?? getValidMainAccountToken)({
+        signal: options.signal,
+        dependencies: options.nativeMainRefreshDependencies,
+      });
+    } catch (cause) {
+      if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
+      else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
+      if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
+        markAccountNeedsReauth(accountId, writerGeneration);
+      }
+      throw new CodexAuthContextError(accountId, cause);
+    }
     if (!token) {
       // Nothing will reach upstream, so give the probe back instead of burning it.
       if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
@@ -529,6 +579,15 @@ export async function resolveCodexAuthContext(
       throw new CodexPoolAuthenticationError(
         fixedAccountId !== undefined ? "Selected Codex account is unavailable" : undefined,
       );
+    }
+    if (fixedAccountId === undefined && !nativeMainReadsForbidden && !getAccountQuota(accountId)) {
+      if (options.primeCodexPoolQuotas) {
+        void options.primeCodexPoolQuotas(config, "pre-route").catch(() => {});
+      } else {
+        import("./auth-api")
+          .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "pre-route"))
+          .catch(() => {});
+      }
     }
     return {
       kind: "main-pool",
@@ -641,6 +700,36 @@ export function materializeCodexUpstreamAuth(
     if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
     return selected;
   }
+  return selected;
+}
+
+export async function materializeCodexUpstreamAuthAsync(
+  headers: Headers,
+  ctx: CodexAuthContext,
+  options: {
+    substituteMainCredential?: boolean;
+    signal?: AbortSignal;
+    getValidMainAccountToken?: typeof getValidMainAccountToken;
+    nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+  } = {},
+): Promise<Headers> {
+  if (ctx.kind !== "main" || options.substituteMainCredential !== true) {
+    return materializeCodexUpstreamAuth(headers, ctx, options);
+  }
+  const selected = new Headers();
+  for (const name of FORWARD_HEADERS) {
+    const value = headers.get(name);
+    if (value) selected.set(name, value);
+  }
+  const stored = await (options.getValidMainAccountToken ?? getValidMainAccountToken)({
+    signal: options.signal,
+    dependencies: options.nativeMainRefreshDependencies,
+  });
+  if (!stored?.accessToken) {
+    throw new CodexMainSubstitutionUnavailableError();
+  }
+  selected.set("authorization", `Bearer ${stored.accessToken}`);
+  if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
   return selected;
 }
 

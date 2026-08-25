@@ -63,4 +63,22 @@ describe("ChatGPT OAuth token response parsing", () => {
     expect(cred.expires).toBeGreaterThan(before);
     expect(Math.abs(cred.expires - (before + FALLBACK_MS))).toBeLessThan(TOLERANCE_MS);
   });
+
+  test("refresh rejects a 200 token response without a usable access token", async () => {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ refresh_token: "rt", expires_in: 3600 }),
+      { status: 200 },
+    )) as typeof fetch;
+
+    await expect(refreshChatGPTToken("secret")).rejects.toThrow("access_token");
+  });
+
+  test("refresh rejects a 200 token response with a malformed refresh token", async () => {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ access_token: "at", refresh_token: 7, expires_in: 3600 }),
+      { status: 200 },
+    )) as typeof fetch;
+
+    await expect(refreshChatGPTToken("secret")).rejects.toThrow("refresh_token");
+  });
 });

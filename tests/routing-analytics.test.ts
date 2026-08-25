@@ -6,6 +6,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
 import {
   appendUsageEntry,
+  readUsageEntries,
   resetUsageReadCacheForTests,
   usageLogPath,
   type PersistedUsageEntry,
@@ -221,6 +222,31 @@ describe("routing analytics (RI-03)", () => {
         ],
       }),
     );
+    const result = await computeRoutingAnalytics({});
+    expect(result.cooldownTriggeringFailures).toBe(1);
+  });
+
+  test("retains codex-main-401 recovery attempts for cooldown analytics", async () => {
+    appendFileSync(usageLogPath(), `${JSON.stringify(entry("native-main-replay", {
+      timestamp: 1,
+      status: 503,
+      durationMs: 100,
+      attempts: [
+        {
+          ordinal: 1,
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          adapter: "openai-responses",
+          status: 401,
+          durationMs: 40,
+          sendCount: 1,
+          recoveryKinds: ["codex-main-401", "unknown"],
+          usageStatus: "unreported",
+        },
+      ],
+    }))}\n`);
+
+    expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["codex-main-401"]);
     const result = await computeRoutingAnalytics({});
     expect(result.cooldownTriggeringFailures).toBe(1);
   });

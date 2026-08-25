@@ -120,15 +120,17 @@ import {
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   headersForCodexAuthContext,
-  materializeCodexUpstreamAuth,
+  materializeCodexUpstreamAuthAsync,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  shouldMarkAccountNeedsReauthForCodexAuthFailure,
   codexProbeLeaseId,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
   type CodexAuthContext,
 } from "../../codex/auth-context";
+import { forceRefreshMainAccountToken, type NativeMainRefreshDependencies } from "../../codex/main-account";
 import {
   entitledCodexAccountIdsForModel,
   invalidateCodexModelEntitlementsForAccount,
@@ -270,7 +272,7 @@ import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from ".
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
-import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
+import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
@@ -1235,6 +1237,8 @@ export interface HandleResponsesOptions {
   responsesTerminalRepairScheduler?: ResponsesTerminalRepairScheduler;
   /** Internal deterministic runtime-identity seam for Codex upstream WS selection tests. */
   codexWsRuntimeIdentity?: BunRuntimeGateInput;
+  /** Test seam for native main auth.json refresh without calling the real OAuth endpoint. */
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   /**
    * When true, body `prompt_cache_key` is a Claude Desktop shared cache cohort
    * (system/tools hash), not a per-session id — do not use it for Anthropic pool affinity.
@@ -1518,6 +1522,8 @@ async function resolveResponsesCodexAuth(
         modelId: route.modelId,
         substituteMainCredentialForDirect: substituteMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        signal: options.abortSignal,
+        nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
       });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
@@ -1534,7 +1540,11 @@ async function resolveResponsesCodexAuth(
     return {
       ok: true,
       authCtx,
-      headers: materializeCodexUpstreamAuth(req.headers, authCtx, { substituteMainCredential }),
+      headers: await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
+        substituteMainCredential,
+        signal: options.abortSignal,
+        nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+      }),
       substituteMainCredential,
     };
   } catch (err) {
@@ -1542,7 +1552,11 @@ async function resolveResponsesCodexAuth(
       const safeAccountLabel = route.codexAccountNamespace
         ? `${route.providerName}-${route.codexAccountNamespace}`
         : formatCodexProviderForLog(route.providerName, err.accountId, config);
-      console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
+      const cause = (err as Error & { cause?: unknown }).cause;
+      const disposition = shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)
+        ? "reauthentication required"
+        : "retryable refresh failure";
+      console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; ${disposition}`);
     }
     if (err instanceof ForwardAdmissionCredentialError) {
       return { ok: false, response: formatErrorResponse(401, "authentication_error", err.message) };
@@ -1553,6 +1567,52 @@ async function resolveResponsesCodexAuth(
     });
     if (response) return { ok: false, response };
     throw err;
+  }
+}
+
+async function refreshNativeMainForwardAuth(args: {
+  req: Request;
+  route: RouteResult;
+  authCtx: CodexAuthContext;
+  substituteMainCredential: boolean;
+  options: HandleResponsesOptions;
+}): Promise<
+  | { ok: true; authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers }
+  | { ok: false; response: Response }
+> {
+  const { req, route, authCtx, substituteMainCredential, options } = args;
+  if (authCtx.kind !== "main-pool") {
+    return { ok: false, response: formatErrorResponse(401, "authentication_error", "No native main credential to refresh") };
+  }
+  try {
+    const refreshed = await forceRefreshMainAccountToken(authCtx.accessToken, {
+      signal: options.abortSignal,
+      dependencies: options.nativeMainRefreshDependencies,
+    });
+    if (!refreshed) {
+      return {
+        ok: false,
+        response: formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication"),
+      };
+    }
+    const refreshedAuthCtx: CodexAuthContext = {
+      ...authCtx,
+      accessToken: refreshed.accessToken,
+      chatgptAccountId: refreshed.chatgptAccountId,
+    };
+    const provider = applyCodexAuthContextToProvider(
+      stripCodexRuntimeProviderFields(route.provider),
+      refreshedAuthCtx,
+      route.codexAccountMode,
+    );
+    const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+      substituteMainCredential,
+      signal: options.abortSignal,
+      nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+    });
+    return { ok: true, authCtx: refreshedAuthCtx, provider, headers };
+  } catch (error) {
+    return { ok: false, response: nativeMainRefreshFailureResponse(error) };
   }
 }
 
@@ -3210,6 +3270,7 @@ async function handleResponsesInner(
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
+    let codexMain401ReplayAttempted = false;
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
@@ -3284,6 +3345,100 @@ async function handleResponsesInner(
     // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one
     // rebuilt replay. xAI's current subscription models use this branch now that their official
     // Grok CLI catalog declares the Responses backend.
+    if (
+      upstreamResponse.status === 401
+      && authCtx.kind === "main-pool"
+      && usesCodexForwardPoolAuth(authCtx, route.provider)
+      && !codexMain401ReplayAttempted
+    ) {
+      codexMain401ReplayAttempted = true;
+      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      const replay = await refreshNativeMainForwardAuth({
+        req,
+        route,
+        authCtx,
+        substituteMainCredential,
+        options,
+      });
+      if (!replay.ok) {
+        upstream.abort();
+        releaseCodexAuthContextProbeLease(authCtx);
+        return replay.response;
+      }
+      authCtx = replay.authCtx;
+      route.provider = replay.provider;
+      selectedForwardHeaders = replay.headers;
+      const replayAdapter = resolveAdapter(
+        resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
+        config.cacheRetention,
+      );
+      if (!("passthrough" in replayAdapter) || !replayAdapter.passthrough) {
+        upstream.abort();
+        return formatErrorResponse(502, "upstream_error", "Native main refresh changed the provider wire unexpectedly");
+      }
+      bindRouteReasoningReplayScope({
+        parsed,
+        providerName: route.providerName,
+        provider: replay.provider,
+        adapterName: replayAdapter.name,
+        codexAuthContext: authCtx,
+        forwardHeaders: selectedForwardHeaders,
+      });
+      logCtx.providerAdapter = replayAdapter.name;
+      sealRequestAttemptIdentity(
+        logCtx.activeAttempt,
+        logCtx.provider,
+        replayAdapter.name,
+        logCtx.accountLogLabel,
+      );
+      try {
+        request = await replayAdapter.buildRequest(parsed, {
+          headers: selectedForwardHeaders,
+          translatorBudget,
+        });
+        refreshRoutedNamespaceToolAliases(request);
+        recordAdapterReasoning(logCtx, request);
+        recordAdapterTier(logCtx, request);
+      } catch (err) {
+        upstream.abort();
+        if (options.abortSignal?.aborted) return clientCancelledResponse();
+        const msg = err instanceof Error ? err.message : String(err);
+        return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
+      }
+      passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
+        ? request.usageLog.inputTokens
+        : undefined;
+      if (passthroughEstimate !== undefined) logCtx.usageLogInputTokens = passthroughEstimate;
+      refreshUndeclaredToolGuard(request);
+      try {
+        upstreamResponse = await fetchWithTransientRetry(
+          recovery => {
+            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "codex-main-401");
+            return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
+              method: request.method,
+              headers: request.headers,
+              body: request.body,
+            }, recovery), upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
+              route.provider.authMode === "forward")
+              .then(res => {
+                settleObservedHostResponse();
+                return res;
+              });
+          },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        );
+      } catch (err) {
+        return transportFailureResponse(err);
+      } finally {
+        request.releaseBodyObservation?.();
+      }
+      continue passthroughRecovery;
+    }
+
     if (
       upstreamResponse.status === 401
       && isOAuth401ReplayProvider
@@ -4633,6 +4788,7 @@ async function handleResponsesInner(
     let imageRetryAttempted = false;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
+    let codexMain401ReplayAttempted = false;
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
      * it once, tagging the attempt with the given recovery kind. Rebuilds are deterministic
@@ -4712,6 +4868,51 @@ async function handleResponsesInner(
     };
     // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
+      if (
+        upstreamResponse.status === 401
+        && authCtx.kind === "main-pool"
+        && usesCodexForwardPoolAuth(authCtx, route.provider)
+        && !codexMain401ReplayAttempted
+      ) {
+        codexMain401ReplayAttempted = true;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        const replay = await refreshNativeMainForwardAuth({
+          req,
+          route,
+          authCtx,
+          substituteMainCredential,
+          options,
+        });
+        if (!replay.ok) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(authCtx);
+          return replay.response;
+        }
+        authCtx = replay.authCtx;
+        route.provider = replay.provider;
+        selectedForwardHeaders = replay.headers;
+        invalidateSameTargetRequest();
+        activeAdapter = resolveAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
+          config.cacheRetention,
+        );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: replay.provider,
+          adapterName: activeAdapter.name,
+          codexAuthContext: authCtx,
+          forwardHeaders: selectedForwardHeaders,
+        });
+        logCtx.providerAdapter = activeAdapter.name;
+        sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+        const result = await rebuildAndRefetch("codex-main-401");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue recovery;
+      }
+
       if (
         upstreamResponse.status === 401
         && isOAuth401ReplayProvider

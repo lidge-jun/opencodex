@@ -25,6 +25,7 @@ export type AttemptRecoveryKind =
   | "transient-5xx"
   | "connection-reset"
   | "oauth-401"
+  | "codex-main-401"
   | "key-429"
   | "rate-limit-429"
   | "anthropic-oauth-429"
@@ -215,6 +216,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "transient-5xx",
   "connection-reset",
   "oauth-401",
+  "codex-main-401",
   "key-429",
   "rate-limit-429",
   "anthropic-oauth-429",
