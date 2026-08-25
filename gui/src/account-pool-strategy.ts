@@ -6,17 +6,34 @@ export const ACCOUNT_POOL_STRATEGIES: readonly AccountPoolStrategy[] = [
   "fill-first",
 ] as const;
 
+/** Which cached usage bar the `quota` strategy scores. Mirrors `OcxAccountPoolQuotaWindow`. */
+export type AccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
+
+export const ACCOUNT_POOL_QUOTA_WINDOWS: readonly AccountPoolQuotaWindow[] = [
+  "five-hour",
+  "weekly",
+  "max-utilization",
+] as const;
+
 export const DEFAULT_ACCOUNT_POOL_STRATEGY: AccountPoolStrategy = "quota";
+export const DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW: AccountPoolQuotaWindow = "five-hour";
 export const DEFAULT_ACCOUNT_POOL_STICKY_LIMIT = 1;
 export const MIN_ACCOUNT_POOL_STICKY_LIMIT = 1;
 export const MAX_ACCOUNT_POOL_STICKY_LIMIT = 100;
 
 const STRATEGY_SET = new Set<string>(ACCOUNT_POOL_STRATEGIES);
+const QUOTA_WINDOW_SET = new Set<string>(ACCOUNT_POOL_QUOTA_WINDOWS);
 
 export function normalizeAccountPoolStrategy(value: unknown): AccountPoolStrategy {
   return typeof value === "string" && STRATEGY_SET.has(value)
     ? value as AccountPoolStrategy
     : DEFAULT_ACCOUNT_POOL_STRATEGY;
+}
+
+export function normalizeAccountPoolQuotaWindow(value: unknown): AccountPoolQuotaWindow {
+  return typeof value === "string" && QUOTA_WINDOW_SET.has(value)
+    ? value as AccountPoolQuotaWindow
+    : DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW;
 }
 
 export function normalizeAccountPoolStickyLimit(value: unknown): number {

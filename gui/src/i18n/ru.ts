@@ -1708,7 +1708,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.advancedSettingsAria": "Показать или скрыть дополнительные настройки Codex Auth",
   "codexAuth.catalogRefreshPending": "Изменение сохранено, но обновление каталога моделей Codex ещё не завершено. Выполните ocx sync, чтобы повторить попытку.",
   "anthropicPool.title": "Пул аккаунтов Claude (экспериментально)",
-  "anthropicPool.enabledDesc": "При 429 аккаунт охлаждается и выполняется переключение. Новые сессии предпочитают использование ниже {threshold}% (полоса 5 часов).",
+  "anthropicPool.enabledDesc": "При 429 аккаунт охлаждается и выполняется переключение. Новые сессии предпочитают использование ниже {threshold}% ({window}).",
   "anthropicPool.disabledDesc": "Используется только активный аккаунт Claude. Включайте только если принимаете экспериментальную маршрутизацию.",
   "anthropicPool.experimentalWarning": "Экспериментально и недостаточно проверено. Anthropic может ограничить аккаунты, похожие на автоматическую ротацию. Одна организация может делить квоту — пул таких аккаунтов не поможет. Оставляйте выключенным, если не понимаете риск.",
   "anthropicPool.needTwoAccounts": "Перед включением пула добавьте минимум два OAuth-аккаунта Claude.",
@@ -1738,6 +1738,14 @@ export const ru: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "Введите целое число от 1 до 100",
   "accountPool.strategyLoadFailed": "Не удалось загрузить стратегию ротации.",
   "accountPool.strategyUpdateFailed": "Не удалось сохранить стратегию ротации.",
+
+  "accountPool.quotaWindow": "Окно квоты",
+  "accountPool.quotaWindowDesc": "Какую кешированную полосу использования оценивает стратегия «Квота», когда выбирает аккаунт для новой сессии.",
+  "accountPool.quotaWindowFiveHour": "Полоса 5 часов",
+  "accountPool.quotaWindowWeekly": "Недельная полоса",
+  "accountPool.quotaWindowMaxUtilization": "Наибольшая полоса",
+  "accountPool.quotaWindowHint": "Недельная полоса всё равно пропускает аккаунты с исчерпанной полосой 5 часов, а при равных недельных значениях выбирает аккаунт с меньшим использованием за 5 часов; недельные полосы отдельных аккаунтов известны только после опроса на странице провайдеров.",
+  "accountPool.quotaWindowInert": "Полосу использования оценивает только «Квота» или Fill-first с порогом выше 0, поэтому для текущей стратегии ротации эта настройка ничего не меняет.",
 
   "accountPool.priority": "Порядок выбора",
   "accountPool.priorityAria": "Порядок выбора для этого аккаунта",
