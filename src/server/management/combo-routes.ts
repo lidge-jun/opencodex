@@ -5,6 +5,7 @@ import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCa
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
+  deleteConfigTopLevelKey,
   hasOwnProvider,
   isValidProviderName,
   multiAgentGuidanceEnabled,
@@ -246,7 +247,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     }
     const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../combos");
     delete config.combos![id];
-    if (Object.keys(config.combos!).length === 0) delete config.combos;
+    if (Object.keys(config.combos!).length === 0) deleteConfigTopLevelKey(config, "combos");
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     clearComboSelectionState(id);

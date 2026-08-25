@@ -15,7 +15,7 @@ import { dirname } from "node:path";
 import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, setMultiAgentModeHintText, transitionMultiAgentV2 } from "../codex/features";
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
-import { loadConfig, saveConfig } from "../config";
+import { deleteConfigTopLevelKey, loadConfig, saveConfig } from "../config";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 
 export interface V2CliDeps {
@@ -193,7 +193,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         return 1;
       }
     }
-    if (modeArg === "default") delete cfg.multiAgentMode;
+    if (modeArg === "default") deleteConfigTopLevelKey(cfg, "multiAgentMode");
     else cfg.multiAgentMode = modeArg as "v1" | "v2";
     saveConfig(cfg);
     try {
@@ -217,7 +217,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     const next = flag === "on";
     const already = cfg.keepNativeChatGptOnV1 === true === next;
     if (next) cfg.keepNativeChatGptOnV1 = true;
-    else delete cfg.keepNativeChatGptOnV1;
+    else deleteConfigTopLevelKey(cfg, "keepNativeChatGptOnV1");
     saveConfig(cfg);
     try {
       const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;

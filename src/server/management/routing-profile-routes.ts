@@ -20,7 +20,7 @@ import { assemblePolicyCandidateEvidence } from "../../routing/compatibility/ass
 import { activateLab, labActivationRequired } from "../../lib/lab-activation";
 import { quotaEvidenceForCandidate } from "../../routing/quota";
 import { routedProviderConfig } from "../../router";
-import { saveConfigPreservingClaudeCode, getConfigDir } from "../../config";
+import { deleteConfigTopLevelKey, saveConfigPreservingClaudeCode, getConfigDir } from "../../config";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -329,7 +329,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     const nextProfiles = { ...(config.routingProfiles ?? {}) };
     delete nextProfiles[id];
     if (Object.keys(nextProfiles).length > 0) config.routingProfiles = nextProfiles;
-    else delete config.routingProfiles;
+    else deleteConfigTopLevelKey(config, "routingProfiles");
     const saveConfigPreservingClaudeCodeSafe = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
     saveConfigPreservingClaudeCodeSafe(config);
     reconcileLiveStateStores();

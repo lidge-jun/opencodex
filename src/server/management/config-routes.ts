@@ -5,6 +5,7 @@ import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nati
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
+  deleteConfigTopLevelKey,
   hasOwnProvider,
   isValidProviderName,
   multiAgentGuidanceEnabled,
@@ -437,7 +438,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
       if (body.streamMode !== undefined) {
         if (body.streamMode === "auto") {
-          delete config.streamMode;
+          deleteConfigTopLevelKey(config, "streamMode");
         } else {
           config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
         }
@@ -458,21 +459,21 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     } catch (error) {
       if (previousSettings.hasCodexAutoStart) config.codexAutoStart = previousSettings.codexAutoStart;
-      else delete config.codexAutoStart;
+      else deleteConfigTopLevelKey(config, "codexAutoStart");
       if (previousSettings.hasStreamMode) config.streamMode = previousSettings.streamMode;
-      else delete config.streamMode;
+      else deleteConfigTopLevelKey(config, "streamMode");
       if (previousSettings.hasAppOwnedMemoryBudgetMb) {
         config.appOwnedMemoryBudgetMb = previousSettings.appOwnedMemoryBudgetMb;
-      } else delete config.appOwnedMemoryBudgetMb;
+      } else deleteConfigTopLevelKey(config, "appOwnedMemoryBudgetMb");
       if (previousSettings.hasCodexAccountNamespaces) {
         config.codexAccountNamespaces = previousSettings.codexAccountNamespaces;
-      } else delete config.codexAccountNamespaces;
+      } else deleteConfigTopLevelKey(config, "codexAccountNamespaces");
       if (previousSettings.hasCodexAccountPickerEnabled) {
         config.codexAccountPickerEnabled = previousSettings.codexAccountPickerEnabled;
-      } else delete config.codexAccountPickerEnabled;
+      } else deleteConfigTopLevelKey(config, "codexAccountPickerEnabled");
       if (previousSettings.hasOauthOpenBrowser) {
         config.oauthOpenBrowser = previousSettings.oauthOpenBrowser;
-      } else delete config.oauthOpenBrowser;
+      } else deleteConfigTopLevelKey(config, "oauthOpenBrowser");
       throw error;
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {

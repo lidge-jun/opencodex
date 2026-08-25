@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types";
+import { deleteConfigTopLevelKey } from "../config/rebase-provenance";
 
 export const DEFAULT_PROVIDER_CONTEXT_CAP = 350_000;
 
@@ -50,7 +51,7 @@ export function setProviderContextCap(config: OcxConfig, provider: string, enabl
     delete next[provider];
   }
   if (Object.keys(next).length > 0) config.providerContextCaps = next;
-  else delete config.providerContextCaps;
+  else deleteConfigTopLevelKey(config, "providerContextCaps");
 }
 
 /**
@@ -71,12 +72,12 @@ export function setGlobalContextCapValue(config: OcxConfig, value: number, apply
 /** Enable the cap for every named provider at the current value, or clear all caps. */
 export function setAllProviderContextCaps(config: OcxConfig, providerNames: string[], enabled: boolean): void {
   if (!enabled) {
-    delete config.providerContextCaps;
+    deleteConfigTopLevelKey(config, "providerContextCaps");
     return;
   }
   const value = globalContextCapValue(config);
   const next: Record<string, number> = {};
   for (const name of providerNames) next[name] = value;
   if (Object.keys(next).length > 0) config.providerContextCaps = next;
-  else delete config.providerContextCaps;
+  else deleteConfigTopLevelKey(config, "providerContextCaps");
 }

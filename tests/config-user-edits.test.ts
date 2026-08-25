@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   armClaudeCodeBaseline,
   adoptPersistedProviderIntoLiveConfig,
+  deleteConfigTopLevelKey,
   getConfigPath,
   getDefaultConfig,
   loadConfig,
@@ -668,11 +669,84 @@ test("a live deletion of a key that only ever existed on disk is not undone by t
   // The live writer adopts it and then deletes it, exactly as the management route
   // does for an empty selection.
   live.grokExcludedModels = ["a"];
-  delete live.grokExcludedModels;
+  deleteConfigTopLevelKey(live, "grokExcludedModels");
   saveConfigPreservingClaudeCode(live);
 
   expect(diskConfig().grokExcludedModels).toBeUndefined();
   expect(live.grokExcludedModels).toBeUndefined();
+});
+
+test("provenance distinguishes an unseen disk key from an explicit deletion", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  deleteConfigTopLevelKey(live, "injectionPrompt");
+
+  const onDisk = loadConfig();
+  onDisk.grokExcludedModels = ["added-elsewhere"];
+  saveConfig(onDisk);
+
+  saveConfigPreservingClaudeCode(live);
+
+  expect(live.grokExcludedModels).toEqual(["added-elsewhere"]);
+  expect(diskConfig().grokExcludedModels).toEqual(["added-elsewhere"]);
+  expect(diskConfig().configRebaseProvenance).toEqual({
+    version: 1,
+    deletedTopLevelKeys: ["injectionPrompt"],
+  });
+});
+
+test("a config without provenance keeps the legacy disk-only-key behavior", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  const onDisk = loadConfig();
+  onDisk.grokExcludedModels = ["disk-only"];
+  saveConfig(onDisk);
+
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().grokExcludedModels).toBeUndefined();
+  expect(diskConfig().configRebaseProvenance).toBeUndefined();
+});
+
+test("version-1 provenance round-trips through load and an older-style whole-config save", () => {
+  const config = loadConfig();
+  deleteConfigTopLevelKey(config, "grokExcludedModels");
+  saveConfig(config);
+  const loaded = loadConfig();
+
+  saveConfig(loaded);
+
+  expect(diskConfig().configRebaseProvenance).toEqual({
+    version: 1,
+    deletedTopLevelKeys: ["grokExcludedModels"],
+  });
+});
+
+test("future provenance is preserved opaquely and grants no deletion authority", () => {
+  const future = { version: 2, opaque: { keep: true } };
+  writeDiskConfig({ configRebaseProvenance: future });
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  const onDisk = loadConfig();
+  onDisk.grokExcludedModels = ["disk-only"];
+  saveConfig(onDisk);
+
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().configRebaseProvenance).toEqual(future);
+  expect(diskConfig().grokExcludedModels).toBeUndefined();
+});
+
+test("assigning a deleted key clears its persisted tombstone", () => {
+  const config = loadConfig();
+  deleteConfigTopLevelKey(config, "grokExcludedModels");
+  saveConfig(config);
+  config.grokExcludedModels = ["restored"];
+
+  saveConfig(config);
+
+  expect(diskConfig().grokExcludedModels).toEqual(["restored"]);
+  expect(diskConfig().configRebaseProvenance).toBeUndefined();
 });
 
 test("a provider deletion from a newer disk snapshot survives an unrelated live save", () => {

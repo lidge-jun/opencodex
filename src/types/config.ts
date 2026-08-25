@@ -239,6 +239,11 @@ export interface OcxClientIntegrationsConfig {
   "claude-desktop"?: boolean;
 }
 
+export interface OcxConfigRebaseProvenance {
+  version: 1;
+  deletedTopLevelKeys: string[];
+}
+
 export interface OcxConfig {
   port: number;
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
@@ -260,6 +265,8 @@ export interface OcxConfig {
   managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
+  /** Explicit top-level deletion intent used by stale whole-config rebases. */
+  configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
   openaiProviderTierVersion?: 1 | 2;
   /** One-time migration marker for Antigravity's static-catalog defaults. */
