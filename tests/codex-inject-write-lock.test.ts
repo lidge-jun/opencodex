@@ -219,34 +219,52 @@ describe("the lock is on the production path", () => {
       stderr: "pipe",
     });
 
-    const deadline = Date.now() + 10_000;
-    while (!existsSync(holdMarker) && Date.now() < deadline) {
-      requireChildSuccess(runChild(["--eval", "Bun.sleepSync(20)"], process.env), "hold-marker wait child");
-    }
-    expect(existsSync(holdMarker)).toBeTrue();
-
-    // PROCESS-UNIQUE bytes: a different port means different candidate bytes, so
-    // the loser's work is identifiable rather than assumed.
-    let contender: ReturnType<typeof runInject>;
+    let primaryFailed = false;
+    let primaryError: unknown;
+    let cleanupFailed = false;
+    let cleanupError: unknown;
     try {
-      contender = runInject(20200, 0, CONTENTION_CHILD_TIMEOUT_MS);
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(holdMarker) && Date.now() < deadline) {
+        requireChildSuccess(runChild(["--eval", "Bun.sleepSync(20)"], process.env), "hold-marker wait child");
+      }
+      expect(existsSync(holdMarker)).toBeTrue();
+
+      // PROCESS-UNIQUE bytes: a different port means different candidate bytes, so
+      // the loser's work is identifiable rather than assumed.
+      const contender = runInject(20200, 0, CONTENTION_CHILD_TIMEOUT_MS);
+
+      expect(contender.success).toBeFalse();
+      expect(contender.retryable).toBeTrue();
+      // Its bytes are absent: the file still names the first winner's port.
+      const finalConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
+      expect(finalConfig).not.toContain("20200");
+      expect(finalConfig).toBe(afterFirst);
+    } catch (error) {
+      // Preserve the first assertion/helper failure after cleanup completes.
+      primaryFailed = true;
+      primaryError = error;
     } finally {
       try {
         writeFileSync(releaseMarker, "go");
-      } finally {
-        // Always release and reap the holder, including when the contender
-        // times out or its diagnostics throw. Otherwise teardown races a live
-        // child that still owns the coordinator database on Windows.
+      } catch (error) {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
+      try {
+        // Always release and reap the holder, including when marker wait,
+        // contender startup, or an assertion fails. Otherwise teardown races a
+        // live child that still owns the coordinator database on Windows.
         await holder.exited;
+      } catch (error) {
+        if (!cleanupFailed) {
+          cleanupFailed = true;
+          cleanupError = error;
+        }
       }
     }
-
-    expect(contender.success).toBeFalse();
-    expect(contender.retryable).toBeTrue();
-    // Its bytes are absent: the file still names the first winner's port.
-    const finalConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
-    expect(finalConfig).not.toContain("20200");
-    expect(finalConfig).toBe(afterFirst);
+    if (primaryFailed) throw primaryError;
+    if (cleanupFailed) throw cleanupError;
   }, SPAWN_BUDGET_MS);
 });
 
