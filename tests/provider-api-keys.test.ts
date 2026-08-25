@@ -142,9 +142,11 @@ describe("provider API key pool", () => {
       liveModels: false,
     };
     saveConfig(config);
-    const before = readFileSync(join(testDir, "config.json"), "utf-8");
     const server = startServer(0);
     try {
+      // Startup normalizes the loaded config; capture the persisted baseline only
+      // after that one-time normalization, before exercising the pool routes.
+      const before = readFileSync(join(testDir, "config.json"), "utf-8");
       const requests: Array<Promise<Response>> = [
         fetch(new URL("/api/providers/keys?name=azure-identity", server.url)),
         fetch(new URL("/api/providers/keys", server.url), {
