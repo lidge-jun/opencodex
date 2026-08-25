@@ -7,7 +7,6 @@
  */
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -21,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 
 const SENTINEL = "/etc/opencodex-disposable-service-host-v1";
