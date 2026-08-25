@@ -80,19 +80,26 @@ ocx login anthropic
 通过正在运行的代理列出并切换提供方账号和 API 密钥池。随附的帮助输出如下：
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage:
+  ocx account list [provider] [--json] [--all]
+  ocx account current <provider> [--json]
+  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
+  ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account main <doctor|list|register|add|switch|recover> ...
 
-list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
-current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
-refresh <provider>  Force-refresh Codex or provider quota reports.
-auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
-add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
-reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
-Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
+List and switch provider accounts and API-key pools (masked output only).
+'main' selects the Codex App login for the openai account pool.
 ```
 
 所有子命令都要求代理正在运行；CLI 会自动解析其记录的运行时端口。成功操作的
@@ -170,12 +177,23 @@ token，也不是简单重读账号列表。`--json` 返回
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-只控制 `openai` 的 Codex 账号池。`on` 会设为 80%，`off` 会设为 0%，`status` 会读取
-当前值，而 `threshold <n>` 接受 0 到 100 之间的整数。其他提供方和无效值都会以 1
-退出。`--json` 返回：
+控制 `openai` Codex 账号池及受支持的 `anthropic`、`google-antigravity` OAuth 池。
+对于 `openai`，`on` 将阈值设为 80%，`off` 将其设为 0%。对于 OAuth 池，`on` / `off`
+会切换池的启用状态，同时保留现有阈值。`threshold <n>` 会保存 0 到 100 的整数，且非零值
+会启用池。`status` 读取当前策略。不支持的提供方和无效值都会以 1 退出。`--json` 返回：
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+### `ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]`
+
+为已有的 Codex 账号、OAuth 账号或 API 密钥设置显示别名；传入 `-` 可清除别名。别名最多包含
+80 个可打印字符。保留的 Codex App 登录 `main` 不能重命名，因此
+`ocx account alias openai main ...` 会以 1 退出。`--json` 返回：
+
+```text
+{ ok: true, provider, id, alias: string | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -206,7 +224,7 @@ token，也不是简单重读账号列表。`--json` 返回
 `--json` 时 stdout 保持可解析，已完成的登录状态会包含 `catalogRefreshPending: true`，且不会
 打印人类可读警告。
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <account-or-key-id|main> --yes [--json]`
 
 这个受保护的非交互式删除需要 `--yes`。删除前，它会验证 id 是否存在；缺失的 id
 会以 1 退出，而不会发送 DELETE。主 Codex App 登录不能被移除，因此会拒绝
@@ -223,6 +241,17 @@ token，也不是简单重读账号列表。`--json` 返回
 输出会在 stderr 打印通用的 `ocx sync` 恢复指引，并仍以 0 退出。OAuth 账号和 API 密钥删除的
 响应结构不会增加此字段。
 
+### `ocx account clear-cooldown <provider> <account-id|main> [--json]`
+
+清除 `openai` Codex 池或受支持的 `anthropic`、`google-antigravity` OAuth 池中的一个运行时冷却。
+`main` 只适用于 `openai`，并会在 JSON 中规范化为 `__main__`。无效提供方或未知账号会被 API
+以 400 拒绝，CLI 以 1 退出。对于不存在活跃冷却的真实账号，操作会幂等成功：API 返回 200，
+CLI 以 0 退出，且 `cleared` 为 `false`。`--json` 严格返回以下结构：
+
+```text
+{ ok: true, provider, id, cleared: boolean }
+```
+
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
 为 API 密钥提供方添加并激活一个密钥。该密钥只会从非 TTY 的管道/重定向 stdin
@@ -235,6 +264,24 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json` 返回 `{ ok: true, id: string | null, label?: string }`，并且绝不会包含该密钥。
+
+### `ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`
+
+导入有大小上限的账号导出文件。版本 1 只接受 `google-antigravity` 提供方和 `cockpit-tools`
+格式，并且必须只从 `--file` 或 `--stdin` 其中一个来源读取。内联 JSON 和额外位置参数会在
+检查其内容前被拒绝。请将导出文件保密，并在使用后删除或安全保存。JSON 输出是以下不含机密的
+摘要。只要存在失败或不支持的记录，命令就以 1 退出；否则以 0 退出。
+
+```text
+{
+  totalCount,
+  importedCount,
+  updatedCount,
+  failedCount,
+  unsupportedCount,
+  results: Array<{ index, status, code }>
+}
+```
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 

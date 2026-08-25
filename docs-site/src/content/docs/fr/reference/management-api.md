@@ -174,13 +174,34 @@ d’abord et soumettez le résumé renvoyé. Préférez la quarantaine lorsqu’
 | `POST /api/oauth/logout` | Supprimer les informations d'identification du fournisseur sélectionné | 400 fournisseur inconnu ; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | Répertorier les comptes masqués ou supprimer un compte | 400 invalide provider/id ; 404 compte manquant ; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Sélectionnez le compte OAuth actif | 400 invalide provider/account ; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Lire ou mettre à jour la stratégie du pool OAuth Anthropic | 400 fournisseur non Anthropic ou stratégie invalide |
-| `POST /api/oauth/accounts/clear-cooldown` | Effacer le temps de recharge d'un compte OAuth | 400 invalide provider/account |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Lire ou mettre à jour la stratégie du pool OAuth Anthropic ou Google Antigravity | 400 fournisseur non pris en charge ou stratégie invalide |
+| `POST /api/oauth/accounts/clear-cooldown` | Effacer la temporisation d'un compte OAuth | 400 fournisseur non valide ou compte inconnu ; un compte connu sans temporisation renvoie 200 avec `{ ok: true, cleared: false }` |
 | `PUT /api/oauth/accounts/alias` | Définir ou supprimer un alias de compte OAuth | 400 invalide provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | Répertorier les clés de fournisseur masquées, en ajouter ou en activer une, ou en supprimer une | 400 saisie invalide ; 404 fournisseur ou clé manquante |
 | `PUT /api/providers/keys/active` | Sélectionnez la clé active d'un fournisseur | 400 saisie invalide ; 404 provider/key manquant |
 | `PUT /api/providers/keys/alias` | Définir ou supprimer un alias de clé de fournisseur | 400 saisie invalide ; 404 provider/key manquant |
 | `GET, POST, PATCH, DELETE /api/keys` | Répertorier, créer, modifier ou supprimer les clés d'admission du plan de données | 400 corps ou identifiant invalide ; 404 clé manquante |
+
+#### Contrat des pools OAuth par fournisseur
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity` exige le paramètre de requête
+`provider`. Sa réponse contient directement les champs `provider`, `enabled`, `autoSwitchThreshold`
+(par défaut `80`), `strategy` (normalisé en `quota`, `round-robin` ou `fill-first`), `stickyLimit`
+(normalisé en entier de 1 à 100) et `experimental: true`.
+
+`PUT` et `PATCH /api/oauth/accounts/pool` exigent un objet JSON avec `provider` et acceptent les
+champs facultatifs `enabled` (booléen), `autoSwitchThreshold` (entier de 0 à 100), `strategy`
+(`quota`, `round-robin` ou `fill-first`) et `stickyLimit` (entier de 1 à 100). Les champs omis
+conservent leur valeur actuelle ou par défaut. En cas de succès, la réponse contient directement
+`{ ok: true, provider, enabled, autoSwitchThreshold, strategy, stickyLimit, experimental: true }`,
+sans enveloppe `config`. Un corps mal formé ou qui n'est pas un objet, un fournisseur non pris en
+charge ou un champ invalide renvoie une réponse d'erreur HTTP 400 générique.
+
+`POST /api/oauth/accounts/clear-cooldown` accepte `{ provider, accountId }`. Le fournisseur doit être
+`anthropic` ou `google-antigravity`, et le compte doit exister pour ce fournisseur. Un compte inconnu
+renvoie l'erreur HTTP 400 générique `account not found`. Un compte connu qui n'est pas en
+temporisation produit un succès idempotent : HTTP 200 avec `{ ok: true, cleared: false }`. Ces
+réponses ne contiennent jamais de jetons, d'adresses e-mail ni de clés complètes.
 
 Les réponses qui répertorient les identifiants sont délibérément masquées. Les jetons d'accès OAuth et les clés API complètes des
 fournisseurs ne sont pas renvoyés aux clients du tableau de bord.
@@ -245,7 +266,7 @@ Codex. Ses routes sont les suivantes :
 | `PUT /api/codex-auth/accounts/alias` | Définir ou supprimer un alias de compte | 400 invalide account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Suspendre ou reprendre un compte | 400 invalide account/state ; 404 compte manquant |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Suspendre les comptes dont le quota est épuisé | Les échecs de verrouillage de mutation deviennent 503 |
-| `POST /api/codex-auth/accounts/clear-cooldown` | Effacer le temps de recharge d'exécution pour un compte ou tous les comptes | 400 identifiant invalide |
+| `POST /api/codex-auth/accounts/clear-cooldown` | Effacer la temporisation d'exécution d'un compte | 400 identifiant de compte non valide ou inconnu ; un compte connu sans temporisation renvoie 200 avec `{ ok: true, id, cleared: false }` |
 | `GET, PUT /api/codex-auth/active` | Lire ou sélectionner le compte actif | 400 compte invalide ou manquant ; 409 conflit avec un compte suspendu ou une ancienne ligne |
 | `PUT /api/codex-auth/auto-switch` | Définir le seuil de quota pour le changement automatique de compte | 400 seuil invalide |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Mettre à jour la stratégie de sélection du groupe de comptes Codex | 400 stratégie ou configuration invalide |

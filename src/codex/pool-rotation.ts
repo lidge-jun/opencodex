@@ -3,6 +3,7 @@ import type { GenerationContext } from "../lib/state-store-sweeper";
 
 export const POOL_KEY_CODEX = "codex";
 export const POOL_KEY_ANTHROPIC = "anthropic";
+export const POOL_KEY_GOOGLE_ANTIGRAVITY = "google-antigravity";
 
 interface SelectionState {
   activeKey?: string;
@@ -237,6 +238,19 @@ export function notePoolRotationFailure(poolKey: string, accountId: string): voi
   }
 }
 
+/** Remove one deleted account without disturbing the rest of the provider's rotation ring. */
+export function removePoolRotationAccount(poolKey: string, accountId: string): boolean {
+  const state = selectionState.get(poolKey);
+  if (!state) return false;
+  let removed = state.currentWeights.delete(accountId);
+  if (state.activeKey === accountId) {
+    delete state.activeKey;
+    state.successes = 0;
+    removed = true;
+  }
+  return removed;
+}
+
 /**
  * Force the next sticky/RR pick onto `accountId` (manual dashboard selection).
  * Clears sticky success counters and ring weights so the seeded account is held
@@ -260,16 +274,21 @@ export function clearPoolRotationState(poolKey?: string): void {
 export function reconcilePoolRotationState(context: GenerationContext): number {
   if (context.generation <= lastReconciledGeneration) return 0;
   const anthropicIds = new Set<string>();
+  const googleAntigravityIds = new Set<string>();
   for (const key of context.oauthAccountKeys) {
     const separator = key.indexOf("\0");
-    if (separator > 0 && key.slice(0, separator) === "anthropic") {
-      anthropicIds.add(key.slice(separator + 1));
-    }
+    if (separator <= 0) continue;
+    const provider = key.slice(0, separator);
+    const accountId = key.slice(separator + 1);
+    if (provider === "anthropic") anthropicIds.add(accountId);
+    if (provider === "google-antigravity") googleAntigravityIds.add(accountId);
   }
   let removed = 0;
   for (const [poolKey, state] of selectionState) {
     const valid = poolKey === POOL_KEY_ANTHROPIC
       ? anthropicIds
+      : poolKey === POOL_KEY_GOOGLE_ANTIGRAVITY
+        ? googleAntigravityIds
       : poolKey === POOL_KEY_CODEX || poolKey.startsWith(`${POOL_KEY_CODEX}:`)
         ? context.codexAccountIds
         : null;

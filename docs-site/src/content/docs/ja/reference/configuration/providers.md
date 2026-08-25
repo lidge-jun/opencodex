@@ -72,7 +72,6 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `modelContextWindows?` | `Record<string, number>` | モデルごとのコンテキスト値および上限。`contextWindow` より優先され、ウィンドウが不明なら設定値を使い、より小さいライブメタデータがあればそちらが優先されます。 |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` や `["text", "image"]` などのモデルごとの入力ヒント。 |
 | `modelMaxInputTokens?` | `Record<string, number>` |カタログの自動圧縮ヒントに使用されるモデルごとの正の最大入力制限。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | モデルごとの正の安全な整数によるソフト自動圧縮予算。実効値であるコンテキストまたは最大入力の 90% の上限を下げることだけができ、信頼できるコンテキストウィンドウが不明な場合は出力されません。canonical `openai` では、キーは provider や account-selector の接頭辞を含まない、サポート対象の正確なネイティブモデル ID でなければなりません。provider PATCH はエントリをマージし、キーを `null` にするとそのキーを削除し、フィールド全体を `null` にするとマップを消去します。これらの `null` tombstone は PATCH 専用です。 |
 | `defaultMaxOutputTokens?` | `number` |クライアントが `max_output_tokens` を省略した場合の、プロバイダー全体の `openai-chat` フォールバック。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` |モデルごとの `openai-chat` フォールバック バジェットがプラスになります。正確な/パターン一致はプロバイダーのデフォルトを上回ります。 |
 | `modelCosts?` | `Record<string, Cost4>` | モデルごとの表示価格（100万トークンあたりの米ドル）。そのプロバイダーの正確なアップストリーム モデル ID をキーにします（プロバイダー識別子やルーティングされた `provider/model` ラベルではありません）。値は `input`, `output`, `cacheRead`, `cacheWrite` の 4 フィールドです（例: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。組み込みカタログにないモデル ID も、任意の OpenAI 互換エンドポイントを対象とするカスタムプロバイダーや、ローカル・内部プロバイダーで有効です。ユーザー設定の価格は Logs の `~$` と Usage の見積もりで組み込みカタログより優先されます。過去のエントリも現在のオーバーレイで再計算されるため、価格を編集すると過去の合計が変わることがあります（フォールバック順: ユーザー設定 → jawcode カタログ → expected-price オーバーレイ → モデル別ベンダー価格）。全ゼロのエントリは次のソースにフォールバックします。各レートは 0 以上の有限数で、最大 1,000,000（100万トークンあたりの米ドル）です。範囲外の行は管理境界で拒否され、読み込み時に破棄されます。表示専用の見積もりであり、ルーティング・アカウント選択・クォータ・請求には影響しません。 |
@@ -167,6 +166,39 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 
 :::caution[実験的]
 Anthropic アカウント ポリシーのリスクを理解していない限り、これは無効のままにしてください。不明な場合は、`ocx account use anthropic <id>` を手動で切り替えることをお勧めします。
+:::
+
+### `googleAntigravityAccountPool`（実験的）
+
+このオプトイン機能は、`google-antigravity` Cloud Code Assist プロバイダー専用に Google
+Antigravity OAuth アカウントをプールします。デフォルトでは無効です。このプールの認証情報が
+Google AI Studio、Vertex AI、別のプロバイダー項目、API キールートに使われることはありません。
+
+| キー | 型 | デフォルト | 説明 |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | プロセスローカルなセッション親和性と、最終的な 429 または表面化した 402 に対する回数制限付きフェイルオーバーを有効にします。 |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0～100 の使用量消化しきい値です。`quota` と `fill-first` は、要求モデルの `Gem` または `Cla` ファミリーに関係するキャッシュ済み使用量の最大値を使います。使用量が不明なら正常なアクティブアカウントを維持します。`0` は使用量による切り替えだけを無効にし、障害回復は無効にしません。 |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新規セッションまたは未バインドのセッションに使う戦略です。 |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | 1 回の `round-robin` 選択に維持する新規セッションのバインド数です。範囲は 1～100 で、ほかの戦略には影響しません。 |
+
+どの戦略でも、対象アカウントが適格である間は既存のセッション親和性を維持します。新規または
+未バインドのセッションでは、`quota` は関連使用量が不明またはしきい値未満なら正常なアクティブ
+アカウントを維持し、その後は既知使用量が最小の適格アカウントを選びます。`round-robin` は
+バインドを均等に分配し、通常のローテーションにはしきい値を使いません。`fill-first` はクールダウン、
+利用不能、消化しきい値のいずれかに達するまでアクティブアカウントを使い、その後で次の適格
+アカウントへ進みます。
+
+各送信では、bearer token と Cloud Code Assist の `projectId` を含む、世代に固定された OAuth
+スナップショットを 1 つ解決します。最終的な 429 または表面化した 402 を受けると、そのアカウントを
+クールダウンし、親和性を解除して、別の適格なスナップショットでリクエストを再構築します。有効な
+`Retry-After` がなければ既定のクールダウンは 60 秒で、解析できた上流値は 15 分を上限とします。
+1 リクエストにつきフェイルオーバーは最大 3 回、上流への送信は合計最大 4 回です。すべての適格
+アカウントがクールダウン中なら、クライアントには最も早い既知の `Retry-After` を付けて 429 を返します。
+
+:::caution[運用上の回復力であり、クォータ回避ではありません]
+このプールは一時的なアカウント障害からの回復に使い、クォータやプロバイダーの制限を回避するために
+使わないでください。複数アカウントの自動運用は利用規約に違反する可能性があります。そのリスクを
+受け入れない場合は無効のままにしてください。
 :::
 
 ### 管理されたレコードの形状

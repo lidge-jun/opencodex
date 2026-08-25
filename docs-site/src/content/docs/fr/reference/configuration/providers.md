@@ -84,7 +84,6 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `modelContextWindows?` | `Record<string, number>` | Valeurs de repli ou plafonds de contexte par modèle. Ils remplacent `contextWindow` : une fenêtre inconnue utilise la valeur configurée, tandis que des métadonnées actives plus faibles restent déterminantes. |
 | `modelInputModalities?` | `Record<string, string[]>` | Conseils de saisie par modèle tels que `["text"]` ou `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Limites d'entrée maximales positives par modèle utilisées pour les conseils de compactage automatique du catalogue. |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Budgets souples de compactage automatique par modèle, sous forme d'entiers sûrs positifs. Ils peuvent uniquement abaisser l'enveloppe effective de 90 % du contexte ou de l'entrée maximale et sont omis lorsqu'aucune fenêtre de contexte faisant autorité n'est connue. Pour le fournisseur canonique `openai`, les clés doivent être les identifiants exacts de modèles natifs pris en charge, sans préfixe de fournisseur ni de sélecteur de compte. PATCH fusionne les entrées ; `null` supprime une clé, tandis que `null` pour le champ entier efface la table. Ces marqueurs `null` sont réservés à PATCH. |
 | `defaultMaxOutputTokens?` | `number` | Solution de secours `openai-chat` à l’échelle du fournisseur lorsque le client omet `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Budgets de repli `openai-chat` positifs par modèle ; les correspondances exactes ou par motif priment sur la valeur par défaut du fournisseur. |
 | `modelCosts?` | `Record<string, Cost4>` | Prix affichés par modèle (USD par 1M de jetons), indexés par l'identifiant exact du modèle en amont de ce fournisseur — et non par un identifiant de fournisseur ni par une étiquette routée `provider/model`, par exemple `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Tout identifiant de modèle constitue une clé valide : les fournisseurs personnalisés peuvent cibler n'importe quel point de terminaison compatible avec OpenAI au moyen de l'adaptateur `openai-chat`, et les identifiants de fournisseur locaux ou internes fonctionnent même s'ils sont absents des catalogues intégrés. Les prix configurés par l'utilisateur priment sur les catalogues intégrés dans les estimations des pages Journaux (`~$`) et Utilisation. Les entrées historiques sont recalculées à partir de la surcharge actuelle ; modifier un prix peut donc changer les totaux antérieurs. L'ordre de repli est le suivant : `modelCosts` défini par l'utilisateur → catalogue jawcode → surcharge des prix attendus → repli propre au fournisseur au niveau du modèle. Une entrée entièrement nulle passe à la source suivante. Chaque tarif doit être un nombre fini positif ou nul, inférieur ou égal à 1 000 000 (USD par 1M de jetons) ; les lignes hors plage sont rejetées par l'interface de gestion et ignorées au chargement. Ces valeurs servent uniquement à l'estimation lors de l'affichage : les surcharges n'affectent jamais le routage, la sélection des comptes, les quotas ni la facturation. |
@@ -205,6 +204,40 @@ comme devant être réauthentifié. Si tous les comptes admissibles sont en temp
 :::caution[Expérimental]
 Laissez cette option désactivée, sauf si vous comprenez les risques liés aux règles d'Anthropic concernant les comptes. En cas de doute,
 préférez le changement manuel avec `ocx account use anthropic <id>`.
+:::
+
+### `googleAntigravityAccountPool` (expérimental)
+
+Cette option regroupe des comptes OAuth Google Antigravity uniquement pour le fournisseur Cloud Code
+Assist `google-antigravity`. Elle est désactivée par défaut. Le pool ne fournit jamais d'identifiants à
+Google AI Studio, Vertex AI, une autre entrée de fournisseur ou une route utilisant une clé API.
+
+| Clé | Type | Par défaut | Description |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | Active l'affinité de session locale au processus et un basculement borné après une réponse finale 429 ou une réponse 402 remontée. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | Seuil d'épuisement de 0 à 100. `quota` et `fill-first` utilisent l'utilisation maximale en cache correspondant à la famille `Gem` ou `Cla` du modèle demandé ; une utilisation inconnue conserve le compte actif sain. `0` désactive le changement selon l'utilisation, pas la reprise après échec. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie pour les sessions nouvelles ou sans liaison. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | Nombre de liaisons de nouvelles sessions conservées sur une sélection `round-robin`. Plage 1–100 ; sans effet sur les autres stratégies. |
+
+Les stratégies conservent l'affinité d'une session tant que son compte reste admissible. Pour une
+session nouvelle ou sans liaison, `quota` conserve le compte actif sain lorsque l'utilisation pertinente
+est inconnue ou inférieure au seuil, puis choisit le compte admissible dont l'utilisation connue est la
+plus faible. `round-robin` répartit uniformément les liaisons et n'emploie pas le seuil pour la rotation
+ordinaire. `fill-first` remplit le compte actif jusqu'à sa temporisation, son indisponibilité ou le seuil
+d'épuisement, puis passe au compte admissible suivant.
+
+Chaque envoi résout un instantané OAuth lié à cette génération, avec le jeton bearer et le `projectId`
+Cloud Code Assist. Une réponse finale 429 ou une réponse 402 remontée met le compte en temporisation,
+efface son affinité et reconstruit la requête pour un autre instantané admissible. Sans `Retry-After`
+exploitable, la temporisation par défaut est de 60 secondes ; une valeur amont analysée est plafonnée à
+15 minutes. Une requête autorise au plus trois basculements, soit quatre envois amont au total. Si tous
+les comptes admissibles sont en temporisation, le client reçoit un 429 avec le premier `Retry-After`
+connu.
+
+:::caution[Résilience opérationnelle, pas contournement de quota]
+Utilisez ce pool pour récupérer après des défaillances transitoires, pas pour contourner les quotas ou
+les contrôles du fournisseur. L'automatisation multicomptes peut enfreindre les conditions du fournisseur ;
+laissez cette fonction désactivée si vous n'acceptez pas ce risque.
 :::
 
 ### Formes d'enregistrement gérées

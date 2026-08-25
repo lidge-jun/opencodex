@@ -151,6 +151,46 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("Google Antigravity pool config is strict, validates, and round-trips safely", () => {
+    const defaults = getDefaultConfig();
+    const pool = {
+      enabled: true,
+      autoSwitchThreshold: 65,
+      strategy: "round-robin" as const,
+      stickyLimit: 4,
+    };
+    expect(validateConfigCandidate({ ...defaults, googleAntigravityAccountPool: pool })).toMatchObject({
+      ok: true,
+      config: { googleAntigravityAccountPool: pool },
+    });
+    for (const invalid of [
+      { enabled: "yes" },
+      { autoSwitchThreshold: 101 },
+      { autoSwitchThreshold: 1.5 },
+      { strategy: "weighted" },
+      { stickyLimit: 0 },
+      { stickyLimit: 101 },
+      { future: true },
+    ]) {
+      const result = validateConfigCandidate({ ...defaults, googleAntigravityAccountPool: invalid });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("googleAntigravityAccountPool");
+    }
+
+    saveConfig({ ...defaults, googleAntigravityAccountPool: pool });
+    expect(loadConfig().googleAntigravityAccountPool).toEqual(pool);
+
+    writeConfig({
+      ...defaults,
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+      defaultProvider: "custom",
+      googleAntigravityAccountPool: { enabled: "yes", autoSwitchThreshold: 999 },
+    });
+    const loaded = loadConfig();
+    expect(loaded.providers.custom).toBeDefined();
+    expect(loaded.googleAntigravityAccountPool).toBeUndefined();
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);
@@ -1650,40 +1690,6 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().source).toBe("fallback");
     expect(readConfigDiagnostics().error).toContain("providers.custom.modelMaxInputTokens");
-  });
-
-  test("disk config validates per-model auto-compaction budgets with native exact ids", () => {
-    writeConfig({
-      port: 10100,
-      providers: {
-        custom: {
-          adapter: "openai-chat",
-          baseUrl: "https://example.test/v1",
-          modelAutoCompactTokenLimits: { model: 1.5 },
-        },
-      },
-      defaultProvider: "custom",
-    });
-    expect(readConfigDiagnostics().source).toBe("fallback");
-    expect(readConfigDiagnostics().error).toContain("providers.custom.modelAutoCompactTokenLimits");
-
-    rmSync(testDir, { recursive: true, force: true });
-    mkdirSync(testDir, { recursive: true });
-    writeConfig({
-      port: 10100,
-      providers: {
-        openai: {
-          adapter: "openai-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authMode: "forward",
-          codexAccountMode: "direct",
-          modelAutoCompactTokenLimits: { "team/gpt-5.6-sol": 64_000 },
-        },
-      },
-      defaultProvider: "openai",
-    });
-    expect(readConfigDiagnostics().source).toBe("fallback");
-    expect(readConfigDiagnostics().error).toContain("exact supported native model id");
   });
 
   test("disk config preserves valid OpenRouter routing and rejects invalid destinations", () => {

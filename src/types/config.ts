@@ -620,6 +620,16 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /** Opt-in quota auto-switching and cooldown pooling for Google Antigravity (Cloud Code Assist). */
+  googleAntigravityAccountPool?: {
+    enabled?: boolean;
+    /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
+    autoSwitchThreshold?: number;
+    /** New-session rotation strategy. Default quota (today's behaviour). */
+    strategy?: OcxAccountPoolRotationStrategy;
+    /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
+    stickyLimit?: number;
+  };
   /**
    * Generic OAuth multi-account 429 failover (#2568). Presence-driven by default.
    *

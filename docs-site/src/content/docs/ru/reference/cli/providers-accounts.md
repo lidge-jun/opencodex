@@ -89,19 +89,26 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage:
+  ocx account list [provider] [--json] [--all]
+  ocx account current <provider> [--json]
+  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
+  ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account main <doctor|list|register|add|switch|recover> ...
 
-list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
-current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
-refresh <provider>  Force-refresh Codex or provider quota reports.
-auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
-add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
-reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
-Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
+List and switch provider accounts and API-key pools (masked output only).
+'main' selects the Codex App login for the openai account pool.
 ```
 
 Все подкоманды требуют запущенного прокси; CLI сам определяет записанный runtime-port. Успешные
@@ -188,12 +195,25 @@ quota-bar'ов дашборда.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Управляет только пулом аккаунтов Codex `openai`. `on` ставит 80%, `off` — 0%, `status` читает
-текущее значение, а `threshold <n>` принимает целое число от 0 до 100. Для других провайдеров и
-некорректных значений команда завершается кодом 1. `--json` возвращает:
+Управляет пулом Codex `openai` и поддерживаемыми OAuth-пулами `anthropic` и `google-antigravity`.
+Для `openai` команда `on` задаёт порог 80%, а `off` — 0%. Для OAuth-пулов `on` и `off`
+переключают состояние пула, сохраняя его порог. `threshold <n>` сохраняет целое число от 0 до 100 и
+включает пул, если значение ненулевое. `status` читает текущую политику. Для неподдерживаемых
+провайдеров и некорректных значений команда завершается кодом 1. `--json` возвращает:
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+### `ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]`
+
+Задаёт отображаемый alias существующему Codex-аккаунту, OAuth-аккаунту или API-ключу; `-` удаляет
+alias. Допускается не более 80 печатных символов. Зарезервированный логин Codex App `main`
+переименовать нельзя, поэтому `ocx account alias openai main ...` завершается с кодом 1. `--json`
+возвращает:
+
+```text
+{ ok: true, provider, id, alias: string | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -230,7 +250,7 @@ provider-specific формы команды используйте `ocx account 
 остаётся пригодным для парсинга, а завершённый login-state содержит
 `catalogRefreshPending: true` без human-readable предупреждения.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <account-or-key-id|main> --yes [--json]`
 
 Это защищённое неинтерактивное удаление требует `--yes`. Перед удалением оно проверяет, что id
 существует; если id отсутствует, команда завершается кодом 1 и DELETE даже не отправляется.
@@ -249,6 +269,18 @@ provider-specific формы команды используйте `ocx account 
 что удаление уже сохранено; human-readable вывод печатает в stderr общую рекомендацию `ocx sync` и
 по-прежнему завершается с кодом 0. Форматы удаления OAuth-аккаунтов и API-key не меняются.
 
+### `ocx account clear-cooldown <provider> <account-id|main> [--json]`
+
+Очищает один runtime cooldown в Codex-пуле `openai` или поддерживаемых OAuth-пулах `anthropic` и
+`google-antigravity`. `main` разрешён только для `openai` и в JSON нормализуется в `__main__`.
+Некорректный провайдер или неизвестный аккаунт отклоняется API с кодом 400, а CLI завершается с кодом 1.
+Для существующего аккаунта без активного cooldown операция идемпотентно успешна: API возвращает 200,
+CLI завершается с кодом 0, а `cleared` равен `false`. `--json` возвращает строго следующую форму:
+
+```text
+{ ok: true, provider, id, cleared: boolean }
+```
+
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
 Добавить и активировать ключ для API-key-провайдера. Ключ читается только из piped/redirected
@@ -263,6 +295,25 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 `--json` возвращает `{ ok: true, id: string | null, label?: string }` и никогда не включает сам
 ключ.
+
+### `ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`
+
+Импортирует ограниченный по размеру экспорт аккаунтов. Версия 1 принимает только провайдер
+`google-antigravity`, формат `cockpit-tools` и ровно один источник: `--file` или `--stdin`. Inline JSON
+и лишние позиционные аргументы отклоняются до проверки их содержимого. Храните экспорт приватно, а
+после использования удалите или защитите его. JSON-вывод — приведённая ниже сводка без секретов.
+Если есть хотя бы одна ошибочная или неподдерживаемая запись, команда завершается с кодом 1, иначе — 0.
+
+```text
+{
+  totalCount,
+  importedCount,
+  updatedCount,
+  failedCount,
+  unsupportedCount,
+  results: Array<{ index, status, code }>
+}
+```
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 

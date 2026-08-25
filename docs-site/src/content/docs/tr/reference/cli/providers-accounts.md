@@ -108,20 +108,26 @@ Bir sağlayıcı için saklanan OAuth kimlik bilgisini kaldırın.
 listeleyin ve değiştirin. Sağlanan yardım arayüzü şöyledir:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage:
+  ocx account list [provider] [--json] [--all]
+  ocx account current <provider> [--json]
+  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
+  ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account main <doctor|list|register|add|switch|recover> ...
 
-list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
-current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
-refresh <provider>  Force-refresh Codex or provider quota reports.
-auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
-add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
-reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
-Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
-A selection-order change applies from the next unbound request and never moves a bound thread.
+List and switch provider accounts and API-key pools (masked output only).
+'main' selects the Codex App login for the openai account pool.
 ```
 
 Tüm alt komutlar proxy'nin çalışmasını gerektirir; CLI kaydedilen çalışma zamanı
@@ -229,13 +235,26 @@ eşleşen null veya eski bir rapora düşer (çıkış 0).
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Yalnızca `openai` Codex hesap havuzunu denetler. `on` %80'i ayarlar, `off` %0'ı
-ayarlar, `status` geçerli değeri okur ve `threshold <n>` 0 ile 100 arasında bir
-tamsayı kabul eder. Diğer sağlayıcılar ve geçersiz değerler 1 ile çıkar.
-`--json` şunu döndürür:
+`openai` Codex hesap havuzunu ve desteklenen `anthropic` / `google-antigravity` OAuth
+havuzlarını denetler. `openai` için `on` eşiği %80'e, `off` ise %0'a ayarlar. OAuth
+havuzlarında `on` / `off`, mevcut eşiği koruyarak havuzun etkin durumunu değiştirir.
+`threshold <n>`, 0 ile 100 arasındaki bir tamsayıyı kaydeder ve değer sıfır değilse
+havuzu etkinleştirir. `status` geçerli politikayı okur. Desteklenmeyen sağlayıcılar ve
+geçersiz değerler 1 ile çıkar. `--json` şunu döndürür:
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+### `ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]`
+
+Mevcut bir Codex hesabına, OAuth hesabına veya API anahtarına görüntüleme takma adı verir; temizlemek
+için `-` kullanın. Takma ad en fazla 80 yazdırılabilir karakter olabilir. Ayrılmış Codex App girişi
+`main` yeniden adlandırılamaz; bu nedenle `ocx account alias openai main ...` 1 ile çıkar. `--json`
+şunu döndürür:
+
+```text
+{ ok: true, provider, id, alias: string | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -284,7 +303,7 @@ sync` kurtarma rehberliği yazdırır. `--json`, stdout'u ayrıştırılabilir t
 insan uyarısı olmadan tamamlanan giriş durumunda `catalogRefreshPending: true`
 taşır.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <account-or-key-id|main> --yes [--json]`
 
 Bu korumalı, etkileşimsiz silme işlemi `--yes` gerektirir. Silmeden önce
 kimliğin var olduğunu doğrular; eksik bir kimlik DELETE göndermeden 1 ile çıkar.
@@ -305,6 +324,18 @@ hesap silme işlemi zaten kaydedilmiştir; insan çıktısı stderr'e genel `ocx
 kurtarma rehberliği yazdırır ve yine de 0 ile çıkar. OAuth hesabı ve API
 anahtarı kaldırma zarfları bu alanı kazanmaz.
 
+### `ocx account clear-cooldown <provider> <account-id|main> [--json]`
+
+`openai` Codex havuzunda veya desteklenen `anthropic` ve `google-antigravity` OAuth havuzlarında bir
+çalışma zamanı soğumasını temizler. `main` yalnızca `openai` için kabul edilir ve JSON'da `__main__`
+olarak normalleştirilir. Geçersiz sağlayıcı veya bilinmeyen hesap API tarafından 400 ile reddedilir ve
+CLI 1 ile çıkar. Etkin soğuması olmayan gerçek bir hesap için işlem idempotent olarak başarılıdır: API
+200 döndürür, CLI 0 ile çıkar ve `cleared` değeri `false` olur. `--json` tam olarak şunu döndürür:
+
+```text
+{ ok: true, provider, id, cleared: boolean }
+```
+
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
 Bir API anahtarı sağlayıcısı için bir anahtar ekler ve etkinleştirir. Anahtar
@@ -320,6 +351,25 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 `--json`, `{ ok: true, id: string | null, label?: string }` döndürür ve asla
 anahtarı içermez.
+
+### `ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`
+
+Boyutu sınırlı bir hesap dışa aktarımını içe aktarır. Sürüm 1 yalnızca `google-antigravity`
+sağlayıcısını ve `cockpit-tools` biçimini, `--file` ya da `--stdin` kaynaklarından tam olarak biriyle
+kabul eder. Satır içi JSON ve ek konumsal argümanlar içerikleri incelenmeden reddedilir. Dışa aktarımları
+gizli tutun; kullandıktan sonra silin veya güvenli biçimde saklayın. JSON çıktısı aşağıdaki gizli bilgi
+içermeyen özettir. Başarısız veya desteklenmeyen kayıt varsa komut 1, yoksa 0 ile çıkar.
+
+```text
+{
+  totalCount,
+  importedCount,
+  updatedCount,
+  failedCount,
+  unsupportedCount,
+  results: Array<{ index, status, code }>
+}
+```
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
@@ -449,5 +499,4 @@ kapalı bir enum olarak ayrıştırır ve başka herhangi bir değer içeren tü
 kataloğu reddeder, bu nedenle `add`, `edit` ve yönetim API'si katalog
 yazıcısının daha sonra çıkarması gereken bir şeyi saklamak yerine hatalı değeri
 reddeder (#759).
-
 

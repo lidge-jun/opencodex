@@ -896,6 +896,13 @@ const configSchema = z.object({
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
+  // Invalid hand edits disable only this opt-in pool; live writes remain strict.
+  googleAntigravityAccountPool: z.object({
+    enabled: z.boolean().optional(),
+    autoSwitchThreshold: z.number().int().min(0).max(100).optional(),
+    strategy: z.enum(["quota", "round-robin", "fill-first"]).optional(),
+    stickyLimit: z.number().int().min(1).max(100).optional(),
+  }).strict().optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -2132,6 +2139,22 @@ function oauthOpenBrowserError(value: unknown): string | null {
   return "schema_invalid: oauthOpenBrowser: must be a boolean or omitted";
 }
 
+function googleAntigravityAccountPoolError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "googleAntigravityAccountPool")) return null;
+  const pool = raw.googleAntigravityAccountPool;
+  if (pool === undefined || pool === null) return null;
+  if (typeof pool !== "object") return "schema_invalid: googleAntigravityAccountPool: must be an object";
+  const parse = z.object({
+    enabled: z.boolean().optional(),
+    autoSwitchThreshold: z.number().int().min(0).max(100).optional(),
+    strategy: z.enum(["quota", "round-robin", "fill-first"]).optional(),
+    stickyLimit: z.number().int().min(1).max(100).optional(),
+  }).strict().safeParse(pool);
+  if (parse.success) return null;
+  return `schema_invalid: googleAntigravityAccountPool: ${schemaDiagnosticsError(parse.error)}`;
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 /**
  * Reject a loopback-listener port that collides with the proxy port (#1102).
@@ -2182,6 +2205,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
     ?? oauthOpenBrowserError(value)
+    ?? googleAntigravityAccountPoolError(value)
     ?? loopbackListenerPortError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

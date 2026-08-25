@@ -91,7 +91,6 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `modelContextWindows?` | `Record<string, number>` | Model başına bağlam geri dönüşleri/sınırları. Bunlar `contextWindow`'u geçersiz kılar: bilinmeyen bir pencere yapılandırılmış değeri kullanırken, daha küçük canlı meta veriler yetkili kalır. |
 | `modelInputModalities?` | `Record<string, string[]>` | Model başına girdi ipuçları, örn. `["text"]` veya `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Katalog otomatik sıkıştırma ipuçları için kullanılan pozitif model başına maksimum girdi sınırları. |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Model başına pozitif güvenli tamsayı biçiminde yumuşak otomatik sıkıştırma bütçeleri. Değerler yalnızca bağlamın veya maksimum girdinin etkin %90 zarfını düşürebilir ve yetkili bir bağlam penceresi bilinmiyorsa yayımlanmaz. Canonical `openai` için anahtarlar, sağlayıcı veya hesap seçici öneki olmadan desteklenen tam yerel model kimlikleri olmalıdır. Sağlayıcı PATCH girdileri birleştirir; bir anahtarı `null` yapmak o anahtarı siler, alanın tamamını `null` yapmak haritayı temizler. Bu `null` silme işaretleri yalnızca PATCH içindir. |
 | `defaultMaxOutputTokens?` | `number` | İstemci `max_output_tokens` değerini atladığında sağlayıcı genelinde `openai-chat` geri dönüşü. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Pozitif model başına `openai-chat` geri dönüş bütçeleri; tam/kalıp eşleşmeleri sağlayıcı varsayılanını yener. |
 | `modelCosts?` | `Record<string, Cost4>` | Sağlayıcının tam yukarı akış model kimliğine göre anahtarlanan model başına görüntüleme fiyatları (1M token başına USD) — bir sağlayıcı tanımlayıcısı veya yönlendirilen `provider/model` etiketi değil, örn. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Herhangi bir model kimliği geçerli bir anahtardır — özel sağlayıcılar `openai-chat` adaptörü aracılığıyla herhangi bir OpenAI uyumlu uç noktayı hedefleyebilir ve yerel veya dahili sağlayıcı kimlikleri yerleşik kataloglarda bulunmasalar bile çalışır. Kullanıcı tarafından yapılandırılan fiyatlar Günlükler `~$` ve Kullanım tahminlerinde yerleşik katalogları yener; geçmiş girdiler geçerli katmandan yeniden fiyatlandırılır, bu nedenle bir fiyatı düzenlemek geçmiş toplamları değiştirebilir. Geri dönüş sırası: kullanıcı `modelCosts` → jawcode kataloğu → beklenen fiyat katmanı → model düzeyinde satıcı geri dönüşü ve tamamen sıfır bir girdi bu dizideki bir sonraki kaynağa düşer. Her oran en fazla 1.000.000 (1M token başına USD) olan negatif olmayan sonlu bir sayı olmalıdır; aralık dışı satırlar yönetim sınırı tarafından reddedilir ve yükleme sırasında bırakılır. Yalnızca görüntüleme zamanı tahmini: katmanlar yönlendirmeyi, hesap seçimini, kotaları veya faturalandırmayı asla etkilemez. |
@@ -232,6 +231,38 @@ kimlik doğrulama hatası değil, bilindiğinde `Retry-After` ile 429 alır.
 :::caution[Deneysel]
 Anthropic hesap politikası riskini anlamadığınız sürece bunu devre dışı bırakın.
 Emin olmadığınızda manuel `ocx account use anthropic <id>` geçişini tercih edin.
+:::
+
+### `googleAntigravityAccountPool` (deneysel)
+
+Bu isteğe bağlı özellik Google Antigravity OAuth hesaplarını yalnızca `google-antigravity` Cloud Code
+Assist sağlayıcısı için havuzlar. Varsayılan olarak devre dışıdır. Havuz, kimlik bilgilerini hiçbir
+zaman Google AI Studio, Vertex AI, başka bir sağlayıcı kaydı veya API anahtarı rotasına vermez.
+
+| Anahtar | Tip | Varsayılan | Açıklama |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | İşleme özgü oturum bağlılığını ve son 429 ya da yüzeye çıkan 402 yanıtında sınırlı yük devretmeyi etkinleştirir. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 kullanım tüketme eşiği. `quota` ve `fill-first`, istek modelinin `Gem` veya `Cla` ailesiyle ilgili önbelleğe alınmış en yüksek kullanımı kullanır; kullanım bilinmiyorsa sağlıklı etkin hesap korunur. `0` yalnızca kullanıma dayalı geçişi kapatır, hata kurtarmayı kapatmaz. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni veya henüz bağlanmamış oturumların stratejisi. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | Bir `round-robin` seçiminde tutulan yeni oturum bağlama sayısı. Aralık 1–100'dür; diğer stratejileri etkilemez. |
+
+Tüm stratejiler, hesap uygun kaldığı sürece mevcut oturum bağlılığını korur. Yeni veya bağlanmamış bir
+oturumda `quota`, ilgili kullanım bilinmiyorsa ya da eşik altındaysa sağlıklı etkin hesabı korur; ardından
+bilinen kullanımı en düşük uygun hesabı seçer. `round-robin` bağlamaları eşit dağıtır ve normal rotasyonda
+eşiği kullanmaz. `fill-first`, etkin hesabı soğuma, kullanılamazlık veya tüketme eşiğine kadar doldurur,
+sonra sıradaki uygun hesaba geçer.
+
+Her gönderim bearer token ile Cloud Code Assist `projectId` değerini birlikte içeren, üretime bağlı tek
+bir OAuth anlık görüntüsü çözümler. Son 429 veya yüzeye çıkan 402, başarısız hesabı soğumaya alır,
+bağlılığını temizler ve isteği başka bir uygun anlık görüntü için yeniden kurar. Kullanılabilir bir
+`Retry-After` yoksa varsayılan soğuma 60 saniyedir; ayrıştırılmış upstream değeri en fazla 15 dakikadır.
+Bir istek en fazla üç yük devretmeye, yani toplam dört upstream gönderime izin verir. Uygun hesapların
+tamamı soğuyorsa istemci en erken bilinen `Retry-After` ile 429 alır.
+
+:::caution[Operasyonel dayanıklılık; kota aşma yöntemi değildir]
+Bu havuzu geçici hesap hatalarından kurtulmak için kullanın; kota veya sağlayıcı yaptırımını aşmak için
+kullanmayın. Çoklu hesap otomasyonu sağlayıcı koşullarını ihlal edebilir; bu riski kabul etmiyorsanız
+özelliği devre dışı bırakın.
 :::
 
 ### Yönetilen kayıt biçimleri

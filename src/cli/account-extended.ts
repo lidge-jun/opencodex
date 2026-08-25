@@ -345,8 +345,11 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const action = args.shift();
   if (!name || !action) return usage();
   const classified = configAndType(deps, name);
-  if ("error" in classified || classified.type !== "codex") {
-    return usage("Error: auto-switch only applies to the openai Codex account pool");
+  if ("error" in classified) return usage(`Error: ${classified.error}`);
+  const oauthPool = classified.type === "oauth"
+    && (name === "anthropic" || name === "google-antigravity");
+  if (classified.type !== "codex" && !oauthPool) {
+    return usage(`Error: ${name} does not support account-pool auto-switch`);
   }
   let threshold: number | undefined;
   if (action === "on" && args.length === 0) threshold = 80;
@@ -358,6 +361,46 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   }
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  if (oauthPool) {
+    let enabled: boolean;
+    if (action === "status") {
+      const response = await apiJson(
+        deps,
+        baseUrl,
+        "GET",
+        `/api/oauth/accounts/pool?provider=${encodeURIComponent(name)}`,
+      );
+      if (response.status === 0) return proxyUnreachable();
+      if (
+        response.status !== 200
+        || typeof response.json.enabled !== "boolean"
+        || typeof response.json.autoSwitchThreshold !== "number"
+      ) return apiError(response.json, "failed to read auto-switch status");
+      enabled = response.json.enabled;
+      threshold = response.json.autoSwitchThreshold;
+    } else {
+      const update = action === "on"
+        ? { provider: name, enabled: true }
+        : action === "off"
+          ? { provider: name, enabled: false }
+          : { provider: name, enabled: threshold! > 0, autoSwitchThreshold: threshold };
+      const response = await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/pool", update);
+      if (response.status === 0) return proxyUnreachable();
+      if (
+        response.status !== 200
+        || typeof response.json.enabled !== "boolean"
+        || typeof response.json.autoSwitchThreshold !== "number"
+      ) return apiError(response.json, "failed to update auto-switch");
+      enabled = response.json.enabled;
+      threshold = response.json.autoSwitchThreshold;
+    }
+    if (wantsJson) {
+      console.log(JSON.stringify({ provider: name, autoSwitchThreshold: threshold, enabled }, null, 2));
+    } else {
+      console.log(enabled ? `auto-switch: on (threshold ${threshold}%)` : "auto-switch: off");
+    }
+    return 0;
+  }
   if (action === "status") {
     const response = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
     if (response.status === 0) return proxyUnreachable();
@@ -566,14 +609,13 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
 }
 
 /**
- * Lift a quota cooldown on a Codex account.
+ * Lift a quota cooldown on a Codex or supported OAuth pool account.
  *
  * This is the user-facing escape from the lockout described in
  * `devlog/_plan/260726_cooldown_lockout_hardening`: injected routing makes the proxy the
  * only model path for Codex Desktop, so a stuck cooldown reads as "the whole app is dead".
  *
- * Codex accounts only. API-key pools already reset their own 429 cooldowns through key
- * management (`clearKeyCooldowns`), and OAuth providers have no equivalent state here.
+ * API-key pools already reset their own 429 cooldowns through key management.
  */
 export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = flag(args, "--json");
@@ -582,13 +624,23 @@ export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promi
   if (!name || !requestedId || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  if (classified.type !== "codex") {
-    return usage(`Error: ${name} is not a Codex account pool; cooldown clearing applies to Codex accounts only`);
+  const oauthPool = classified.type === "oauth"
+    && (name === "anthropic" || name === "google-antigravity");
+  if (classified.type !== "codex" && !oauthPool) {
+    return usage(`Error: ${name} does not support account-pool cooldown clearing`);
   }
-  const id = requestedId === "main" ? MAIN_ID : requestedId;
+  if (classified.type === "oauth" && requestedId === "main") {
+    return usage("Error: main is only valid for the openai Codex account pool");
+  }
+  const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
-  const response = await apiJson(deps, baseUrl, "POST", "/api/codex-auth/accounts/clear-cooldown", { id });
+  const response = classified.type === "codex"
+    ? await apiJson(deps, baseUrl, "POST", "/api/codex-auth/accounts/clear-cooldown", { id })
+    : await apiJson(deps, baseUrl, "POST", "/api/oauth/accounts/clear-cooldown", {
+      provider: name,
+      accountId: id,
+    });
   if (response.status === 0) return proxyUnreachable();
   if (response.status !== 200) return apiError(response.json, `failed to clear cooldown for ${requestedId}`);
   const cleared = response.json?.cleared === true;

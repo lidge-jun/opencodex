@@ -150,13 +150,32 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `POST /api/oauth/logout` | 移除所選的供應商憑證 | 400 未知供應商；`oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | 列出遮罩帳號或移除一個帳號 | 400 無效供應商/id；404 帳號缺失；`oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | 選擇現用 OAuth 帳號 | 400 無效供應商／帳號；`oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | 讀取或更新 Anthropic OAuth 池政策 | 400 非 Anthropic 供應商或無效政策 |
-| `POST /api/oauth/accounts/clear-cooldown` | 清除一個 OAuth 帳號的 runtime 冷卻 | 400 無效供應商／帳號 |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | 讀取或更新 Anthropic 或 Google Antigravity OAuth 池政策 | 400 不支援的供應商或無效政策 |
+| `POST /api/oauth/accounts/clear-cooldown` | 清除一個 OAuth 帳號的 runtime 冷卻 | 400：供應商無效或帳號未知；已知帳號沒有冷卻時回傳 200 與 `{ ok: true, cleared: false }` |
 | `PUT /api/oauth/accounts/alias` | 設定或清除 OAuth 帳號別名 | 400 無效供應商／帳號／別名 |
 | `GET, POST, DELETE /api/providers/keys` | 列出遮罩供應商金鑰、新增／啟用一個或移除一個 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/active` | 選擇供應商的現用金鑰 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/alias` | 設定或清除供應商金鑰別名 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、建立、編輯或刪除 data-plane 許可金鑰 | 400 無效 body/id；404 金鑰缺失 |
+
+#### 供應商範圍內的 OAuth 池契約
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity` 要求提供 `provider` 查詢參數。
+回應的頂層欄位為 `provider`、`enabled`、`autoSwitchThreshold`（預設 `80`）、`strategy`（正規化為
+`quota`、`round-robin` 或 `fill-first`）、`stickyLimit`（正規化為 1～100 的整數）以及
+`experimental: true`。
+
+`PUT` 與 `PATCH /api/oauth/accounts/pool` 要求 body 為包含 `provider` 的 JSON 物件，並可選接受
+`enabled`（boolean）、`autoSwitchThreshold`（0～100 的整數）、`strategy`（`quota`、
+`round-robin` 或 `fill-first`）以及 `stickyLimit`（1～100 的整數）。省略的欄位會保留目前值或
+預設值。成功回應直接在頂層回傳 `{ ok: true, provider, enabled, autoSwitchThreshold, strategy,
+stickyLimit, experimental: true }`，沒有 `config` 包裝層。格式錯誤或非物件的 body、不支援的
+provider 或無效欄位都會回傳通用 HTTP 400 錯誤回應。
+
+`POST /api/oauth/accounts/clear-cooldown` 的 body 為 `{ provider, accountId }`。provider 必須是
+`anthropic` 或 `google-antigravity`，且帳號必須存在於該 provider 內。未知帳號回傳通用 HTTP 400
+`account not found` 錯誤。已知帳號即使不在冷卻中也會冪等成功：HTTP 200 與
+`{ ok: true, cleared: false }`。這些回應不會包含 token、電子郵件地址或完整金鑰。
 
 憑證清單回應被刻意遮罩。OAuth access token 與完整的供應商 API 金鑰不回傳給儀表板客戶端。
 
@@ -205,7 +224,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `PUT /api/codex-auth/accounts/alias` | 設定或清除帳號別名 | 400 無效帳號／別名 |
 | `PUT /api/codex-auth/accounts/pause` | 暫停或恢復一個帳號 | 400 無效帳號／狀態；404 缺失帳號 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暫停配額耗盡的帳號 | 變更鎖失敗變為 503 |
-| `POST /api/codex-auth/accounts/clear-cooldown` | 清除一個或所有帳號的 runtime 冷卻 | 400 無效 id |
+| `POST /api/codex-auth/accounts/clear-cooldown` | 清除一個帳號的 runtime 冷卻 | 400：帳號 id 無效或未知；已知帳號沒有冷卻時回傳 200 與 `{ ok: true, id, cleared: false }` |
 | `GET, PUT /api/codex-auth/active` | 讀取或選擇現用帳號 | 400 無效或缺失帳號；409 暫停／舊列衝突 |
 | `PUT /api/codex-auth/auto-switch` | 設定自動帳號切換的配額閾值 | 400 無效閾值 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | 更新 Codex 帳號池選擇策略 | 400 無效策略／設定 |
