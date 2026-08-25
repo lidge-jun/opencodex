@@ -84,3 +84,67 @@ where the fix goes.
 OUT: implementing that fix inside this phase; restarting or reconfiguring the
 user's running proxy; any live provider call.
 
+---
+
+## Outcome (wp9 close, 2026-08-25)
+
+**Terminal outcome: cannot be driven deterministically → #2472 deregistered as a GO
+criterion and recorded as a deferred known defect.** This is the third of the three
+outcomes this document allowed, and it is the honest one.
+
+### What was attempted
+
+The planned regression was written: `tests/cursor-zero-output-turn.test.ts`, seven
+tests driving the native/host call-id dedupe, including three routes that each
+produce a turn whose only event is the terminal `done`. It passed. It was then
+**deleted**, because an independent review showed it pins the wrong mechanism.
+
+### Why it was wrong
+
+The dedupe lives on the **pre-execution announcement** side of the tool boundary.
+`planMcpArgsHandling` deliberately ends turn 1 as `done` and cancels the Cursor run
+without a result — `live-transport.ts:220-225` states outright that the real tool
+result arrives on the NEXT `/v1/responses` request as structured history. #2472
+reports output lost **after** the calling agent already produced non-empty text,
+which is downstream of that boundary. A test that reproduced an empty-looking turn
+on the announcement side would have looked like evidence while proving nothing.
+
+The other two routes were equally unreachable: the empty-argument case only goes
+silent under `allowEmptyArgs: false`, and the live bridge passes `true`
+(`live-transport.ts:258`), where malformed shell arguments raise an explicit error.
+
+### What is settled
+
+- The bridge-version theory from the issue's own point 3 is closed: `88b7cc057`
+  (zero-output combo failover) is an ancestor of `dev`, and the regression the issue
+  asked for exists and passes — `tests/combo-stream-preflight.test.ts`, *"converts a
+  zero-output failed terminal into a retryable HTTP failure"*, 4 pass / 0 fail.
+- The dedupe is correct and stays. Without it every repeated `tool_call_start`
+  becomes another Responses `function_call` item, i.e. a duplicate execution request.
+
+### What remains open
+
+There is no turn-wide semantic-output ledger. `finalizeTurnEvents` reports an error
+for a call left OPEN at turn end but is silent for a turn that closed with zero
+output, and the bridge emits `response.completed` with an empty snapshot. The
+`empty-completion-guard` would catch it but is opt-in and defaults to false. The gap
+is real **if a reachable producer exists**; none was constructible on current `dev`.
+
+Settling it needs a reproduction at the `function_call_output`/next-request boundary,
+not another adapter-level probe. The microsecond `wall_time_seconds` in the report is
+the strongest remaining lead and deserves its own telemetry issue.
+
+### Consequence for this train
+
+Per 000's canary section, #2472 **stops being a GO criterion**. Criterion c-9 is met
+by this recorded disposition rather than by a passing canary. Nothing about the six
+merged runtime fixes depends on it, and the issue stays open with the investigation
+posted at https://github.com/lidge-jun/opencodex/issues/2472#issuecomment-5402463174.
+
+**LOOP-PESSIMIST-01.** The hypothesis that died is mine: that the zero-output symptom
+could be reproduced from the adapter's event mapper. Two cycles in a row (wp7's
+config-dir guard, wp9's dedupe theory) I built a plausible mechanism and had to
+discard it against evidence. The pattern worth carrying: a reproduction that only
+exercises code I chose to call is not a reproduction — it has to start from the
+reported observable and work backwards to a path the runtime actually takes.
+
