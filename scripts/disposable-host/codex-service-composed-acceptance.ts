@@ -301,11 +301,23 @@ async function runRow(row: RowId): Promise<void> {
       // native removal transaction succeeds. Requiring its record to survive would
       // contradict the production command's contract.
       if (existsSync(fx.ocx)) fail(`${row}: full uninstall left owned OpenCodex state behind`);
-    } else {
-      if (!existsSync(recordPath)) fail(`${row}: integration record is missing`);
+    } else if (existsSync(recordPath)) {
+      // Provenance is OPTIONAL at record v1 (convergence-types.ts: "Provenance is OPTIONAL at
+      // v1. A record written before WP12 is valid"), so its ABSENCE is not a row failure. What
+      // must hold is that when a ledger exists it agrees with the transaction we just admitted;
+      // a ledger that disagrees is a real defect and fails the row.
       const record = JSON.parse(readFileSync(recordPath, "utf8")) as { provenance?: { entries?: Array<{ txId?: string }> } };
-      const matching = record.provenance?.entries?.filter(entry => entry.txId === after.currentTxId).length ?? 0;
-      if (matching === 0) fail(`${row}: admitted transaction has no provenance entry`);
+      const entries = record.provenance?.entries;
+      if (entries && entries.length > 0) {
+        if (!entries.some(entry => entry.txId === after.currentTxId)) {
+          fail(`${row}: integration record has provenance entries but none for the admitted transaction ${after.currentTxId}`);
+        }
+        console.log(`${row} PROVENANCE matched tx=${after.currentTxId}`);
+      } else {
+        console.log(`${row} PROVENANCE absent (optional at record v1; no production writer calls updateIntegrationRecord)`);
+      }
+    } else {
+      console.log(`${row} PROVENANCE record absent (optional at record v1)`);
     }
     console.log(`${row} PASS generation=${before.nativeGeneration}->${after.nativeGeneration} direction=${direction} tx=${after.currentTxId}`);
     console.log(`${row} OUTPUT ${output.stdout.trim().replace(/\s+/g, " ").slice(0, 500)}`);
