@@ -128,6 +128,29 @@ cache hit rates, while requests without a key remain keyless. If an opted-in ups
 field, opencodex does not strip it and retry or mutate saved configuration. Other providers remain
 deny-by-default.
 
+A custom `openai-chat` provider can opt in when its upstream documents support for
+`prompt_cache_key`:
+
+```json
+{
+  "providers": {
+    "example-compatible-provider": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://api.example.com/v1",
+      "apiKey": "${EXAMPLE_API_KEY}",
+      "promptCacheKey": true
+    }
+  }
+}
+```
+
+This setting forwards only a key supplied by the caller; it does not create one. Preserve the rest
+of the provider configuration when adding it, then reload or restart opencodex. When the caller
+supplies a stable `prompt_cache_key`, validate caching by comparing the initial cold request with
+later requests in the same conversation. Leave the option omitted or set it to `false` for
+incompatible upstreams, and disable or remove it if a strict
+gateway returns an HTTP 400 unknown-field error.
+
 You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
 
 ### Logging in from another browser profile, or another machine
