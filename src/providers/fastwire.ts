@@ -246,6 +246,7 @@ export function tierObservationContext(
   policy: ResolvedFastPolicy,
   fastMode: boolean | undefined,
   callerTier: string | undefined,
+  responseTierAuthoritative?: boolean,
 ): TierObservationContext {
   return {
     capability: policy.capability,
@@ -253,6 +254,7 @@ export function tierObservationContext(
     fastWire: policy.fastWire,
     demandDecision: fastMode === true ? "force-fast" : fastMode === false ? "force-default" : "inherit",
     ...(callerTier !== undefined ? { callerTier } : {}),
+    ...(responseTierAuthoritative !== undefined ? { responseTierAuthoritative } : {}),
   };
 }
 
@@ -344,7 +346,11 @@ export function createAdapterTierMetadata(
 
   const responseCanConfirmFast = effectiveFastRequested
     && context.eligibility === "eligible"
-    && wireValue !== null;
+    && wireValue !== null
+    // A destination whose echo is not authoritative can neither confirm nor deny Fast. The
+    // ChatGPT-internal Codex backend echoes "default" on priority-scheduled turns, so believing
+    // it reported every Fast request as `response-declined` (#2558).
+    && context.responseTierAuthoritative !== false;
   return {
     outcome,
     observeResponseServiceTier(value: unknown) {

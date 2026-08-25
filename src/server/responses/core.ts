@@ -1701,7 +1701,15 @@ async function applyFinalRouteRequestNormalization(args: {
   );
   const modelServiceTierSupport = serviceTierSupportFromPolicy(fastPolicy);
   const callerTier = parsed.options.serviceTier;
-  parsed.options.tierObservation = tierObservationContext(fastPolicy, config.fastMode, callerTier);
+  // The ChatGPT-internal Codex backend echoes `service_tier: "default"` even on turns it
+  // scheduled as priority, so its echo cannot confirm OR deny Fast. Believing it reported every
+  // Fast request as `response-declined` (#2558). The public API's echo stays authoritative.
+  parsed.options.tierObservation = tierObservationContext(
+    fastPolicy,
+    config.fastMode,
+    callerTier,
+    isCanonicalOpenAiForwardProvider(route.provider) ? false : undefined,
+  );
   parsed.options.tierDecision = decideTier(fastPolicy, config.fastMode, callerTier);
   parsed.options.serviceTier = tierValueAfterDecision(parsed.options.tierDecision, callerTier);
   if (fastPolicy.capability === true && fastPolicy.fastWire === null) {

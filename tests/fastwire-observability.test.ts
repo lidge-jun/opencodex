@@ -827,3 +827,51 @@ describe("FastWire gate and compatibility fingerprint", () => {
     expect(buildBehaviorFingerprintV1(base)).not.toBe(buildBehaviorFingerprintV1(performance));
   });
 });
+
+describe("#2558 a non-authoritative destination cannot confirm or deny Fast", () => {
+  /**
+   * The ChatGPT-internal Codex backend echoes service_tier: "default" even on turns it
+   * scheduled as priority. Believing that echo classified every Fast request as
+   * response-declined, which is a false negative that also drives priority cost attribution.
+   */
+  const nonAuthoritative = () => observation({ responseTierAuthoritative: false });
+
+  test("an echoed default is not a downgrade when the destination is not authoritative", () => {
+    const tracker = createAdapterTierMetadata(
+      nonAuthoritative(),
+      { kind: "set", value: "priority" },
+      "service-tier",
+      "priority",
+    )!;
+    tracker.observeResponseServiceTier("default");
+    expect(tracker.outcome.fastDowngradeReason).toBeUndefined();
+    expect(tracker.outcome.fastOutcome).not.toBe("downgraded");
+    // The raw echo is still recorded — this suppresses a verdict, not the evidence.
+    expect(tracker.outcome.responseServiceTier).toBe("default");
+  });
+
+  test("the same echo IS a downgrade on an authoritative destination", () => {
+    const tracker = createAdapterTierMetadata(
+      observation(),
+      { kind: "set", value: "priority" },
+      "service-tier",
+      "priority",
+    )!;
+    tracker.observeResponseServiceTier("default");
+    expect(tracker.outcome.fastOutcome).toBe("downgraded");
+    expect(tracker.outcome.fastDowngradeReason).toBe("response-declined");
+  });
+
+  test("an omitted flag keeps the authoritative default", () => {
+    // Absent must mean "assume authoritative" so the public API path is unchanged.
+    const tracker = createAdapterTierMetadata(
+      observation({}),
+      { kind: "set", value: "priority" },
+      "service-tier",
+      "priority",
+    )!;
+    tracker.observeResponseServiceTier("default");
+    expect(tracker.outcome.fastOutcome).toBe("downgraded");
+  });
+});
+

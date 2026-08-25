@@ -115,6 +115,15 @@ export interface TierObservationContext {
   fastWire: FastWire | null;
   demandDecision: "force-fast" | "force-default" | "inherit";
   callerTier?: string;
+  /**
+   * Whether the destination's echoed `service_tier` is authoritative about Fast scheduling.
+   *
+   * The ChatGPT-internal Codex backend returns `service_tier: "default"` on turns that were in
+   * fact scheduled as priority, so treating its echo as a downgrade produced a false
+   * `response-declined` on every Fast request (#2558). Absent means "assume authoritative",
+   * preserving the behaviour for the public API where the echo does mean what it says.
+   */
+  responseTierAuthoritative?: boolean;
 }
 
 export type TierDecision =
