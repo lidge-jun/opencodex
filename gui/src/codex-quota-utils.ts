@@ -1,9 +1,12 @@
 export interface AccountQuota {
   weeklyPercent?: number;
   fiveHourPercent?: number;
+  /** Codex account API aliases for the same five-hour window. */
+  shortPercent?: number;
   monthlyPercent?: number;
   weeklyResetAt?: number;
   fiveHourResetAt?: number;
+  shortResetAt?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
   resetCredits?: number;
@@ -16,11 +19,19 @@ export function isThirtyDayOnlyPlan(plan: string | null | undefined): boolean {
 }
 
 export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string | null | undefined): AccountQuota | null {
-  if (!quota || !isThirtyDayOnlyPlan(plan)) return quota;
+  if (!quota) return null;
+  const normalized = quota.shortPercent === undefined && quota.shortResetAt === undefined
+    ? quota
+    : {
+        ...quota,
+        fiveHourPercent: quota.fiveHourPercent ?? quota.shortPercent,
+        fiveHourResetAt: quota.fiveHourResetAt ?? quota.shortResetAt,
+      };
+  if (!isThirtyDayOnlyPlan(plan)) return normalized;
   return {
-    ...(quota.monthlyPercent !== undefined ? { monthlyPercent: quota.monthlyPercent } : {}),
-    ...(quota.monthlyResetAt !== undefined ? { monthlyResetAt: quota.monthlyResetAt } : {}),
-    ...(quota.resetCredits !== undefined ? { resetCredits: quota.resetCredits } : {}),
-    updatedAt: quota.updatedAt,
+    ...(normalized.monthlyPercent !== undefined ? { monthlyPercent: normalized.monthlyPercent } : {}),
+    ...(normalized.monthlyResetAt !== undefined ? { monthlyResetAt: normalized.monthlyResetAt } : {}),
+    ...(normalized.resetCredits !== undefined ? { resetCredits: normalized.resetCredits } : {}),
+    updatedAt: normalized.updatedAt,
   };
 }
