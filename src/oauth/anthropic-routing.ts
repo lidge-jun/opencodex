@@ -27,7 +27,7 @@ import {
   POOL_KEY_ANTHROPIC,
   seedPoolRotationAccount,
 } from "../codex/pool-rotation";
-import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
+import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
 
@@ -39,6 +39,8 @@ const MAX_AFFINITY_ENTRIES = 2_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
 const UNKNOWN_USAGE_SCORE = 100;
 const DEFAULT_AUTO_SWITCH_THRESHOLD = 80;
+const DEFAULT_QUOTA_WINDOW: OcxAccountPoolQuotaWindow = "five-hour";
+const VALID_QUOTA_WINDOWS = new Set<OcxAccountPoolQuotaWindow>(["five-hour", "weekly", "max-utilization"]);
 /** Cap same-request 429 rotations so short Retry-After cannot infinite-loop. */
 export const ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST = 3;
 
@@ -50,6 +52,8 @@ export interface AnthropicAccountPoolConfig {
   strategy?: OcxAccountPoolRotationStrategy;
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   stickyLimit?: number;
+  /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
+  quotaWindow?: OcxAccountPoolQuotaWindow;
 }
 
 interface AccountHealth {
@@ -84,6 +88,22 @@ export function anthropicAutoSwitchThreshold(config: OcxConfig): number {
   const value = anthropicAccountPoolConfig(config).autoSwitchThreshold;
   if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100) return value;
   return DEFAULT_AUTO_SWITCH_THRESHOLD;
+}
+
+/** Strict parse for management APIs — returns null instead of defaulting. */
+export function parseAccountPoolQuotaWindow(raw: unknown): OcxAccountPoolQuotaWindow | null {
+  if (typeof raw === "string" && VALID_QUOTA_WINDOWS.has(raw as OcxAccountPoolQuotaWindow)) {
+    return raw as OcxAccountPoolQuotaWindow;
+  }
+  return null;
+}
+
+export function normalizeAccountPoolQuotaWindow(raw: unknown): OcxAccountPoolQuotaWindow {
+  return parseAccountPoolQuotaWindow(raw) ?? DEFAULT_QUOTA_WINDOW;
+}
+
+export function anthropicQuotaWindow(config: AnthropicAccountPoolConfig): OcxAccountPoolQuotaWindow {
+  return normalizeAccountPoolQuotaWindow(config.quotaWindow);
 }
 
 function parseRetryAfterMs(value: string | null | undefined, now: number): number | undefined {

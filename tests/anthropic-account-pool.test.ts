@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearPoolRotationState, notePoolRotationFailure, POOL_KEY_ANTHROPIC } from "../src/codex/pool-rotation";
 import {
+  anthropicQuotaWindow,
   anthropicSessionKeyFromParts,
   bindAnthropicSessionAffinity,
   clearAnthropicAccountPoolState,
   formatAnthropicProviderForLog,
   getEligibleAnthropicAccounts,
   isAnthropicAccountPoolEnabled,
+  normalizeAccountPoolQuotaWindow,
+  parseAccountPoolQuotaWindow,
   resolveAnthropicAccountForSession,
   resetAnthropicRoutingForManualSelection,
   rotateAnthropicAccountOn429,
@@ -378,5 +381,41 @@ describe("anthropic account pool", () => {
     await setActiveAccount("anthropic", cId);
     resetAnthropicRoutingForManualSelection(cId);
     expect(resolveAnthropicAccountForSession("seed-3", config).accountId).toBe(cId);
+  });
+});
+
+describe("anthropic account pool quota window", () => {
+  test("every valid window normalizes and strict-parses to itself", () => {
+    for (const window of ["five-hour", "weekly", "max-utilization"]) {
+      expect(normalizeAccountPoolQuotaWindow(window)).toBe(window);
+      expect(parseAccountPoolQuotaWindow(window)).toBe(window);
+    }
+  });
+
+  test("an unknown window string defaults to five-hour and fails strict parse", () => {
+    expect(normalizeAccountPoolQuotaWindow("daily")).toBe("five-hour");
+    expect(parseAccountPoolQuotaWindow("daily")).toBeNull();
+  });
+
+  test("undefined defaults to five-hour and fails strict parse", () => {
+    expect(normalizeAccountPoolQuotaWindow(undefined)).toBe("five-hour");
+    expect(parseAccountPoolQuotaWindow(undefined)).toBeNull();
+  });
+
+  test("non-string input never satisfies strict parse", () => {
+    expect(parseAccountPoolQuotaWindow(5)).toBeNull();
+    expect(parseAccountPoolQuotaWindow(null)).toBeNull();
+    expect(parseAccountPoolQuotaWindow({})).toBeNull();
+    expect(parseAccountPoolQuotaWindow(["weekly"])).toBeNull();
+    expect(normalizeAccountPoolQuotaWindow(5)).toBe("five-hour");
+  });
+
+  test("accessor reads the pool config field and defaults when absent or invalid", () => {
+    expect(anthropicQuotaWindow({ quotaWindow: "five-hour" })).toBe("five-hour");
+    expect(anthropicQuotaWindow({ quotaWindow: "weekly" })).toBe("weekly");
+    expect(anthropicQuotaWindow({ quotaWindow: "max-utilization" })).toBe("max-utilization");
+    expect(anthropicQuotaWindow({})).toBe("five-hour");
+    expect(anthropicQuotaWindow({ enabled: true })).toBe("five-hour");
+    expect(anthropicQuotaWindow({ quotaWindow: "daily" })).toBe("five-hour");
   });
 });
