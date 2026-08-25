@@ -360,6 +360,19 @@ changing is left untouched and retried later. Repair failures warn without faili
 command; manual fallback: `ocx codex-shim install`. Set `codexShimAutoRestore` to `false`, or set
 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
 
+That restore needs the original launcher OpenCodex saved next to the shim. A version manager —
+mise, asdf, volta — rewrites its whole install tree on upgrade, which destroys the shim *and* that
+backup, so there is nothing left to restore from. **A version-manager install tree is not a
+supported shim target.** OpenCodex reports the condition and stops rather than wrapping the newly
+installed binary as a replacement original: doing so would record a history that never happened, and
+the next upgrade would overwrite it again, so the repair would silently undo itself on the version
+manager's schedule.
+
+If your `codex` is owned by a version manager, route through Codex configuration instead of the
+launcher: `ocx start` writes `openai_base_url`, and `ocx service install` provides autostart. Run
+`ocx status` to confirm — it reports the active routing, and warns when a running proxy is not the
+one Codex is pointed at.
+
 | Subcommand | Action |
 | --- | --- |
 | `install` | Install the shim (or repair if stale). |

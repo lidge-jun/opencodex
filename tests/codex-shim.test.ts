@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -1997,5 +1997,37 @@ describe("WSL PATH interop guard", () => {
       ...fakeFs([`${dir}/codex`]),
     });
     expect(found).toBe(`${dir}/codex`);
+  });
+});
+
+// #2412: a version-manager upgrade (mise/asdf/volta) rewrites its install tree
+// in place, destroying both the shim and its sibling .opencodex-real backup.
+// The bail was silent, and the CLI warns only when a message exists, so start /
+// ensure / service repair all reported success while routing stayed native.
+describe("version-manager shim destruction (#2412)", () => {
+  test("classifies version-manager install trees without catching ordinary paths", () => {
+    expect(isVersionManagerOwnedCodexPath("/home/u/.local/share/mise/installs/codex/latest/bin/codex")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("/home/u/.local/share/mise/shims/codex")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("/home/u/.asdf/installs/codex/1.0/bin/codex")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("/home/u/.asdf/shims/codex")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("/home/u/.volta/bin/codex")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("C:\\Users\\u\\.volta\\bin\\codex.cmd")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("/usr/local/bin/codex")).toBe(false);
+    expect(isVersionManagerOwnedCodexPath("/home/u/.npm-global/bin/codex")).toBe(false);
+    expect(isVersionManagerOwnedCodexPath("/opt/homebrew/bin/codex")).toBe(false);
+  });
+
+  test("a destroyed shim reports the paths instead of bailing silently", () => {
+    withInstalledShim(({ wrappers, backups }) => {
+      writeFileSync(wrappers[0], "#!/bin/sh\necho version-manager codex\n", "utf8");
+      if (process.platform !== "win32") chmodSync(wrappers[0], 0o755);
+      rmSync(backups[0]);
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+      expect(result.status).toBe("ineligible");
+      // The silent bail is the whole defect: cli/codex-shim-autorestore.ts warns
+      // only when a message exists.
+      expect(result.message).toBeTruthy();
+      expect(result.message).toContain("backup");
+    });
   });
 });
