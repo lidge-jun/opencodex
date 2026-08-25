@@ -100,6 +100,7 @@ export type ProviderUpdatePatch = {
   liveModels?: boolean;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;
   requestPacing?: WorkspaceItem["requestPacing"] | null;
+  tlsProfile?: "antigravity-browser" | null;
   /** Dedicated field: the API PATCHes it alone for the canonical `openai` provider. */
   codexAccountMode?: "direct" | "pool";
   /** Management-only write that atomically owns the two supported xAI Grok adapter rows. */

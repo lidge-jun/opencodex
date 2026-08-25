@@ -54,6 +54,8 @@ export interface WorkspaceProvider {
     jitterMs?: number;
     models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number; jitterMs?: number }>;
   };
+  tlsProfile?: "antigravity-browser";
+  tlsProfileStatus?: "disabled" | "active" | "fallback";
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
   /** Derived state of the two xAI Grok Responses model-adapter entries. */

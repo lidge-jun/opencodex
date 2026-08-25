@@ -106,6 +106,7 @@ export default function ProviderSettings({
   const [pacingModelDelay, setPacingModelDelay] = useState("");
   const [pacingModelJitter, setPacingModelJitter] = useState("");
   const [pacingStatus, setPacingStatus] = useState<PacingStatus | null>(null);
+  const [tlsProfile, setTlsProfile] = useState<WorkspaceItem["tlsProfile"]>(item.tlsProfile);
 
   /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
   useEffect(() => {
@@ -123,10 +124,11 @@ export default function ProviderSettings({
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
     setPacingJitter(numberDraft(item.requestPacing?.jitterMs));
     setPacingModels({ ...(item.requestPacing?.models ?? {}) });
+    setTlsProfile(item.tlsProfile);
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, item.tlsProfile, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -206,7 +208,8 @@ export default function ProviderSettings({
     || liveModels !== savedLiveModels
     || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion);
   const pacingDirty = pacingSignature(pacingDraft) !== pacingSignature(item.requestPacing);
-  const formDirty = dirty || pacingDirty;
+  const tlsDirty = tlsProfile !== item.tlsProfile;
+  const formDirty = dirty || pacingDirty || tlsDirty;
 
   useEffect(() => { onDirtyChange?.(formDirty); return () => onDirtyChange?.(false); }, [formDirty, onDirtyChange]);
 
@@ -239,6 +242,10 @@ export default function ProviderSettings({
       ? resolvedBaseUrlForChoice(baseUrlChoices, endpointChoice, baseUrl)
       : baseUrl.trim();
     if (!adapter.trim() || !nextBaseUrl) { setMsg({ ok: false, text: t("pws.adapterBaseRequired") }); return false; }
+    if (tlsDirty && tlsProfile === "antigravity-browser" && !window.confirm(t("pws.antigravityTlsConfirm"))) {
+      setTlsProfile(item.tlsProfile);
+      return false;
+    }
     setSaving(true);
     setMsg(null);
     try {
@@ -256,6 +263,7 @@ export default function ProviderSettings({
             note: note.trim(),
             allowPrivateNetwork,
             ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
+            ...(tlsDirty ? { tlsProfile: tlsProfile ?? null } : {}),
           };
       if (!pacingOnly) {
         // Keep omitted legacy values omitted unless the user actually changes this toggle.
@@ -314,6 +322,7 @@ export default function ProviderSettings({
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs)); setPacingModels({ ...(item.requestPacing?.models ?? {}) });
     setPacingJitter(numberDraft(item.requestPacing?.jitterMs)); setPacingModelJitter("");
+    setTlsProfile(item.tlsProfile);
     setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
   };
 
@@ -342,6 +351,25 @@ export default function ProviderSettings({
         <span className="pwi-settings-label"><IconLock style={{ width: 12, height: 12 }} /> {t("pws.providerId")}</span>
         <input className="input" value={item.name} readOnly disabled />
       </label>
+      {item.name === "google-antigravity" && (
+        <section className="pwi-settings-field" aria-labelledby="pwi-antigravity-tls-title">
+          <span id="pwi-antigravity-tls-title" className="pwi-settings-label">{t("pws.antigravityTlsTitle")}</span>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <input
+              data-testid="antigravity-tls-profile"
+              type="checkbox"
+              checked={tlsProfile === "antigravity-browser"}
+              onChange={e => setTlsProfile(e.target.checked ? "antigravity-browser" : undefined)}
+              aria-describedby="pwi-antigravity-tls-help"
+            />
+            <span>{t("pws.antigravityTlsEnable")}</span>
+          </label>
+          <span id="pwi-antigravity-tls-help" className="pwi-settings-hint">{t("pws.antigravityTlsWarning")}</span>
+          <span data-testid="antigravity-tls-status" role="status" className="pwi-settings-hint">
+            {t("pws.antigravityTlsStatus", { status: item.tlsProfileStatus === "active" ? t("pws.antigravityTlsActive") : item.tlsProfileStatus === "fallback" ? t("pws.antigravityTlsFallback") : t("pws.antigravityTlsDisabled") })}
+          </span>
+        </section>
+      )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("modal.adapter")}</span>
         {isPreset ? <input className="input" value={adapter} readOnly disabled /> : (

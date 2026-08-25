@@ -116,6 +116,21 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
+
+### Antigravity pacing and TLS profile
+
+The built-in `google-antigravity` provider uses conservative request pacing by default: 30 RPM,
+at least 2,000 ms between request starts, and up to 500 ms of positive jitter. Existing explicit
+`requestPacing` settings remain authoritative; `jitterMs` may be set from 0 through 60,000 ms and
+only delays a start. Model rules can make the provider slower, never faster.
+
+The dashboard can explicitly enable `tlsProfile: "antigravity-browser"` for this provider. This is
+an experimental, unofficial compatibility mechanism, not a compliance feature.
+It may make traffic more distinctive, and initialization failures fall back to Bun; requests that
+already reached the native transport are not replayed. The profile is limited to canonical Cloud
+Code Assist hosts, keeps certificate and hostname verification enabled, and leaves OAuth/token/
+onboarding requests on standard Bun TLS. Users who prioritize account-policy safety should use the
+official Gemini API-key, Vertex, or documented Gemini Code Assist routes.
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 

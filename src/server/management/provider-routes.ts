@@ -216,6 +216,17 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "tlsProfile")) {
+    const value = rawBody.tlsProfile;
+    if (value === null || value === "") {
+      delete next.tlsProfile;
+    } else if (value === "antigravity-browser") {
+      next.tlsProfile = value;
+    } else {
+      return { error: "tlsProfile must be antigravity-browser or null" };
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "upstreamHttpVersion")) {
     const value = rawBody.upstreamHttpVersion;
     if (value === null || value === "") {

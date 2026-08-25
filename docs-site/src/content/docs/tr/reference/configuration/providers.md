@@ -76,6 +76,8 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (veya takma ad `azure`) seçeneklerinden biri. |
 | `baseUrl` | `string` | Yukarı akış API temel URL'si. Çoğu yerleşik sabit uç nokta uyumsuzluğu yok sayar; çakışma güvenli anahtar önayarları aynı adlı daha eski özel bir hedefi korur. |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, jitterMs?, models? }` | İstemci tarafı istek başlangıç aralığı. `jitterMs` yalnızca 0–60.000 ms pozitif rastgele gecikme ekler; model kuralları yalnızca gecikmeyi artırabilir. |
+| `tlsProfile?` | `"antigravity-browser"` | Yalnızca Google Antigravity Cloud Code Assist kanonik ana bilgisayarları için deneysel, resmi olmayan TLS/HTTP2 uyumluluk profili. Kullanım şartlarına uyumu veya askıya alınmayı önlemeyi garanti etmez, trafiği daha ayırt edilebilir kılabilir ve başlatma başarısız olursa Bun'a döner. |
 | `responsesPath?` | `string` | Anahtar kimlik doğrulamalı `openai-responses` istekleri için göreli kaynak yolu. `/` ile başlamalı ve şema, sorgu veya parça içermemelidir. |
 | `supportsServiceTier?` | `boolean` | Üç durumlu `service_tier` yeteneği. `true`: hızlı mod enjekte edebilir ve arayan değerleri korunur. `false`: alan kaldırılır ve asla enjekte edilmez (desteklemediği belgelenen yukarı akış bunu almamalıdır). Yok: sağlayıcı sınıflandırılmamıştır — arayan tarafından sağlanan değerler dokunulmadan korunur ve hızlı mod asla enjekte etmez. Kayıt defteri kurallı OpenAI'yi (`true`), DeepSeek'i ve Volcengine Ark'ı (`false`) sınıflandırır; bunu yalnızca katmanları gerçekten destekleyen özel ağ geçitleri için açıkça ayarlayın. |
 | `preserveResponsesReasoningContent?` | `boolean` | Düz metin akıl yürütme içeriğini boşaltmak yerine (boşaltma ChatGPT arka ucunun kuralıdır) tekrarlanan Responses akıl yürütme öğelerinde tutun. DeepSeek gibi sözleşmesi akıl yürütme tekrarını kabul eden yukarı akışlar için etkinleştirin. Proxy tarafından basılan `ocxr1` zarfları her zaman kaldırılır. |
@@ -479,4 +481,3 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
-

@@ -2951,6 +2951,32 @@ describe("provider management validation", () => {
     expect(raw).not.toContain("must-not-leak");
   });
 
+  test("PATCH /api/providers persists the validated Antigravity TLS profile", async () => {
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          authMode: "oauth",
+          googleMode: "cloud-code-assist",
+        },
+      },
+    };
+    const request = new Request("http://127.0.0.1/api/providers?name=google-antigravity", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tlsProfile: "antigravity-browser" }),
+    });
+    const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {});
+    expect(response?.status).toBe(200);
+    expect(liveConfig.providers["google-antigravity"]?.tlsProfile).toBe("antigravity-browser");
+  });
+
   test("GET /api/providers clears active TLS status when the profile is removed", async () => {
     const profiled = {
       adapter: "google" as const,
