@@ -1,4 +1,5 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { redactSecretString } from "../lib/redact";
 import { modelRecordValue } from "../reasoning-effort";
 import {
   isWirePinnedModel,
@@ -128,7 +129,7 @@ export function providerEmptyToolOutputConfigError(name: string, provider: unkno
   const raw = provider as Record<string, unknown> | null | undefined;
   const value = raw === null || raw === undefined ? undefined : raw.annotateEmptyToolOutputs;
   if (value !== undefined && typeof value !== "boolean") {
-    return `provider ${name} annotateEmptyToolOutputs must be a boolean`;
+    return `provider ${JSON.stringify(redactSecretString(name))} annotateEmptyToolOutputs must be a boolean`;
   }
   return null;
 }

@@ -188,6 +188,17 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "annotateEmptyToolOutputs")) {
+    const value = rawBody.annotateEmptyToolOutputs;
+    if (value === null) {
+      delete next.annotateEmptyToolOutputs;
+    } else if (typeof value === "boolean") {
+      next.annotateEmptyToolOutputs = value;
+    } else {
+      return { error: "annotateEmptyToolOutputs must be a boolean or null" };
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "xaiResponsesOptIn")) {
     if (name !== "xai") return { error: "xaiResponsesOptIn is valid only for provider xai" };
     if (typeof rawBody.xaiResponsesOptIn !== "boolean") {

@@ -369,6 +369,60 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider PATCH sets, clears, and rejects annotateEmptyToolOutputs", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const reject = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: "yes" }),
+      });
+      expect(reject.status).toBe(400);
+      expect(await reject.json()).toMatchObject({ error: "annotateEmptyToolOutputs must be a boolean or null" });
+
+      const enable = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: true }),
+      });
+      expect(enable.status).toBe(200);
+      expect(loadConfig().providers.relay?.annotateEmptyToolOutputs).toBe(true);
+
+      const disable = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: false }),
+      });
+      expect(disable.status).toBe(200);
+      expect(loadConfig().providers.relay?.annotateEmptyToolOutputs).toBe(false);
+
+      const clear = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: null }),
+      });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("annotateEmptyToolOutputs");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider management rejects modelCosts rows with extra fields", () => {
     const error = providerManagementConfigError("blsc", {
       adapter: "openai-chat",
