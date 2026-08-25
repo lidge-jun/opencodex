@@ -256,6 +256,45 @@ describe("Antigravity live model discovery", () => {
     }
   });
 
+  test("legacy Antigravity config without authMode still ignores stale project without a snapshot project", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-legacy-discovery-"));
+    process.env.OPENCODEX_HOME = home;
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3_600_000,
+          },
+        }],
+      },
+    }));
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return Response.json({ models: {} });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels(configWith("google-antigravity", {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        project: "stale-configured-project",
+        liveModels: true,
+        models: ["configured-only"],
+      }));
+
+      expect(fetches).toBe(0);
+      expect(models.filter(model => model.provider === "google-antigravity").map(model => model.id))
+        .toEqual(["configured-only"]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("does not register wire mappings from a stale CCA discovery", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-stale-discovery-"));
     process.env.OPENCODEX_HOME = home;

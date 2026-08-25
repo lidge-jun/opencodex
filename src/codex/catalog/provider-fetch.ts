@@ -1176,8 +1176,10 @@ async function fetchProviderModelsWithAuth(
     clearProviderDiscoveryStatus(name);
     return observed(configured, "authoritative");
   }
+  const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
+  const antigravityOAuth = isAntigravityOAuthProvider(name, prov);
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? prov.authMode === "oauth" && effectiveGoogleMode(name, prov) === "cloud-code-assist"
+    ? antigravityOAuth && cloudCodeAssist
       ? await getValidAccessTokenSnapshot(name)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
@@ -1261,14 +1263,12 @@ async function fetchProviderModelsWithAuth(
       "degraded",
     );
   }
-  if (prov.authMode === "oauth" && !apiKey) {
+  if ((prov.authMode === "oauth" || antigravityOAuth) && !apiKey) {
     // No usable token (logged out, or account marked needsReauth). Still surface the
     // configured static catalog so the GUI Models tab / rail counts are not empty —
     // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
     return observed(configured, "degraded");
   }
-  const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
-  const antigravityOAuth = isAntigravityOAuthProvider(name, prov);
   if (antigravityOAuth && !cloudCodeAssist) return observed(configured, "degraded");
   const project = antigravityOAuth ? auth.oauthSnapshot?.projectId : prov.project ?? auth.oauthSnapshot?.projectId;
   if (cloudCodeAssist && !project) return observed(configured, "degraded");

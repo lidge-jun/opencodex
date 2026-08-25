@@ -2651,8 +2651,9 @@ async function handleResponsesInner(
       return formatErrorResponse(400, "invalid_request_error", antigravityConfigError);
     }
   }
-  const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro" || isAntigravityOAuth)
-    && route.provider.authMode === "oauth";
+  const isOAuth401ReplayProvider = isAntigravityOAuth
+    || ((route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro")
+      && route.provider.authMode === "oauth");
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
@@ -2682,7 +2683,7 @@ async function handleResponsesInner(
       promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
     });
   }
-  if (route.provider.authMode === "oauth") {
+  if (route.provider.authMode === "oauth" || isAntigravityOAuth) {
     try {
       if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
         const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config);

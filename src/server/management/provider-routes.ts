@@ -772,7 +772,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
       : undefined;
     const apiKey = snapshot?.accessToken ?? await resolveModelsAuthToken(name, prov);
-    if (prov.authMode === "oauth" && !apiKey) {
+    if ((prov.authMode === "oauth" || antigravity) && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
     if (prov.adapter === "cursor") {

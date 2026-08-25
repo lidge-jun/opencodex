@@ -149,7 +149,8 @@ export function isAntigravityOAuthProvider(
   providerName: string,
   provider: Pick<OcxProviderConfig, "authMode">,
 ): boolean {
-  return providerName === "google-antigravity" && provider.authMode === "oauth";
+  return providerName === "google-antigravity"
+    && (provider.authMode === undefined || provider.authMode === "oauth");
 }
 
 /** Same-name Antigravity rows are OAuth destinations even when legacy config omitted authMode. */
