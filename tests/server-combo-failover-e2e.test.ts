@@ -2886,6 +2886,36 @@ describe("cursor conversation continuity across store:false chains", () => {
     expect(seen[1]).toBe(seen[0]);
   });
 
+  test("Desktop session and thread headers retain Cursor ownership without a parent-thread header", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postDesktopTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "session-id": "desktop-session-owner",
+        "thread-id": "desktop-thread-owner",
+      },
+      body: JSON.stringify({
+        model: "cursortest/grok-4.5",
+        input,
+        stream: false,
+        store: false,
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postDesktopTurn("start")).status).toBe(200);
+    expect((await postDesktopTurn([
+      { role: "user", content: "start" },
+      { role: "assistant", content: "working" },
+      { role: "user", content: "continue" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
   test("native composer reuses conversationId across store:false turns via parent thread id", async () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);

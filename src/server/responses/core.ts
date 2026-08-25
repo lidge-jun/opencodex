@@ -2185,6 +2185,7 @@ async function handleResponsesInner(
     (body as { input?: unknown } | undefined)?.input,
   );
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
@@ -2254,6 +2255,7 @@ async function handleResponsesInner(
         parsed._reasoningReplayScope = { clientThreadId: normalizedCacheKey };
       }
     }
+    if (cursorClientThreadId) parsed._cursorClientThreadId = cursorClientThreadId;
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
       return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
@@ -2474,6 +2476,7 @@ async function handleResponsesInner(
             "_providerContinuationOwner",
             "_cursorConversationId",
             "_clientThreadId",
+            "_cursorClientThreadId",
             "_reasoningReplayScope",
             "_cursorIsolateConversation",
           ];

@@ -298,7 +298,7 @@ export function cursorConversationIdFromClientThread(threadId: string, identityS
 
 /**
  * Resolve the Cursor conversation id for this turn.
- * Priority: force-fresh → isolate helper → remembered → thread override → client thread → random.
+ * Priority: force-fresh → isolate helper → remembered → client thread owner → random.
  * Never use OpenAI Responses `previous_response_id` (resp_*) or shared `prompt_cache_key`
  * (cache-cohort fingerprint, not conversation ownership).
  */
@@ -310,13 +310,17 @@ export function resolveCursorConversationId(
   if (options.forceFreshConversation === true) return generatedCursorConversationId();
   if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
   if (parsed._cursorConversationId) return parsed._cursorConversationId;
-  const threadId = parsed._clientThreadId?.trim();
+  const threadId = cursorClientThreadOwner(parsed);
   if (threadId) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
     if (recovered) return recovered;
     return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
   }
   return generatedCursorConversationId();
+}
+
+export function cursorClientThreadOwner(parsed: OcxParsedRequest): string | undefined {
+  return parsed._clientThreadId?.trim() || parsed._cursorClientThreadId?.trim() || undefined;
 }
 
 function updateFramed(hash: ReturnType<typeof createHash>, value: string): void {
@@ -361,6 +365,7 @@ function lookupPrefixSnapshot(
   const modelId = cursorCheckpointModelAffinityId(request.modelId);
   for (let covered = parsed.context.messages.length; covered >= 1; covered--) {
     const snapshot = getCursorCheckpointForPrefix({
+      conversationId: request.conversationId,
       prefixDigest: cursorCoveredPrefixDigest(parsed, covered),
       systemDigest,
       coveredMessageCount: covered,
@@ -404,10 +409,14 @@ function resolveCursorCheckpoint(
     snapshot = getCursorCheckpoint(ref);
     if (!snapshot) return { reason: "expired" };
   } else {
+    if (
+      isolated
+      || (!parsed._cursorConversationId && !cursorClientThreadOwner(parsed))
+    ) return { reason: "missing_ref" };
     snapshot = lookupPrefixSnapshot(parsed, request, identityScope);
     if (!snapshot) return { reason: "missing_ref" };
   }
-  if (!isolated && snapshot.conversationId !== request.conversationId && ref) {
+  if (snapshot.conversationId !== request.conversationId) {
     return { reason: "conversation_changed" };
   }
   if (snapshot.identityScope !== identityScope) return { reason: "identity_changed" };

@@ -9,6 +9,7 @@ import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import {
   createCursorRequest,
+  cursorClientThreadOwner,
   cursorCoveredPrefixDigest,
   cursorInstructionDigest,
 } from "./cursor/request-builder";
@@ -265,12 +266,13 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           request = createCursorRequest(_parsed, { forceFreshConversation: true });
           rekeyContextUsage(failedConversationId, request.conversationId);
           _parsed._cursorConversationId = request.conversationId;
-          // Persist recovery for store:false clients that only send a parent thread id, so the
-          // next turn does not recompute the stale deterministic thread hash. Isolated helper /
-          // compaction turns must not park their throwaway id under the parent thread key.
-          if (_parsed._clientThreadId && _parsed._cursorIsolateConversation !== true) {
+          // Persist recovery for store:false clients that send any stable Cursor thread owner, so
+          // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
+          // compaction turns must not park their throwaway id under the parent or Desktop owner.
+          const threadOwner = cursorClientThreadOwner(_parsed);
+          if (threadOwner && _parsed._cursorIsolateConversation !== true) {
             rememberCursorThreadConversation(
-              _parsed._clientThreadId,
+              threadOwner,
               request.conversationId,
               _parsed._cursorIdentityScope,
             );
