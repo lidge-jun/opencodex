@@ -58,6 +58,7 @@ jobs:
       - name: Check base ancestry
         run: |
           set -eu
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           if ! git merge-base --is-ancestor "origin/${{ github.base_ref }}" HEAD; then
             echo "The pull request head is not a descendant of origin/${{ github.base_ref }}"
             echo "Recovery: merge \`origin/dev\` into the sync branch before retrying."
