@@ -237,6 +237,11 @@ describe("headless GUI parity CLI", () => {
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],
+      // #2463: both read and write reach the CLI. `ocx alias list` reads /api/aliases,
+      // `ocx alias defaults` writes /api/default-aliases, and the per-provider writes sit
+      // under /api/providers/:name/alias, already covered by the /api/providers prefix.
+      ["/api/aliases", "ocx alias"],
+      ["/api/default-aliases", "ocx alias defaults"],
       // GUI-only for now: the overview card switches for Claude Code and Grok.
       // Their effect is already reachable from the CLI by other names —
       // `ocx grok apply` regenerates the fence and `ocx stop` strips it, and
@@ -767,4 +772,3 @@ describe("#2566 per-account quota in ocx account list", () => {
     expect(formatAccountTable([row({ quotaUnavailable: true })] as never, true)).toContain("unavailable");
   });
 });
-

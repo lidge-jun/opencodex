@@ -40,7 +40,12 @@ export function projectConfigRebaseProvenance(config: OcxConfig): OcxConfig {
   for (const key of [...deleted]) {
     if (Object.hasOwn(record, key) && record[key] !== undefined) deleted.delete(key);
   }
-  const projected = structuredClone(config);
+  // A SHALLOW copy, deliberately. A provider entry may carry a non-cloneable value — a test
+  // fixture injects its own `fetch`, and `structuredClone` throws DataCloneError on a function,
+  // which took every provider-probe and CLI-parity suite down. Only the provenance key is
+  // rewritten here, so nothing below the top level needs to be copied at all; the deep clone
+  // was doing work this projection never asked for.
+  const projected = { ...config };
   if (deleted.size === 0) delete projected.configRebaseProvenance;
   else projected.configRebaseProvenance = {
     version: 1,
