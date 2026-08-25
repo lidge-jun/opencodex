@@ -433,3 +433,50 @@ describe("ocx models custom slash ids", () => {
     }
   });
 });
+
+describe("#2491 the removal selector uses the shared equivalence relation", () => {
+  /**
+   * `slugEquals` compared the raw and encoded spellings of ONE id, so a selector written in
+   * the NATIVE slash form matched only the slash row while the encoded form matched both.
+   * Catalog filtering and persisted sync had already agreed on the collision class through
+   * `slugEquivalenceKey`; this command disagreed with both on the same config.
+   */
+  test("a native-slash selector sees the same collision the encoded one does", () => {
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "test", modelId: "openai/gpt-5.5" },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "test", modelId: "openai-gpt-5.5" },
+      ],
+    });
+    try {
+      // Before: this deleted the slash row outright, because slugEquals matched only it.
+      const result = runCli(["models", "remove", "test/openai/gpt-5.5", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ambiguous");
+      // Refusing is the right default for a destructive command: nothing was removed.
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unambiguous slash selector still removes its row", () => {
+    // Widening the relation must not make ordinary removal ambiguous.
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "test", modelId: "openai/gpt-5.5" },
+        { id: "33333333-3333-4333-8333-333333333333", provider: "test", modelId: "unrelated" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "remove", "test/openai/gpt-5.5", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels.map((m: { modelId: string }) => m.modelId)).toEqual(["unrelated"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

@@ -11,7 +11,7 @@ import {
   isDeclaredReasoningEffort,
   modelRecordValue,
 } from "../reasoning-effort";
-import { encodedModelIdCollides, routedSlug, slugEquals } from "../providers/slug-codec";
+import { encodedModelIdCollides, resolveSlugSelection, routedSlug } from "../providers/slug-codec";
 import { knownModelIdsForProvider } from "../router";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
@@ -277,11 +277,17 @@ async function handleCustomRemove(args: string[]): Promise<void> {
 
   const config = loadConfig();
   const existing = config.customModels ?? [];
-  const matchingIndexes = existing.flatMap((model, index) => (
-    target.includes("/")
-      ? slugEquals(target, model.provider, model.modelId)
-      : model.id === target
-  ) ? [index] : []);
+  // Slug matching goes through the shared resolver so this command sees the same collision
+  // class catalog filtering and persisted sync see (#2491). `slugEquals` compares the raw and
+  // encoded spellings of ONE id, so a selector written in the native slash form matched only
+  // that row while the dash form matched both — the two relations disagreed on the same
+  // config. Removal stays exact-or-refuse: an ambiguous selector still aborts below, which is
+  // the right default for a destructive command.
+  const matchingIndexes = existing.flatMap((model, index) => {
+    if (!target.includes("/")) return model.id === target ? [index] : [];
+    const resolved = resolveSlugSelection(model.provider, target, [model.modelId]);
+    return resolved.matched.length > 0 ? [index] : [];
+  });
   if (matchingIndexes.length === 0) fail(`custom model "${target}" not found`);
   if (matchingIndexes.length > 1) {
     fail(`custom model selector "${target}" is ambiguous; use the custom model id`);
