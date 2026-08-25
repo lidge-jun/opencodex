@@ -650,25 +650,30 @@ describe("claude outbound SSE", () => {
   });
 
   test("unread pre-output keepalives preserve budget for semantic output", async () => {
+    const HEARTBEAT_COUNT = 100;
+    const MAX_BUFFERED_PINGS = 10;
+    const UNREAD_MS = 100;
     const encoder = new TextEncoder();
     const upstream = new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(encoder.encode(sse("response.created", { response: {} })));
-        for (let index = 0; index < 100; index++) {
+        for (let index = 0; index < HEARTBEAT_COUNT; index++) {
           controller.enqueue(encoder.encode(sse("response.heartbeat", {})));
         }
-        await new Promise(r => setTimeout(r, 75));
+        await new Promise(r => setTimeout(r, UNREAD_MS));
         controller.enqueue(encoder.encode(sse("response.output_text.delta", { delta: "x" })));
         controller.enqueue(encoder.encode(sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })));
         controller.close();
       },
     });
     const budget = createTestTranslatorBudget({ maxTurnBytes: 2 * 1024 });
-    const output = responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: 5, translatorBudget: budget });
-    await new Promise(r => setTimeout(r, 100));
+    const output = responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: 1, translatorBudget: budget });
+    await new Promise(r => setTimeout(r, UNREAD_MS + 25));
 
     const events = await collectEvents(output);
-    expect(events.filter(event => event.name === "ping")).toHaveLength(2);
+    // The exact number admitted depends on the runtime's stream queue size. A generous
+    // ceiling still catches either an unguarded heartbeat burst or the 1 ms timer.
+    expect(events.filter(event => event.name === "ping").length).toBeLessThanOrEqual(MAX_BUFFERED_PINGS);
     expect(events.some(event => event.name === "error")).toBe(false);
     expect(events.at(-1)!.name).toBe("message_stop");
     const snapshot = budget.snapshot();

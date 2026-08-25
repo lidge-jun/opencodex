@@ -2,8 +2,9 @@
  * Claude Code outbound: internal /v1/responses output -> Anthropic Messages API shapes.
  *
  * Wire contract pinned in devlog/260711_claude_inbound/003_evidence.md (all Tier 2):
- *  - SSE order: message_start -> (content_block_start -> deltas -> content_block_stop)*
- *    -> message_delta -> message_stop; any number of `ping`.
+ *  - Transport-only `ping` events may appear at any point, including before
+ *    message_start. Semantic framing stays message_start ->
+ *    (content_block_start -> deltas -> content_block_stop)* -> message_delta -> message_stop.
  *  - thinking blocks get thinking_delta(s) then ONE synthetic signature_delta just
  *    before content_block_stop (CCR precedent: Claude Code does not verify signatures).
  *  - message_delta.usage is cumulative; message_start embeds a full message snapshot.
