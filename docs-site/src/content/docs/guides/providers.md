@@ -144,9 +144,11 @@ A custom `openai-chat` provider can opt in when its upstream documents support f
 }
 ```
 
-This setting forwards only a key supplied by the caller; it does not create one. Leave it omitted
-or set it to `false` for incompatible upstreams, and disable it if a strict gateway returns an HTTP
-400 unknown-field error.
+This setting forwards only a key supplied by the caller; it does not create one. Preserve the rest
+of the provider configuration when adding it, then reload or restart opencodex. Validate caching by
+comparing the initial cold request with later requests in the same conversation. Leave the option
+omitted or set it to `false` for incompatible upstreams, and disable or remove it if a strict
+gateway returns an HTTP 400 unknown-field error.
 
 You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
 
