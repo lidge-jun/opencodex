@@ -11,6 +11,13 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { providerQuotaLine } from "./account-extended";
+import type { ProviderQuotaReportDto } from "./account-api";
+
+interface ProviderQuotasDto {
+  generatedAt?: number;
+  reports?: ProviderQuotaReportDto[];
+}
 
 const USAGE = `Usage:
   ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->]
@@ -107,8 +114,15 @@ async function quota(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const wantsJson = takeFlag(args, "--json");
   const refresh = takeFlag(args, "--refresh");
   rejectArgs(args, USAGE);
-  const result = await runtimeRequest(`/api/provider-quotas${refresh ? "?refresh=1" : ""}`, {}, deps);
-  printData(result, wantsJson, summaryLines(result));
+  const result = await runtimeRequest<ProviderQuotasDto>(`/api/provider-quotas${refresh ? "?refresh=1" : ""}`, {}, deps);
+  // `summaryLines` is a depth-1 flattener: it renders a non-scalar array as "N item(s)", which
+  // collapsed the whole report to a count and made the command useless for its stated purpose
+  // (#2565). Render one line per report with the same formatter `ocx account refresh` uses.
+  const reports = Array.isArray(result?.reports) ? result.reports : [];
+  const lines = reports.length > 0
+    ? reports.map(report => providerQuotaLine(report.provider, report))
+    : ["no quota reports available"];
+  printData(result, wantsJson, lines);
 }
 
 async function presets(argv: string[], deps: RuntimeApiDeps): Promise<void> {

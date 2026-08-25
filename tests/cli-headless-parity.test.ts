@@ -9,6 +9,7 @@ import { handleConfigCommand } from "../src/cli/config-command";
 import { handleClientIntegrationCommand, handleGrokCommand } from "../src/cli/integrations";
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
+import { providerQuotaLine } from "../src/cli/account-extended";
 
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
@@ -689,5 +690,43 @@ describe("headless GUI parity CLI", () => {
       else process.env.OPENCODEX_HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("#2565 ocx provider quota renders bars, not a count", () => {
+  /**
+   * `quota()` rendered the response through `summaryLines()`, a depth-1 flattener that emits
+   * "N item(s)" for a non-scalar array. Every fetched report was discarded and the default
+   * invocation printed only `generatedAt` and `reports: 5 item(s)`.
+   */
+  const report = (provider: string, quota: Record<string, unknown>) => ({ provider, quota });
+
+  test("one line per report, using the same formatter as ocx account refresh", () => {
+    const line = providerQuotaLine("anthropic", report("anthropic", {
+      fiveHourPercent: 9,
+      fiveHourResetAt: 1_787_690_999_802,
+      weeklyPercent: 45,
+    }) as never);
+    expect(line).toContain("anthropic");
+    expect(line).toContain("5h 9%");
+    expect(line).toContain("weekly 45%");
+    expect(line).toContain("resets ");
+  });
+
+  test("custom windows keep their upstream labels", () => {
+    const line = providerQuotaLine("cursor", report("cursor", {
+      monthlyPercent: 0.69,
+      customWindows: [
+        { label: "First-party models", percent: 0.77 },
+        { label: "API usage", percent: 0.19 },
+      ],
+    }) as never);
+    expect(line).toContain("monthly 0.69%");
+    expect(line).toContain("First-party models 0.77%");
+    expect(line).toContain("API usage 0.19%");
+  });
+
+  test("a report with no windows still names its provider", () => {
+    expect(providerQuotaLine("plain", report("plain", {}) as never)).toBe("plain");
   });
 });
