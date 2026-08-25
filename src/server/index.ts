@@ -1034,6 +1034,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           : [];
         const disabledNatives = disabledNativeSlugs(config);
         const disabledModels = new Set(config.disabledModels ?? []);
+        const exactComboSlugs = exactComboCatalogSlugs(config);
         const shadowedNativeSlugs = configuredNativeAliasSlugs(config);
         const suppressedBareNativeSlugs = new Set([
           ...desktopAllowlistSuppressedNativeSlugs(config),
@@ -1119,7 +1120,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             config.subagentModels,
             websocketsEnabled(config),
             maMode as "v1" | "default" | "v2",
-            exactComboCatalogSlugs(config),
+            exactComboSlugs,
             accountSelectors,
             suppressedBareNativeSlugs,
             new Set(),
@@ -1197,6 +1198,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...visibleNatives.map(id => nativeModelRow(id)),
           ...visibleAccountNatives.map(({ id, metadataId }) => nativeModelRow(id, metadataId)),
           ...await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
+            const publicId = m.alias ?? `${m.provider}/${m.id}`;
+            const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
             const provider = config.providers[m.provider];
             const effective = provider
               ? (await import("../providers/default-aliases")).effectiveModelAliases(
@@ -1206,10 +1209,14 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
                 ).get(m.id)
               : undefined;
             return {
-              id: m.alias ?? `${m.provider}/${m.id}`,
+              id: publicId,
               object: "model",
               created: 0,
-              owned_by: m.owned_by ?? m.provider,
+              // This endpoint is an OpenAI-compatible inbound contract. Some clients use
+              // owned_by as an adapter selector, so a virtual combo must name that wire
+              // adapter rather than the internal catalog authority marker.
+              owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
+              ...(isCombo ? { is_combo: true } : {}),
               ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
               ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             };

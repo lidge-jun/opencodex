@@ -809,7 +809,7 @@ describe("server combo failover 030 activation matrix", () => {
         const response = await fetch(new URL("/v1/models", server.url));
         expect(response.status).toBe(200);
         const payload = await response.json() as {
-          data: Array<{ id: string; owned_by: string }>;
+          data: Array<{ id: string; owned_by: string; is_combo?: boolean }>;
         };
         return payload.data;
       };
@@ -820,7 +820,7 @@ describe("server combo failover 030 activation matrix", () => {
       });
 
       expect((await publicRows()).filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "combo" },
+        { id: selector, object: "model", created: 0, owned_by: "openai", is_combo: true },
       ]);
 
       const renamed = await updateAlias("fast-chat");
@@ -830,7 +830,7 @@ describe("server combo failover 030 activation matrix", () => {
         { id: selector, object: "model", created: 0, owned_by: "deepseek" },
       ]);
       expect(renamedRows.filter(model => model.id === "fast-chat")).toEqual([
-        { id: "fast-chat", object: "model", created: 0, owned_by: "combo" },
+        { id: "fast-chat", object: "model", created: 0, owned_by: "openai", is_combo: true },
       ]);
 
       const restored = await updateAlias(selector);
@@ -841,7 +841,7 @@ describe("server combo failover 030 activation matrix", () => {
       expect(deletedRows.filter(model => model.id === selector)).toEqual([
         { id: selector, object: "model", created: 0, owned_by: "deepseek" },
       ]);
-      expect(deletedRows.some(model => model.owned_by === "combo")).toBe(false);
+      expect(deletedRows.some(model => model.is_combo === true)).toBe(false);
     } finally {
       await server.stop(true);
     }
@@ -861,10 +861,10 @@ describe("server combo failover 030 activation matrix", () => {
       const response = await fetch(new URL("/v1/models", server.url));
       expect(response.status).toBe(200);
       const payload = await response.json() as {
-        data: Array<{ id: string; owned_by: string }>;
+        data: Array<{ id: string; owned_by: string; is_combo?: boolean }>;
       };
       expect(payload.data.filter(model => model.id.startsWith("a/vendor")).sort((a, b) => a.id.localeCompare(b.id))).toEqual([
-        { id: "a/vendor-model", object: "model", created: 0, owned_by: "combo" },
+        { id: "a/vendor-model", object: "model", created: 0, owned_by: "openai", is_combo: true },
         { id: "a/vendor/model", object: "model", created: 0, owned_by: "a" },
       ]);
     } finally {
