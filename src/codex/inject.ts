@@ -19,6 +19,7 @@ import {
   CodexWriteConflictError,
   DEFAULT_INJECT_LOCK_TIMEOUT_MS,
   recomputeInjectWitness,
+  recordCodexNativeTransactionProvenance,
   restoreCodexPreImages,
 } from "./inject-coordination";
 import { readIntegrationRecord } from "./integration-record";
@@ -1020,6 +1021,7 @@ export async function injectCodexConfig(
         }
         return {
           kind: "applied" as const,
+          preImages,
           /*
            * The receipt the terminal update matches on. The transition commits
            * when the callback returns, so this pair is what the post-job
@@ -1037,6 +1039,10 @@ export async function injectCodexConfig(
     if (coordinated.status !== "acquired") {
       return codexInjectLockOutcome(coordinated);
     }
+    recordCodexNativeTransactionProvenance(
+      coordinated.value.preImages,
+      coordinated.value.receipt.currentTxId,
+    );
     transitionReceipt = coordinated.value.receipt;
   }
   // Legacy mode still forward-tags history so re-tagged threads stay listable. Design B needs
@@ -1591,6 +1597,7 @@ export async function restoreNativeCodexAsync(
         }
         return {
           config: restored,
+          preImages,
           receipt: {
             nativeGeneration: ctx.expectation.nativeAfter,
             currentTxId: ctx.expectation.txId,
@@ -1609,6 +1616,10 @@ export async function restoreNativeCodexAsync(
           : `Codex configuration was not restored: ${coordinated.message}`,
       };
     } else {
+      recordCodexNativeTransactionProvenance(
+        coordinated.value.preImages,
+        coordinated.value.receipt.currentTxId,
+      );
       config = coordinated.value.config;
       transitionReceipt = coordinated.value.receipt;
     }

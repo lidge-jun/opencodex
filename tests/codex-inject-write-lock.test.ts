@@ -163,6 +163,11 @@ describe("the lock is on the production path", () => {
 
   test("a clean first apply coordinates and records a transition", () => {
     seedNative();
+    mkdirSync(join(opencodexHome, "integrations"), { recursive: true });
+    writeFileSync(join(opencodexHome, "integrations", "codex.json"), JSON.stringify({
+      version: 1,
+      futureSection: { owner: "newer-writer" },
+    }));
     const result = runInject(10100);
     expect(result.success).toBeTrue();
 
@@ -184,6 +189,61 @@ describe("the lock is on the production path", () => {
     // Guessing null passes on a fresh machine and fails on a real one, so the
     // id being present is part of the claim.
     expect(typeof row.state?.currentTxId).toBe("string");
+
+    const record = JSON.parse(
+      readFileSync(join(opencodexHome, "integrations", "codex.json"), "utf8"),
+    ) as {
+      futureSection?: unknown;
+      provenance?: { entries?: Array<{ txId?: string; artifact?: { kind?: string } }> };
+    };
+    expect(record.futureSection).toEqual({ owner: "newer-writer" });
+    const matching = record.provenance?.entries?.filter(entry =>
+      entry.txId === row.state?.currentTxId) ?? [];
+    expect(matching.map(entry => entry.artifact?.kind).sort()).toEqual([
+      "config",
+      "generated-profile",
+      "injection-journal",
+    ]);
+  });
+
+  test("a provenance append failure does not undo an admitted transaction", () => {
+    seedNative();
+    expect(runInject(10100).success).toBeTrue();
+
+    const readTransition = () => parseChildJson<{
+      kind?: string;
+      state?: { nativeGeneration?: number; currentTxId?: string | null };
+    }>(runChild(["--eval", `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `], {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
+    }), "read transition state around failed provenance append");
+    const admitted = readTransition();
+    expect(typeof admitted.state?.currentTxId).toBe("string");
+
+    writeFileSync(join(opencodexHome, "integrations", "codex.json"), "{ malformed", "utf8");
+    const append = parseChildJson<{ kind?: string }>(runChild(["--eval", `
+      const {
+        captureCodexPreImages,
+        recordCodexNativeTransactionProvenance,
+      } = require("./src/codex/inject-coordination");
+      console.log(JSON.stringify(recordCodexNativeTransactionProvenance(
+        captureCodexPreImages(),
+        process.env.OCX_TEST_TX_ID,
+      )));
+    `], {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
+      OCX_TEST_TX_ID: admitted.state!.currentTxId!,
+    }), "failed provenance append");
+    expect(append.kind).toBe("invalid");
+    expect(readTransition()).toEqual(admitted);
+    expect(readFileSync(join(opencodexHome, "integrations", "codex.json"), "utf8"))
+      .toBe("{ malformed");
   });
 
   /**
