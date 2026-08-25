@@ -1,7 +1,9 @@
 import {
   CANONICAL_EFFORT_SUFFIXES,
   cursorModelEffortLadder,
+  cursorModelHasEffortTiers,
   cursorWireModelIdWithEffort,
+  CURSOR_THINKING_MODEL_IDS,
 } from "./effort-map";
 
 export interface CursorModelInfo {
@@ -261,6 +263,17 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // picker. 3.6 is the only Cursor model with a `minimal` rung.
   { id: "gemini-3.6-flash", contextWindow: CONTEXT_GEMINI, supportsReasoningEffort: true },
   { id: "gemini-3.7-flash", contextWindow: CONTEXT_GEMINI, supportsReasoningEffort: true },
+
+  // Explicit-thinking variants (260825 live roster). Exposed as first-class ids the same way the
+  // Opus Fast families were in 831810c13: `isCursorModelAvailableForAccount` matches a base id
+  // against `{base}`, `{base}-{effort}` and the family's wire form, and none of those ever
+  // matched a `-thinking` id, so every one of these was invisible in the routed catalog.
+  // Suffix ORDER differs per family; `cursorWireModelIdWithEffort` owns that mapping.
+  ...CURSOR_THINKING_MODEL_IDS.map(id => ({
+    id,
+    contextWindow: CONTEXT_200K,
+    supportsReasoningEffort: cursorModelHasEffortTiers(id),
+  })),
 
   { id: "gpt-5-codex", contextWindow: CONTEXT_272K },
   { id: "gpt-5-fast", contextWindow: CONTEXT_272K },

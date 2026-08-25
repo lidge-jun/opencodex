@@ -38,6 +38,20 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // listing it here is also what admits the suffix into CANONICAL_EFFORT_SUFFIXES below.
   "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
   "gemini-3.7-flash": ["low", "medium", "high"],
+  // Explicit-thinking variants (260825 live roster). Tiers are the rungs the wire actually
+  // lists for each family, which is not always the same set the non-thinking id carries:
+  // 4.6-opus thinks only at high/max, 4.5-opus only at high, 4.6-sonnet only at medium.
+  "claude-opus-5-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-5-thinking-fast": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-8-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-8-thinking-fast": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-7-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-opus-4-7-thinking-fast": ["low", "medium", "high", "xhigh", "max"],
+  "claude-sonnet-5-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-fable-5-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-4.6-opus-thinking": ["high", "max"],
+  "claude-4.5-opus-thinking": ["high"],
+  "claude-4.6-sonnet-thinking": ["medium"],
   // 260814 preemptive: glm-5.3 seeded ahead of Cursor's lineup update. Unlike 5.2, Z.AI folds
   // 5.3 efforts into low/high/max (docs.z.ai/devpack/latest-model), so `low` is a real tier.
   "glm-5.3": ["low", "high", "max"],
@@ -74,6 +88,37 @@ export const CANONICAL_EFFORT_SUFFIXES: ReadonlySet<string> = new Set([
 ]);
 
 const CANONICAL_CODEX_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * Cursor's explicit-thinking variants, exposed as first-class Codex model ids the same way the
+ * `-fast` families were.
+ *
+ * `source` is the id whose wire name the variant is built from; `order` is where Cursor puts the
+ * thinking marker relative to the effort rung. All three shapes exist in the live roster
+ * (GetUsableModels, 260825), and using the wrong one is rejected with ERROR_BAD_MODEL_NAME:
+ *
+ *   thinking-then-effort  claude-opus-5-thinking-high, claude-opus-5-thinking-high-fast
+ *   effort-then-thinking  claude-4.6-opus-high-thinking
+ *   bare                  claude-4.5-sonnet-thinking (the model has no effort rung)
+ */
+const CURSOR_THINKING_FAMILIES: Readonly<Record<string, { source: string; order: "thinking-then-effort" | "effort-then-thinking" | "bare" }>> = {
+  "claude-opus-5-thinking": { source: "claude-opus-5", order: "thinking-then-effort" },
+  "claude-opus-5-thinking-fast": { source: "claude-opus-5-fast", order: "thinking-then-effort" },
+  "claude-opus-4-8-thinking": { source: "claude-opus-4-8", order: "thinking-then-effort" },
+  "claude-opus-4-8-thinking-fast": { source: "claude-opus-4-8-fast", order: "thinking-then-effort" },
+  "claude-opus-4-7-thinking": { source: "claude-opus-4-7", order: "thinking-then-effort" },
+  "claude-opus-4-7-thinking-fast": { source: "claude-opus-4-7-fast", order: "thinking-then-effort" },
+  "claude-sonnet-5-thinking": { source: "claude-sonnet-5", order: "thinking-then-effort" },
+  "claude-fable-5-thinking": { source: "claude-fable-5", order: "thinking-then-effort" },
+  "claude-4.6-opus-thinking": { source: "claude-4.6-opus", order: "effort-then-thinking" },
+  "claude-4.5-opus-thinking": { source: "claude-4.5-opus", order: "effort-then-thinking" },
+  "claude-4.6-sonnet-thinking": { source: "claude-4.6-sonnet", order: "effort-then-thinking" },
+  "claude-4.5-sonnet-thinking": { source: "claude-4.5-sonnet", order: "bare" },
+  "claude-4-sonnet-thinking": { source: "claude-4-sonnet", order: "bare" },
+};
+
+/** Codex-facing ids for Cursor's explicit-thinking variants. */
+export const CURSOR_THINKING_MODEL_IDS = Object.keys(CURSOR_THINKING_FAMILIES);
 
 /**
  * Picker order, which is the canonical ladder plus the declared sentinels that rank below `low`.
@@ -146,6 +191,23 @@ export function cursorModelHasEffortTiers(baseModelId: string): boolean {
  * and send the base model plus requested_model parameters instead.
  */
 export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
+  const thinking = CURSOR_THINKING_FAMILIES[baseModelId];
+  if (thinking) {
+    const { source, order } = thinking;
+    // Cursor writes the thinking marker on either side of the effort depending on family
+    // (measured against GetUsableModels, 260825):
+    //   thinking-then-effort  claude-opus-5-thinking-high, ...-thinking-high-fast
+    //   effort-then-thinking  claude-4.6-opus-high-thinking
+    //   bare                  claude-4.5-sonnet-thinking (no effort rung at all)
+    // Sending the wrong order returns ERROR_BAD_MODEL_NAME, so this is not cosmetic.
+    if (order === "bare") return `${source}-thinking`;
+    if (order === "effort-then-thinking") return `${source}-${effortSuffix}-thinking`;
+    if (source.endsWith("-fast")) {
+      const stem = source.slice(0, -"-fast".length);
+      return `${stem}-thinking-${effortSuffix}-fast`;
+    }
+    return `${source}-thinking-${effortSuffix}`;
+  }
   if (baseModelId.endsWith("-fast")) {
     return `${baseModelId.slice(0, -"-fast".length)}-${effortSuffix}-fast`;
   }
