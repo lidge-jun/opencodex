@@ -1331,11 +1331,17 @@ export function bridgeToResponsesSSE(
           if (currentToolCall) failCurrentToolCall();
           if (currentWebSearch) closeCurrentWebSearch("failed", []);
           releasePendingWebSources();
+          const failure = responseError(
+            500,
+            "proxy_error",
+            redactSecretString(err instanceof Error ? err.message : String(err)),
+          );
           emit("response.failed", {
             response: {
               ...responseSnapshot("failed", finishedItems),
-              error: responseError(500, "proxy_error", err instanceof Error ? err.message : String(err)),
-              last_error: responseError(500, "proxy_error", err instanceof Error ? err.message : String(err)),
+              error: failure,
+              last_error: failure,
+              ...(isCyberPolicyCode(failure.code) ? { retryable: false } : {}),
             },
           });
           reportTerminal("failed");
