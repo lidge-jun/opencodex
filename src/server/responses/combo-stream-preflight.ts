@@ -4,6 +4,12 @@ import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
+// Keep retained object count proportional to the same byte budget used by the
+// shared SSE framer. Tiny or empty upstream reads must not bypass the byte cap.
+const COMBO_STREAM_PREFLIGHT_MAX_CHUNKS = Math.max(
+  1,
+  Math.ceil(COMBO_STREAM_PREFLIGHT_MAX_BYTES / 1024),
+);
 
 const PRE_OUTPUT_CONTROL_EVENTS = new Set([
   "response.created",
@@ -105,8 +111,8 @@ export type ComboStreamPreflightResult =
 /**
  * Buffer a combo child's downstream SSE only until the request becomes unsafe to
  * replay or reaches a terminal. This owns exactly one body reader. The aggregate
- * buffer is capped; hitting the cap commits the current target instead of growing
- * memory or guessing that replay is safe.
+ * buffer is capped by bytes and retained chunks; hitting either cap commits the
+ * current target instead of growing memory or guessing that replay is safe.
  */
 export async function preflightComboStreamResponse(
   response: Response,
@@ -161,7 +167,8 @@ export async function preflightComboStreamResponse(
         return { kind: "failed", response: failedTerminalResponse(response, failedPayload, logCtx) };
       }
       if (next.done || terminalStatus !== undefined || outputCommitted
-        || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES) {
+        || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES
+        || buffered.length >= COMBO_STREAM_PREFLIGHT_MAX_CHUNKS) {
         return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
       }
     }

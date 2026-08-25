@@ -11,6 +11,8 @@ const sse = (...payloads: unknown[]): Response => new Response(
   { headers: { "content-type": "text/event-stream" } },
 );
 
+const preflightChunkLimit = Math.max(1, Math.ceil(MAX_CLIENT_SSE_FRAME_BYTES / 1024));
+
 describe("combo stream preflight", () => {
   test("keeps only lifecycle preamble replayable and treats unknown output conservatively", () => {
     expect(comboStreamPayloadCommitsOutput({ type: "response.created" })).toBe(false);
@@ -89,5 +91,102 @@ describe("combo stream preflight", () => {
     expect(new TextDecoder().decode(first.value)).toBe(new TextDecoder().decode(preamble));
     expect(second.value).toBe(oversized);
     await reader.cancel();
+  });
+
+  test("commits at the retained-chunk boundary without reading one more chunk", async () => {
+    const prefix = Array.from(
+      { length: preflightChunkLimit },
+      (_, index) => Uint8Array.of((index % 251) + 1),
+    );
+    const tail = Uint8Array.of(252, 253);
+    let sourceIndex = 0;
+    let releaseTail: (() => void) | undefined;
+    let reportNextPull!: () => void;
+    const nextPull = new Promise<void>(resolve => { reportNextPull = resolve; });
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sourceIndex < prefix.length) {
+          controller.enqueue(prefix[sourceIndex++]!);
+          return;
+        }
+        reportNextPull();
+        return new Promise<void>(resolve => {
+          releaseTail = () => {
+            controller.enqueue(tail);
+            controller.close();
+            resolve();
+          };
+        });
+      },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+
+    const preflight = preflightComboStreamResponse(response, { model: "m1", provider: "a" });
+    const winner = await Promise.race([
+      preflight.then(result => ({ kind: "preflight" as const, result })),
+      nextPull.then(() => ({ kind: "next-pull" as const })),
+    ]);
+    if (winner.kind === "next-pull") {
+      releaseTail!();
+      const late = await preflight;
+      await late.response.body?.cancel();
+    }
+    expect(winner.kind).toBe("preflight");
+    if (winner.kind !== "preflight") return;
+
+    expect(winner.result.kind).toBe("accepted");
+    const reader = winner.result.response.body!.getReader();
+    for (let index = 0; index < prefix.length; index += 1) {
+      const next = await reader.read();
+      expect(next.done).toBe(false);
+      expect(next.value).not.toBe(prefix[index]);
+      expect(next.value).toEqual(prefix[index]);
+    }
+
+    const tailRead = reader.read();
+    await nextPull;
+    expect(releaseTail).toBeDefined();
+    releaseTail!();
+    const replayedTail = await tailRead;
+    expect(replayedTail.done).toBe(false);
+    expect(replayedTail.value).toBe(tail);
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  test("keeps a failed terminal authoritative at the retained-chunk boundary", async () => {
+    const encoder = new TextEncoder();
+    const comment = encoder.encode(":\n\n");
+    const failed = encoder.encode(`data: ${JSON.stringify({
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: { type: "server_error", code: "upstream_server_error", message: "busy" },
+        usage: { input_tokens: 9, output_tokens: 0, total_tokens: 9 },
+        provider_trace_id: "must-not-cross-the-combo-boundary",
+      },
+    })}\n\n`);
+    let sourceIndex = 0;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sourceIndex < preflightChunkLimit - 1) {
+          sourceIndex += 1;
+          controller.enqueue(comment);
+          return;
+        }
+        if (sourceIndex === preflightChunkLimit - 1) {
+          sourceIndex += 1;
+          controller.enqueue(failed);
+        }
+      },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+
+    const result = await preflightComboStreamResponse(response, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json();
+    expect(body).toMatchObject({
+      error: { code: "upstream_server_error", message: "busy" },
+      response: { usage: { input_tokens: 9, output_tokens: 0 } },
+    });
+    expect(JSON.stringify(body)).not.toContain("provider_trace_id");
   });
 });
