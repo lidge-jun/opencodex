@@ -125,7 +125,8 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 **対象:** デフォルトでは `api2.cursor.sh` の HTTP/2 Connect ストリーミング
 `agent.v1.AgentService/Run`。`upstreamHttpVersion: "http1.1"`（または `"h1"`）では Cursor の
 HTTP/1.1 互換トランスポートを使い、サーバー出力を `agent.v1.AgentService/RunSSE`、クライアント
-メッセージを `aiserver.v1.BidiService/BidiAppend` で送受信します。
+メッセージを `aiserver.v1.BidiService/BidiAppend` で送受信します。この設定は inference と live
+model discovery の両方に適用されます。
 **認証:** `provider.apiKey` または転送された authorization ヘッダーの Cursor OAuth/access token。
 
 - 通常の fetch/parse 経路の代わりに `runTurn` を使います。リクエスト、サーバーイベント、ツール引数、使用量 checkpoint、クライアントレスポンスは `cursor/gen/agent_pb.ts` の `@bufbuild/protobuf` スキーマでエンコードしたのち Connect メッセージとして framing します。

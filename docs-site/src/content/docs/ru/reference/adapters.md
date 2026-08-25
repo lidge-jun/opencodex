@@ -147,7 +147,8 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 **Назначение:** по умолчанию `agent.v1.AgentService/Run` Cursor поверх потокового HTTP/2 Connect
 на `api2.cursor.sh`. При `upstreamHttpVersion: "http1.1"` (или `"h1"`) используется совместимый
 транспорт HTTP/1.1: `agent.v1.AgentService/RunSSE` для вывода сервера и
-`aiserver.v1.BidiService/BidiAppend` для сообщений клиента.
+`aiserver.v1.BidiService/BidiAppend` для сообщений клиента. Эта настройка применяется и к
+inference, и к live model discovery.
 **Аутентификация:** Cursor OAuth/access token из `provider.apiKey` или из переданного заголовка
 authorization.
 

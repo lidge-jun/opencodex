@@ -142,7 +142,8 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 **대상:** 기본값은 `api2.cursor.sh`의 HTTP/2 Connect 스트리밍
 `agent.v1.AgentService/Run`입니다. `upstreamHttpVersion: "http1.1"` 또는 `"h1"`을 설정하면
 Cursor의 HTTP/1.1 호환 조합을 사용합니다. 서버 출력은 `agent.v1.AgentService/RunSSE`, 클라이언트
-메시지는 `aiserver.v1.BidiService/BidiAppend`로 전송합니다.
+메시지는 `aiserver.v1.BidiService/BidiAppend`로 전송합니다. 이 설정은 추론과 live model
+discovery에 모두 적용됩니다.
 **인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Cursor OAuth/access token.
 
 - 일반 fetch/parse 경로 대신 `runTurn`을 사용합니다. 요청, 서버 이벤트, 툴 인자, 사용량 checkpoint,
