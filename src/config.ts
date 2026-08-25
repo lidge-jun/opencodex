@@ -453,6 +453,7 @@ const requestPacingSchema = z.object({
 }).strict().refine(value => value.enabled === false
   || value.requestsPerMinute !== undefined
   || value.minIntervalMs !== undefined
+  || value.jitterMs !== undefined
   || (value.models !== undefined && Object.keys(value.models).length > 0), {
   message: "enabled request pacing needs a provider rule or model override",
 });
@@ -461,7 +462,7 @@ export function requestPacingConfigError(value: unknown): string | null {
   if (value === undefined) return null;
   const parsed = requestPacingSchema.safeParse(value);
   if (parsed.success) return null;
-  return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs provider rule or model overrides";
+  return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs/jitterMs provider rule or model overrides";
 }
 
 const fastWireSchema = z.object({

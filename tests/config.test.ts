@@ -23,6 +23,7 @@ import {
   removePid,
   removeRuntimePort,
   ocxStartProcessCacheSizeForTests,
+  requestPacingConfigError,
   setOcxStartProcessCacheForTests,
   setProcessCommandLineExecForTests,
   setProcessCommandLinePlatformForTests,
@@ -112,6 +113,21 @@ function writeAccountNamespaceConfig(
 }
 
 describe("opencodex config defaults", () => {
+  test("accepts and preserves provider-level jitter-only request pacing", () => {
+    const defaults = getDefaultConfig();
+    const requestPacing = { enabled: true, jitterMs: 500 };
+    const result = validateConfigCandidate({
+      ...defaults,
+      providers: {
+        ...defaults.providers,
+        openai: { ...defaults.providers.openai!, requestPacing },
+      },
+    });
+
+    expect(requestPacingConfigError(requestPacing)).toBeNull();
+    expect(result).toMatchObject({ ok: true, config: { providers: { openai: { requestPacing } } } });
+  });
+
   test("malformed classifier config is normalized at load, even with subagentEffort absent (#1697)", () => {
     // normalizePersistedClaudeCode used to be reached only through a subagentEffort short-circuit,
     // so a config whose ONLY defect was elsewhere in claudeCode was never normalized. These

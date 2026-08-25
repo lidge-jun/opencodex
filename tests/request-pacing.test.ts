@@ -90,6 +90,8 @@ describe("requestPacingIntervalMs", () => {
   test("validates jitter and keeps model jitter as an additional delay", async () => {
     expect(requestPacingConfigError({ enabled: true, minIntervalMs: 100, jitterMs: 60_001 })).not.toBeNull();
     expect(requestPacingConfigError({ enabled: true, minIntervalMs: 100, jitterMs: 25 })).toBeNull();
+    expect(requestPacingConfigError({ enabled: true, jitterMs: 25 })).toBeNull();
+    expect(requestPacingConfigError({ enabled: true, jitterMs: 0 })).toBeNull();
     expect(requestPacingConfigError({
       enabled: true,
       minIntervalMs: 100,

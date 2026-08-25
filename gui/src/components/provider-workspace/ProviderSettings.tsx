@@ -249,7 +249,11 @@ export default function ProviderSettings({
     setSaving(true);
     setMsg(null);
     try {
-      if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.models) {
+      if (pacingEnabled
+        && pacingDraft.requestsPerMinute === undefined
+        && pacingDraft.minIntervalMs === undefined
+        && pacingDraft.jitterMs === undefined
+        && pacingDraft.models === undefined) {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
       const pacingOnly = pacingDirty && !dirty && !tlsDirty;
