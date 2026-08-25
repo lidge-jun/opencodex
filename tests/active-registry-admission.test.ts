@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../src/server/lifecycle";
+import { MAX_ACTIVE_TURNS, abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../src/server/lifecycle";
 import {
   MAX_TRACKED_CODEX_WEBSOCKETS,
   getTrackedCodexWebSocketCountForAccount,
@@ -173,6 +173,16 @@ describe("active registry admission", () => {
     const nested = trackStreamLifetime(trackStreamLifetime(source, first, undefined, lease!), second, undefined, lease!);
     expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
     await new Response(nested).arrayBuffer();
+    expect(activeRegistryMetrics().activeTurns.active).toBe(before);
+  });
+
+  test("the 256-turn gate bounds concurrency, not sequential continuation count", () => {
+    const before = activeRegistryMetrics().activeTurns.active;
+    for (let index = 0; index <= MAX_ACTIVE_TURNS; index += 1) {
+      const lease = tryAdmitTurn("one-logical-session");
+      expect(lease).not.toBeNull();
+      lease!.release();
+    }
     expect(activeRegistryMetrics().activeTurns.active).toBe(before);
   });
 
