@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction, stripOpenAiOnlyWebSearchFields } from "../src/adapters/openai-responses";
+import { stripMuseSparkUnsupportedWebSearchFields } from "../src/adapters/openai-responses";
+import { stripMuseSparkUnsupportedWebSearchFields } from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { resolveProviderTransport } from "../src/providers/xai-transport";
@@ -245,5 +247,53 @@ describe("routedProviderConfig web_search capability backfill", () => {
       supportsOpenAiWebSearchToolFields: true,
     });
     expect(routed.supportsOpenAiWebSearchToolFields).toBe(true);
+  });
+});
+
+// Muse Spark (muse-spark-1.2-contributor) gateway rejects `search_content_types` on a
+// plain `web_search` tool (400) but accepts it on `web_search_preview` and accepts every
+// other web_search field on both variants. Probe 2026-08-26. This strips only that field
+// and only for the exact Muse model; Luna and DeepSeek are unaffected.
+describe("stripMuseSparkUnsupportedWebSearchFields", () => {
+  test("strips search_content_types from web_search for the exact Muse model", () => {
+    const body = { model: "muse-spark-1.2-contributor", tools: [{
+      type: "web_search",
+      search_content_types: ["text"],
+      external_web_access: true,
+      search_context_size: "medium",
+      user_location: { type: "approximate" },
+    }] };
+    const out = stripMuseSparkUnsupportedWebSearchFields(body, "muse-spark-1.2-contributor") as { tools: Array<Record<string, unknown>> };
+    expect(out.tools[0]).toEqual({
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: "medium",
+      user_location: { type: "approximate" },
+    });
+  });
+
+  test("keeps web_search_preview untouched", () => {
+    const body = { model: "muse-spark-1.2-contributor", tools: [{ type: "web_search_preview", search_content_types: ["text"] }] };
+    const out = stripMuseSparkUnsupportedWebSearchFields(body, "muse-spark-1.2-contributor") as { tools: Array<Record<string, unknown>> };
+    expect(out.tools[0]).toEqual({ type: "web_search_preview", search_content_types: ["text"] });
+  });
+
+  test("strips nested additional_tools for the exact Muse model", () => {
+    const body = { model: "muse-spark-1.2-contributor", input: [{
+      type: "additional_tools",
+      tools: [{ type: "web_search", search_content_types: ["text"] }],
+    }] };
+    const out = stripMuseSparkUnsupportedWebSearchFields(body, "muse-spark-1.2-contributor") as { input: Array<{ tools: Array<Record<string, unknown>> }> };
+    expect(out.input[0].tools[0]).toEqual({ type: "web_search" });
+  });
+
+  test("leaves a non-Muse model unchanged and returns the same reference", () => {
+    const body = { model: "gpt-5.6-luna", tools: [{ type: "web_search", search_content_types: ["text"] }] };
+    expect(stripMuseSparkUnsupportedWebSearchFields(body, "gpt-5.6-luna")).toBe(body);
+  });
+
+  test("ignores a near-match model id", () => {
+    const body = { model: "muse-spark-1.2-contributor-free", tools: [{ type: "web_search", search_content_types: ["text"] }] };
+    expect(stripMuseSparkUnsupportedWebSearchFields(body, "muse-spark-1.2-contributor-free")).toBe(body);
   });
 });
