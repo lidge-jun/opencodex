@@ -48,6 +48,25 @@ const GOOGLE_BREVITY_INSTRUCTION = [
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
 ].join("\n");
 
+export function maxOutputTokensForGoogleModel(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  if (lower.includes("flash")) return 65536;
+  if (lower.includes("pro")) return 65535;
+  if (lower.includes("claude")) return 64000;
+  if (lower.includes("gpt-oss") || lower.includes("oss")) return 32768;
+  if (lower.startsWith("gemini")) return 65536;
+  return 16384;
+}
+
+export function clampGoogleMaxOutputTokens(
+  modelId: string,
+  requestedTokens?: number,
+): number | undefined {
+  if (requestedTokens === undefined || requestedTokens <= 0) return undefined;
+  const modelMax = maxOutputTokensForGoogleModel(modelId);
+  return Math.min(requestedTokens, modelMax);
+}
+
 /**
  * Some Google direct deployments expose current Gemini Flash generations with a `-tiered`
  * wire suffix (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`). Keep the picker-visible id
@@ -650,7 +669,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (toolConfig) body.toolConfig = toolConfig;
 
       const generationConfig: Record<string, unknown> = {};
-      if (parsed.options.maxOutputTokens) generationConfig.maxOutputTokens = parsed.options.maxOutputTokens;
+      const clampedMaxOutputTokens = clampGoogleMaxOutputTokens(identityModelId, parsed.options.maxOutputTokens);
+      if (clampedMaxOutputTokens !== undefined) generationConfig.maxOutputTokens = clampedMaxOutputTokens;
       if (parsed.options.temperature !== undefined) generationConfig.temperature = parsed.options.temperature;
       if (parsed.options.topP !== undefined) generationConfig.topP = parsed.options.topP;
       if (parsed.options.stopSequences) generationConfig.stopSequences = parsed.options.stopSequences;
