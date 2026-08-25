@@ -252,6 +252,16 @@ export interface ProviderRegistryEntry {
   modelSupportsReasoningSummaries?: Record<string, boolean>;
   /** Registry defaults for per-model Codex Responses verbosity support. */
   modelSupportsVerbosity?: Record<string, boolean>;
+  /**
+   * Registry default applied to EVERY model of this provider, including ids that arrive from
+   * live discovery after this table was written.
+   *
+   * `modelSupportsVerbosity` only covers the ids enumerated here, so a newly discovered model
+   * fell through and re-advertised a control the upstream accepts and ignores. Where the opt-out
+   * is a property of the provider's API rather than of one model, declare it here; a per-model
+   * entry still wins over it.
+   */
+  supportsVerbosity?: boolean;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -1086,6 +1096,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Keep this separate from reasoning-summary support: that bit gates Codex's
     // entire Responses reasoning object, including reasoning.effort.
     modelSupportsVerbosity: Object.fromEntries(XAI_MODELS.map(id => [id, false])),
+    // Provider-wide, not merely per-model: `text.verbosity` is an OpenAI Responses parameter
+    // absent from xAI's documented API, so a model discovered later has no more support for it
+    // than the seeded ones do.
+    supportsVerbosity: false,
     defaultModel: "grok-4.5",
     // Keep Codex Responses callers on the compatibility Chat wire until xAI can replay
     // opaque reasoning continuation and compaction state across later turns. The scoped

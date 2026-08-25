@@ -4427,6 +4427,27 @@ describe("Codex catalog routed normalization", () => {
     expect(entries.find(entry => entry.slug === "plain/plain-model")?.support_verbosity).toBe(true);
   });
 
+  test("a live-discovered xAI id inherits the provider-wide verbosity opt-out", async () => {
+    // modelSupportsVerbosity only enumerates the ids present when the registry row was written.
+    // A model that arrives later from live discovery used to fall through and re-advertise a
+    // control xAI accepts and ignores.
+    const models = await gatherRoutedModels({
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "oauth",
+          liveModels: false,
+          models: ["grok-9.9-not-in-the-registry"],
+        },
+      },
+    });
+    const entries = buildCatalogEntries(null, [], models);
+
+    expect(models.find(model => model.provider === "xai")?.supportsVerbosity).toBe(false);
+    expect(entries.find(entry => entry.slug === "xai/grok-9.9-not-in-the-registry")?.support_verbosity).toBe(false);
+  });
+
   test("a routed model never inherits the native template's context window (#992)", () => {
     // /models returns only the id: the routed entry must fall to the
     // conservative 128k triple, never the native template's larger window.

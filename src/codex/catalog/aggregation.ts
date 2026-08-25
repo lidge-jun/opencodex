@@ -193,6 +193,12 @@ export function deriveComboCatalogModel(
         ? { supportsServiceTier: false }
         : {}),
     ...(members.some(member => member.supportsReasoningSummaries === false) ? { supportsReasoningSummaries: false } : {}),
+    // A combo is only as capable as its least capable member. One member that cannot honour
+    // text.verbosity is enough to make the control a no-op for the whole combo, so the
+    // conservative false propagates — the same rule supportsReasoningSummaries uses above.
+    // Without this, routing a combo through an xAI or Kiro member re-advertised a control the
+    // upstream accepts and ignores.
+    ...(members.some(member => member.supportsVerbosity === false) ? { supportsVerbosity: false } : {}),
     ...(members.every(member => member.codexToolMode === "shell")
       ? { codexToolMode: "shell" as const }
       : {}),

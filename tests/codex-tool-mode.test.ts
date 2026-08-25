@@ -208,3 +208,34 @@ describe("Codex tool mode configuration (#2106)", () => {
 });
 
 
+
+describe("#2503 combo derivation preserves a member's verbosity opt-out", () => {
+  const { deriveComboCatalogModel } = require("../src/codex/catalog/aggregation");
+  const combo = {
+    name: "mixed-combo",
+    targets: [
+      { provider: "xai", model: "grok-4.6" },
+      { provider: "openai", model: "gpt-5.6-sol" },
+    ],
+  };
+
+  test("one member that cannot honour text.verbosity makes the combo advertise false", () => {
+    // A combo is only as capable as its least capable member: routing a turn to the xAI member
+    // would re-advertise a control the upstream accepts and ignores. Same conservative rule
+    // supportsReasoningSummaries already uses.
+    const derived = deriveComboCatalogModel("mixed-combo", combo, [
+      { id: "grok-4.6", provider: "xai", contextWindow: 256000, supportsVerbosity: false },
+      { id: "gpt-5.6-sol", provider: "openai", contextWindow: 272000 },
+    ]);
+    expect(derived?.supportsVerbosity).toBe(false);
+  });
+
+  test("a combo whose members all support verbosity does not force the flag", () => {
+    const derived = deriveComboCatalogModel("mixed-combo", combo, [
+      { id: "a", provider: "openai", contextWindow: 272000 },
+      { id: "b", provider: "openai", contextWindow: 272000, supportsVerbosity: true },
+    ]);
+    expect(derived?.supportsVerbosity).toBeUndefined();
+  });
+});
+

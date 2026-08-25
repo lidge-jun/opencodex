@@ -652,7 +652,13 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
   if (!prov) return undefined;
   const entry = (providerMatchesRegistryTransport(name, prov) ? getProviderRegistryEntry(name) : undefined)
     ?? registryEntryForProviderDestination(prov);
-  return entry ? modelRecordValue(entry.modelSupportsVerbosity, id) : undefined;
+  if (!entry) return undefined;
+  const perModel = modelRecordValue(entry.modelSupportsVerbosity, id);
+  if (perModel !== undefined) return perModel;
+  // Provider-wide fallback. `modelSupportsVerbosity` only enumerates the ids present when the
+  // registry row was written, so a live-discovered model used to fall through here and
+  // re-advertise a control the upstream accepts and ignores. A per-model entry still wins.
+  return entry.supportsVerbosity;
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
