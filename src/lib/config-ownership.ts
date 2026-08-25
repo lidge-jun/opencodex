@@ -40,6 +40,7 @@ const INITIAL_OWNED_PATHS = [
   "artifacts",
   "auth.json",
   "auth.store.lock",
+  "admin-api-token",
   "catalog-backup.json",
   "claude-env.sh",
   "codex-accounts.json",
@@ -328,6 +329,25 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       return {
         status: "partial",
         reason: `could not remove owned path ${rel}: ${error instanceof Error ? error.message : String(error)}`,
+        residualPaths: [path],
+      };
+    }
+  }
+
+  // Per-catalog backups are named `catalog-backup-<16 hex>.json` (catalogBackupPathFor), one per
+  // CODEX_HOME, so they cannot be enumerated as literal manifest entries the way every other
+  // owned file can. Without this, `ocx uninstall` always reported "unowned files remain" and
+  // refused to remove a home OpenCodex created itself — the file is unambiguously ours, produced
+  // by our own writer, and the strict hex shape keeps the match from widening.
+  for (const name of readdirSync(configDir)) {
+    if (!/^catalog-backup-[0-9a-f]{16}\.json$/.test(name)) continue;
+    const path = join(configDir, name);
+    try {
+      removeOwnedEntry(rootPath, path);
+    } catch (error) {
+      return {
+        status: "partial",
+        reason: `could not remove owned path ${name}: ${error instanceof Error ? error.message : String(error)}`,
         residualPaths: [path],
       };
     }

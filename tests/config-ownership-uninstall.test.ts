@@ -205,4 +205,55 @@ describe("owned config uninstall", () => {
       rmSync(parent, { recursive: true, force: true });
     }
   });
+
+  /**
+   * The uninstall path could not remove a home OpenCodex created itself (#1048).
+   *
+   * Found by running the disposable-host service acceptance for real: `ocx uninstall` reported
+   * "partial uninstall: unowned files remain" and left the whole config directory behind. Two of
+   * our OWN writers produce files the manifest never claimed —
+   * `admin-api-token` (lib/admin-secrets.ts) and the per-CODEX_HOME
+   * `catalog-backup-<16 hex>.json` (catalog/parsing.ts `catalogBackupPathFor`).
+   *
+   * The hashed backup is the interesting one: its name depends on which Codex home it mirrors,
+   * so it cannot be a literal manifest entry the way every other owned file is. It is matched by
+   * its exact shape instead — narrow enough that a user's own file cannot collide, which is what
+   * keeps the "never delete what we do not own" guarantee intact.
+   */
+  test("uninstall removes the admin token and per-home catalog backups it wrote itself", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-self-written-"));
+    const dir = join(parent, "config");
+
+    try {
+      // Establish ownership the way production does: the first owned write into an empty dir.
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      writeFileSync(join(dir, "config.json"), "{}\n");
+      writeFileSync(join(dir, "admin-api-token"), "token\n");
+      writeFileSync(join(dir, "catalog-backup-0123456789abcdef.json"), "{}\n");
+
+      const result = removeOwnedConfigState(dir);
+      expect(result).toMatchObject({ status: "removed" });
+      expect(existsSync(dir)).toBe(false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("a lookalike that is not our generated backup name is still never removed", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-lookalike-"));
+    const dir = join(parent, "config");
+
+    try {
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      // Not our shape: the digest segment is the wrong length, so this is a user file.
+      const foreign = join(dir, "catalog-backup-notahash.json");
+      writeFileSync(foreign, "mine\n");
+
+      const result = removeOwnedConfigState(dir);
+      expect(result.status).toBe("partial");
+      expect(readFileSync(foreign, "utf8")).toBe("mine\n");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
 });
