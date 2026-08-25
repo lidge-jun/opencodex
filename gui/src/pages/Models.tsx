@@ -102,6 +102,18 @@ function parseContextWindowDraft(raw: string): number | null | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
+
+/** #2465 per-provider model-preset view, as `GET /api/model-presets` returns it. */
+interface ModelPresetView {
+  mode: "preset" | "all" | "custom";
+  appliedVersion?: number;
+  availableVersion: number;
+  presetIds: string[];
+  presetCount: number;
+  totalCount: number;
+  fallback?: string;
+}
+
 export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string; restartEpoch?: number }) {
   // Codex app-server staleness (devlog/_fin/260815_gui_codex_restart). Named
   // appServerState, not catalogState: this file already binds that name to the
@@ -225,6 +237,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
   const [v2, setV2] = useState<V2Status | null>(null);
+  // #2465: per-provider model-preset state. Keyed by provider so one card's busy state cannot
+  // freeze the others.
+  const [presets, setPresets] = useState<Record<string, ModelPresetView>>({});
+  const [presetBusy, setPresetBusy] = useState<string | null>(null);
   const [v2Loading, setV2Loading] = useState(true);
   const [v2Busy, setV2Busy] = useState(false);
   const [v2Note, setV2Note] = useState("");
@@ -421,6 +437,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     const timeout = window.setTimeout(() => {
       void loadShadowCall();
       void loadV2();
+      // Preset previews belong to the same tab. Loaded once rather than polled: the rules are
+      // shipped code and the catalog poll above already refreshes the rows they describe.
+      void loadPresets();
     }, 0);
     // Hidden tab: no timer, no /api/v2 traffic; the make-up tick refreshes on return.
     const stop = startVisibilityPoll(() => {
@@ -430,6 +449,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       window.clearTimeout(timeout);
       stop();
     };
+    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadPresets is a plain async loader
+    // like the rest of this file's; a useCallback wrapper trips PreserveManualMemo, and the
+    // effect only ever needs the current closure.
   }, [catalogActive, loadShadowCall, loadV2]);
 
   const groups = useMemo(
@@ -840,6 +863,53 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     await putV2Setting({ multiAgentMode: mode });
   };
 
+
+  /**
+   * #2465: load the per-provider preset preview. Rules are evaluated server-side against the
+   * CURRENT catalog, so the count shown is the count an apply would produce.
+   */
+  const loadPresets = async () => {
+    try {
+      const bounded = createBoundedFetch(15_000);
+      const r = await fetch(`${apiBase}/api/model-presets`, { signal: bounded.signal });
+      const data = await readJsonIfOk<{ providers?: Record<string, ModelPresetView> }>(r);
+      setPresets(data?.providers ?? {});
+    } catch {
+      // A preset preview is decoration on top of a working Models page; failing to load it must
+      // not take the page down.
+      setPresets({});
+    }
+  };
+
+  const applyPreset = async (provider: string, mode: "preset" | "all") => {
+    if (presetBusy) return;
+    setPresetBusy(provider);
+    try {
+      const bounded = createBoundedFetch(30_000);
+      const r = await fetch(`${apiBase}/api/model-presets`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, mode }),
+        signal: bounded.signal,
+      });
+      const res = await readJsonIfOk<{ fallback?: string; selected?: string[] }>(r) ?? {};
+      if (res.fallback === "preset-empty") {
+        // Never silently narrow to nothing: the server kept the previous selection, so say so
+        // rather than showing a success that changed nothing.
+        publishFeedback(false, t("models.presetEmpty", { provider }));
+      } else {
+        publishFeedback(true, mode === "all"
+          ? t("models.presetClearedToast", { provider })
+          : t("models.presetAppliedToast", { provider, count: String(res.selected?.length ?? 0) }));
+      }
+      await Promise.all([loadPresets(), load()]);
+    } catch (error) {
+      publishFeedback(false, error instanceof Error ? error.message : String(error));
+    } finally {
+      setPresetBusy(null);
+    }
+  };
+
   const setKeepNativeChatGptOnV1 = async (next: boolean) => {
     if (!v2 || v2.keepNativeChatGptOnV1 === next) return;
     await putV2Setting({ keepNativeChatGptOnV1: next });
@@ -1121,6 +1191,70 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                 aria-haspopup="dialog"
               >+</button>
              }
+             {(() => {
+               // #2465: Preset / All / Custom. Only providers with a shipped preset get the
+               // control — a provider with nothing to curate would show a dead switch.
+               const preset = presets[provider];
+               if (!preset) return null;
+               const busyHere = presetBusy === provider;
+               const stale = preset.mode === "custom"
+                 && preset.appliedVersion !== undefined
+                 && preset.appliedVersion < preset.availableVersion;
+               return (
+                 <>
+                   <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.presetLabel")}>
+                     {(["preset", "all"] as const).map(mode => (
+                       <button
+                         key={mode}
+                         type="button"
+                         role="radio"
+                         aria-checked={preset.mode === mode}
+                         className={`btn btn-sm${preset.mode === mode ? " btn-primary" : " btn-ghost"}`}
+                         style={{
+                           background: preset.mode === mode ? undefined : "transparent",
+                           color: preset.mode === mode ? undefined : "var(--muted)",
+                         }}
+                         disabled={busy || busyHere}
+                         onClick={(e) => {
+                           e.stopPropagation();
+                           // Switching from a custom selection destroys it, so confirm first.
+                           if (mode === "preset" && preset.mode === "custom"
+                             && !confirm(t("models.presetConfirmReplace", { count: String(preset.presetCount) }))) return;
+                           void applyPreset(provider, mode);
+                         }}
+                       >
+                         {t(`models.presetMode_${mode}` as TKey)}
+                       </button>
+                     ))}
+                     {/* Custom is a STATE, not a destination: it activates on edit. Shown as a
+                         disabled segment so the current mode is never ambiguous. */}
+                     {preset.mode === "custom" && (
+                       <button
+                         type="button"
+                         role="radio"
+                         aria-checked
+                         className="btn btn-sm btn-primary"
+                         disabled
+                       >{t("models.presetMode_custom")}</button>
+                     )}
+                   </div>
+                   {preset.mode === "preset" && (
+                     <span className="muted mono text-label">
+                       {t("models.presetSummary", {
+                         count: String(preset.presetCount),
+                         total: String(preset.totalCount),
+                         version: String(preset.availableVersion),
+                       })}
+                     </span>
+                   )}
+                   {stale && (
+                     <span className="badge badge-amber" role="status">
+                       {t("models.presetUpdateAvailable", { version: String(preset.availableVersion) })}
+                     </span>
+                   )}
+                 </>
+               );
+             })()}
              <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
              <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
              <>
