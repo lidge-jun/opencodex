@@ -126,10 +126,10 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Daybreak aliases: priced as their current snapshots (red -> gpt-5.6-cyber,
   // blue -> gpt-5.6-sol). The alias ids carry no rows of their own upstream, hence
   // verified-derived. Blue deliberately reuses GPT56_SOL rather than duplicating the tuple.
+  // The `gpt-` selector is native to ChatGPT/Codex accounts. The bare aliases below belong to
+  // the separately billed API-key catalog; keep those namespaces disjoint so pricing metadata
+  // cannot make an unroutable provider/model pair look supported.
   { provider: "openai", modelId: "gpt-daybreak-blue-latest", cost4: GPT56_SOL, source: `alias of gpt-5.6-sol ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-11", status: "verified-derived" },
-  { provider: "openai", modelId: "daybreak-blue-latest", cost4: GPT56_SOL, source: `alias of gpt-5.6-sol ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-11", status: "verified-derived" },
-  { provider: "openai", modelId: "daybreak-red-latest", cost4: DAYBREAK_RED, source: `alias of gpt-5.6-cyber ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-11", status: "verified-derived" },
-  { provider: "openai-apikey", modelId: "gpt-daybreak-blue-latest", cost4: GPT56_SOL, source: `alias of gpt-5.6-sol ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-11", status: "verified-derived" },
   { provider: "openai-apikey", modelId: "daybreak-red-latest", cost4: DAYBREAK_RED, source: `alias of gpt-5.6-cyber ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-11", status: "verified-derived" },
   { provider: "openai-apikey", modelId: "daybreak-blue-latest", cost4: GPT56_SOL, source: `alias of gpt-5.6-sol ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-11", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-low", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
@@ -340,10 +340,6 @@ const OPENAI_GPT56_CONTEXT_MODELS = [
   "gpt-5.6-sol-pro",
   "gpt-5.6-terra-pro",
   "gpt-5.6-luna-pro",
-  // Daybreak Blue aliases gpt-5.6-sol (shares the 272k long-context tier).
-  // Daybreak Red (cyber snapshot) has all "-" long-context cells and thus has no tier row.
-  "gpt-daybreak-blue-latest",
-  "daybreak-blue-latest",
 ];
 
 export const CONTEXT_TIERS: readonly ContextTier[] = [
@@ -359,6 +355,29 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
       verifiedAt: "2026-08-03",
     })),
   ),
+  {
+    // The native Codex selector aliases gpt-5.6-sol and shares its 272k long-context tier.
+    provider: "openai",
+    modelId: "gpt-daybreak-blue-latest",
+    thresholdInputTokens: 272_000,
+    inclusive: false,
+    multiplier: OPENAI_LONG_CONTEXT,
+    confirmedPriorityRelation: "exclusive",
+    source: OPENAI_PRICING_DOC,
+    verifiedAt: "2026-08-11",
+  },
+  {
+    // The bare selector is the separately billed API-key alias. Daybreak Red has no tier row:
+    // the cyber snapshot's four long-context cells are all "-" on the pricing page.
+    provider: "openai-apikey",
+    modelId: "daybreak-blue-latest",
+    thresholdInputTokens: 272_000,
+    inclusive: false,
+    multiplier: OPENAI_LONG_CONTEXT,
+    confirmedPriorityRelation: "exclusive",
+    source: OPENAI_PRICING_DOC,
+    verifiedAt: "2026-08-11",
+  },
   {
     provider: "xai",
     modelId: "grok-4.5",
