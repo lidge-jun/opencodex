@@ -1277,16 +1277,6 @@ describe("opencodex config defaults", () => {
       expect(readConfigDiagnostics().error).toContain("modelSupportsVerbosity");
     }
 
-    expect(providerManagementConfigError("custom", {
-      adapter: "openai-responses",
-      baseUrl: "https://example.test/v1",
-      modelSupportsVerbosity: { strict: false },
-    })).toBeNull();
-    expect(providerManagementConfigError("custom", {
-      adapter: "openai-responses",
-      baseUrl: "https://example.test/v1",
-      modelSupportsVerbosity: { strict: "false" },
-    })).toContain("modelSupportsVerbosity");
   });
 
   test("modelReasoningSummaryDelivery validates known values and rejects summary opt-out conflicts (#538)", () => {

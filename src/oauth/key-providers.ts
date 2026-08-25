@@ -19,23 +19,20 @@ export const KEY_LOGIN_PROVIDERS: Record<string, KeyLoginProvider> = deriveKeyLo
  * caller didn't already supply. Lets the vision/reasoning classification actually reach the saved
  * config (the GUI/API only send adapter/baseUrl/apiKey/defaultModel). No-op for unknown names.
  *
- * `modelSupportsReasoningSummaries` and `modelSupportsVerbosity` are deliberately excluded from
- * what gets persisted. They are registry-only defaults resolved at runtime, and this function
- * feeds a config that is about to be written to disk. Persisting today's defaults would freeze
- * them as the user's own overrides, preventing later registry corrections from reaching existing
- * providers. Catalog gathering enriches a detached runtime clone, so the defaults still apply
- * where they matter.
+ * `modelSupportsReasoningSummaries` is deliberately excluded from what gets persisted. It is
+ * registry-only metadata resolved at runtime, and this function feeds a config that is about to
+ * be written to disk. Persisting today's registry defaults would freeze them as the user's own
+ * overrides: a later registry correction — say we learn a model's backend rejects summary
+ * delivery — would never reach anyone who created their provider before the correction, and they
+ * would keep getting upstream 400s with no way to know why. Catalog gathering enriches a
+ * detached runtime clone, so the defaults still apply where they matter.
  */
 export function enrichProviderFromCatalog(name: string, prov: OcxProviderConfig): void {
   const hadOwnSummaries = Object.hasOwn(prov, "modelSupportsReasoningSummaries");
   const submittedSummaries = prov.modelSupportsReasoningSummaries;
-  const hadOwnVerbosity = Object.hasOwn(prov, "modelSupportsVerbosity");
-  const submittedVerbosity = prov.modelSupportsVerbosity;
   enrichProviderFromRegistry(name, prov);
   if (hadOwnSummaries) prov.modelSupportsReasoningSummaries = submittedSummaries;
   else delete prov.modelSupportsReasoningSummaries;
-  if (hadOwnVerbosity) prov.modelSupportsVerbosity = submittedVerbosity;
-  else delete prov.modelSupportsVerbosity;
 }
 
 export function isKeyLoginProvider(name: string): boolean {
