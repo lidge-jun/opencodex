@@ -258,10 +258,11 @@ export interface ImageBridgeDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
-   * Optional 429 key-failover for the routed (non-xAI) model. Return a rebuilt adapter for the
-   * rotated key, or null when the pool is exhausted.
+   * Optional 429 failover for the routed (non-xAI) model. Return a rebuilt adapter for the
+   * rotated credential, or null when the pool is exhausted. Async hooks support OAuth refresh;
+   * existing synchronous key-pool hooks remain valid.
    */
-  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null | Promise<ProviderAdapter | null>;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called when the bridged Responses stream completes (parity with runTurn / routed paths). */
@@ -572,7 +573,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       // 429 key-failover parity with web-search / normal routed path.
       while (prepared.response.status === 429 && deps.on429) {
-        const rotated = deps.on429(prepared.response.headers.get("retry-after"));
+        const rotated = await deps.on429(prepared.response.headers.get("retry-after"));
         if (!rotated) break;
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated;

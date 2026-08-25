@@ -196,7 +196,7 @@ import {
   providerModelResponsesUpstreamStreaming,
   type InboundWire,
 } from "../../providers/registry";
-import type { AdapterRequest } from "../../adapters/base";
+import type { AdapterRequest, ProviderAdapter } from "../../adapters/base";
 import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
@@ -4195,6 +4195,53 @@ async function handleResponsesInner(
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
+  const rotateSidecarProviderOn429 = async (retryAfter: string | null): Promise<ProviderAdapter | null> => {
+    const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+      retryAfter,
+      now: Date.now(),
+      attemptedKey: route.provider.apiKey,
+      promptCacheKey: parsed.options.promptCacheKey,
+    });
+    if (rotated) {
+      route.provider = rotated;
+    } else {
+      if (
+        !genericFailoverAccountId
+        || genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        || !isGenericOAuthFailoverEnabled(config, route.providerName)
+      ) return null;
+      const nextAccountId = rotateGenericOAuthAccountOn429(
+        config,
+        route.providerName,
+        genericFailoverAccountId,
+        retryAfter,
+      );
+      if (!nextAccountId) return null;
+      try {
+        const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+        genericFailoverAccountId = nextAccountId;
+        genericFailovers += 1;
+        route.provider = { ...route.provider, apiKey: snapshot.accessToken };
+        if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
+        if (route.provider.googleMode === "cloud-code-assist" && snapshot.projectId) {
+          route.provider = { ...route.provider, project: snapshot.projectId };
+        }
+      } catch {
+        return null;
+      }
+    }
+    const rotatedAdapter = resolveAdapter(
+      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+      config.cacheRetention,
+    );
+    bindRouteReasoningReplayScope({
+      parsed,
+      providerName: route.providerName,
+      provider: route.provider,
+      adapterName: rotatedAdapter.name,
+    });
+    return rotatedAdapter;
+  };
   if ((imgPlan || vidPlan) && canRunWebSearch) {
     // Web search takes priority when both are active — the media bridge cannot run
     // alongside runWithWebSearch. Surface a runtime signal so the user knows their
@@ -4285,27 +4332,7 @@ async function handleResponsesInner(
           if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
         }
       },
-      on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
-          retryAfter,
-          now: Date.now(),
-          attemptedKey: route.provider.apiKey,
-          promptCacheKey: parsed.options.promptCacheKey,
-        });
-        if (!rotated) return null;
-        route.provider = rotated;
-        const rotatedAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: rotatedAdapter.name,
-        });
-        return rotatedAdapter;
-      },
+      on429: rotateSidecarProviderOn429,
       retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
@@ -4373,27 +4400,7 @@ async function handleResponsesInner(
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
-      on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
-          retryAfter,
-          now: Date.now(),
-          attemptedKey: route.provider.apiKey,
-          promptCacheKey: parsed.options.promptCacheKey,
-        });
-        if (!rotated) return null;
-        route.provider = rotated;
-        const rotatedAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: rotatedAdapter.name,
-        });
-        return rotatedAdapter;
-      },
+      on429: rotateSidecarProviderOn429,
       retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
       onCompletedResponse: commitReasoningReplayServingRoute,
     });

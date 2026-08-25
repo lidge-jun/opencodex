@@ -304,10 +304,11 @@ export interface WebSearchLoopDeps {
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
-   * 429 key-failover hook: rotate the provider's active pool key and return a rebuilt adapter,
-   * or null when the pool is exhausted (same semantics as the normal routed path).
+   * 429 failover hook: rotate the provider's active credential and return a rebuilt adapter,
+   * or null when the pool is exhausted. Async hooks support OAuth refresh; existing synchronous
+   * key-pool hooks remain valid.
    */
-  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  on429?: (retryAfterHeader: string | null) => ProviderAdapter | null | Promise<ProviderAdapter | null>;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
@@ -509,7 +510,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while (prepared.response.status === 429 && deps.on429) {
-        const rotated = deps.on429(prepared.response.headers.get("retry-after"));
+        const rotated = await deps.on429(prepared.response.headers.get("retry-after"));
         if (!rotated) break;
         // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
         // it, but proceed immediately to the rotated fetch under the SAME deadline signal.

@@ -652,7 +652,7 @@ describe("runWithImageBridge", () => {
     expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
   });
 
-  test("429 key rotation rebuilds the adapter and retries the iteration", async () => {
+  test("429 OAuth rotation awaits a refreshed adapter and retries the iteration", async () => {
     let fetchCalls = 0;
     let rotations = 0;
     let activeAdapter: ProviderAdapter | undefined;
@@ -677,8 +677,9 @@ describe("runWithImageBridge", () => {
       parsed: makeParsed(),
       adapter: firstAdapter,
       plan,
-      on429: () => {
+      on429: async () => {
         rotations++;
+        await Promise.resolve();
         activeAdapter = secondAdapter;
         return secondAdapter;
       },

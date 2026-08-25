@@ -769,7 +769,7 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
 });
 
 describe("web-search sidecar native web_search_call emission", () => {
-  test("loop 429 triggers on429 rotation and succeeds with the rebuilt adapter", async () => {
+  test("loop 429 awaits OAuth on429 rotation and succeeds with the rebuilt adapter", async () => {
     globalThis.fetch = (() => Promise.resolve(new Response(
       'event: response.completed\ndata: {"type":"response.completed"}\n\n',
       { headers: { "Content-Type": "text/event-stream" } },
@@ -825,9 +825,10 @@ describe("web-search sidecar native web_search_call emission", () => {
       settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
       onRequestBuilt: request => reasoningLogs.push(request.reasoningLog),
-      on429: retryAfter => {
+      on429: async retryAfter => {
         rotations++;
         expect(retryAfter).toBe("30");
+        await Promise.resolve();
         return rotatedAdapter;
       },
     });
