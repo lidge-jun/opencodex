@@ -42,6 +42,9 @@ const GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS = [
   "too many requests",
   "rate limit",
   "retry after",
+  // Upstream writes the header name both ways in prose ("retry-after: 60"); matching only the
+  // spaced spelling let a transient 429 fall through to the exhaustion needles below.
+  "retry-after",
   "concurrent request limit",
 ];
 

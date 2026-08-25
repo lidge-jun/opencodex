@@ -56,6 +56,10 @@ describe("google error classification & quota exhaustion", () => {
       "Concurrent request limit reached, try again in a few seconds.",
       "Per-minute quota exceeded, retry later.",
       "Quota exceeded per minute (RPM).",
+      // Upstream writes the header name unspaced in prose. Matching only "retry after" let
+      // this fall through to the exhaustion needles and suppress a retry for a transient 429.
+      "Quota exceeded; retry-after: 60",
+      "RESOURCE_EXHAUSTED: quota exceeded. Retry-After: 30",
     ];
 
     for (const phrase of transientPhrases) {
