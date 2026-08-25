@@ -200,4 +200,38 @@ describe("#820 concurrent tool-recall session harness", () => {
     for (const lease of leases) lease?.release();
     expect(sessionLaneMetrics().retainedBytes).toBe(0);
   });
+
+  /**
+   * The regression this lane derivation exists to avoid (#820).
+   *
+   * A parallel subagent fan-out is Codex's normal shape, and every child of one parent
+   * carries the SAME `x-codex-parent-thread-id` — that is what `codexPoolAffinityKey`
+   * deliberately keys on, so the whole fan-out pins to one account. A lane keyed the same
+   * way inherits that coalescing and rejects every sibling after the first with 503.
+   *
+   * Keyed on the pair, the parent qualifies the lane instead of defining it: siblings
+   * separate, while two overlapping turns of ONE conversation still share a lane, which is
+   * the protocol rule this admission boundary is here to enforce.
+   */
+  test("parallel subagents of one parent take separate lanes, and one conversation still shares one", () => {
+    resetLifecycleDrainStateForTests();
+    const parent = "parent-thread-id";
+    const spawn = (threadId: string) => new Headers({
+      "x-codex-parent-thread-id": parent,
+      "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }),
+      "thread-id": threadId,
+    });
+
+    const siblingLanes = ["child-a", "child-b", "child-c"].map(id => sessionLaneIdFromRequest(spawn(id)));
+    expect(new Set(siblingLanes).size).toBe(3);
+    const siblingLeases = siblingLanes.map(lane => tryAdmitTurn(lane));
+    expect(siblingLeases.every(Boolean)).toBe(true);
+
+    // Same parent AND same child thread: one logical conversation, so the second overlapping
+    // turn is refused rather than admitted alongside the first.
+    expect(tryAdmitTurn(sessionLaneIdFromRequest(spawn("child-a")))).toBeNull();
+
+    for (const lease of siblingLeases) lease?.release();
+    expect(sessionLaneMetrics().retainedBytes).toBe(0);
+  });
 });

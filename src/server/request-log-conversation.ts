@@ -61,11 +61,25 @@ export function sessionIdHeaderFromRequest(headers: Headers): string | null {
   return headers.get("session_id") ?? headers.get("session-id");
 }
 
-/** Fixed-size logical turn lane; true thread identity wins over a fallback session header. */
+/**
+ * Fixed-size logical turn lane (#820).
+ *
+ * A lane must be as SPECIFIC as the identity available, which is the opposite of what
+ * `codexPoolAffinityKey` wants. Affinity deliberately prefers the parent thread so a whole
+ * subagent fan-out pins to one account; a lane keyed that way would put every parallel
+ * subagent of one parent into a single lane and reject all but the first with 503 — the
+ * fan-out is the normal case, not an abuse.
+ *
+ * So the parent is a QUALIFIER, never the lane on its own when a child thread exists: the
+ * pair separates siblings while still keeping one conversation's overlapping turns together.
+ */
 export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
-  return normalizeLogConversationId(headers.get("x-codex-parent-thread-id"))
-    ?? normalizeLogConversationId(headers.get("thread-id"))
-    ?? normalizeLogConversationId(sessionIdHeaderFromRequest(headers));
+  const parent = normalizeLogConversationId(headers.get("x-codex-parent-thread-id"));
+  const thread = normalizeLogConversationId(headers.get("thread-id"));
+  const session = normalizeLogConversationId(sessionIdHeaderFromRequest(headers));
+  const specific = thread ?? session;
+  if (parent && specific) return `${parent}\u0000${specific}`;
+  return specific ?? parent;
 }
 
 function firstSanitizedConversationId(
