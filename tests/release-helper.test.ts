@@ -1,6 +1,5 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +38,39 @@ interface ReleaseScenario {
 
 interface SshInvocation {
   args: string[];
+}
+
+interface CapturedProcessResult {
+  status: number | null;
+  stderr: string;
+  stdout: string;
+}
+
+async function runCaptured(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: Record<string, string | undefined>; timeoutMs?: number },
+): Promise<CapturedProcessResult> {
+  const child = Bun.spawn([command, ...args], {
+    cwd: options.cwd,
+    env: options.env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try { child.kill("SIGKILL"); } catch { /* child already exited */ }
+  }, options.timeoutMs ?? 20_000);
+  try {
+    const [status, capturedStdout, capturedStderr] = await Promise.all([child.exited, stdout, stderr]);
+    return { status: timedOut ? null : status, stdout: capturedStdout, stderr: capturedStderr };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function writeExecutable(path: string, contents: string): void {
@@ -215,7 +247,7 @@ function findCallIndex(calls: LoggedCall[], name: string, matcher: (call: Logged
   return calls.findIndex(call => call.name === name && matcher(call));
 }
 
-function runRelease(version: string, scenario: ReleaseScenario = {}) {
+async function runRelease(version: string, scenario: ReleaseScenario = {}) {
   const shimDir = mkdtempSync(join(tmpdir(), "ocx-release-helper-"));
   const logPath = join(shimDir, "release-log.jsonl");
   writeFileSync(logPath, "", "utf8");
@@ -241,31 +273,32 @@ function runRelease(version: string, scenario: ReleaseScenario = {}) {
   const pathKey = process.platform === "win32" ? "Path" : "PATH";
   const pathValue = `${shimDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? process.env.Path ?? ""}`;
 
-  const result = spawnSync(process.execPath, [releaseScriptPath, version], {
-    cwd: repoRoot,
-    env: {
-      ...inheritedEnv,
-      [pathKey]: pathValue,
-      FAKE_RELEASE_LOG: logPath,
-      FAKE_GIT_BRANCH: scenario.branch ?? "main",
-      FAKE_GIT_HEAD_SHA: scenario.headSha ?? "abc123def456",
-      ...(scenario.remoteHeadSha ? { FAKE_GIT_REMOTE_HEAD_SHA: scenario.remoteHeadSha } : {}),
-      FAKE_BUN_TSC_EXIT_CODE: String(scenario.typecheckExitCode ?? 0),
-      FAKE_BUN_TEST_EXIT_CODE: String(scenario.testExitCode ?? 0),
-      FAKE_BUN_PRIVACY_EXIT_CODE: String(scenario.privacyExitCode ?? 0),
-      ...(scenario.npmLatest ? { FAKE_NPM_LATEST: scenario.npmLatest } : {}),
-      ...(scenario.npmPreview ? { FAKE_NPM_PREVIEW: scenario.npmPreview } : {}),
-      ...(scenario.releaseSshKey ? { OCX_RELEASE_SSH_KEY: scenario.releaseSshKey } : {}),
-      ...(scenario.releaseSshRepo ? { OCX_RELEASE_SSH_REPO: scenario.releaseSshRepo } : {}),
-      ...(scenario.pendingBump ? { FAKE_GIT_PENDING_BUMP: " M package.json" } : {}),
-      ...(scenario.originUrl ? { FAKE_GIT_ORIGIN_URL: scenario.originUrl } : {}),
-    },
-    encoding: "utf8",
-  });
-
-  const calls = readLoggedCalls(logPath);
-  rmSync(shimDir, { recursive: true, force: true });
-  return { calls, result };
+  const env = {
+    ...inheritedEnv,
+    [pathKey]: pathValue,
+    FAKE_RELEASE_LOG: logPath,
+    FAKE_GIT_BRANCH: scenario.branch ?? "main",
+    FAKE_GIT_HEAD_SHA: scenario.headSha ?? "abc123def456",
+    ...(scenario.remoteHeadSha ? { FAKE_GIT_REMOTE_HEAD_SHA: scenario.remoteHeadSha } : {}),
+    FAKE_BUN_TSC_EXIT_CODE: String(scenario.typecheckExitCode ?? 0),
+    FAKE_BUN_TEST_EXIT_CODE: String(scenario.testExitCode ?? 0),
+    FAKE_BUN_PRIVACY_EXIT_CODE: String(scenario.privacyExitCode ?? 0),
+    ...(scenario.npmLatest ? { FAKE_NPM_LATEST: scenario.npmLatest } : {}),
+    ...(scenario.npmPreview ? { FAKE_NPM_PREVIEW: scenario.npmPreview } : {}),
+    ...(scenario.releaseSshKey ? { OCX_RELEASE_SSH_KEY: scenario.releaseSshKey } : {}),
+    ...(scenario.releaseSshRepo ? { OCX_RELEASE_SSH_REPO: scenario.releaseSshRepo } : {}),
+    ...(scenario.pendingBump ? { FAKE_GIT_PENDING_BUMP: " M package.json" } : {}),
+    ...(scenario.originUrl ? { FAKE_GIT_ORIGIN_URL: scenario.originUrl } : {}),
+  };
+  try {
+    const result = await runCaptured(process.execPath, [releaseScriptPath, version], {
+      cwd: repoRoot,
+      env,
+    });
+    return { calls: readLoggedCalls(logPath), result };
+  } finally {
+    rmSync(shimDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -275,7 +308,7 @@ function runRelease(version: string, scenario: ReleaseScenario = {}) {
  * contract for `GIT_SSH_COMMAND`. Exercising a real Git process here catches quoting that looks
  * correct in text yet splits, substitutes, or reinterprets the private-key path before SSH sees it.
  */
-function executeGitSshCommand(gitSshCommand: string): { calls: SshInvocation[]; result: ReturnType<typeof spawnSync> } {
+async function executeGitSshCommand(gitSshCommand: string): Promise<{ calls: SshInvocation[]; result: CapturedProcessResult }> {
   const shimDir = mkdtempSync(join(tmpdir(), "ocx-release-ssh-"));
   const logPath = join(shimDir, "ssh-log.jsonl");
   const jsPath = join(shimDir, "ssh.js");
@@ -296,26 +329,29 @@ process.exit(0);
   const inheritedEnv = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => key !== "GIT_SSH" && key !== "GIT_SSH_COMMAND"),
   );
-  const result = spawnSync("git", ["ls-remote", "ssh://example.invalid/owner/repository.git"], {
-    cwd: repoRoot,
-    env: {
-      ...inheritedEnv,
-      FAKE_SSH_LOG: logPath,
-      GIT_SSH_COMMAND: nativeFakeCommand,
-    },
-    encoding: "utf8",
-  });
-  const raw = readFileSync(logPath, "utf8").trim();
-  const calls = raw
-    ? raw.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as SshInvocation)
-    : [];
-  rmSync(shimDir, { recursive: true, force: true });
-  return { calls, result };
+  const env = {
+    ...inheritedEnv,
+    FAKE_SSH_LOG: logPath,
+    GIT_SSH_COMMAND: nativeFakeCommand,
+  };
+  try {
+    const result = await runCaptured("git", ["ls-remote", "ssh://example.invalid/owner/repository.git"], {
+      cwd: repoRoot,
+      env,
+    });
+    const raw = readFileSync(logPath, "utf8").trim();
+    const calls = raw
+      ? raw.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as SshInvocation)
+      : [];
+    return { calls, result };
+  } finally {
+    rmSync(shimDir, { recursive: true, force: true });
+  }
 }
 
 describe("release helper", () => {
-  test("preflight runs the shared audit, typecheck, test suite, and privacy scan before version bump", () => {
-    const { calls, result } = runRelease("9.9.9");
+  test("preflight runs the shared audit, typecheck, test suite, and privacy scan before version bump", async () => {
+    const { calls, result } = await runRelease("9.9.9");
 
     // Report what the script actually said. A bare status assertion turned a
     // Windows-only spawn failure into "Expected: 0 Received: 1" with no cause,
@@ -343,8 +379,8 @@ describe("release helper", () => {
     expect(dispatchIndex).toBeGreaterThan(versionIndex);
   });
 
-  test("an obsolete version that would move latest backwards aborts before the bump", () => {
-    const { calls, result } = runRelease("9.9.8", { npmLatest: "9.9.9" });
+  test("an obsolete version that would move latest backwards aborts before the bump", async () => {
+    const { calls, result } = await runRelease("9.9.8", { npmLatest: "9.9.9" });
 
     expect(result.status).not.toBe(0);
     expect(result.stderr ?? "").toContain("does not move the 'latest' channel forward");
@@ -352,21 +388,21 @@ describe("release helper", () => {
     expect(findCallIndex(calls, "git", call => call.args[0] === "commit")).toBe(-1);
   });
 
-  test("a version newer than the channel tip passes the forward guard", () => {
-    const { calls, result } = runRelease("9.9.10", { npmLatest: "9.9.9" });
+  test("a version newer than the channel tip passes the forward guard", async () => {
+    const { calls, result } = await runRelease("9.9.10", { npmLatest: "9.9.9" });
 
     expect(`${result.status}\n${result.stderr ?? ""}`.trim()).toBe("0");
     expect(findCallIndex(calls, "npm", call => call.args.join(" ") === "version 9.9.10 --no-git-tag-version")).toBeGreaterThanOrEqual(0);
   });
 
-  test("preview releases compare against the preview channel, not latest", () => {
-    const { result } = runRelease("9.9.9-preview.2", { branch: "preview", npmLatest: "10.0.0", npmPreview: "9.9.9-preview.1" });
+  test("preview releases compare against the preview channel, not latest", async () => {
+    const { result } = await runRelease("9.9.9-preview.2", { branch: "preview", npmLatest: "10.0.0", npmPreview: "9.9.9-preview.1" });
 
     expect(`${result.status}\n${result.stderr ?? ""}`.trim()).toBe("0");
   });
 
-  test("failed privacy scan aborts before version bump, commit, and push", () => {
-    const { calls, result } = runRelease("9.9.9", { privacyExitCode: 1 });
+  test("failed privacy scan aborts before version bump, commit, and push", async () => {
+    const { calls, result } = await runRelease("9.9.9", { privacyExitCode: 1 });
 
     expect(result.status).not.toBe(0);
     expect(findCallIndex(calls, "bun", call => call.args.join(" ") === "run privacy:scan")).toBeGreaterThanOrEqual(0);
@@ -375,8 +411,8 @@ describe("release helper", () => {
     expect(findCallIndex(calls, "git", call => call.args[0] === "push")).toBe(-1);
   });
 
-  test("preview branch still defaults to preview tag and dry-run dispatch", () => {
-    const { calls, result } = runRelease("9.9.9-preview.1", { branch: "preview" });
+  test("preview branch still defaults to preview tag and dry-run dispatch", async () => {
+    const { calls, result } = await runRelease("9.9.9-preview.1", { branch: "preview" });
 
     expect(result.status).toBe(0);
     expect(findCallIndex(calls, "gh", call =>
@@ -388,8 +424,8 @@ describe("release helper", () => {
     )).toBeGreaterThanOrEqual(0);
   });
 
-  test("dispatch pins the audited release SHA via expected-sha", () => {
-    const { calls, result } = runRelease("9.9.9", { headSha: "deadbeefcafe1234" });
+  test("dispatch pins the audited release SHA via expected-sha", async () => {
+    const { calls, result } = await runRelease("9.9.9", { headSha: "deadbeefcafe1234" });
 
     expect(result.status).toBe(0);
     expect(findCallIndex(calls, "gh", call =>
@@ -410,8 +446,8 @@ describe("release helper", () => {
    * rejected by the ruleset again), and the default path must stay byte-identical so a contributor
    * or CI clone without the variable is unaffected.
    */
-  test("the protected push uses the release deploy key only when one is configured", () => {
-    const { calls, result } = runRelease("9.9.9", {
+  test("the protected push uses the release deploy key only when one is configured", async () => {
+    const { calls, result } = await runRelease("9.9.9", {
       releaseSshKey: "/tmp/ocx-release-key",
       releaseSshRepo: sshTarget,
       pendingBump: true,
@@ -430,8 +466,8 @@ describe("release helper", () => {
    * (`C:\Users\Jun Kim\.ssh\...`) is exactly that shape, and ssh would read the tail as its next
    * flag. Assert the whole command string, not a substring: `toContain` passes on the broken form.
    */
-  test("a key path with spaces and backslashes stays a single ssh argument", () => {
-    const { calls } = runRelease("9.9.9", {
+  test("a key path with spaces and backslashes stays a single ssh argument", async () => {
+    const { calls } = await runRelease("9.9.9", {
       releaseSshKey: "C:\\Users\\Jun Kim\\.ssh\\ocx release key",
       pendingBump: true,
     });
@@ -440,9 +476,9 @@ describe("release helper", () => {
     expect(push?.gitSshCommand).toBe('ssh -i "C:\\\\Users\\\\Jun Kim\\\\.ssh\\\\ocx release key" -o IdentitiesOnly=yes');
   });
 
-  test("Git passes the emitted deploy-key path to SSH as one literal argument", () => {
+  test("Git passes the emitted deploy-key path to SSH as one literal argument", async () => {
     const keyPath = 'C:\\Users\\Jun Kim\\.ssh\\ocx "quoted" $HOME $(not-run) `not-run`; key';
-    const { calls: releaseCalls } = runRelease("9.9.9", {
+    const { calls: releaseCalls } = await runRelease("9.9.9", {
       releaseSshKey: keyPath,
       releaseSshRepo: sshTarget,
       pendingBump: true,
@@ -450,7 +486,7 @@ describe("release helper", () => {
     const push = releaseCalls.find(call => call.name === "git" && call.args[0] === "push");
     expect(push?.gitSshCommand).toBeDefined();
 
-    const { calls } = executeGitSshCommand(push?.gitSshCommand ?? "");
+    const { calls } = await executeGitSshCommand(push?.gitSshCommand ?? "");
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
       const identityIndex = call.args.indexOf("-i");
@@ -463,8 +499,8 @@ describe("release helper", () => {
    * The SSH target is derived from `origin` rather than hardcoded, so a fork's release pushes to
    * the fork instead of silently targeting upstream.
    */
-  test("the ssh push target follows the configured origin remote", () => {
-    const { calls } = runRelease("9.9.9", {
+  test("the ssh push target follows the configured origin remote", async () => {
+    const { calls } = await runRelease("9.9.9", {
       releaseSshKey: "/tmp/k",
       originUrl: "https://github.com/someone-else/opencodex.git",
       pendingBump: true,
@@ -479,8 +515,8 @@ describe("release helper", () => {
    * failing command, so a folded `user:token@` would put the token on the terminal and in the
    * release log. Refuse instead of building a target.
    */
-  test("an origin carrying credentials is refused rather than transplanted", () => {
-    const { calls, result } = runRelease("9.9.9", {
+  test("an origin carrying credentials is refused rather than transplanted", async () => {
+    const { calls, result } = await runRelease("9.9.9", {
       releaseSshKey: "/tmp/k",
       originUrl: `https://x-access-token:SECRET@${"github.com"}/lidge-jun/opencodex.git`,
       pendingBump: true,
@@ -492,8 +528,8 @@ describe("release helper", () => {
     expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
   });
 
-  test("a malformed OCX_RELEASE_SSH_REPO override is refused instead of pushed to", () => {
-    const { calls, result } = runRelease("9.9.9", {
+  test("a malformed OCX_RELEASE_SSH_REPO override is refused instead of pushed to", async () => {
+    const { calls, result } = await runRelease("9.9.9", {
       releaseSshKey: "/tmp/k",
       releaseSshRepo: "not-a-remote",
       pendingBump: true,
@@ -504,18 +540,19 @@ describe("release helper", () => {
     expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
   });
 
-  test("credential-bearing SSH targets are rejected without logging the credential", () => {
-    for (const scenario of [
-      { releaseSshRepo: "ssh://git:SECRET@example.test/owner/repository.git" },
-      { releaseSshRepo: "ssh://SECRET@example.test/owner/repository.git" },
-      { releaseSshRepo: "ssh://git%3ASECRET@example.test/owner/repository.git" },
-      { releaseSshRepo: "git@SECRET@example.test:owner/repository.git" },
-      { releaseSshRepo: "ssh://git:@example.test/owner/repository.git" },
-      { releaseSshRepo: "git@example.test:owner/repository.git?token=SECRET" },
-      { originUrl: "ssh://git:SECRET@example.test/owner/repository.git" },
-      { originUrl: "git:SECRET@example.test:owner/repository.git" },
-    ]) {
-      const { calls, result } = runRelease("9.9.9", {
+  test.each([
+    { releaseSshRepo: "ssh://git:SECRET@example.test/owner/repository.git" },
+    { releaseSshRepo: "ssh://SECRET@example.test/owner/repository.git" },
+    { releaseSshRepo: "ssh://git%3ASECRET@example.test/owner/repository.git" },
+    { releaseSshRepo: "git@SECRET@example.test:owner/repository.git" },
+    { releaseSshRepo: "ssh://git:@example.test/owner/repository.git" },
+    { releaseSshRepo: "git@example.test:owner/repository.git?token=SECRET" },
+    { originUrl: "ssh://git:SECRET@example.test/owner/repository.git" },
+    { originUrl: "git:SECRET@example.test:owner/repository.git" },
+  ] satisfies ReleaseScenario[])(
+    "credential-bearing SSH target is rejected without logging the credential",
+    async scenario => {
+      const { calls, result } = await runRelease("9.9.9", {
         releaseSshKey: "/tmp/k",
         pendingBump: true,
         ...scenario,
@@ -524,28 +561,26 @@ describe("release helper", () => {
       expect(result.status).not.toBe(0);
       expect(output).not.toContain("SECRET");
       expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
-    }
+    },
+  );
+
+  test.each([
+    "ssh://git@example.test/owner/repository.git",
+    "ssh://example.test/owner/repository.git",
+    "git@example.test:owner/repository.git",
+  ])("credential-free ssh URL or scp-like release target remains accepted", async releaseSshRepo => {
+    const { calls, result } = await runRelease("9.9.9", {
+      releaseSshKey: "/tmp/k",
+      releaseSshRepo,
+      pendingBump: true,
+    });
+    expect(result.status).toBe(0);
+    expect(calls.find(call => call.name === "git" && call.args[0] === "push")?.args[1])
+      .toBe(releaseSshRepo);
   });
 
-  test("credential-free ssh URL and scp-like release targets remain accepted", () => {
-    for (const releaseSshRepo of [
-      "ssh://git@example.test/owner/repository.git",
-      "ssh://example.test/owner/repository.git",
-      "git@example.test:owner/repository.git",
-    ]) {
-      const { calls, result } = runRelease("9.9.9", {
-        releaseSshKey: "/tmp/k",
-        releaseSshRepo,
-        pendingBump: true,
-      });
-      expect(result.status).toBe(0);
-      expect(calls.find(call => call.name === "git" && call.args[0] === "push")?.args[1])
-        .toBe(releaseSshRepo);
-    }
-  });
-
-  test("an ssh origin is reused verbatim rather than rewritten", () => {
-    const { calls } = runRelease("9.9.9", {
+  test("an ssh origin is reused verbatim rather than rewritten", async () => {
+    const { calls } = await runRelease("9.9.9", {
       releaseSshKey: "/tmp/k",
       originUrl: `${"git"}@${"github.com"}:lidge-jun/opencodex.git`,
       pendingBump: true,
@@ -555,8 +590,8 @@ describe("release helper", () => {
     expect(push?.args[1]).toBe(`${"git"}@${"github.com"}:lidge-jun/opencodex.git`);
   });
 
-  test("an origin that yields no ssh target aborts instead of guessing one", () => {
-    const { calls, result } = runRelease("9.9.9", {
+  test("an origin that yields no ssh target aborts instead of guessing one", async () => {
+    const { calls, result } = await runRelease("9.9.9", {
       releaseSshKey: "/tmp/k",
       originUrl: "/srv/git/opencodex.git",
       pendingBump: true,
@@ -567,8 +602,8 @@ describe("release helper", () => {
     expect(calls.find(call => call.name === "git" && call.args[0] === "push")).toBeUndefined();
   });
 
-  test("without a configured key the push is unchanged and carries no ssh override", () => {
-    const { calls, result } = runRelease("9.9.9", { pendingBump: true });
+  test("without a configured key the push is unchanged and carries no ssh override", async () => {
+    const { calls, result } = await runRelease("9.9.9", { pendingBump: true });
 
     expect(result.status).toBe(0);
     const push = calls.find(call => call.name === "git" && call.args[0] === "push");
@@ -576,8 +611,8 @@ describe("release helper", () => {
     expect(push?.gitSshCommand).toBeUndefined();
   });
 
-  test("aborts before dispatch when the remote branch moved during the CI wait", () => {
-    const { calls, result } = runRelease("9.9.9", {
+  test("aborts before dispatch when the remote branch moved during the CI wait", async () => {
+    const { calls, result } = await runRelease("9.9.9", {
       headSha: "abc123def456",
       remoteHeadSha: "9999999999999999999999999999999999999999",
     });
@@ -652,19 +687,19 @@ describe("release helper", () => {
   // #1753 review follow-up: build metadata on the channel tip is valid semver
   // and compares by precedence only; an unparseable tip must fail CLOSED
   // (Number() on a garbage core used to yield NaN and pass any candidate).
-  test("channel tip with build metadata compares by precedence, not NaN", () => {
-    const { result } = runRelease("2.19.4", { npmLatest: "2.19.3+build.1" });
+  test("channel tip with build metadata compares by precedence, not NaN", async () => {
+    const { result } = await runRelease("2.19.4", { npmLatest: "2.19.3+build.1" });
     expect(`${result.status}\n${result.stderr ?? ""}`.trim()).toBe("0");
   });
 
-  test("channel tip equal after stripping build metadata does not move forward", () => {
-    const { result } = runRelease("2.19.3", { npmLatest: "2.19.3+build.1" });
+  test("channel tip equal after stripping build metadata does not move forward", async () => {
+    const { result } = await runRelease("2.19.3", { npmLatest: "2.19.3+build.1" });
     expect(result.status).toBe(1);
     expect(result.stderr ?? "").toContain("does not move");
   });
 
-  test("unparseable channel tip fails closed", () => {
-    const { result } = runRelease("2.19.4", { npmLatest: "not-a-version" });
+  test("unparseable channel tip fails closed", async () => {
+    const { result } = await runRelease("2.19.4", { npmLatest: "not-a-version" });
     expect(result.status).toBe(1);
     expect(result.stderr ?? "").toContain("cannot compare release versions");
   });

@@ -3415,7 +3415,7 @@ describe("server local API auth", () => {
       await server.stop(true);
       await upstream.stop(true);
     }
-  });
+  }, { timeout: SERVER_BUDGET_MS });
 
   test("passthrough SSE cyber terminal is logged as 400 cyber_policy", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
