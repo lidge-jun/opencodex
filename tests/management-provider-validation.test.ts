@@ -2977,6 +2977,57 @@ describe("provider management validation", () => {
     expect(liveConfig.providers["google-antigravity"]?.tlsProfile).toBe("antigravity-browser");
   });
 
+  test("POST and PATCH reject Antigravity TLS profiles outside the canonical OAuth CCA contract", async () => {
+    const canonical = {
+      adapter: "google" as const,
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      authMode: "oauth" as const,
+      googleMode: "cloud-code-assist" as const,
+      tlsProfile: "antigravity-browser" as const,
+    };
+    const cases = [
+      { name: "other-provider", provider: { ...canonical } },
+      { name: "google-antigravity", provider: { ...canonical, authMode: "key" as const } },
+      { name: "google-antigravity", provider: { ...canonical, googleMode: "ai-studio" as const } },
+      { name: "google-antigravity", provider: { ...canonical, baseUrl: "https://example.test" } },
+    ];
+    expect(providerManagementConfigError("google-antigravity", canonical)).toBeNull();
+    for (const candidate of cases) {
+      expect(providerManagementConfigError(candidate.name, candidate.provider)).toContain("tlsProfile");
+
+      const postConfig: OcxConfig = {
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "openai",
+        openaiProviderTierVersion: 2,
+        providers: { openai: { ...canonicalDirect } },
+      };
+      const post = new Request("http://127.0.0.1/api/providers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: candidate.name, provider: candidate.provider }),
+      });
+      expect((await handleManagementAPI(post, new URL(post.url), postConfig, {}))?.status).toBe(400);
+
+      const patchConfig: OcxConfig = {
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "openai",
+        openaiProviderTierVersion: 2,
+        providers: {
+          openai: { ...canonicalDirect },
+          [candidate.name]: { ...candidate.provider, tlsProfile: undefined },
+        },
+      };
+      const patch = new Request(`http://127.0.0.1/api/providers?name=${encodeURIComponent(candidate.name)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tlsProfile: "antigravity-browser" }),
+      });
+      expect((await handleManagementAPI(patch, new URL(patch.url), patchConfig, {}))?.status).toBe(400);
+    }
+  });
+
   test("GET /api/providers clears active TLS status when the profile is removed", async () => {
     const profiled = {
       adapter: "google" as const,

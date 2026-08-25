@@ -28,7 +28,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
-import { getProviderTlsProfileStatus } from "../lib/provider-tls-profile";
+import { getProviderTlsProfileStatus, providerTlsProfileConfigError } from "../lib/provider-tls-profile";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -574,6 +574,10 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     return `provider ${name} must not include codexAccountMode`;
   }
   const typed = provider as unknown as OcxProviderConfig;
+  const tlsProfileError = providerTlsProfileConfigError(name, typed);
+  if (tlsProfileError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${tlsProfileError}`;
+  }
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
   if (effectiveGoogleMode(name, typed) === "vertex" && typed.location !== undefined) {

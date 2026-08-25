@@ -79,6 +79,7 @@ async function saveTls(container: HTMLElement): Promise<void> {
 
 test("Antigravity TLS profile is opt-in and requires confirmation before save", async () => {
   const { root, container, patches } = await mountSettings(item(), async () => ({ ok: true }));
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Unofficial");
   Object.defineProperty(testWindow, "confirm", { configurable: true, value: () => false });
   await saveTls(container);
   expect(patches).toHaveLength(0);
@@ -91,6 +92,43 @@ test("confirmed Antigravity TLS profile save sends the fixed profile and shows s
   expect(container.querySelector("[data-testid='antigravity-tls-status']")?.textContent).toContain("Fallback");
   await saveTls(container);
   expect(patches[0]?.tlsProfile).toBe("antigravity-browser");
+  await act(async () => { root.unmount(); });
+});
+
+test("combined pacing and TLS save sends both fields after one confirmation", async () => {
+  const { root, container, patches } = await mountSettings(item(), async () => ({ ok: true }));
+  const rpm = container.querySelector<HTMLInputElement>(".pwi-pacing-grid input[type='number']");
+  expect(rpm).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(rpm, "31");
+    rpm!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    container.querySelector<HTMLInputElement>("[data-testid='antigravity-tls-profile']")!.click();
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(patches).toHaveLength(1);
+  expect(patches[0]?.requestPacing).toBeDefined();
+  expect(patches[0]?.tlsProfile).toBe("antigravity-browser");
+  await act(async () => { root.unmount(); });
+});
+
+test("cancelled combined pacing and TLS save sends neither field", async () => {
+  const { root, container, patches } = await mountSettings(item(), async () => ({ ok: true }));
+  Object.defineProperty(testWindow, "confirm", { configurable: true, value: () => false });
+  const rpm = container.querySelector<HTMLInputElement>(".pwi-pacing-grid input[type='number']");
+  expect(rpm).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(rpm, "31");
+    rpm!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    container.querySelector<HTMLInputElement>("[data-testid='antigravity-tls-profile']")!.click();
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click();
+    await Promise.resolve();
+  });
+  expect(patches).toHaveLength(0);
   await act(async () => { root.unmount(); });
 });
 

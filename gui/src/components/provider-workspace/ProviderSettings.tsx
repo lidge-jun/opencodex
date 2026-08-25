@@ -252,7 +252,7 @@ export default function ProviderSettings({
       if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.models) {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
-      const pacingOnly = pacingDirty && !dirty;
+      const pacingOnly = pacingDirty && !dirty && !tlsDirty;
       const patch: ProviderUpdatePatch = pacingOnly
         ? { requestPacing: pacingDraft }
         : {
@@ -364,7 +364,20 @@ export default function ProviderSettings({
             />
             <span>{t("pws.antigravityTlsEnable")}</span>
           </label>
-          <span id="pwi-antigravity-tls-help" className="pwi-settings-hint">{t("pws.antigravityTlsWarning")}</span>
+          <div
+            id="pwi-antigravity-tls-help"
+            role="alert"
+            className="card-sub"
+            style={{
+              marginTop: 10,
+              padding: "10px 16px",
+              border: "1px solid var(--border, #c9a227)",
+              borderRadius: 6,
+              background: "color-mix(in srgb, var(--warn, #c9a227) 12%, transparent)",
+            }}
+          >
+            {t("pws.antigravityTlsWarning")}
+          </div>
           <span data-testid="antigravity-tls-status" role="status" className="pwi-settings-hint">
             {t("pws.antigravityTlsStatus", { status: item.tlsProfileStatus === "active" ? t("pws.antigravityTlsActive") : item.tlsProfileStatus === "fallback" ? t("pws.antigravityTlsFallback") : t("pws.antigravityTlsDisabled") })}
           </span>
