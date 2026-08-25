@@ -7,7 +7,7 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 
 ## 加密 v2 任務復原控制
 
-實驗性復原功能預設關閉。確認配額與延遲警告後，可在**子代理 → 設定 → 復原加密的 v2 任務**中啟用，或分別使用 `ocx agent recovery status`、`ocx agent recovery on` 或 `ocx agent recovery off`。對應 API 為 `GET/PUT /api/agent-task-recovery`；`PUT` 僅接受 `{"enabled": boolean}`，會先寫入持久設定，再更新執行中的狀態，並保留手動設定的進階選項。
+實驗性復原功能預設關閉。確認配額與延遲警告後，可在**子代理 → 設定 → 復原加密的 v2 任務**中啟用，或分別使用 `ocx agent recovery status`、`ocx agent recovery on --yes` 或 `ocx agent recovery off`。對應 API 為 `GET/PUT /api/agent-task-recovery`；`PUT` 僅接受 `{"enabled": boolean}`，會先寫入持久設定，再更新執行中的狀態，並保留手動設定的進階選項。
 
 ## Agent 欄位
 

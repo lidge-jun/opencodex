@@ -25,7 +25,9 @@ const USAGE = `Usage:
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
       [--prompt <text|->] [--guidance <on|off>] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
-  ocx agent recovery <status|on|off> [--json]
+  ocx agent recovery status [--json]
+  ocx agent recovery on --yes [--json]
+  ocx agent recovery off [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
@@ -57,14 +59,20 @@ async function recovery(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
   const wantsJson = takeFlag(args, "--json");
+  const confirmed = takeFlag(args, "--yes");
   rejectArgs(args, USAGE);
   if (action === "status") {
+    if (confirmed) throw new CliUsageError("--yes is valid only when enabling recovery", USAGE);
     const result = await runtimeRequest("/api/agent-task-recovery", {}, deps);
     printData(result, wantsJson, summaryLines(result));
     return;
   }
   if (action !== "on" && action !== "off") throw new CliUsageError(`unknown recovery action ${action}`, USAGE);
   const enabled = action === "on";
+  if (enabled && !confirmed) {
+    throw new CliUsageError("enabling encrypted V2 task recovery requires --yes", USAGE);
+  }
+  if (!enabled && confirmed) throw new CliUsageError("--yes is valid only when enabling recovery", USAGE);
   const result = await runtimeRequest("/api/agent-task-recovery", {
     method: "PUT",
     body: JSON.stringify({ enabled }),

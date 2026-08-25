@@ -9,7 +9,7 @@ kontrol eder.
 
 ## Şifrelenmiş v2 görev kurtarma denetimi
 
-Deneysel kurtarma varsayılan olarak kapalıdır. Kota ve gecikme uyarısını kabul ettikten sonra **Alt ajanlar → Ayarlar → Şifrelenmiş v2 görevlerini kurtar** yolundan etkinleştirin veya `ocx agent recovery status`, `ocx agent recovery on` ya da `ocx agent recovery off` kullanın. Eşdeğer API `GET/PUT /api/agent-task-recovery`'dir. `PUT` yalnızca `{"enabled": boolean}` kabul eder, etkin durumu güncellemeden önce kalıcı yapılandırmayı yazar ve elle yapılandırılmış gelişmiş seçenekleri korur.
+Deneysel kurtarma varsayılan olarak kapalıdır. Kota ve gecikme uyarısını kabul ettikten sonra **Alt ajanlar → Ayarlar → Şifrelenmiş v2 görevlerini kurtar** yolundan etkinleştirin veya `ocx agent recovery status`, `ocx agent recovery on --yes` ya da `ocx agent recovery off` kullanın. Eşdeğer API `GET/PUT /api/agent-task-recovery`'dir. `PUT` yalnızca `{"enabled": boolean}` kabul eder, etkin durumu güncellemeden önce kalıcı yapılandırmayı yazar ve elle yapılandırılmış gelişmiş seçenekleri korur.
 
 ## Ajan alanları
 

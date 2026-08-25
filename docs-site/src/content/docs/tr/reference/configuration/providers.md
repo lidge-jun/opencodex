@@ -10,7 +10,7 @@ konuştuğunu ve isteklerin nasıl doğrulandığını söyler.
 
 Kurallı bir OpenRouter sağlayıcısında **Sağlayıcılar → OpenRouter → Modeller → Model başına sağlayıcı yönlendirmesi** yolunu açın. Tam OpenRouter model kimliğini girip uçları yükleyin; ardından `openRouterRouting` kalıtımını, `order` sırasını veya `only` kısıtını seçin. Kalıtımı kaydetmek ilgili `modelOpenRouterRouting` girdisini kaldırır. Keşifte artık dönmeyen yapılandırılmış etiketler görünür kalır ve açıkça kaldırılabilir.
 
-Keşif yapılandırılmış OpenRouter API anahtarını kullanır. Yetkilendirme reddi kayıtlı yönlendirmeyi değiştirmez. Başarılı sonuçlar beş dakika önbelleğe alınır; boş bir sonuçtan sonra bile **Yenile** önbelleği atlar.
+Keşif yapılandırılmış OpenRouter API anahtarını kullanır. Yetkilendirme reddi kayıtlı yönlendirmeyi değiştirmez. Başarılı sonuçlar beş dakika önbelleğe alınır; boş bir sonuçtan sonra bile **Yenile** önbelleği atlar. Yönetim API'sinde `cached: true`, yanıtın tamamlanmış bir önbellek girdisinden geldiğini belirtir; etkin paylaşılan isteğe katılan çağrılar `cached: false` alır.
 
 ## Sağlayıcı ile ilgili üst düzey alanlar
 

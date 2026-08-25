@@ -9,7 +9,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 对于规范 OpenRouter 提供者，请打开**提供者 → OpenRouter → 模型 → 按模型的提供者路由**。输入精确的 OpenRouter 模型 ID，加载 endpoint，然后选择继承 `openRouterRouting`、使用 `order` 排序或使用 `only` 限制。保存继承模式会删除对应的 `modelOpenRouterRouting` 条目。发现结果中已不存在的已配置 tag 仍会显示，并可明确移除。
 
-发现功能使用已配置的 OpenRouter API 密钥。授权失败不会更改已保存的路由。成功结果会缓存五分钟；即使结果为空，也可通过**刷新**绕过缓存。
+发现功能使用已配置的 OpenRouter API 密钥。授权失败不会更改已保存的路由。成功结果会缓存五分钟；即使结果为空，也可通过**刷新**绕过缓存。在管理 API 中，`cached: true` 表示响应来自已完成的缓存条目；加入正在进行的共享请求的调用会收到 `cached: false`。
 
 ## 提供者相关顶级字段
 

@@ -61,6 +61,83 @@ describe("OpenRouter model endpoint discovery", () => {
     expect(urls).toEqual(["https://openrouter.ai/api/v1/models/deepseek/deepseek-r1/endpoints"]);
   });
 
+  test("bounds every external string before returning or caching the DTO", () => {
+    const oversized = "x".repeat(257);
+    const longParameter = "p".repeat(129);
+    expect(parseOpenRouterModelEndpoints({
+      data: {
+        id: "author/model",
+        endpoints: [{
+          tag: "provider/live",
+          provider_name: "Provider",
+          name: oversized,
+          context_length: Number.MAX_VALUE,
+          max_completion_tokens: -1,
+          supported_parameters: ["tools", longParameter],
+          pricing: { prompt: "1".repeat(129), completion: " 0.000002 " },
+        }],
+      },
+    }, "author/model")).toEqual([{
+      tag: "provider/live",
+      providerName: "Provider",
+      supportedParameters: ["tools"],
+      pricing: { completion: "0.000002" },
+    }]);
+
+    expect(parseOpenRouterModelEndpoints({
+      data: { id: "author/model", endpoints: [{ tag: oversized, provider_name: "Provider" }] },
+    }, "author/model")).toEqual([]);
+  });
+
+  test("rejects dot segments and oversized model path components before outbound fetch", async () => {
+    let fetches = 0;
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      fetch: async () => {
+        fetches += 1;
+        return Response.json(responseBody);
+      },
+    } as OcxProviderConfig;
+
+    for (const modelId of ["../model", "author/..", `${"a".repeat(257)}/model`, `author/${"m".repeat(257)}`]) {
+      await expect(listOpenRouterModelEndpoints("openrouter", provider, modelId, "test-token"))
+        .rejects.toMatchObject({ code: "invalid_model", status: 400 });
+    }
+    expect(fetches).toBe(0);
+  });
+
+  test("same-key callers share one flight and do not call it a completed cache hit", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    let fetches = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchStarted = new Promise<void>(resolve => { started = resolve; });
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      fetch: async () => {
+        fetches += 1;
+        started();
+        await gate;
+        return Response.json({ data: { id: "author/model", endpoints: [] } });
+      },
+    } as OcxProviderConfig;
+
+    const first = listOpenRouterModelEndpoints("openrouter", provider, "author/model", "test-token");
+    await fetchStarted;
+    const joined = listOpenRouterModelEndpoints("openrouter", provider, "author/model", "test-token");
+    release();
+
+    expect(await Promise.all([first, joined])).toEqual([
+      expect.objectContaining({ cached: false }),
+      expect.objectContaining({ cached: false }),
+    ]);
+    expect(fetches).toBe(1);
+    await expect(listOpenRouterModelEndpoints("openrouter", provider, "author/model", "test-token"))
+      .resolves.toMatchObject({ cached: true });
+  });
+
   test("maps authorization failures without returning the upstream body", async () => {
     const provider = {
       adapter: "openai-chat",

@@ -72,6 +72,33 @@ describe("OpenRouter model routing management API", () => {
     expect(current.providers.openrouter?.modelOpenRouterRouting).toBeUndefined();
   });
 
+  test("rejects invalid model routing through the canonical schema before persistence", async () => {
+    const current = config({
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "test-key",
+      modelOpenRouterRouting: { "author/existing": { order: ["provider/live"] } },
+    });
+    const original = structuredClone(current.providers.openrouter?.modelOpenRouterRouting);
+    const invalid = [
+      { "author/model": { order: "provider/live" } },
+      { "author/model": { only: [] } },
+      { "author/model": { allowFallbacks: "yes" } },
+      { "author/model": { allow_fallbacks: false } },
+      { "author/model": { order: ["provider/live", "provider/live"] } },
+    ];
+
+    for (const modelOpenRouterRouting of invalid) {
+      const response = await management(current, "/api/providers?name=openrouter", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelOpenRouterRouting }),
+      });
+      expect(response.status).toBe(400);
+      expect(current.providers.openrouter?.modelOpenRouterRouting).toEqual(original);
+    }
+  });
+
   test("rejects discovery for a noncanonical OpenRouter-shaped provider", async () => {
     const current = config({ adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "test-key" });
     const response = await management(current, "/api/openrouter/model-providers?provider=openrouter&model=deepseek%2Fdeepseek-r1");

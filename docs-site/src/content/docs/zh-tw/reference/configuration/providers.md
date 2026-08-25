@@ -9,7 +9,7 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 對於規範 OpenRouter 供應商，請開啟**供應商 → OpenRouter → 模型 → 依模型的供應商路由**。輸入精確的 OpenRouter model ID、載入 endpoint，然後選擇繼承 `openRouterRouting`、使用 `order` 排序或以 `only` 限制。儲存繼承模式會移除對應的 `modelOpenRouterRouting` 項目。探索結果中已不存在的已設定 tag 仍會顯示，並可明確移除。
 
-探索使用已設定的 OpenRouter API 金鑰。授權失敗不會變更已儲存的路由。成功結果會快取五分鐘；即使結果為空，也能透過**重新整理**略過快取。
+探索使用已設定的 OpenRouter API 金鑰。授權失敗不會變更已儲存的路由。成功結果會快取五分鐘；即使結果為空，也能透過**重新整理**略過快取。在管理 API 中，`cached: true` 表示回應來自已完成的快取項目；加入進行中共享請求的呼叫會收到 `cached: false`。
 
 ## 供應商相關的頂層欄位
 

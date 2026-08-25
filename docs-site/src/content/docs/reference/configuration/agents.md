@@ -192,7 +192,7 @@ tasks** and shows the quota/latency warning before enabling it. Headless users c
 
 ```bash
 ocx agent recovery status
-ocx agent recovery on
+ocx agent recovery on --yes
 ocx agent recovery off
 ```
 

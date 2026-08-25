@@ -289,13 +289,21 @@ describe("headless GUI parity CLI", () => {
   });
 
   test("agent recovery mirrors the explicit management toggle", async () => {
+    const unconfirmed = fakeRuntime();
+    expect(await handleAgentCommand(["recovery", "on", "--json"], unconfirmed.deps)).toBe(2);
+    expect(unconfirmed.requests).toEqual([]);
+
     const runtime = fakeRuntime();
-    expect(await handleAgentCommand(["recovery", "on", "--json"], runtime.deps)).toBe(0);
+    expect(await handleAgentCommand(["recovery", "on", "--yes", "--json"], runtime.deps)).toBe(0);
     expect(runtime.requests).toEqual([{
       path: "/api/agent-task-recovery",
       method: "PUT",
       body: { enabled: true },
     }]);
+
+    const disabled = fakeRuntime();
+    expect(await handleAgentCommand(["recovery", "off", "--json"], disabled.deps)).toBe(0);
+    expect(disabled.requests[0]?.body).toEqual({ enabled: false });
   });
 
   test("provider edit reuses the management provider patch", async () => {

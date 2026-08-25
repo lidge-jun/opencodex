@@ -10,7 +10,7 @@ authentifiées.
 
 Pour un fournisseur OpenRouter canonique, ouvrez **Fournisseurs → OpenRouter → Modèles → Routage du fournisseur par modèle**. Saisissez l’identifiant OpenRouter exact, chargez les endpoints, puis choisissez l’héritage de `openRouterRouting`, un ordre `order` ou une liste exclusive `only`. Le mode héritage supprime l’entrée correspondante de `modelOpenRouterRouting`. Les tags configurés mais absents d’une découverte restent visibles et peuvent être supprimés explicitement.
 
-La découverte utilise la clé API OpenRouter configurée. Un refus d’autorisation ne modifie pas le routage enregistré. Les résultats valides sont mis en cache pendant cinq minutes ; **Actualiser** contourne ce cache, même après une liste vide.
+La découverte utilise la clé API OpenRouter configurée. Un refus d’autorisation ne modifie pas le routage enregistré. Les résultats valides sont mis en cache pendant cinq minutes ; **Actualiser** contourne ce cache, même après une liste vide. Dans l’API de gestion, `cached: true` signifie que la réponse provient d’une entrée de cache terminée ; les appels qui rejoignent une requête partagée active reçoivent `cached: false`.
 
 ## Champs de premier niveau liés aux fournisseurs
 

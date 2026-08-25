@@ -7,7 +7,7 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 
 ## 암호화된 v2 작업 복구 제어
 
-실험적 복구는 기본적으로 꺼져 있습니다. 할당량과 지연 경고를 확인한 뒤 **하위 에이전트 → 설정 → 암호화된 v2 작업 복구**에서 켜거나 `ocx agent recovery status`, `ocx agent recovery on`, 또는 `ocx agent recovery off`를 사용하세요. 동일한 API는 `GET/PUT /api/agent-task-recovery`입니다. `PUT`은 `{"enabled": boolean}`만 허용하며, 영구 설정을 먼저 기록한 뒤 활성 상태를 갱신하고 수동으로 설정한 고급 옵션은 보존합니다.
+실험적 복구는 기본적으로 꺼져 있습니다. 할당량과 지연 경고를 확인한 뒤 **하위 에이전트 → 설정 → 암호화된 v2 작업 복구**에서 켜거나 `ocx agent recovery status`, `ocx agent recovery on --yes`, 또는 `ocx agent recovery off`를 사용하세요. 동일한 API는 `GET/PUT /api/agent-task-recovery`입니다. `PUT`은 `{"enabled": boolean}`만 허용하며, 영구 설정을 먼저 기록한 뒤 활성 상태를 갱신하고 수동으로 설정한 고급 옵션은 보존합니다.
 
 ## 에이전트 필드
 

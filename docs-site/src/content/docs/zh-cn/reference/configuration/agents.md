@@ -7,7 +7,7 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 
 ## 加密 v2 任务恢复控制
 
-实验性恢复功能默认关闭。确认配额和延迟警告后，可在**子代理 → 设置 → 恢复加密的 v2 任务**中启用，或分别使用 `ocx agent recovery status`、`ocx agent recovery on` 或 `ocx agent recovery off`。对应 API 为 `GET/PUT /api/agent-task-recovery`；`PUT` 只接受 `{"enabled": boolean}`，会先写入持久配置，再更新运行中的状态，并保留手动配置的高级选项。
+实验性恢复功能默认关闭。确认配额和延迟警告后，可在**子代理 → 设置 → 恢复加密的 v2 任务**中启用，或分别使用 `ocx agent recovery status`、`ocx agent recovery on --yes` 或 `ocx agent recovery off`。对应 API 为 `GET/PUT /api/agent-task-recovery`；`PUT` 只接受 `{"enabled": boolean}`，会先写入持久配置，再更新运行中的状态，并保留手动配置的高级选项。
 
 ## 代理字段
 

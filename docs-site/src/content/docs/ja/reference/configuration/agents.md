@@ -7,7 +7,7 @@ description: マルチエージェント サーフェス、委任ガイダンス
 
 ## 暗号化された v2 タスクの復旧コントロール
 
-実験的な復旧機能は既定で無効です。クォータと遅延の警告を確認したうえで、**サブエージェント → 設定 → 暗号化された v2 タスクを復旧**から有効にするか、`ocx agent recovery status`、`ocx agent recovery on`、または `ocx agent recovery off` を使います。同等の API は `GET/PUT /api/agent-task-recovery` です。`PUT` は `{"enabled": boolean}` のみを受け付け、永続設定を先に書き込んでから実行中の状態を更新し、手動設定された高度なオプションを保持します。
+実験的な復旧機能は既定で無効です。クォータと遅延の警告を確認したうえで、**サブエージェント → 設定 → 暗号化された v2 タスクを復旧**から有効にするか、`ocx agent recovery status`、`ocx agent recovery on --yes`、または `ocx agent recovery off` を使います。同等の API は `GET/PUT /api/agent-task-recovery` です。`PUT` は `{"enabled": boolean}` のみを受け付け、永続設定を先に書き込んでから実行中の状態を更新し、手動設定された高度なオプションを保持します。
 
 ## エージェントフィールド
 

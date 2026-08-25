@@ -545,7 +545,8 @@ used for inference. If OpenRouter rejects that key, existing routing remains unc
 configuration is still available. opencodex never returns the key to the browser or includes upstream
 error bodies in the dashboard response. At most eight distinct endpoint discoveries run concurrently;
 additional unique requests receive a bounded busy response while callers for an existing discovery
-still share that request.
+still share that request. In the management API, `cached: true` means the response came from a
+completed five-minute cache entry; callers that join an active shared request receive `cached: false`.
 
 ## Static model allowlists
 
