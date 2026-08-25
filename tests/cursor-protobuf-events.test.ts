@@ -22,6 +22,8 @@ import {
   mapSyntheticMcpExecToToolEvents,
 } from "../src/adapters/cursor/protobuf-events";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
+import { observeEmptyCompletion } from "../src/server/responses/empty-completion-guard";
+import type { AdapterEvent } from "../src/types";
 
 const encoder = new TextEncoder();
 
@@ -1137,5 +1139,68 @@ describe("textual pseudo tool-call marker normalization (#2305)", () => {
     const short = "[TOOL_CALL]grep[ARGS]{}";
     const events = mapCursorProtobufServerMessage(textDelta(short), state);
     expect(events).toEqual([{ type: "text", text: short }]);
+  });
+});
+
+describe("#2472 the Cursor producer path for a silent empty turn", () => {
+  /**
+   * A turnEnded with no text and no committed tool call finalizes to a bare `done`. That is a
+   * successful terminal carrying no content — the exact shape the client records as a
+   * completed turn that said nothing, which is the reported symptom.
+   *
+   * This pins the producer so the shape stays visible. The observer added in #2597 is what
+   * makes it recorded rather than silent; this proves the stream really can reach that state
+   * from a real adapter rather than only in the observer's own fixtures.
+   */
+  test("turnEnded with no output finalizes to a content-free done", () => {
+    const state = createCursorProtobufEventState();
+    const events = mapCursorProtobufServerMessage(turnEndedFrame(), state);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe("done");
+    // No text_delta and no tool_call_* were emitted at any point in this turn.
+    expect(events.some(event => event.type === "text_delta")).toBe(false);
+    expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+  });
+
+  test("an incomplete tool call is a stated error, not a silent empty turn", () => {
+    // The distinction matters: this path already tells the client something went wrong, so it
+    // is NOT the failure mode #2472 describes and must not be conflated with it.
+    const state = createCursorProtobufEventState();
+    state.openToolCalls.set("call-1", { name: "shell", args: "" } as never);
+    const events = finalizeTurnEvents(state);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe("error");
+  });
+
+  test("a turn that produced text finalizes with content already emitted", () => {
+    const state = createCursorProtobufEventState();
+    state.usage.outputTokens = 3;
+    const events = finalizeTurnEvents(state);
+    expect(events[0]!.type).toBe("done");
+    // Usage alone is not content: the observer keys on emitted events, not token counters,
+    // which is why a turn can report output tokens and still be empty to the client.
+    expect(events.some(event => event.type === "text_delta")).toBe(false);
+  });
+});
+
+
+describe("#2472 end to end: the real producer output reaches the observer", () => {
+  /**
+   * The two halves were verified separately — the Cursor adapter can finalize a turn to a
+   * content-free `done`, and the observer flags a content-free `done`. This joins them so a
+   * future change to either side cannot quietly break the pairing.
+   */
+  test("a Cursor turnEnded with no output is flagged by the observer", async () => {
+    const state = createCursorProtobufEventState();
+    const produced = mapCursorProtobufServerMessage(turnEndedFrame(), state) as unknown as AdapterEvent[];
+
+    let flagged = 0;
+    const seen: AdapterEvent[] = [];
+    const stream = (async function* () { yield* produced; })();
+    for await (const event of observeEmptyCompletion(stream, () => { flagged += 1; })) seen.push(event);
+
+    expect(flagged).toBe(1);
+    // Passthrough: the adapter's own events are delivered unchanged.
+    expect(seen).toEqual(produced);
   });
 });
