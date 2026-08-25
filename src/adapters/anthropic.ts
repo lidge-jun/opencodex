@@ -27,7 +27,7 @@ import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
-import { modelRecordValue } from "../reasoning-effort";
+import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -521,7 +521,14 @@ function adaptiveEffort(effort: string): string {
 
 function defaultReasoningEffort(provider: OcxProviderConfig, modelId: string): string | undefined {
   const value = modelRecordValue(provider.modelDefaultReasoningEfforts, modelId);
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  // `__omit__` means "send no reasoning field", not "an effort literally named
+  // __omit__". Without this the sentinel reached the wire as
+  // `output_config.effort: "__omit__"` on adaptive models, and enabled budget
+  // thinking on the rest — the opposite of what it asks for (#2432).
+  if (!trimmed || isReasoningEffortOmitted(trimmed)) return undefined;
+  return trimmed;
 }
 
 function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage | undefined {
