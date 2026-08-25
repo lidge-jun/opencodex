@@ -352,4 +352,83 @@ describe("Anthropic account pool strategy management API", () => {
       await server.stop(true);
     }
   });
+
+  test("GET returns quotaWindow five-hour by default", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ quotaWindow: "five-hour" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT persists each valid quotaWindow value", async () => {
+    const server = startServer(0);
+    try {
+      for (const quotaWindow of ["weekly", "max-utilization", "five-hour"]) {
+        const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "anthropic", enabled: true, quotaWindow }),
+        });
+        expect(put.status).toBe(200);
+        expect(await put.json()).toMatchObject({ ok: true, quotaWindow });
+
+        const get = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+        expect(await get.json()).toMatchObject({ quotaWindow });
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT rejects invalid quotaWindow with 400", async () => {
+    const server = startServer(0);
+    try {
+      for (const bad of ["monthly", "", "Weekly", 1, null]) {
+        const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "anthropic", enabled: true, quotaWindow: bad }),
+        });
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({
+          error: "quotaWindow must be one of: five-hour, weekly, max-utilization",
+        });
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT without quotaWindow preserves the existing value", async () => {
+    const server = startServer(0);
+    try {
+      const first = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "anthropic", enabled: true, quotaWindow: "weekly" }),
+      });
+      expect(first.status).toBe(200);
+
+      const second = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "anthropic", enabled: false, autoSwitchThreshold: 55 }),
+      });
+      expect(second.status).toBe(200);
+      expect(await second.json()).toMatchObject({ quotaWindow: "weekly" });
+
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(await get.json()).toMatchObject({
+        enabled: false,
+        autoSwitchThreshold: 55,
+        quotaWindow: "weekly",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
