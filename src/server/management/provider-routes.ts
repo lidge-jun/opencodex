@@ -48,7 +48,7 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
-import { clearProviderTlsProfileStatus, getProviderTlsProfileStatus } from "../../lib/provider-tls-profile";
+import { antigravityOAuthDestinationConfigError, clearProviderTlsProfileStatus, getProviderTlsProfileStatus } from "../../lib/provider-tls-profile";
 import { redactErrorMessage } from "../../lib/redact";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
@@ -751,6 +751,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (prov.disabled) {
       return jsonResponse({ ok: false, error: "Provider is disabled", latencyMs: 0 });
     }
+    const antigravityError = antigravityOAuthDestinationConfigError(name, prov);
+    if (antigravityError) return jsonResponse({ ok: false, error: antigravityError, latencyMs: 0 }, 400);
     if (prov.authMode === "forward") {
       return jsonResponse({
         ok: true,

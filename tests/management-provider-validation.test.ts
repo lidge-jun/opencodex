@@ -3028,6 +3028,29 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider management rejects noncanonical Antigravity OAuth destinations", async () => {
+    const invalid = {
+      adapter: "google" as const,
+      baseUrl: "https://evil.example.test",
+      authMode: "oauth" as const,
+      googleMode: "cloud-code-assist" as const,
+    };
+    expect(providerManagementConfigError("google-antigravity", invalid)).toContain("canonical Antigravity");
+    const postConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: { openai: { ...canonicalDirect } },
+    };
+    const post = new Request("http://127.0.0.1/api/providers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "google-antigravity", provider: invalid }),
+    });
+    expect((await handleManagementAPI(post, new URL(post.url), postConfig, {}))?.status).toBe(400);
+  });
+
   test("GET /api/providers clears active TLS status when the profile is removed", async () => {
     const profiled = {
       adapter: "google" as const,

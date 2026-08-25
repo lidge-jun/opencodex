@@ -9,7 +9,7 @@ import {
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
 import { outboundProxyConfigured, proxyForUrl } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
-import { isCanonicalAntigravityUrl, providerTlsFetch } from "./provider-tls-profile";
+import { antigravityOAuthDestinationConfigError, isCanonicalAntigravityUrl, providerTlsFetch } from "./provider-tls-profile";
 import { waitForProviderRequestSlot } from "../providers/request-pacing";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -136,6 +136,11 @@ async function providerOutboundRequest(
   init: ProviderGetInit | ProviderPostInit,
   dependencies: ProviderOutboundDependencies = {},
 ): Promise<Response> {
+  const antigravityBaseError = antigravityOAuthDestinationConfigError(name, provider);
+  if (antigravityBaseError) throw new ProviderOutboundPolicyError(`provider ${name} ${antigravityBaseError}`);
+  if (name === "google-antigravity" && !isCanonicalAntigravityUrl(url)) {
+    throw new ProviderOutboundPolicyError("provider google-antigravity requires a canonical Antigravity HTTPS destination for OAuth");
+  }
   const postUrl = method === "POST" ? new URL(url) : undefined;
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");

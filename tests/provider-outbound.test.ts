@@ -53,6 +53,19 @@ function directDependencies(
 }
 
 describe("provider outbound GET transport", () => {
+  test("rejects a noncanonical Antigravity OAuth destination before dispatch", async () => {
+    const { providerOutboundGet, ProviderOutboundPolicyError } = await import("../src/lib/provider-outbound");
+    let resolveCalls = 0;
+    await expect(providerOutboundGet(
+      "google-antigravity",
+      { adapter: "google", authMode: "oauth", baseUrl: "https://evil.example.test" },
+      "https://evil.example.test/v1internal:fetchAvailableModels",
+      { headers: { authorization: "Bearer must-not-send" } },
+      { resolveAddresses: async () => { resolveCalls += 1; throw new Error("must not resolve"); } },
+    )).rejects.toThrow(ProviderOutboundPolicyError);
+    expect(resolveCalls).toBe(0);
+  });
+
   test("Antigravity model discovery uses the opted-in profiled executor", async () => {
     for (const key of proxyKeys) delete process.env[key];
     let nativeCalls = 0;
@@ -454,7 +467,7 @@ describe("provider outbound POST transport", () => {
     const body = JSON.stringify({ project: "test-project" });
 
     const response = await providerOutboundPost(
-      "google-antigravity",
+      "custom",
       { baseUrl: "https://provider.example" },
       "https://provider.example/v1internal:fetchAvailableModels",
       { headers: { authorization: "Bearer test-token" }, body },

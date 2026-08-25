@@ -211,10 +211,10 @@ describe("Antigravity TLS transport gate", () => {
       ...canonicalProvider,
       baseUrl: "https://attacker.example",
     }, bunFetch);
-    await executor("https://daily-cloudcode-pa.googleapis.com/v1internal");
-    await executor(userInfoUrl);
+    await expect(executor("https://daily-cloudcode-pa.googleapis.com/v1internal")).rejects.toThrow(/canonical Antigravity/);
+    await expect(executor(userInfoUrl)).rejects.toThrow(/canonical Antigravity/);
     expect(wreqCalls).toBe(0);
-    expect(bunCalls).toBe(2);
+    expect(bunCalls).toBe(0);
   });
 
   test("keeps OAuth token destinations on Bun fetch", async () => {

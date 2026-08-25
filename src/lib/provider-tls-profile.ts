@@ -32,6 +32,8 @@ interface InitializedTransport {
 
 type ProviderTlsContract = Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode" | "baseUrl" | "tlsProfile">;
 
+type AntigravityOAuthDestinationContract = Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>;
+
 export interface ProviderTlsRuntimeForTest {
   importWreq: () => Promise<WreqModule>;
   resolveDestination?: typeof resolvePublicAddresses;
@@ -143,6 +145,18 @@ export function isCanonicalAntigravityUrl(input: string | URL): boolean {
   }
 }
 
+/** Same-name Antigravity rows are OAuth destinations even when legacy config omitted authMode. */
+export function antigravityOAuthDestinationConfigError(
+  providerName: string,
+  provider: AntigravityOAuthDestinationContract,
+): string | null {
+  if (providerName !== "google-antigravity") return null;
+  if (!isCanonicalAntigravityUrl(provider.baseUrl)) {
+    return "requires a canonical Antigravity HTTPS destination for OAuth";
+  }
+  return null;
+}
+
 export function getProviderTlsProfileStatus(providerName: string, provider: ProviderTlsContract): ProviderTlsProfileStatus {
   const current = statusByProvider.get(providerName);
   return current?.fingerprint === providerTlsContractFingerprint(providerName, provider)
@@ -199,6 +213,12 @@ export function providerTlsFetch(
   provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode" | "baseUrl" | "tlsProfile">,
   bunFetch: typeof globalThis.fetch,
 ): typeof globalThis.fetch {
+  const antigravityError = antigravityOAuthDestinationConfigError(providerName, provider);
+  if (antigravityError) {
+    return (async () => {
+      throw new Error(`provider ${providerName} ${antigravityError}`);
+    }) as unknown as typeof globalThis.fetch;
+  }
   if (provider.tlsProfile === undefined) {
     setStatus(providerName, provider, "disabled");
     return bunFetch;

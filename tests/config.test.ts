@@ -150,6 +150,29 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("config candidates reject noncanonical Antigravity OAuth destinations", () => {
+    const defaults = getDefaultConfig();
+    const antigravity = {
+      adapter: "google",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+    };
+    expect(validateConfigCandidate({
+      ...defaults,
+      providers: {
+        ...defaults.providers,
+        "google-antigravity": { ...antigravity, baseUrl: "https://evil.example.test", authMode: "oauth" },
+      },
+    })).toMatchObject({ ok: false, error: expect.stringContaining("canonical Antigravity") });
+    for (const baseUrl of ["https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"]) {
+      expect(validateConfigCandidate({
+        ...defaults,
+        providers: { ...defaults.providers, "google-antigravity": { ...antigravity, baseUrl, authMode: "oauth" } },
+      }).ok).toBe(true);
+    }
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);
