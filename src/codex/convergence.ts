@@ -42,6 +42,7 @@ import {
   import {
   buildCatalogEntriesFromObservedState,
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+  finalizeAutoReviewModelOverride,
   mergeCatalogEntriesFromObservedState,
   mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
@@ -371,6 +372,7 @@ function prepareCatalog(
       ? supportedCodexReasoningEffortsFromObservedCatalog(source.runtimeSupport.catalog)
       : null,
   );
+  finalizeAutoReviewModelOverride(mergedModels, catalogModels);
   catalog.models = mergedModels;
   return catalog;
 }

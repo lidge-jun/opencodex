@@ -223,6 +223,22 @@ export function readCodexCatalogPathForHome(codexHome: string): string {
   return join(codexHome, "opencodex-catalog.json");
 }
 
+/**
+ * Read the configured auto-review model from the root of Codex's config.toml (issue #1225).
+ * Stamped onto catalog entries as `auto_review_model_override` during sync so the auto-review
+ * subagent uses the operator's chosen model across catalog regenerations.
+ */
+export function readConfiguredAutoReviewModel(): string | null {
+  try {
+    const configPath = activeCodexConfigPath();
+    if (existsSync(configPath)) {
+      const toml = readFileSync(configPath, "utf-8");
+      return readRootTomlString(toml, "auto_review_model");
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 export function parseCatalogJson(raw: string): RawCatalog | null {
   try {
     const cat = JSON.parse(raw);
