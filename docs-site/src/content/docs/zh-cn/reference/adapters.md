@@ -140,9 +140,18 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
 - 经 content-addressed blob 重放对话状态，把 server tool call 映射回 Codex，用 protobuf
   `GetUsableModels` RPC 发现实时 Cursor 模型，并且只在 run request 尚未 commit 到 wire 前重试。
 - 对不含工具且正常完成的 turn，会在进程本地保存返回的 ConversationStateStructure，并在经过验证的
-  线性 continuation 中复用 checkpoint。无 ref 的 prefix lookup 仅在存在已记忆的 Cursor conversation
-  或稳定 client thread（包括受限的 Desktop session/thread fallback），且唯一匹配的 checkpoint 由同一
-  provider conversation 所有时才允许；否则执行 full replay。
+  线性 continuation 中复用 checkpoint。tool-result turn 会在已知覆盖消息边界时，复用最后一个已完成
+  turn 的 checkpoint，并只追加尚未覆盖的 suffix。无 ref 的 prefix lookup 仅在存在已记忆的 Cursor
+  conversation 或稳定 client thread（包括受限的 Desktop session/thread fallback），且唯一匹配的
+  checkpoint 由同一 provider conversation 所有时才允许；否则执行 full replay。compaction、
+  helper/shadow 隔离、account/model 不匹配、ref 缺失、decode 失败、forced-fresh recovery 以及
+  invalid_argument 重试也会回退到 full replay。进程重启会丢弃内存 store 并执行 full replay。
+  Cursor Connect 不提供权威的 cache_read_tokens，因此 OpenCodex usage 不是 cache hit 计数器。
+  受限的 Desktop fallback 只保存进程本地由 HMAC 派生的 owner；原始 session/thread header 与
+  OAuth/authorization 材料不会写入 checkpoint state。基于 OAuth 的 live transport 和按账号过滤的
+  live model discovery 仍是实验功能；登录与 transport 设置参见[提供商指南](/zh-cn/guides/providers/)
+  和 [Cursor 提供商配置](/zh-cn/reference/configuration/providers/#cursor-provider-adapter-cursor)。
+  checkpoint 复用本身是自动的，没有用户设置。
 - 模型实时发现和推理都会遵守 `upstreamHttpVersion`。`auto`、`http2` 与 `h2` 保持原有 HTTP/2
   transport；只有 `http1.1` 与 `h1` 会选择兼容模式。
 - 保留 `cursor/grok-4.5-fast` 作为可选模型，但向 Cursor 发送规范的 `grok-4.5` 模型，并将独立的

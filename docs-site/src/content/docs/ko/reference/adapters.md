@@ -159,6 +159,11 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
   forced-fresh 복구, invalid_argument 재시도는 기존 full replay로 돌아갑니다. 프로세스 재시작은
   메모리 store를 버리고 full replay합니다. Cursor Connect는 권위 있는 cache_read_tokens를 주지
   않으므로 OpenCodex usage만 보고 cache hit라고 단정하지 않습니다.
+  범위가 제한된 Desktop 대체 식별자는 프로세스 로컬 HMAC 파생 소유자만 보관하며, 원본
+  session/thread 헤더나 OAuth/authorization 자료를 checkpoint 상태에 쓰지 않습니다. OAuth 기반
+  live transport와 계정별 live model discovery는 아직 실험 기능입니다. 로그인과 transport 설정은
+  [공급자 가이드](/ko/guides/providers/)와 [Cursor 공급자 설정](/ko/reference/configuration/providers/#cursor-provider-adapter-cursor)을
+  참고하세요. checkpoint 재사용 자체는 자동이며 사용자 설정이 없습니다.
 - `cursor/grok-4.5-fast`는 선택 가능한 모델로 유지하되, Cursor에는 정식 `grok-4.5` 모델을 보내고
   별도의 `effort`, `fast=true` 값은 `requested_model.parameters`에 담습니다.
 - Cursor 네이티브 로컬 파일시스템/shell/network 실행은 기본적으로 거부합니다. 명시적인

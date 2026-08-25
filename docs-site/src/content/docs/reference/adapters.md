@@ -233,6 +233,11 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   forced-fresh recovery, and invalid_argument retries fall back to the existing full replay. A
   process restart drops the in-memory store and full-replays. Cursor Connect still does not expose
   authoritative cache_read_tokens, so OpenCodex usage is not a cache-hit counter.
+  The bounded Desktop fallback stores only a process-local HMAC-derived owner; raw session/thread
+  headers and OAuth/authorization material are never written to checkpoint state. Cursor's
+  OAuth-backed live transport and account-filtered model discovery remain experimental; see the
+  [provider guide](/guides/providers/) and [Cursor provider configuration](/reference/configuration/providers/#cursor-provider-adapter-cursor)
+  for login and transport settings. Checkpoint reuse itself is automatic and has no user setting.
 - Honors `upstreamHttpVersion` for both live model discovery and inference. `auto`, `http2`, and `h2`
   preserve the existing HTTP/2 transport; only `http1.1` and `h1` select compatibility mode.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
