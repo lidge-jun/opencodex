@@ -281,3 +281,46 @@ describe("Codex desktop app restart — kill-authority guards (#2292)", () => {
   });
 });
 
+
+describe("#2557 a failed probe is not an absent app", () => {
+  test("an enumeration that throws reports process_probe_failed, not no_targets", () => {
+    // Returning [] on a throwing probe made "we could not look" indistinguishable from
+    // "we looked and found nothing", so the CLI said the app was not running and silently
+    // skipped the restart the user asked for.
+    const calls: Call[] = [];
+    const result = withTrustedExes(() => restartCodexDesktopApp(scriptedIo({
+      discovery: DISCOVERY,
+      calls,
+      throwOn: (_file, args) => args.join(" ").includes("Win32_Process"),
+    })));
+    expect(result.reason).toBe("process_probe_failed");
+    expect(result.attempted).toBe(false);
+    // Fail closed: nothing was terminated and nothing was relaunched on unreadable evidence.
+    expect(result.stopped).toEqual([]);
+    expect(result.relaunch).toBe("skipped");
+  });
+
+  test("an empty enumeration still reports no_targets", () => {
+    // The two states must stay distinguishable in both directions.
+    const calls: Call[] = [];
+    const result = withTrustedExes(() => restartCodexDesktopApp(scriptedIo({
+      discovery: DISCOVERY, processes: "", calls,
+    })));
+    expect(result.reason).toBe("no_targets");
+  });
+
+  test("the probe script separates PowerShell statements with newlines", () => {
+    // Joined with spaces, `$ErrorActionPreference='SilentlyContinue' $root = '...'` is one
+    // malformed statement and PowerShell rejects the whole script.
+    const calls: Call[] = [];
+    withTrustedExes(() => restartCodexDesktopApp(scriptedIo({
+      discovery: DISCOVERY, processes: "", calls,
+    })));
+    const probe = calls.find(call => call.args.join(" ").includes("Win32_Process"));
+    expect(probe).toBeTruthy();
+    const script = probe!.args[probe!.args.length - 1]!;
+    expect(script).toContain("SilentlyContinue'\n");
+    expect(script).not.toContain("SilentlyContinue' $root");
+  });
+});
+

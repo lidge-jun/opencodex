@@ -615,6 +615,15 @@ async function handleDesktopAppRestart(log: Pick<Console, "log" | "error">): Pro
         + "Run 'ocx sync --restart-desktop-app' from an external terminal instead.",
       );
       return;
+    case "process_probe_failed":
+      // Distinct from `no_targets`: we could not look, which is not the same as looking and
+      // finding nothing. Saying "not running" here sent users away believing there was nothing
+      // to restart (#2557).
+      log.error(
+        "Could not enumerate Codex desktop processes, so the app was not restarted. "
+        + "Quit and relaunch the desktop app manually to refresh the model picker.",
+      );
+      return;
     case "no_targets":
       log.log("Codex desktop app is not running; nothing to restart.");
       return;
@@ -630,4 +639,3 @@ async function handleDesktopAppRestart(log: Pick<Console, "log" | "error">): Pro
       }
   }
 }
-

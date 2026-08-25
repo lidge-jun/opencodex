@@ -43,6 +43,7 @@ export interface DesktopAppRestartIo {
 export type DesktopAppRestartReason =
   | "windows_only"
   | "package_discovery_failed"
+  | "process_probe_failed"
   | "no_targets"
   | "self_ancestry"
   | "targets_survived";
@@ -119,7 +120,7 @@ interface DesktopProcess {
 function listPackageProcesses(
   exec: NonNullable<DesktopAppRestartIo["execFile"]>,
   installLocation: string,
-): DesktopProcess[] {
+): DesktopProcess[] | null {
   const literal = installLocation.replace(/'/g, "''");
   const script = [
     "$ErrorActionPreference='SilentlyContinue'",
@@ -136,7 +137,10 @@ function listPackageProcesses(
     "      }",
     "    }",
     "  }",
-  ].join(" ");
+  // Statements must be newline-separated. Joining with a space concatenates
+  // `$ErrorActionPreference='SilentlyContinue' $root = '...'` into one malformed statement,
+  // which PowerShell rejects — so the probe threw and every caller read "not running" (#2557).
+  ].join("\n");
   let stdout: string;
   try {
     stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], {
@@ -144,7 +148,10 @@ function listPackageProcesses(
       windowsHide: true,
     });
   } catch {
-    return [];
+    // A probe that could not run is NOT proof the app is absent. Returning [] here made a
+    // failed enumeration indistinguishable from "no targets", so the CLI reported the app as
+    // not running and skipped a restart the user had explicitly asked for.
+    return null;
   }
   const processes: DesktopProcess[] = [];
   for (const line of stdout.split(/\r?\n/)) {
@@ -170,8 +177,11 @@ function stillSameProcess(
   installLocation: string,
   target: DesktopProcess,
 ): boolean {
-  const current = listPackageProcesses(exec, installLocation)
-    .find(p => p.pid === target.pid);
+  const processes = listPackageProcesses(exec, installLocation);
+  // Fail CLOSED on a failed re-probe: this guards a kill, and "we could not look" must not be
+  // read as "the pid was recycled and is now someone else's process".
+  if (processes === null) return false;
+  const current = processes.find(p => p.pid === target.pid);
   return current !== undefined && current.createdAt === target.createdAt;
 }
 
@@ -266,6 +276,9 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   if (!pkg) return skipped("package_discovery_failed");
 
   const processes = listPackageProcesses(exec, pkg.installLocation);
+  // A probe that could not run is not evidence of absence. Reporting it as `no_targets` told
+  // the user the app was not running and silently skipped the restart they asked for (#2557).
+  if (processes === null) return skipped("process_probe_failed");
   const roots = rootProcesses(processes);
   if (roots.length === 0) return skipped("no_targets");
 
