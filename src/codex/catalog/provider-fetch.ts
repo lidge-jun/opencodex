@@ -650,15 +650,16 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
   const explicit = prov ? modelRecordValue(prov.modelSupportsVerbosity, id) : undefined;
   if (explicit !== undefined) return explicit;
   if (!prov) return undefined;
-  const entry = (providerMatchesRegistryTransport(name, prov) ? getProviderRegistryEntry(name) : undefined)
-    ?? registryEntryForProviderDestination(prov);
-  if (!entry) return undefined;
-  const perModel = modelRecordValue(entry.modelSupportsVerbosity, id);
-  if (perModel !== undefined) return perModel;
-  // Provider-wide fallback. `modelSupportsVerbosity` only enumerates the ids present when the
-  // registry row was written, so a live-discovered model used to fall through here and
-  // re-advertise a control the upstream accepts and ignores. A per-model entry still wins.
-  return entry.supportsVerbosity;
+  void name;
+  // Provider-wide fallback for ids the per-model map does not enumerate — a live-discovered
+  // model would otherwise re-advertise a control the upstream accepts and ignores.
+  //
+  // Read from the PROVIDER CONFIG, never from PROVIDER_REGISTRY. A gather flight captures its
+  // registry authority up front and forbids any later registry read, so consulting the registry
+  // here made a custom-destination flight fall back to "configured" instead of serving its own
+  // discovery result (tests/codex-gather-authority.test.ts). `applyVerbosityDefaults` in
+  // providers/derive.ts materializes the registry default into the config at seed/enrich time.
+  return prov.supportsVerbosity;
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {

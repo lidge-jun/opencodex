@@ -348,6 +348,12 @@ export interface OcxProviderConfig {
    */
   modelSupportsVerbosity?: Record<string, boolean>;
   /**
+   * Provider-wide Codex Responses verbosity capability, applied to models the per-model map
+   * does not enumerate (a live-discovered id, for example). Materialized from the registry at
+   * seed/enrich time so the catalog hint pass never has to read PROVIDER_REGISTRY.
+   */
+  supportsVerbosity?: boolean;
+  /**
    * Per-model wire value for Responses `stream_options.reasoning_summary_delivery`.
    * Presence also advertises reasoning-summary support for that routed model.
    */
