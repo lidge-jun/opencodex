@@ -3,6 +3,7 @@ import {
   AZURE_IDENTITY_UNAVAILABLE_ERROR,
   __resetAzureCredentialCache,
   getAzureAccessToken,
+  invalidateAzureCredentialCache,
   setAzureCredentialFactoryForTests,
   setAzureLoggerModuleLoaderForTests,
   setAzureIdentityModuleLoaderForTests,
@@ -45,6 +46,26 @@ describe("Azure identity credential helper", () => {
       "https://cognitiveservices.azure.com/.default",
       "https://cognitiveservices.azure.com/.default",
     ]);
+  });
+
+  test("evicts only a replaced identity while unchanged identities remain cached", async () => {
+    const constructions: string[] = [];
+    setAzureCredentialFactoryForTests(options => {
+      const clientId = options?.managedIdentityClientId ?? "default";
+      constructions.push(clientId);
+      const token = `${clientId}-${constructions.length}`;
+      return { getToken: async () => ({ token }) };
+    });
+
+    expect(await getAzureAccessToken(provider("client-a"))).toBe("client-a-1");
+    expect(await getAzureAccessToken(provider("client-b"))).toBe("client-b-2");
+    expect(await getAzureAccessToken(provider("client-a"))).toBe("client-a-1");
+
+    invalidateAzureCredentialCache(" client-a ");
+
+    expect(await getAzureAccessToken(provider("client-a"))).toBe("client-a-3");
+    expect(await getAzureAccessToken(provider("client-b"))).toBe("client-b-2");
+    expect(constructions).toEqual(["client-a", "client-b", "client-a"]);
   });
 
   test("redacts SDK failures and blank tokens behind one stable error", async () => {

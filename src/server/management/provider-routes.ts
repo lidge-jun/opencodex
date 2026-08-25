@@ -54,6 +54,7 @@ import { codexAccountNamespaceProviderCollisionError } from "../../codex/account
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { clearModelCache, getProviderDiscoveryStatus } from "../../codex/model-cache";
+import { azureIdentityClientId, invalidateAzureCredentialCache } from "../../lib/azure-identity";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -102,6 +103,16 @@ type ProviderPatchApplication =
       enablingOpenAi: boolean;
       headersTouched: boolean;
     };
+
+function invalidateReplacedAzureCredential(
+  previous: OcxProviderConfig | undefined,
+  next: OcxProviderConfig | undefined,
+): void {
+  const previousClientId = previous ? azureIdentityClientId(previous) : undefined;
+  if (previousClientId !== undefined && previousClientId !== (next ? azureIdentityClientId(next) : undefined)) {
+    invalidateAzureCredentialCache(previousClientId);
+  }
+}
 
 /**
  * Apply the recognized PATCH field mask onto a provider copy. The caller runs this once
@@ -481,6 +492,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         return;
       }
       currentDiskConfig = current.diagnostics.config;
+      invalidateReplacedAzureCredential(config.providers[name], current.diagnostics.config.providers[name]);
       adoptPersistedProviderIntoLiveConfig(
         config,
         name,
@@ -589,7 +601,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     const mergedProviderError = providerManagementConfigError(name, prov);
     if (mergedProviderError) return jsonResponse({ error: mergedProviderError }, 400);
-    config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
+    const replacement = stripRegistryOnlyStaticHeaders(name, prov);
+    config.providers[name] = replacement;
+    invalidateReplacedAzureCredential(existing, replacement);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
     reconcileLiveStateStores();
@@ -719,8 +733,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
       // A PATCH that managed headers owns the resulting block: the clear path restores
       // registry static headers, so exact-match stripping must not erase them again.
-      config.providers[name] = replay.headersTouched ? replay.next : stripRegistryOnlyStaticHeaders(name, replay.next);
+      const previous = config.providers[name];
+      const replacement = replay.headersTouched ? replay.next : stripRegistryOnlyStaticHeaders(name, replay.next);
+      config.providers[name] = replacement;
       saveConfigPreservingClaudeCode(config);
+      invalidateReplacedAzureCredential(previous, replacement);
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
@@ -917,7 +934,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
+    const removed = config.providers[name];
     delete config.providers[name];
+    invalidateReplacedAzureCredential(removed, undefined);
     const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
     const droppedCustomModels = dropProviderCustomModels(config, name);
     setProviderContextCap(config, name, false);

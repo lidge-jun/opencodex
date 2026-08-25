@@ -385,6 +385,34 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider show --json redacts Azure managed identity client ids", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        azure: {
+          adapter: "azure-openai",
+          baseUrl: "https://resource.openai.azure.com/openai",
+          azureCredential: {
+            type: "default-azure-credential",
+            managedIdentityClientId: "client-id-must-not-leak",
+          },
+        },
+      },
+    });
+    try {
+      const result = runCli(["provider", "show", "azure", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("client-id-must-not-leak");
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.azureCredential).toEqual({
+        type: "default-azure-credential",
+        hasManagedIdentityClientId: true,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("provider set-default changes default", () => {
     const { dir } = freshConfig({
       providers: {

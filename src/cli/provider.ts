@@ -360,6 +360,12 @@ function handleShow(args: string[]): void {
     ...(prov.modelCosts !== undefined ? { modelCosts: sanitizeModelCostsForDisplay(prov.modelCosts) } : {}),
     ...(prov.apiKey ? { apiKey: maskSecret(prov.apiKey) } : {}),
     ...(prov.apiKeyPool ? { apiKeyPool: prov.apiKeyPool.map(e => ({ ...e, key: maskSecret(e.key) })) } : {}),
+    ...(prov.azureCredential ? {
+      azureCredential: {
+        type: prov.azureCredential.type,
+        hasManagedIdentityClientId: Boolean(prov.azureCredential.managedIdentityClientId?.trim()),
+      },
+    } : {}),
   };
 
   if (wantsJson) {

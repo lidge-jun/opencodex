@@ -18,6 +18,7 @@ export type AzureLoggerModuleLoader = () => Promise<{
 
 const credentials = new Map<string, AzureTokenCredential>();
 const inflight = new Map<string, Promise<AzureTokenCredential>>();
+const cacheKeyGenerations = new Map<string, number>();
 let testFactory: AzureCredentialFactory | undefined;
 let testModuleLoader: AzureIdentityModuleLoader | undefined;
 let testLoggerModuleLoader: AzureLoggerModuleLoader | undefined;
@@ -64,10 +65,13 @@ async function credentialFor(clientId: string): Promise<AzureTokenCredential> {
   const running = inflight.get(clientId);
   if (running) return running;
   const generation = cacheGeneration;
+  const keyGeneration = cacheKeyGenerations.get(clientId) ?? 0;
   let promise!: Promise<AzureTokenCredential>;
   promise = Promise.resolve((testFactory ?? loadDefaultAzureCredential)(clientId ? { managedIdentityClientId: clientId } : undefined))
     .then(credential => {
-      if (cacheGeneration === generation) credentials.set(clientId, credential);
+      if (cacheGeneration === generation && (cacheKeyGenerations.get(clientId) ?? 0) === keyGeneration) {
+        credentials.set(clientId, credential);
+      }
       return credential;
     })
     .finally(() => {
@@ -75,6 +79,18 @@ async function credentialFor(clientId: string): Promise<AzureTokenCredential> {
     });
   inflight.set(clientId, promise);
   return promise;
+}
+
+export function azureIdentityClientId(provider: Pick<OcxProviderConfig, "azureCredential">): string | undefined {
+  if (provider.azureCredential?.type !== "default-azure-credential") return undefined;
+  return provider.azureCredential.managedIdentityClientId?.trim() ?? "";
+}
+
+export function invalidateAzureCredentialCache(clientId: string): void {
+  const key = clientId.trim();
+  cacheKeyGenerations.set(key, (cacheKeyGenerations.get(key) ?? 0) + 1);
+  credentials.delete(key);
+  inflight.delete(key);
 }
 
 export async function getAzureAccessToken(provider: OcxProviderConfig): Promise<string> {
@@ -94,6 +110,7 @@ export function setAzureCredentialFactoryForTests(factory: AzureCredentialFactor
   testFactory = factory;
   testModuleLoader = undefined;
   testLoggerModuleLoader = undefined;
+  cacheKeyGenerations.clear();
   credentials.clear();
   inflight.clear();
 }
@@ -103,6 +120,7 @@ export function __resetAzureCredentialCache(): void {
   testFactory = undefined;
   testModuleLoader = undefined;
   testLoggerModuleLoader = undefined;
+  cacheKeyGenerations.clear();
   credentials.clear();
   inflight.clear();
 }
@@ -113,6 +131,7 @@ export function setAzureIdentityModuleLoaderForTests(loader: AzureIdentityModule
   cacheGeneration++;
   testFactory = undefined;
   testModuleLoader = loader;
+  cacheKeyGenerations.clear();
   credentials.clear();
   inflight.clear();
 }
