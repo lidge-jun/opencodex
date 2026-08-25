@@ -4924,6 +4924,9 @@ async function handleResponsesInner(
       // Antigravity never rotates accounts. Record the account cooldown and allow only one
       // short, abort-aware replay on the same credential; longer Retry-After values surface to
       // the client so a conversation cannot churn through accounts or requests.
+      if (upstreamResponse.status === 403 && isAntigravityOAuth && antigravityAccountId) {
+        recordAntigravityCooldown(antigravityAccountId, upstreamResponse.headers.get("retry-after"), Date.now(), "geoblock");
+      }
       if (upstreamResponse.status === 429 && isAntigravityOAuth && antigravityAccountId) {
         recordAntigravityCooldown(antigravityAccountId, upstreamResponse.headers.get("retry-after"));
         const retryAfter = retryableAntigravity429DelayMs(upstreamResponse.headers.get("retry-after"));
@@ -5255,6 +5258,9 @@ async function handleResponsesInner(
         }
       }
 
+      if (response.status === 403 && isAntigravityOAuth && antigravityAccountId) {
+        recordAntigravityCooldown(antigravityAccountId, response.headers.get("retry-after"), Date.now(), "geoblock");
+      }
       if (response.status === 429 && isAntigravityOAuth && antigravityAccountId) {
         recordAntigravityCooldown(antigravityAccountId, response.headers.get("retry-after"));
         const retryAfter = retryableAntigravity429DelayMs(response.headers.get("retry-after"));

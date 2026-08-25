@@ -135,14 +135,31 @@ export function recordAntigravityCooldown(
   now = Date.now(),
   cooldownKind: AntigravityCooldownKind = "rate-limit",
 ): number {
-  const delay = parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
+  const delay = parseRetryAfterMs(retryAfterHeader, now) ?? (cooldownKind === "geoblock" ? MAX_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
+  const targetUntil = now + delay;
+  const existing = accountHealth.get(accountId);
+  if (existing && existing.cooldownUntil > now) {
+    const effectiveUntil = Math.max(existing.cooldownUntil, targetUntil);
+    const effectiveKind = (existing.cooldownKind === "geoblock" || cooldownKind === "geoblock")
+      ? "geoblock"
+      : (cooldownKind === "quota" || existing.cooldownKind === "quota")
+        ? "quota"
+        : "rate-limit";
+    accountHealth.set(accountId, {
+      cooldownUntil: effectiveUntil,
+      cooldownSource: retryAfterHeader?.trim() ? "retry-after" : existing.cooldownSource,
+      cooldownKind: effectiveKind,
+    });
+    sweepExpiredOnWrite(now);
+    return effectiveUntil;
+  }
   accountHealth.set(accountId, {
-    cooldownUntil: now + delay,
+    cooldownUntil: targetUntil,
     cooldownSource: retryAfterHeader?.trim() ? "retry-after" : "default",
     cooldownKind,
   });
   sweepExpiredOnWrite(now);
-  return now + delay;
+  return targetUntil;
 }
 
 export function clearAntigravityAccountCooldown(accountId: string): boolean {
@@ -253,13 +270,26 @@ export function recordAntigravitySyntheticFailure(
   now = Date.now(),
 ): AntigravitySyntheticFailure | null {
   const failure = classifyAntigravityProviderError(payload);
-  if (failure === "geoblock") {
-    accountHealth.set(accountId, { cooldownUntil: now + MAX_COOLDOWN_MS, cooldownSource: "synthetic", cooldownKind: "geoblock" });
-    return "geoblock";
-  }
   if (!failure) return null;
+  const delay = failure === "geoblock" ? MAX_COOLDOWN_MS : DEFAULT_COOLDOWN_MS;
+  const targetUntil = now + delay;
+  const existing = accountHealth.get(accountId);
+  if (existing && existing.cooldownUntil > now) {
+    const effectiveUntil = Math.max(existing.cooldownUntil, targetUntil);
+    const effectiveKind = (existing.cooldownKind === "geoblock" || failure === "geoblock")
+      ? "geoblock"
+      : (failure === "quota" || existing.cooldownKind === "quota")
+        ? "quota"
+        : "rate-limit";
+    accountHealth.set(accountId, {
+      cooldownUntil: effectiveUntil,
+      cooldownSource: "synthetic",
+      cooldownKind: effectiveKind,
+    });
+    return failure;
+  }
   accountHealth.set(accountId, {
-    cooldownUntil: now + DEFAULT_COOLDOWN_MS,
+    cooldownUntil: targetUntil,
     cooldownSource: "synthetic",
     cooldownKind: failure,
   });

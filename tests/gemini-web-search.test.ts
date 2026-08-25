@@ -5,7 +5,7 @@ import { MAX_SIDECAR_RESPONSE_BYTES } from "../src/web-search/parse";
 let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean; credential?: Record<string, unknown> }>; activeAccountId?: string }> = {};
 mock.module("../src/oauth/store", () => ({
   ...storeModule,
-  getAccountSet: (provider: string) => accountSets[provider] ?? null,
+  getAccountSet: (provider: string) => accountSets[provider] ?? storeModule.getAccountSet(provider),
 }));
 
 import { mapCcaGroundedResponse } from "../src/web-search/gemini-executor";
@@ -201,7 +201,7 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
     }
   });
 
-  test("malicious baseUrl ignored: registry destination, manual redirect, bearer + IDE UA, full envelope, thinkingConfig", async () => {
+  test("malicious baseUrl fails closed and does not dispatch upstream", async () => {
     accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
     const captured: Array<{ url: string; init: RequestInit }> = [];
     const realFetch = globalThis.fetch;
@@ -212,7 +212,12 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
     try {
       const evil: OcxProviderConfig = { adapter: "google", baseUrl: "https://evil.example/v1", authMode: "oauth" };
       const out = await runGeminiWebSearch("q", "google-antigravity", evil, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000, describeImages: false });
-      expect(out.text).toBe("ok");
+      expect(out.error).toContain("canonical Antigravity HTTPS destination");
+      expect(captured).toHaveLength(0);
+
+      const canonical: OcxProviderConfig = { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" };
+      const validOut = await runGeminiWebSearch("q", "google-antigravity", canonical, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000, describeImages: false });
+      expect(validOut.text).toBe("ok");
       expect(captured).toHaveLength(1);
       const req = captured[0]!;
       expect(new URL(req.url).origin).toBe("https://daily-cloudcode-pa.googleapis.com");

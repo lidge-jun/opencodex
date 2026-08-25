@@ -80,6 +80,21 @@ describe("google antigravity strict account affinity", () => {
     expect(resolveAntigravityAccountForSession("new-conversation", 2000)).toMatchObject({ accountId: ids.a, reason: "active-cooled", cooldownKind: "geoblock" });
   });
 
+  test("cooldown updates preserve the strongest active cooldown and kind", async () => {
+    const ids = accountIds();
+    await setActiveAccount("google-antigravity", ids.a);
+    // 15-minute geoblock
+    recordAntigravitySyntheticFailure(ids.a, { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" }, 1000);
+    const healthBefore = getAntigravityAccountHealthSnapshot(ids.a, 2000);
+    expect(healthBefore?.cooldownKind).toBe("geoblock");
+    expect(healthBefore?.cooldownUntil).toBe(1000 + 15 * 60_000);
+
+    // Shorter 60s synthetic failure should not shorten the 15-minute geoblock or overwrite the geoblock kind
+    recordAntigravitySyntheticFailure(ids.a, { code: 429, status: "RESOURCE_EXHAUSTED", message: "rate limit exceeded" }, 2000);
+    const healthAfter = getAntigravityAccountHealthSnapshot(ids.a, 2000);
+    expect(healthAfter?.cooldownKind).toBe("geoblock");
+    expect(healthAfter?.cooldownUntil).toBe(1000 + 15 * 60_000);
+  });
   test("classifies QUOTA_EXCEEDED as quota even without message", () => {
     expect(classifyAntigravityProviderError({ code: "QUOTA_EXCEEDED", status: 429 })).toBe("quota");
     expect(classifyAntigravityProviderError({ code: "RESOURCE_EXHAUSTED", status: 429, message: "rate limit exceeded" })).toBe("rate-limit");

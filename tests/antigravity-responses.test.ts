@@ -334,3 +334,20 @@ describe("Antigravity Responses integration", () => {
     expect(calls).toBe(1);
   }, 10_000);
 });
+  test("records 403 HTTP geoblock cooldown and returns 403 on subsequent requests", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { message: "User location is not supported" } }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const first = await handleResponses(request(), fastConfig(), { model: "", provider: "" }, {});
+    expect(first.status).toBe(403);
+    const accountId = getAccountSet("google-antigravity")!.activeAccountId;
+    expect(getAntigravityAccountHealthSnapshot(accountId)).toMatchObject({ cooldownKind: "geoblock" });
+    const second = await handleResponses(request(), fastConfig(), { model: "", provider: "" }, {});
+    expect(second.status).toBe(403);
+    expect(calls).toBe(1);
+  });
