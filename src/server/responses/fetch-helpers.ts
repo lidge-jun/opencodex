@@ -64,14 +64,26 @@ export function providerFetch(
   options: ProviderFetchOptions = {},
 ): ProviderFetch {
   const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
+    base.preconnect?.(...args);
+  };
+  const httpFetch = Object.assign(
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+      base(input, withUpstreamHttpVersion(input, init, provider)),
+    { preconnect },
+  ) as typeof globalThis.fetch;
   // ChatGPT Codex backend: streaming turns ride the responses_websockets
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime)) {
-      return codexWsUpstreamFetch(input, init, base, runtime);
+      // The fallback has to be the same HTTP fetch the non-WS branch would have
+      // used, protocol pin included: a WS turn that falls back is serving the
+      // request over HTTP, and dropping the provider's `upstreamHttpVersion`
+      // there would silently negotiate a transport the operator ruled out.
+      return codexWsUpstreamFetch(input, init, httpFetch, runtime);
     }
-    return base(input, withUpstreamHttpVersion(input, init, provider));
+    return httpFetch(input, init);
   };
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
   const waitForPacing = (signal?: AbortSignal) => {
@@ -86,9 +98,6 @@ export function providerFetch(
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     await waitForPacing(init?.signal ?? undefined);
     return unpaced(input, init);
-  };
-  const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
-    base.preconnect?.(...args);
   };
   return Object.assign(wrapped, {
     preconnect,
