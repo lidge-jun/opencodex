@@ -18,6 +18,7 @@ import {
   cursorModelReasoningEfforts,
 } from "../src/adapters/cursor/discovery";
 import { getModelMetadata, resolveMetadataProvider } from "../src/generated/model-metadata";
+import { resetCodexModelEntitlementCacheForTests, seedCodexModelEntitlementsForTests } from "../src/codex/model-entitlements";
 import {
   clearModelCache,
   getProviderDiscoveryStatus,
@@ -57,6 +58,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   clearModelCache();
   resetOpenAiApiCatalogWarningStateForTests();
+  resetCodexModelEntitlementCacheForTests();
 });
 
 function normalizedCombo(
@@ -1258,7 +1260,9 @@ describe("combo catalog capability intersection", () => {
     // The "openai" provider uses forward-auth (Codex login passthrough) — fetchProviderModels
     // returns [] for it, so native slugs only surface through nativeOpenAiSlugs(). Before the
     // fix, memberByKey never contained openai/<slug>, so combos with a native-openai target were
-    // silently dropped from the catalog.
+    // silently dropped from the catalog. Sol is account-gated now, so the combo's native member
+    // needs a confirmed roster to be visible at all.
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol"]);
     globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
     const config: OcxConfig = {
       port: 10100,

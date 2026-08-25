@@ -270,6 +270,8 @@ describe("Codex catalog restore", () => {
 
     const r = runScript(codexHome, opencodexHome, `
       const { syncCatalogModels } = require("./src/codex/catalog");
+      const { seedCodexModelEntitlementsForTests } = require("./src/codex/model-entitlements");
+      seedCodexModelEntitlementsForTests("__main__", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
       (async () => {
         const result = await syncCatalogModels({
           port: 10100,
@@ -291,6 +293,9 @@ describe("Codex catalog restore", () => {
   test("sync advertises documented Codex-native additions omitted by the bundled catalog", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "catalog-main-access", account_id: "catalog-main-account" },
+    }), "utf8");
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         {
@@ -314,6 +319,19 @@ describe("Codex catalog restore", () => {
 
     const r = runScript(codexHome, opencodexHome, `
       const { syncCatalogModels } = require("./src/codex/catalog");
+      globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (request.method !== "GET" || url.pathname !== "/backend-api/codex/models") {
+          throw new Error("unexpected fetch: " + request.method + " " + url.href);
+        }
+        const entitled = request.headers.get("authorization") === "Bearer catalog-main-access"
+          && request.headers.get("chatgpt-account-id") === "catalog-main-account";
+        const slugs = entitled ? ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] : [];
+        return Response.json({
+          models: slugs.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
+        });
+      };
       (async () => {
         const result = await syncCatalogModels({
           port: 10100,

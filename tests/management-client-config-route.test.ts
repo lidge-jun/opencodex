@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import {
+  resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
+} from "../src/codex/model-entitlements";
 import { handleManagementAPI } from "../src/server/management-api";
 import {
   OPENCODE_API_KEY_ENV,
@@ -23,6 +27,8 @@ import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
  * worthless unless the running config actually holds a serializable secret (030 §Security).
  */
 const REAL_LOOKING_KEY = "ocx_live_9f3c7a2b41d84e6fa05c8e17b3d92764";
+
+afterEach(() => resetCodexModelEntitlementCacheForTests());
 
 interface ClientConfigEnvelope {
   client: string;
@@ -190,6 +196,7 @@ describe("GET /api/client-config", () => {
   }, 15_000);
 
   test("DSH response keeps management reasoning metadata in the rc.6 model map", async () => {
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-luna"]);
     const response = await clientConfigApi(baseConfig(), "?client=dsh");
     expect(response.status).toBe(200);
     const body = await response.json() as ClientConfigEnvelope;

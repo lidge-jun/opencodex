@@ -176,6 +176,19 @@ describe("OpenAI provider-option integration spine", () => {
             rate_limit: { secondary_window: { used_percent: isAdded ? 10 : 90 } },
           });
         }
+        if (request.method === "GET" && url.pathname === "/backend-api/codex/models") {
+          const authorization = request.headers.get("authorization");
+          const accountId = request.headers.get("chatgpt-account-id");
+          const explicitlyEntitled = accountId === "fixture-main-account"
+            || accountId === "fixture-pool-account"
+            || authorization === "Bearer fixture-caller-main";
+          const slugs = explicitlyEntitled
+            ? ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            : [];
+          return Response.json({
+            models: slugs.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
+          });
+        }
         const upstreamTuple = `${request.method} ${url.href}`;
         if (!upstreamTuples.has(upstreamTuple)) {
           throw new Error(`deny-by-default fetch blocked: ${upstreamTuple}`);
@@ -214,6 +227,7 @@ describe("OpenAI provider-option integration spine", () => {
         websocketRegistry,
         requestLog,
         catalog,
+        modelEntitlements,
         serverModule,
         mainAccount,
         sidecar,
@@ -227,6 +241,7 @@ describe("OpenAI provider-option integration spine", () => {
         import("../src/codex/websocket-registry"),
         import("../src/server/request-log"),
         import("../src/codex/catalog"),
+        import("../src/codex/model-entitlements"),
         import("../src/server"),
         import("../src/codex/main-account"),
         import("../src/providers/openai-sidecar"),
@@ -235,6 +250,7 @@ describe("OpenAI provider-option integration spine", () => {
       resets.push(
         requestLog.clearRequestLogsForTests,
         catalog.resetCatalogRuntimeStateForTests,
+        modelEntitlements.resetCodexModelEntitlementCacheForTests,
         routing.clearThreadAccountMap,
         routing.clearCodexUpstreamHealth,
         authApi.clearAccountQuota,

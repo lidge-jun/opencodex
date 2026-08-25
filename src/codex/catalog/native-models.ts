@@ -3,6 +3,9 @@ export const NATIVE_DAYBREAK_BLUE_MODEL = "gpt-daybreak-blue-latest";
 
 /** Native ChatGPT/Codex ids whose availability is proven per authenticated account. */
 export const ACCOUNT_GATED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   NATIVE_DAYBREAK_BLUE_MODEL,
 ]);
 
@@ -58,8 +61,8 @@ export function nativeOpenAiCapabilitySourceSlug(slug: string): string {
  * discover it on a clean install.
  *
  * Availability is not static: catalog sync and Pool routing require the account's authenticated
- * `/models` roster to contain the slug. An unconfirmed or unentitled account never receives the
- * request. `disabledModels` remains the independent user visibility control.
+ * `/models` roster to contain account-gated slugs. An unconfirmed or unentitled account never
+ * receives the request. `disabledModels` remains the independent user visibility control.
  *
  * Devlog: 260816_codexrs_multiagent_v2_and_history_perf/011 §4-bis.
  */

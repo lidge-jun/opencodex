@@ -13,6 +13,9 @@ import {
 } from "../src/codex/model-entitlements";
 
 const DAYBREAK = "gpt-daybreak-blue-latest";
+const SOL = "gpt-5.6-sol";
+const TERRA = "gpt-5.6-terra";
+const LUNA = "gpt-5.6-luna";
 
 function credential(accountId: string): CodexModelEntitlementCredentialSnapshot {
   return {
@@ -38,15 +41,17 @@ describe("Codex account model entitlements", () => {
       fetcher: (async (_input, init) => {
         const accountId = new Headers(init?.headers).get("chatgpt-account-id");
         return accountId === "chatgpt-main"
-          ? roster("gpt-5.6-sol", DAYBREAK)
-          : roster("gpt-5.6-sol");
+          ? roster(SOL, LUNA, DAYBREAK)
+          : roster(SOL, TERRA);
       }) as typeof fetch,
       now: 1_000,
     });
 
     expect([...entitledCodexAccountIdsForModel(snapshot, DAYBREAK)!]).toEqual(["main"]);
-    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([DAYBREAK]);
-    expect(entitledCodexAccountIdsForModel(snapshot, "gpt-5.6-sol")).toBeUndefined();
+    expect([...entitledCodexAccountIdsForModel(snapshot, SOL)!]).toEqual(["main", "secondary"]);
+    expect([...entitledCodexAccountIdsForModel(snapshot, TERRA)!]).toEqual(["secondary"]);
+    expect([...entitledCodexAccountIdsForModel(snapshot, LUNA)!]).toEqual(["main"]);
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA, DAYBREAK]);
   });
 
   test("fails closed when an account roster cannot be confirmed", async () => {

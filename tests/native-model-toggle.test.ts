@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   accountBoundNativeOpenAiSlugs,
   accountBoundNativeDisplayName,
@@ -30,6 +30,13 @@ import {
 } from "../src/codex/model-entitlements";
 
 afterEach(() => resetCodexModelEntitlementCacheForTests());
+
+// Most of this file exercises visibility/window mechanics on Sol/Terra/Luna rows. They are
+// account-gated now, so give them a confirmed main roster up front; the two gating-specific
+// tests below reset the cache to assert the unconfirmed baseline first.
+beforeEach(() => {
+  seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+});
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;
@@ -71,16 +78,23 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   });
 
   test("nativeModelRows hides account-gated ids until an authenticated roster confirms them", () => {
+    resetCodexModelEntitlementCacheForTests();
     const rows = nativeModelRows({ disabledModels: ["gpt-5.6-sol"] });
     expect(rows.map(r => r.slug)).toEqual(
       NATIVE_OPENAI_MODELS.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
     );
-    expect(rows.find(r => r.slug === "gpt-5.6-sol")?.disabled).toBe(true);
-    expect(rows.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
-    // Known context metadata rides along for the dashboard.
-    expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(272_000);
 
-    seedCodexModelEntitlementsForTests("main", ["gpt-daybreak-blue-latest"]);
+    seedCodexModelEntitlementsForTests(
+      "main",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-daybreak-blue-latest"],
+    );
+    const confirmed = nativeModelRows({ disabledModels: ["gpt-5.6-sol"] });
+    expect(confirmed.map(r => r.slug)).toEqual(NATIVE_OPENAI_MODELS);
+    expect(confirmed.find(r => r.slug === "gpt-5.6-sol")?.disabled).toBe(true);
+    expect(confirmed.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
+    // Known context metadata rides along for the dashboard.
+    expect(confirmed.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(272_000);
+
     expect(nativeModelRows({ disabledModels: [] }).map(row => row.slug))
       .toContain("gpt-daybreak-blue-latest");
   });
@@ -648,6 +662,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   });
 
   test("management API surfaces: /api/models leads with native rows; subagent available drops disabled bare slugs", async () => {
+    resetCodexModelEntitlementCacheForTests();
     const config = makeConfig({ disabledModels: ["gpt-5.6-sol"] });
 
     const modelsRes = await handleManagementAPI(
@@ -658,7 +673,16 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(nativeRows.map(r => r.namespaced)).toEqual(
       NATIVE_OPENAI_MODELS.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
     );
-    expect(nativeRows.find(r => r.namespaced === "gpt-5.6-sol")?.disabled).toBe(true);
+
+    // A confirmed roster makes the gated rows selectable again; a bare disable still wins.
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol"]);
+    const confirmedRes = await handleManagementAPI(
+      new Request("http://localhost/api/models"), new URL("http://localhost/api/models"), config,
+    );
+    const confirmedRows = (await confirmedRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>)
+      .filter(r => r.native);
+    expect(confirmedRows.map(r => r.namespaced)).toContain("gpt-5.6-sol");
+    expect(confirmedRows.find(r => r.namespaced === "gpt-5.6-sol")?.disabled).toBe(true);
     // Native rows lead the response so the GUI pins the group first.
     expect(rows[0]?.native).toBe(true);
 

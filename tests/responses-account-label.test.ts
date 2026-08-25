@@ -48,7 +48,7 @@ function request(): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello", stream: false }),
+    body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
   });
 }
 

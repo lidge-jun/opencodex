@@ -184,7 +184,7 @@ function spawnStartup(
 }
 
 async function mainRequest(port: number) {
-  return fetch(`http://127.0.0.1:${port}/v1/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "gpt-5.6-sol", input: "crash recovery", stream: false }) });
+  return fetch(`http://127.0.0.1:${port}/v1/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "gpt-5.5", input: "crash recovery", stream: false }) });
 }
 
 const boundaries: Array<{

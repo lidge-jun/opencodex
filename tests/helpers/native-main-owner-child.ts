@@ -183,7 +183,7 @@ async function request(port: number, kind: string): Promise<{ status: number; te
   const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "gpt-5.6-sol", input: kind, stream: false }),
+    body: JSON.stringify({ model: "gpt-5.5", input: kind, stream: false }),
   });
   return { status: response.status, text: await response.text() };
 }

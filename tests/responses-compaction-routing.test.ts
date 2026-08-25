@@ -232,11 +232,11 @@ describe("Codex auth-context error parity (#2392)", () => {
   ];
 
   function regularAuthRequest(): Request {
-    return compactionRequest({ model: "gpt-5.6-sol", input: "hello", stream: false });
+    return compactionRequest({ model: "gpt-5.5", input: "hello", stream: false });
   }
 
   function compactAuthRequest(): Request {
-    return compactionRequest(baseCompactionBody({ model: "gpt-5.6-sol" }));
+    return compactionRequest(baseCompactionBody({ model: "gpt-5.5" }));
   }
 
   test.each(cases)("maps $label identically on regular and compact Responses", async testCase => {
@@ -393,7 +393,16 @@ describe("native Codex pool compaction", () => {
         expiresAt: Date.now() + 300_000,
         chatgptAccountId: "pool_acc",
       });
-      globalThis.fetch = (async () => {
+      globalThis.fetch = (async (input, init) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (request.method === "GET" && url.pathname === "/backend-api/codex/models") {
+          const accountId = request.headers.get("chatgpt-account-id");
+          const slugs = accountId === "pool_acc" ? ["gpt-5.6-terra"] : [];
+          return Response.json({
+            models: slugs.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
+          });
+        }
         if (sparkPhase) {
           return Response.json({ error: { message: "Spark quota exhausted" } }, {
             status: 429,
@@ -907,7 +916,7 @@ describe("compact alternate-account attempt (#913)", () => {
         }) as typeof fetch;
 
         const res = await handleResponsesCompact(
-          compactionRequest(baseCompactionBody({ model: "side/gpt-5.6-sol" })),
+          compactionRequest(baseCompactionBody({ model: "side/gpt-5.5" })),
           config,
           { model: "", provider: "" },
         );
@@ -1191,7 +1200,7 @@ describe("compact alternate-account attempt (#913)", () => {
         const request = new Request("http://localhost/v1/responses", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello", stream: false }),
+          body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
         });
         await expect(handleResponses(request, config, { model: "", provider: "" }))
           .rejects.toThrow("synthetic build failure");
@@ -1216,7 +1225,7 @@ describe("compact alternate-account attempt (#913)", () => {
       const request = () => new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello", stream: false }),
+        body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
       });
       const authSpy = spyOn(authContextModule, "resolveCodexAuthContext");
       try {

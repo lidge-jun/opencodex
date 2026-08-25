@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { handleConfigCommand } from "../src/cli/config-command";
 import { handleManagementAPI } from "../src/server/management-api";
 import { listManagementModelRows } from "../src/server/management/model-rows";
+import {
+  resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
+} from "../src/codex/model-entitlements";
 import type { OcxConfig } from "../src/types";
 import { resolveOpenAiVisionModel } from "../src/vision";
 import { ManagementRequest as Request } from "./helpers/management-auth";
@@ -54,6 +58,9 @@ function validCliConfig(visionSidecar: Record<string, unknown>): Record<string, 
  */
 describe("vision reasoning capability contracts", () => {
   test("native management rows expose vision-safe reasoning ladders", async () => {
+    // This contract is about the effort ladders themselves; Sol/Luna are account-gated,
+    // so confirm a roster or their rows would be filtered before the ladder is read.
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-5.6-luna"]);
     const config: OcxConfig = { port: 10100, defaultProvider: "none", providers: {} };
     const rows = await listManagementModelRows(config);
     const efforts = (id: string) => (rows.find(row => row.native === true && row.id === id) as
@@ -209,6 +216,7 @@ describe("vision reasoning capability contracts", () => {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       rmSync(isolatedHome, { recursive: true, force: true });
+      resetCodexModelEntitlementCacheForTests();
     }
   });
 });

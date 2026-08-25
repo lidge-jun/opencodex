@@ -159,8 +159,10 @@ describe("Codex catalog refresh", () => {
       expect(result.path).toBe(join(realpathSync.native(home.codexHome), "nested", "catalog.json"));
       expect(result.catalogWritten).toBe(true);
       expect(after).not.toBe(before);
-      expect(rewritten.models[0].slug).toBe("gpt-5.6-sol");
-      expect(rewritten.models[0].display_name).toBe("GPT-5.6-Sol");
+      // The fixture seeds gated Sol rows, but this isolated home has no authenticated
+      // roster, so sync drops them and the first surviving row is gpt-5.5.
+      expect(rewritten.models[0].slug).toBe("gpt-5.5");
+      expect(rewritten.models[0].display_name).toBe("gpt-5.5");
       expect(rewritten.models[0].context_window).toBeGreaterThan(0);
     } finally {
       home.restore();

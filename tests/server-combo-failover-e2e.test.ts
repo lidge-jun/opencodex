@@ -1123,7 +1123,7 @@ describe("server combo failover 030 activation matrix", () => {
       },
     }, [
       { provider: "openai", model: "gpt-5.3-codex-spark" },
-      { provider: "openai", model: "gpt-5.6-terra" },
+      { provider: "openai", model: "gpt-5.5" },
     ]);
     config.codexAccounts = [{
       id: rawAccountId,
@@ -1150,13 +1150,13 @@ describe("server combo failover 030 activation matrix", () => {
           headers: { "x-codex-primary-reset-at": String(resetAt) },
         });
       }
-      return Response.json(responsesSuccess("Terra fallback", "gpt-5.6-terra"));
+      return Response.json(responsesSuccess("Shared-native fallback", "gpt-5.5"));
     };
 
     const response = await post(config);
     expect(response.status).toBe(200);
     expect(upstreamCalls).toBe(2);
-    expect(await response.json()).toMatchObject({ model: "gpt-5.6-terra" });
+    expect(await response.json()).toMatchObject({ model: "gpt-5.5" });
   });
 
   test("keeps a failed estimate on A without overwriting B reported usage", async () => {

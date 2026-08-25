@@ -249,7 +249,7 @@ describe("passthrough empty 503 (#452)", () => {
         const response = await originalGlobalFetch(new URL("/v1/responses", serverUrl), {
           method: "POST",
           headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: false }),
+          body: JSON.stringify({ model: "gpt-5.5", input: "hi", stream: false }),
         });
         expect(response.status).toBe(503);
         const text = await response.text();
@@ -275,7 +275,7 @@ describe("passthrough empty 503 (#452)", () => {
         const response = await originalGlobalFetch(new URL("/v1/responses", serverUrl), {
           method: "POST",
           headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: false }),
+          body: JSON.stringify({ model: "gpt-5.5", input: "hi", stream: false }),
         });
         expect(response.status).toBe(418);
         expect(response.headers.get("content-type")).toContain("application/json");
@@ -297,7 +297,7 @@ describe("passthrough empty 503 (#452)", () => {
           const response = await originalGlobalFetch(new URL("/v1/responses", serverUrl), {
             method: "POST",
             headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-            body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: false }),
+            body: JSON.stringify({ model: "gpt-5.5", input: "hi", stream: false }),
           });
           expect(response.status).toBe(status);
           expect(response.headers.get("content-type")).toContain("application/json");
@@ -317,7 +317,7 @@ describe("passthrough empty 503 (#452)", () => {
         const response = await originalGlobalFetch(new URL("/v1/responses", serverUrl), {
           method: "POST",
           headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
-          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: false }),
+          body: JSON.stringify({ model: "gpt-5.5", input: "hi", stream: false }),
         });
         expect(response.status).toBe(503);
         expect(response.headers.get("retry-after")).toBeNull();
@@ -333,7 +333,7 @@ describe("passthrough empty 503 (#452)", () => {
           method: "POST",
           headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
           body: JSON.stringify({
-            model: "gpt-5.6-sol",
+            model: "gpt-5.5",
             messages: [{ role: "user", content: "hi" }],
             stream: false,
           }),

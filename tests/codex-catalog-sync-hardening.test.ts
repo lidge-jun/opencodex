@@ -108,7 +108,7 @@ describe("Codex catalog sync hardening", () => {
     if (existsSync(opencodexHome)) rmSync(opencodexHome, { recursive: true, force: true });
   });
 
-  test("Gap B: drops legacy OpenAI-family natives but keeps supported + user natives", () => {
+  test("Gap B: drops legacy and unentitled account-gated natives but keeps supported + user natives", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -138,9 +138,11 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.4");
     expect(slugs).toContain("gpt-5.4-mini");
     expect(slugs).toContain("gpt-5.3-codex-spark");
-    expect(slugs).toContain("gpt-5.6-sol");
-    expect(slugs).toContain("gpt-5.6-terra");
-    expect(slugs).toContain("gpt-5.6-luna");
+    // This isolated fixture has no authenticated ChatGPT roster, so account-gated
+    // native models must fail closed rather than remain selectable.
+    expect(slugs).not.toContain("gpt-5.6-sol");
+    expect(slugs).not.toContain("gpt-5.6-terra");
+    expect(slugs).not.toContain("gpt-5.6-luna");
     expect(slugs).toContain("user-native");           // genuine user native preserved
     expect(slugs).not.toContain("gpt-5.3-codex");      // legacy dropped
     expect(slugs).not.toContain("gpt-5.2");            // legacy dropped
@@ -153,8 +155,8 @@ describe("Codex catalog sync hardening", () => {
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         {
-          ...nativeEntry("gpt-5.6-sol", 0),
-          display_name: "Original Sol",
+          ...nativeEntry("gpt-5.5", 0),
+          display_name: "Original GPT-5.5",
           comp_hash: "native-sol-hash",
           base_instructions: "Native Sol instructions",
           model_messages: { instructions_template: "Native Sol instructions" },
@@ -178,17 +180,17 @@ describe("Codex catalog sync hardening", () => {
             adapter: "openai-chat",
             baseUrl: "https://api.example.test/v1",
             liveModels: false,
-            models: ["codex/gpt-5.6-sol"]
+            models: ["codex/gpt-5.5"]
           }
         },
         codexAccounts: [{ id: "stored-team-account", isMain: false }],
         codexAccountNamespaces: { team: "stored-team-account" },
         combos: {
           "nova-sol": {
-            alias: "gpt-5.6-sol",
+            alias: "gpt-5.5",
             nativeAlias: true,
-            displayName: "Nova Sol",
-            targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }]
+            displayName: "Nova GPT-5.5",
+            targets: [{ provider: "Nova1", model: "codex/gpt-5.5" }]
           }
         }
       };
@@ -205,13 +207,13 @@ describe("Codex catalog sync hardening", () => {
       tool_mode?: string | null;
       opencodex_catalog_kind?: string;
     }>;
-    expect(rows.filter(row => row.slug === "gpt-5.6-sol")).toEqual([
+    expect(rows.filter(row => row.slug === "gpt-5.5")).toEqual([
       expect.objectContaining({
-        display_name: "Nova Sol",
+        display_name: "Nova GPT-5.5",
         opencodex_catalog_kind: "combo-native-alias-v1",
       }),
     ]);
-    expect(rows.find(row => row.slug === "team/gpt-5.6-sol")).toMatchObject({
+    expect(rows.find(row => row.slug === "team/gpt-5.5")).toMatchObject({
       comp_hash: "native-sol-hash",
       base_instructions: "Native Sol instructions",
       model_messages: { instructions_template: "Native Sol instructions" },

@@ -57,7 +57,7 @@ function mixedConfig(): OcxConfig {
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
         codexAccountMode: "direct",
-        defaultModel: "gpt-5.6-luna",
+        defaultModel: "gpt-5.5",
       },
       gateway: {
         adapter: "openai-chat",
@@ -153,7 +153,7 @@ describe("#2132 bearer admission does not require a ChatGPT credential for route
 
     const server = startServer(0);
     try {
-      const response = await postResponses(server.url, "gpt-5.6-luna");
+      const response = await postResponses(server.url, "gpt-5.5");
 
       // This is the #1686 guarantee and it must survive: a native route genuinely needs the
       // stored credential, so it fails BEFORE any upstream I/O rather than forwarding ours.
@@ -175,7 +175,7 @@ describe("#2132 bearer admission does not require a ChatGPT credential for route
 
     const server = startServer(0);
     try {
-      const response = await postResponses(server.url, "gpt-5.6-luna");
+      const response = await postResponses(server.url, "gpt-5.5");
 
       expect(response.status).toBe(200);
       expect(nativeAuth).toEqual([`Bearer ${stored}`]);
@@ -213,7 +213,7 @@ describe("an admission bearer never reaches a canonical ChatGPT transport, whate
           adapter: "openai-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
-          defaultModel: "gpt-5.6-luna",
+          defaultModel: "gpt-5.5",
         },
       },
     } as OcxConfig;
@@ -225,7 +225,7 @@ describe("an admission bearer never reaches a canonical ChatGPT transport, whate
 
     const server = startServer(0);
     try {
-      const response = await postResponses(server.url, "mirror/gpt-5.6-luna");
+      const response = await postResponses(server.url, "mirror/gpt-5.5");
 
       // Fail-before-I/O is the contract (src/codex/auth-context.ts): the only two acceptable
       // outcomes for an admission bearer are replaced-with-stored-main, or refused. Reaching
@@ -247,7 +247,7 @@ describe("an admission bearer never reaches a canonical ChatGPT transport, whate
 
     const server = startServer(0);
     try {
-      await postResponses(server.url, "mirror/gpt-5.6-luna");
+      await postResponses(server.url, "mirror/gpt-5.5");
 
       expect(nativeAuth.join("|")).not.toContain(ADMISSION_SECRET);
       for (const sent of nativeAuth) expect(sent).toBe(`Bearer ${stored}`);

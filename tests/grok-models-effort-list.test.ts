@@ -3,6 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import {
+  resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
+} from "../src/codex/model-entitlements";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
@@ -44,6 +48,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetCodexModelEntitlementCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testHome) rmSync(testHome, { recursive: true, force: true });
@@ -52,6 +57,7 @@ afterEach(() => {
 
 describe("raw /v1/models list reasoning-effort advertisement (Grok Build discovery)", () => {
   test("routed models with configured tiers advertise the Grok reasoning catalog shape", async () => {
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     const config = effortConfig();
     config.providers.openai = {
       adapter: "openai-responses",

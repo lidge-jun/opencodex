@@ -150,7 +150,7 @@ afterEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
-const POOL_RETRY_MODEL = "gpt-5.6-sol";
+const POOL_RETRY_MODEL = "gpt-5.5";
 
 function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
   return JSON.stringify({

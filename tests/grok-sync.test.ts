@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,9 +6,15 @@ import { injectGrokConfig } from "../src/grok/inject";
 import { syncGrokConfig } from "../src/grok/sync";
 import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
 import type { CatalogModel } from "../src/codex/catalog";
+import {
+  resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
+} from "../src/codex/model-entitlements";
 import type { OcxConfig } from "../src/types";
 
 const baseConfig = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+
+afterEach(() => resetCodexModelEntitlementCacheForTests());
 
 function tempGrokHome(): { root: string; grokHome: string } {
   const root = mkdtempSync(join(tmpdir(), "ocx-grok-sync-"));
@@ -44,6 +50,7 @@ describe("syncGrokConfig", () => {
   // and Grok fell back to its own 200k default — understating gpt-5.6-sol, which is 372k. The
   // window comes from the same accessor the dashboard uses, so the two surfaces agree.
   test("native slugs carry their real context window, not Grok's 200k default", async () => {
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     const { root, grokHome } = tempGrokHome();
     try {
       const result = await syncGrokConfig(10190, baseConfig, { grokHome }, {

@@ -298,7 +298,7 @@ async function mainRequest(port: number): Promise<Response> {
   return fetch(`http://127.0.0.1:${port}/v1/responses`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "gpt-5.6-sol", input: "startup gate", stream: false }),
+    body: JSON.stringify({ model: "gpt-5.5", input: "startup gate", stream: false }),
   });
 }
 

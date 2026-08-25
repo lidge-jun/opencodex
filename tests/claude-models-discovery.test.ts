@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import {
+  resetCodexModelEntitlementCacheForTests,
+} from "../src/codex/model-entitlements";
 import { handleManagementAPI } from "../src/server/management-api";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
@@ -25,6 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetCodexModelEntitlementCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -159,6 +163,23 @@ test("OpenAI list shape and Codex catalog shape stay unchanged", async () => {
 });
 
 test("Codex discovery applies the OpenAI context cap to native rows (#1430)", async () => {
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "context-cap-access", account_id: "context-cap-account" },
+  }), "utf8");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/backend-api/codex/models") {
+      const entitled = request.headers.get("authorization") === "Bearer context-cap-access"
+        && request.headers.get("chatgpt-account-id") === "context-cap-account";
+      const slugs = entitled ? ["gpt-5.6-sol"] : [];
+      return Response.json({
+        models: slugs.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
+      });
+    }
+    return originalFetch(request);
+  }) as typeof fetch;
   const config = configWithStaticModels();
   config.providers.openai = {
     adapter: "openai-responses",
@@ -186,6 +207,7 @@ test("Codex discovery applies the OpenAI context cap to native rows (#1430)", as
     });
   } finally {
     await server.stop(true);
+    globalThis.fetch = originalFetch;
   }
 });
 

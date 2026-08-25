@@ -48,7 +48,7 @@ function directConfig(): OcxConfig {
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
         codexAccountMode: "direct",
-        defaultModel: "gpt-5.6-luna",
+        defaultModel: "gpt-5.5",
       },
     },
     apiKeys: [
@@ -105,7 +105,7 @@ async function postResponses(url: string | URL, authorization: string): Promise<
   return originalFetch(new URL("/v1/responses", url), {
     method: "POST",
     headers: { "content-type": "application/json", authorization },
-    body: JSON.stringify({ model: "gpt-5.6-luna", input: "hi", stream: false }),
+    body: JSON.stringify({ model: "gpt-5.5", input: "hi", stream: false }),
   });
 }
 
@@ -113,7 +113,7 @@ async function postCompact(url: string | URL, authorization: string): Promise<Re
   return originalFetch(new URL("/v1/responses/compact", url), {
     method: "POST",
     headers: { "content-type": "application/json", authorization },
-    body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+    body: JSON.stringify({ model: "gpt-5.5", input: [] }),
   });
 }
 

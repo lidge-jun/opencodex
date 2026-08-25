@@ -540,7 +540,7 @@ describe("agent task recovery (opt-in, default off)", () => {
 
     const response = await post(
       routedConfig(),
-      "gpt-5.6-sol",
+      "gpt-5.5",
       encryptedInput(),
       codexHeaders(),
     );

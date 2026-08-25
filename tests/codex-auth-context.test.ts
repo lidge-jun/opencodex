@@ -450,7 +450,7 @@ describe("Codex auth context", () => {
     });
     let discoveries = 0;
     await expect(resolveCodexAuthContext(new Headers(), config(), "pool", {
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
       resolveCodexModelEntitlements: async () => {
         discoveries += 1;
         throw new Error("must not run");
@@ -479,7 +479,7 @@ describe("Codex auth context", () => {
 
     const exactContext = await resolveCodexAuthContext(headers, cfg, "direct", {
       accountId: "pool-a",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
     });
     expect(exactContext).toMatchObject({
       kind: "pool",
@@ -493,7 +493,7 @@ describe("Codex auth context", () => {
       _codexAccountOverride: { accessToken: "fixed_pool_token", chatgptAccountId: "fixed_pool_acc" },
     });
     expect(cfg.activeCodexAccountId).toBe("pool-b");
-    await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-sol" }))
+    await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.5" }))
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
   });
 
@@ -706,7 +706,7 @@ describe("Codex auth context", () => {
 
     // The pool path honors the order: pool-b outranks pool-a, so an unbound request
     // prefers pool-b.
-    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { modelId: "gpt-5.6-sol" }))
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { modelId: "gpt-5.5" }))
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
 
     // An exact selector names pool-a: it must resolve to pool-a even though pool-b is
@@ -714,7 +714,7 @@ describe("Codex auth context", () => {
     // way to redirect a request that already named its account.
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
       accountId: "pool-a",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
     })).resolves.toMatchObject({
       kind: "pool",
       accountId: "pool-a",
@@ -735,7 +735,7 @@ describe("Codex auth context", () => {
 
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
       accountId: MAIN_CODEX_ACCOUNT_ID,
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
     })).resolves.toMatchObject({
       kind: "main-pool",
       accountId: MAIN_CODEX_ACCOUNT_ID,
@@ -841,7 +841,7 @@ describe("Codex auth context", () => {
     expect(isCodexAuthContextUsable(captured, cfg)).toBe(true);
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
       accountId: "pool-a",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
     })).rejects.toThrow("Selected Codex account is unavailable");
     expect(cfg.activeCodexAccountId).toBe("pool-a");
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
@@ -868,7 +868,7 @@ describe("Codex auth context", () => {
 
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
       accountId: "pool-a",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
     })).rejects.toThrow("Selected Codex account needs reauthentication");
     expect(cfg.activeCodexAccountId).toBe("pool-b");
   });
@@ -885,7 +885,7 @@ describe("Codex auth context", () => {
 
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
       accountId: "pool-a",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.5",
     })).rejects.toThrow("Selected Codex account is unavailable");
     expect(cfg.activeCodexAccountId).toBe("pool-a");
   });
@@ -905,18 +905,18 @@ describe("Codex auth context", () => {
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         resetAt: Math.floor((now + 60 * 60_000) / 1_000),
         now,
-        modelId: "gpt-5.6-sol",
+        modelId: "gpt-5.5",
         fixedAccount: true,
       });
       Date.now = () => now + CODEX_QUOTA_PROBE_INTERVAL_MS;
 
       await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
         accountId: "pool-a",
-        modelId: "gpt-5.6-sol",
+        modelId: "gpt-5.5",
       })).rejects.toBeInstanceOf(CodexAccountCooldownError);
 
       const ordinaryProbe = await resolveCodexAuthContext(new Headers(), cfg, "pool", {
-        modelId: "gpt-5.6-sol",
+        modelId: "gpt-5.5",
       });
       expect(ordinaryProbe).toMatchObject({ kind: "pool", accountId: "pool-a" });
       expect(ordinaryProbe.kind === "pool" ? ordinaryProbe.probeLeaseId : undefined).toBeTruthy();
@@ -1079,7 +1079,7 @@ describe("Codex auth context", () => {
       });
 
       // Spark owns a separate quota, so Terra can use the same account.
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.4" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
@@ -1087,12 +1087,12 @@ describe("Codex auth context", () => {
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         now,
         resetAt,
-        modelId: "gpt-5.6-terra",
+        modelId: "gpt-5.4",
       });
 
       // Terra and Luna stay in the shared native quota group, while Spark keeps
       // its independent cooldown instead of being overwritten by Terra's 429.
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-luna" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.4-mini" }))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
@@ -1104,7 +1104,7 @@ describe("Codex auth context", () => {
         retryAfter: "60",
         modelId: "gpt-5.3-codex-spark",
       });
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.4" }))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
     } finally {
       Date.now = originalNow;
@@ -1137,7 +1137,7 @@ describe("Codex auth context", () => {
       Date.now = () => now;
       // Establish the shared-scope binding first. The Spark fallback below must
       // create a second binding rather than replacing this one.
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.4" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
 
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
@@ -1149,7 +1149,7 @@ describe("Codex auth context", () => {
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
       expect(cfg.activeCodexAccountId).toBe("pool-a");
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.4" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
       // This second Spark request proves routing retained the peer choice for
       // the Spark affinity instead of relying on an auth-layer substitution.
@@ -1182,7 +1182,7 @@ describe("Codex auth context", () => {
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         now,
         resetAt,
-        modelId: "gpt-5.6-terra",
+        modelId: "gpt-5.4",
       });
 
       const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
@@ -1205,7 +1205,7 @@ describe("Codex auth context", () => {
       Date.now = () => probeAt + 1;
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-luna" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.4-mini" }))
         .resolves.toMatchObject({ kind: "pool", probeQuotaScope: "shared" });
     } finally {
       Date.now = originalNow;
