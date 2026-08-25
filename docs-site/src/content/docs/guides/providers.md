@@ -144,12 +144,16 @@ A custom `openai-chat` provider can opt in when its upstream documents support f
 }
 ```
 
-This setting forwards only a key supplied by the caller; it does not create one. Preserve the rest
-of the provider configuration when adding it, then reload or restart opencodex. When the caller
-supplies a stable `prompt_cache_key`, validate caching by comparing the initial cold request with
-later requests in the same conversation. Leave the option omitted or set it to `false` for
-incompatible upstreams, and disable or remove it if a strict
-gateway returns an HTTP 400 unknown-field error.
+The adapter forwards the key it is given and never invents one. It can still receive a key the
+caller did not send: Claude Messages translation derives one from `metadata.user_id`, or from a
+model/system/tools cohort when the client sends no metadata, because the OpenAI backends report
+`cached_tokens: 0` for every keyless turn. So "forwarded, not fabricated" describes this adapter,
+not the whole request path.
+
+Preserve the rest of the provider configuration when adding the option, then reload or restart
+opencodex. To validate caching, compare the initial cold request with later requests carrying the
+same stable key. Leave the option omitted or set it to `false` for incompatible upstreams, and
+disable or remove it if a strict gateway returns an HTTP 400 unknown-field error.
 
 You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
 

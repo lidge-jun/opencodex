@@ -164,8 +164,8 @@ full breakdown per account, not just the two summarized windows:
 ```text
 $ ocx account list anthropic --quota
 PROVIDER   TYPE   ID        PLAN/LABEL         PRIORITY  STATUS  QUOTA
-anthropic  oauth  1278f8da  a***r@big5lms.com  -                 5h 7% wk 62%
-anthropic  oauth  e112f28b  k***1@gmail.com    -         active  5h 9% wk 45%
+anthropic  oauth  1278f8da  a***r@examp***.com  -                5h 7% wk 62%
+anthropic  oauth  e112f28b  k***1@examp***.net  -        active  5h 9% wk 45%
 ```
 
 ### `ocx account current <provider> [--json]`
