@@ -843,6 +843,12 @@ describe("native fallback account preview", () => {
     const now = cooldownAt + CODEX_QUOTA_PROBE_INTERVAL_MS + 1;
     Date.now = () => now;
     installPoolCredential("pool-a", "pool_acc_a", now);
+    // This case binds on gpt-5.6-sol, which is account-gated: without a roster the
+    // entitlement snapshot fails closed and no account is eligible (#2550).
+    installCodexRosterMock({
+      pool_acc_a: GPT56_NATIVE_MODELS,
+      pool_acc_b: GPT56_NATIVE_MODELS,
+    });
     installPoolCredential("pool-b", "pool_acc_b", now);
     const cfg = poolNativePlusRoutedConfig({
       activeCodexAccountId: "pool-a",
@@ -910,6 +916,11 @@ describe("native fallback account preview", () => {
     let currentNow = now;
     Date.now = () => currentNow;
     installPoolCredential("pool-a", "pool_acc_a", now);
+    // Same account-gated binding as above: grant the roster to both pool accounts.
+    installCodexRosterMock({
+      pool_acc_a: GPT56_NATIVE_MODELS,
+      pool_acc_b: GPT56_NATIVE_MODELS,
+    });
     installPoolCredential("pool-b", "pool_acc_b", now);
     const cfg = poolNativePlusRoutedConfig({
       defaultProvider: "xai",
