@@ -34,6 +34,10 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-opus-5-fast": ["low", "medium", "high"],
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "glm-5.2": ["high", "max"],
+  // 260825 live GetUsableModels. gemini-3.6-flash is the only Cursor model exposing `minimal`;
+  // listing it here is also what admits the suffix into CANONICAL_EFFORT_SUFFIXES below.
+  "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.7-flash": ["low", "medium", "high"],
   // 260814 preemptive: glm-5.3 seeded ahead of Cursor's lineup update. Unlike 5.2, Z.AI folds
   // 5.3 efforts into low/high/max (docs.z.ai/devpack/latest-model), so `low` is a real tier.
   "glm-5.3": ["low", "high", "max"],
@@ -70,6 +74,15 @@ export const CANONICAL_EFFORT_SUFFIXES: ReadonlySet<string> = new Set([
 ]);
 
 const CANONICAL_CODEX_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * Picker order, which is the canonical ladder plus the declared sentinels that rank below `low`.
+ *
+ * `cursorModelEffortLadder` filters against this, so a tier absent from it is silently dropped
+ * from the Codex picker even though `cursorEffortSuffix` would happily send it. That is what
+ * hid `gemini-3.6-flash-minimal`, the one Cursor model with a `minimal` rung.
+ */
+const CURSOR_PICKER_EFFORT_ORDER = ["minimal", ...CANONICAL_CODEX_EFFORT_ORDER] as const;
 
 function normalizeRequestedEffort(reasoning: string | undefined): string | undefined {
   const normalized = reasoning?.toLowerCase();
@@ -119,7 +132,7 @@ export function cursorModelEffortLadder(baseModelId: string): string[] | undefin
   const tiers = CURSOR_MODEL_EFFORT_TIERS[baseModelId];
   if (!tiers || tiers.length === 0) return undefined;
   const tierSet = new Set(tiers);
-  return CANONICAL_CODEX_EFFORT_ORDER.filter(effort => tierSet.has(effort));
+  return CURSOR_PICKER_EFFORT_ORDER.filter(effort => tierSet.has(effort));
 }
 
 /** Base models known to carry a reasoning-effort suffix (everything else is sent bare). */

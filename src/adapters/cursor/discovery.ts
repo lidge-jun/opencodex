@@ -257,6 +257,10 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "gemini-3-pro-image-preview", contextWindow: CONTEXT_200K },
   { id: "gemini-3.1-pro", contextWindow: CONTEXT_GEMINI },
   { id: "gemini-3.5-flash", contextWindow: CONTEXT_200K },
+  // 260825 live GetUsableModels: both ship only as effort-suffixed ids, so each exposes a tier
+  // picker. 3.6 is the only Cursor model with a `minimal` rung.
+  { id: "gemini-3.6-flash", contextWindow: CONTEXT_GEMINI, supportsReasoningEffort: true },
+  { id: "gemini-3.7-flash", contextWindow: CONTEXT_GEMINI, supportsReasoningEffort: true },
 
   { id: "gpt-5-codex", contextWindow: CONTEXT_272K },
   { id: "gpt-5-fast", contextWindow: CONTEXT_272K },

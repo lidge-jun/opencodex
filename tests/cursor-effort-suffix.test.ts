@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
-import { cursorEffortSuffix, cursorModelEffortLadder } from "../src/adapters/cursor/effort-map";
+import { CANONICAL_EFFORT_SUFFIXES, cursorEffortSuffix, cursorModelEffortLadder } from "../src/adapters/cursor/effort-map";
+import { CURSOR_STATIC_MODELS, isCursorModelAvailableForAccount } from "../src/adapters/cursor/discovery";
 import type { OcxParsedRequest } from "../src/types";
 
 // Static fixture recorded from Cursor GetUsableModels on 2026-08-06. This pins the
@@ -197,5 +198,32 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(cursorModelEffortLadder("claude-opus-4-8")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(cursorModelEffortLadder("glm-5.2")).toEqual(["high", "max"]);
     expect(cursorModelEffortLadder("composer-2.5")).toBeUndefined();
+  });
+});
+
+describe("#2569 Cursor catalog tracks the live GetUsableModels roster", () => {
+  test("the two Gemini families the live roster exposes are catalogued", () => {
+    const ids = new Set(CURSOR_STATIC_MODELS.map(model => model.id));
+    expect(ids.has("gemini-3.6-flash")).toBe(true);
+    expect(ids.has("gemini-3.7-flash")).toBe(true);
+  });
+
+  test("gemini-3.6-flash exposes its minimal rung in the picker ladder", () => {
+    // minimal is not in the canonical five-rung order, so the ladder filter dropped it and the
+    // tier was unreachable from Codex even though the wire accepts it.
+    expect(cursorModelEffortLadder("gemini-3.6-flash")).toEqual(["minimal", "low", "medium", "high"]);
+    expect(cursorEffortSuffix("gemini-3.6-flash", "minimal")).toBe("minimal");
+    expect(CANONICAL_EFFORT_SUFFIXES.has("minimal")).toBe(true);
+  });
+
+  test("gemini-3.7-flash carries the low/medium/high ladder the wire lists", () => {
+    expect(cursorModelEffortLadder("gemini-3.7-flash")).toEqual(["low", "medium", "high"]);
+  });
+
+  test("both families survive live-discovery filtering from effort-suffixed wire ids", () => {
+    // The live roster lists ONLY suffixed ids for these models; a base id that does not match
+    // one of them is dropped from the routed catalog.
+    expect(isCursorModelAvailableForAccount("gemini-3.6-flash", ["gemini-3.6-flash-minimal"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("gemini-3.7-flash", ["gemini-3.7-flash-high"])).toBe(true);
   });
 });
