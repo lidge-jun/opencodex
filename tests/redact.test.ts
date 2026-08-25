@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   REDACTED_SECRET,
   redactHeaders,
+  redactErrorMessage,
   redactSecretString,
   redactSecrets,
   redactUrlForLog,
@@ -536,5 +537,20 @@ describe("redactUrlForLog", () => {
 
   test("best-effort redacts invalid URL strings", () => {
     expect(redactUrlForLog("not a url?refreshToken=refresh-secret")).toBe("not a url");
+  });
+});
+
+describe("redactErrorMessage", () => {
+  test("strips credentials, queries, and fragments from every URI scheme", () => {
+    for (const scheme of ["socks5", "socks5h", "custom+proxy.v1"]) {
+      const redacted = redactErrorMessage(
+        `connect failed via ${scheme}://alice:secret@proxy.test:1080/path?token=secret#fragment`,
+      );
+      expect(redacted).toBe(`connect failed via ${scheme}://proxy.test:1080/path`);
+      expect(redacted).not.toContain("alice");
+      expect(redacted).not.toContain("secret");
+      expect(redacted).not.toContain("token");
+      expect(redacted).not.toContain("fragment");
+    }
   });
 });

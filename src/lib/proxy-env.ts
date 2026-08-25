@@ -22,7 +22,7 @@ function proxyValue(key: ProxyEnvKey, env: ProxyEnvMap): string | undefined {
   return value || undefined;
 }
 
-function noProxyMatches(url: URL, env: ProxyEnvMap): boolean {
+export function noProxyMatches(url: URL, env: ProxyEnvMap = process.env): boolean {
   const raw = env.NO_PROXY?.trim() || env.no_proxy?.trim() || "";
   const hostname = url.hostname.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   const port = url.port || (url.protocol === "https:" ? "443" : "80");

@@ -497,7 +497,7 @@ export function redactUrlForLog(url: string): string {
 /** Redact credentials and userinfo from arbitrary diagnostic text. */
 export function redactErrorMessage(value: string): string {
   return redactSecretString(value).replace(
-    /https?:\/\/[^\s"'<>]+/gi,
+    /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi,
     match => redactUrlForLog(match),
   );
 }

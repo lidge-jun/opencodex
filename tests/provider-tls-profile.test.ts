@@ -299,6 +299,22 @@ describe("Antigravity TLS transport gate", () => {
     expect(bunCalls).toBe(2);
   });
 
+  test("redacts credentials in post-dispatch socks5 proxy errors", async () => {
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          throw new Error("post-dispatch failure at socks5://alice:secret@proxy.test:1080/path?token=secret#fragment");
+        },
+      }),
+    });
+    const executor = providerTlsFetch("google-antigravity", canonicalProvider, globalThis.fetch);
+    await expect(executor("https://daily-cloudcode-pa.googleapis.com/v1internal"))
+      .rejects.toThrow("post-dispatch failure at socks5://proxy.test:1080/path");
+    await expect(executor("https://daily-cloudcode-pa.googleapis.com/v1internal"))
+      .rejects.not.toThrow(/alice|secret|token|fragment/);
+  });
+
   test("preserves only safe cancellation identity while redacting native details", async () => {
     setProviderTlsRuntimeForTest({
       importWreq: async () => ({
