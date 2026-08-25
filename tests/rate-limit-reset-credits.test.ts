@@ -239,6 +239,43 @@ describe("rate-limit reset credits", () => {
       expect(normalizeQuotaForPlan(quota, "pro")).toBe(quota);
     });
 
+    /**
+     * The five-hour window reaches the GUI under TWO names (#2616).
+     *
+     * `QuotaBars` reads `fiveHour*`, which is what the per-account provider probe reports. The
+     * Codex pool declares the same window as `short*` (auth-api.ts, and `account-api.ts` says
+     * outright that "the two surfaces name the same idea differently and both reach this DTO").
+     * A Codex account card therefore had a five-hour quota upstream and rendered no five-hour
+     * row at all.
+     *
+     * The canonical name wins when both are present: `short*` is an alias to fall back to, not
+     * an override, or a pool snapshot could quietly replace a probe reading.
+     */
+    it("renders the Codex pool's short window as the five-hour window (#2616)", async () => {
+      const { normalizeQuotaForPlan } = await import("../gui/src/codex-quota-utils");
+
+      expect(normalizeQuotaForPlan({ shortPercent: 71, shortResetAt: 555, updatedAt: 1 }, "pro"))
+        .toMatchObject({ fiveHourPercent: 71, fiveHourResetAt: 555 });
+
+      // Canonical values win; the alias does not overwrite a probe reading.
+      expect(normalizeQuotaForPlan(
+        { fiveHourPercent: 10, fiveHourResetAt: 111, shortPercent: 71, shortResetAt: 555, updatedAt: 1 },
+        "pro",
+      )).toMatchObject({ fiveHourPercent: 10, fiveHourResetAt: 111 });
+
+      // A quota carrying neither alias is still returned by identity, so the common path adds
+      // no allocation and no behavior change.
+      const untouched = { weeklyPercent: 5, updatedAt: 2 };
+      expect(normalizeQuotaForPlan(untouched, "pro")).toBe(untouched);
+
+      // A 30-day plan still strips non-monthly windows, alias or not — #1791's burst-window
+      // carve-out lives on the server DTO, not in this GUI normalizer.
+      expect(normalizeQuotaForPlan(
+        { shortPercent: 71, shortResetAt: 555, monthlyPercent: 12, updatedAt: 3 },
+        "go",
+      )).toEqual({ monthlyPercent: 12, updatedAt: 3 });
+    });
+
     it("does not exclude team or workspace plans from ticket badges", async () => {
       const [pool, helpers] = await Promise.all([
         Bun.file("gui/src/components/CodexAccountPool.tsx").text(),
