@@ -930,11 +930,15 @@ export function codexAccountGatedCanonicalWireModel(modelId: string): string | u
   return undefined;
 }
 
-function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest, route: RouteResult): void {
+function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest, route: RouteResult, logCtx?: RequestLogContext): void {
   if (!isCanonicalOpenAiForwardProvider(route.provider)) return;
   const wireModel = codexAccountGatedCanonicalWireModel(route.modelId);
   if (!wireModel) return;
 
+  if (logCtx) {
+    logCtx.preserveResolvedModelFromRoute = true;
+    delete logCtx.resolvedModel;
+  }
   parsed.modelId = wireModel;
   if (!parsed._rawBody || typeof parsed._rawBody !== "object") return;
   const raw = parsed._rawBody as Record<string, unknown>;
@@ -2719,7 +2723,7 @@ async function handleResponsesInner(
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
-  applyCodexAccountGatedWireNormalization(parsed, route);
+  applyCodexAccountGatedWireNormalization(parsed, route, logCtx);
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
@@ -3650,7 +3654,7 @@ async function handleResponsesInner(
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();
-    if (resolvedModel) logCtx.resolvedModel = resolvedModel;
+    if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
     if (isUsageDebugEnabled()) {
       const upstreamContentType = upstreamResponse.headers.get("content-type");
       if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;

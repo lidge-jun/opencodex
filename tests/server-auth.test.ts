@@ -2167,7 +2167,10 @@ describe("server local API auth", () => {
     const harness = await startPoolRetryHarness(
       async (_accountId, request) => {
         upstreamBody = await request.json() as Record<string, unknown>;
-        return Response.json({ id: "canonical-wire-success", status: "completed", output: [] });
+        return Response.json(
+          { id: "canonical-wire-success", status: "completed", output: [], usage: { input_tokens: 1000, output_tokens: 100 } },
+          { headers: { "openai-model": "gpt-5.6-sol" } },
+        );
       },
       {
         secondAccount: false,
@@ -2183,6 +2186,14 @@ describe("server local API auth", () => {
       expect(upstreamBody?.model).toBe("gpt-5.6-sol");
       expect(upstreamBody).not.toHaveProperty("prompt_cache_retention");
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
+
+      const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=1", harness.server.url), { headers: managementHeaders() }).then(r => r.json()));
+      expect(logs.at(-1)).toMatchObject({
+        model: "gpt-daybreak-blue-latest",
+        status: 200,
+      });
+      expect(logs.at(-1)?.resolvedModel).toBeUndefined();
+      expect(logs.at(-1)?.displayMetrics?.cost?.kind).toBe("value");
     } finally {
       await stopPoolRetryHarness(harness);
     }
