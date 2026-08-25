@@ -138,6 +138,34 @@ describe("Responses previous_response_id state", () => {
     clearResponseStateMemoryForTests();
   });
 
+  test("a slow progressing Cursor chain remains replayable beyond the reported 18 continuations", () => {
+    let request: Record<string, unknown> = {
+      model: "cursor/grok-4.6",
+      input: [{ role: "user", content: "bounded task" }],
+      store: false,
+    };
+
+    for (let turn = 0; turn < 32; turn += 1) {
+      const responseId = `resp_progress_${turn}`;
+      const callId = `call_progress_${turn}`;
+      rememberResponseState(
+        request,
+        fixedResponse(responseId, [{ type: "function_call", call_id: callId, name: "inspect", arguments: "{}" }]),
+        { cursor: { conversationId: "cursor_progress_chain" } },
+        { force: true },
+      );
+      request = expandPreviousResponseInput({
+        model: "cursor/grok-4.6",
+        previous_response_id: responseId,
+        input: [{ type: "function_call_output", call_id: callId, output: `new evidence ${turn}` }],
+        store: false,
+      }) as Record<string, unknown>;
+    }
+
+    expect(request.input).toBeArrayOfSize(65);
+    expect(previousResponseConversationId("resp_progress_31")).toBe("cursor_progress_chain");
+  });
+
   afterEach(() => {
     setSpillIoForTest(null);
     setIcaclsRunnerForTests(null);
