@@ -308,6 +308,23 @@ export function lookupReplayThoughtSignature(
   return entry.sig;
 }
 
+/** Drop a remembered signature for a specific callId and scope (e.g. when upstream rejects it). */
+export function forgetThoughtSignatureForReplay(
+  callId: string,
+  scope: OcxReasoningReplayScopeRef | undefined,
+): boolean {
+  const key = keyFor(callId, scope);
+  if (key === undefined) return false;
+  load();
+  const entry = entries.get(key);
+  if (!entry) return false;
+  entries.delete(key);
+  totalBytes -= entry.sig.length;
+  prune(Date.now());
+  void persist();
+  return true;
+}
+
 /** Test seams: clear in-memory state and the loaded flag without touching the file. */
 export function resetThoughtSignatureReplayForTests(): void {
   entries = new Map();

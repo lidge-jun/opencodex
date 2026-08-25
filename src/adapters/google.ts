@@ -26,7 +26,7 @@ import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
-import { lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
+import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
   retainTranslatedEventBatch,
@@ -221,7 +221,7 @@ function geminiOrphanToolResultParts(msg: OcxToolResultMessage): unknown[] {
 function messagesToGeminiFormat(
   parsed: OcxParsedRequest,
   identityModelId: string,
-): { systemInstruction?: unknown; contents: unknown[] } {
+): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
@@ -233,6 +233,7 @@ function messagesToGeminiFormat(
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
+  const replayedCallIds: string[] = [];
 
   const callIds = createToolCallIdAllocator();
   for (const msg of parsed.context.messages) {
@@ -308,7 +309,10 @@ function messagesToGeminiFormat(
             const signature = tc.providerMetadata?.google?.thoughtSignature
               ?? tc.thoughtSignature
               ?? lookupReplayThoughtSignature(tc.id, parsed._reasoningReplayScope);
-            if (isLikelyRealThoughtSignature(signature)) part.thoughtSignature = signature;
+            if (isLikelyRealThoughtSignature(signature)) {
+              part.thoughtSignature = signature;
+              replayedCallIds.push(tc.id);
+            }
             parts.push(part);
           }
         }
@@ -360,7 +364,7 @@ function messagesToGeminiFormat(
     }
   }
 
-  return { systemInstruction, contents };
+  return { systemInstruction, contents, replayedCallIds };
 }
 
 function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
@@ -647,6 +651,38 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   let vertexReplayModel: string | undefined;
   let vertexReplaySession: string | undefined;
   let restoreGoogleToolName = (name: string): string => name;
+  let lastInjectedCallIds: string[] = [];
+  let lastReasoningReplayScope: OcxParsedRequest["_reasoningReplayScope"];
+
+  // Conservative batch invalidation: upstream Gemini/Antigravity errors (e.g.
+  // "Function call is missing a thought_signature in functionCall parts") do not specify which
+  // specific call_id was rejected. When a request containing replayed signatures is rejected,
+  // we evict all callIds injected in that turn (lastInjectedCallIds) from the durable store
+  // and clear the session replay cache, preventing poisoned-signature loops while allowing
+  // subsequent turns to re-accumulate valid signatures. Unrelated calls from other turns remain intact.
+  //
+  // Memory-cache clearing stays broad (any invalid-argument/signature error can poison the
+  // session replay cache), but durable-store eviction is intentionally narrower: it only runs
+  // when the error text explicitly mentions a signature, so a generic tool-schema
+  // INVALID_ARGUMENT does not destroy valid durable signatures.
+  function handleSignatureRejection(errorMessage?: string) {
+    const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+    const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+    const text = errorMessage ?? "";
+    const isInvalidArgument = /invalid_argument|invalid argument/i.test(text);
+    const isSignatureError = /signature|thought_signature|thoughtSignature/i.test(text);
+    if (provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex") {
+      if (replayModel && replaySession && (isInvalidArgument || isSignatureError)) {
+        clearAntigravityReplay(replayModel, replaySession);
+      }
+      if (isSignatureError) {
+        for (const callId of lastInjectedCallIds) {
+          forgetThoughtSignatureForReplay(callId, lastReasoningReplayScope);
+        }
+      }
+    }
+  }
+
   return {
     name: "google",
 
@@ -675,7 +711,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
-      const { systemInstruction, contents } = messagesToGeminiFormat(parsed, identityModelId);
+      const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(parsed, identityModelId);
+      lastInjectedCallIds = [...replayedCallIds];
+      lastReasoningReplayScope = parsed._reasoningReplayScope;
       const tools = toolsToGeminiFormat(parsed);
 
       const body: Record<string, unknown> = { contents };
@@ -902,14 +940,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (chunk.error) {
           const err = chunk.error as { message?: string } | undefined;
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
-          // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
-          const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-          const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-          if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-            && replayModel && replaySession
-            && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
-            clearAntigravityReplay(replayModel, replaySession);
-          }
+          // Drop the cache entry and durable store entry for rejected calls so the next turn
+          // starts clean instead of re-injecting a bad sig.
+          handleSignatureRejection(err?.message);
           yield { type: "error", message: err?.message ?? "upstream error" };
           return "terminate";
         }
@@ -1224,6 +1257,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       };
       if (raw.error) {
         const err = raw.error as { message?: string };
+        handleSignatureRejection(err.message);
         return finish([{ type: "error", message: err.message ?? "upstream error" }]);
       }
       // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.

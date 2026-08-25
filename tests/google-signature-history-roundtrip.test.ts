@@ -7,16 +7,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
-import { __resetAntigravityReplayCache, observeAntigravityReplay } from "../src/adapters/google-antigravity-replay";
+import {
+  __resetAntigravityReplayCache,
+  applyAntigravityReplay,
+  observeAntigravityReplay,
+} from "../src/adapters/google-antigravity-replay";
 import { parseRequest } from "../src/responses/parser";
 import {
   flushThoughtSignatureReplayForTests,
+  forgetThoughtSignatureForReplay,
   lookupReplayThoughtSignature,
   rememberThoughtSignatureForReplay,
   resetThoughtSignatureReplayForTests,
 } from "../src/responses/thought-signature-replay";
 import { durableReplayDestinationIdentity } from "../src/responses/reasoning-replay-cache";
-import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxReasoningReplayScopeRef } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
@@ -40,7 +46,6 @@ const aiStudioProvider = {
   apiKey: "ai-studio-test-key",
 } as OcxProviderConfig;
 
-
 /**
  * A replay scope is now REQUIRED for the store to remember or return anything: a
  * client-visible call_id is not unique across threads, accounts, providers or models,
@@ -51,7 +56,7 @@ function scopeFor(
   modelId = MODEL,
   providerName = "google",
   destination = "https://generativelanguage.googleapis.com",
-) {
+): OcxReasoningReplayScopeRef {
   return {
     clientThreadId: threadId,
     current: {
@@ -68,9 +73,12 @@ function scopeFor(
 }
 
 /** parseRequest with the replay scope bound, as the server does after route selection. */
-function parseRequestScoped(body: unknown, scope = scopeFor()) {
-  return parseRequest(body, { replayCacheScope: scope });
+function parseRequestScoped(body: unknown, scope = scopeFor()): OcxParsedRequest {
+  const req = parseRequest(body, { replayCacheScope: scope });
+  req._reasoningReplayScope = scope;
+  return req;
 }
+
 function firstTurn(): OcxParsedRequest {
   return {
     modelId: MODEL,
@@ -108,11 +116,19 @@ function sseResponse(frames: string[]): Response {
   return new Response(stream);
 }
 
+const fcPart = (name: string, args: unknown, sig?: string) => {
+  const part: Record<string, unknown> = { functionCall: { name, args } };
+  if (sig) part.thoughtSignature = sig;
+  return part;
+};
+
 describe("#1735 thought signature survives history replay", () => {
   let previousHome: string | undefined;
   let testDir: string;
 
   beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+    setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
     __resetAntigravityReplayCache();
     resetThoughtSignatureReplayForTests();
     previousHome = process.env.OPENCODEX_HOME;
@@ -120,10 +136,14 @@ describe("#1735 thought signature survives history replay", () => {
     process.env.OPENCODEX_HOME = testDir;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await flushThoughtSignatureReplayForTests();
+    resetThoughtSignatureReplayForTests();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
     rmSync(testDir, { recursive: true, force: true });
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
   });
 
   test("the adapter attaches the signature to the tool call that produced it", async () => {
@@ -413,67 +433,47 @@ describe("#1735 thought signature survives history replay", () => {
     expect(part?.thoughtSignature).toBeUndefined();
   });
 
-
   test("the same call_id in a different thread does not borrow the signature (#1823)", () => {
-    // A client-visible call_id is not unique. Keyed on it alone, one conversation's
-    // signature was handed to another's replay -- and a second thread writing the same
-    // id silently overwrote the first.
     rememberThoughtSignatureForReplay("call_shared", SIGNATURE, scopeFor("thread-a"));
-
     expect(lookupReplayThoughtSignature("call_shared", scopeFor("thread-a"))).toBe(SIGNATURE);
     expect(lookupReplayThoughtSignature("call_shared", scopeFor("thread-b"))).toBeUndefined();
   });
 
   test("a different account or model is a different scope (#1823)", () => {
     rememberThoughtSignatureForReplay("call_scoped", SIGNATURE, scopeFor("thread-a", MODEL, "google"));
-
     expect(lookupReplayThoughtSignature("call_scoped", scopeFor("thread-a", MODEL, "google"))).toBe(SIGNATURE);
-    // Same thread and call id, different provider identity: opaque signatures are not
-    // portable across providers, so this must miss rather than cross-contaminate.
     expect(lookupReplayThoughtSignature("call_scoped", scopeFor("thread-a", MODEL, "antigravity"))).toBeUndefined();
-    // Same thread and provider, different model.
     expect(lookupReplayThoughtSignature("call_scoped", scopeFor("thread-a", "gemini-3.6-pro", "google"))).toBeUndefined();
   });
 
   test("a conflicting signature under one key fails closed instead of overwriting (#1823)", () => {
     expect(rememberThoughtSignatureForReplay("call_conflict", SIGNATURE, scopeFor()).result).toBe("stored");
-    // Re-remembering the same value is a no-op, not a conflict: retries are ordinary.
     expect(rememberThoughtSignatureForReplay("call_conflict", SIGNATURE, scopeFor()).result).toBe("already-equal");
-    // A DIFFERENT value under the same complete key means two upstream turns claimed one
-    // identity. Keeping the first is the fail-closed choice; last-write-wins would let a
-    // later turn silently invalidate an earlier replay.
     expect(rememberThoughtSignatureForReplay("call_conflict", SIGNATURE_B, scopeFor()).result).toBe("conflict");
     expect(lookupReplayThoughtSignature("call_conflict", scopeFor())).toBe(SIGNATURE);
   });
 
   test("an incomplete scope remembers nothing rather than remembering globally (#1823)", () => {
-    // A partially identified entry is exactly the cross-thread collision this store exists
-    // to prevent, so it must not be stored under a degraded key.
     expect(rememberThoughtSignatureForReplay("call_unscoped", SIGNATURE, undefined).result).toBe("unscoped");
     expect(rememberThoughtSignatureForReplay("call_unscoped", SIGNATURE, { clientThreadId: "t" }).result).toBe("unscoped");
     expect(lookupReplayThoughtSignature("call_unscoped", scopeFor())).toBeUndefined();
   });
 
   test("a store write reports when it is durable (#1823)", async () => {
-    // The caller can await this before exposing the tool-call item, so a client cannot
-    // observe a call whose signature was never persisted.
     const { result, durable } = rememberThoughtSignatureForReplay("call_durable", SIGNATURE, scopeFor());
     expect(result).toBe("stored");
     await durable;
     expect(lookupReplayThoughtSignature("call_durable", scopeFor())).toBe(SIGNATURE);
   });
+
   test("the proxy-side store survives a process restart via its snapshot", async () => {
     rememberThoughtSignatureForReplay("call_disk_1", SIGNATURE, scopeFor());
     await flushThoughtSignatureReplayForTests();
-    // Simulate a fresh process: drop in-memory state; lookup must reload from disk.
     resetThoughtSignatureReplayForTests();
     expect(lookupReplayThoughtSignature("call_disk_1", scopeFor())).toBe(SIGNATURE);
   });
 
   test("one provider name serving two endpoints does not share signatures", () => {
-    // The gap the durable key closes. providerName, adapterName, modelId and thread can all
-    // be identical across two upstreams — a gateway and a direct endpoint under one config
-    // name — and an opaque signature minted by one is meaningless to the other.
     const primary = scopeFor("thread-a", MODEL, "google", "https://generativelanguage.googleapis.com");
     const secondary = scopeFor("thread-a", MODEL, "google", "https://gateway.internal.example/v1beta");
 
@@ -484,14 +484,9 @@ describe("#1735 thought signature survives history replay", () => {
   });
 
   test("the durable destination identity is stable across restarts, unlike the process-local one", async () => {
-    // The reason this is a separate digest rather than the sibling cache's HMAC: that one is
-    // keyed by randomBytes minted at module load, so reusing it here would change every key
-    // on restart and the store would silently stop matching — a worse failure than the
-    // over-broad key it replaced, because it looks like it is working.
     const url = "https://generativelanguage.googleapis.com";
     expect(durableReplayDestinationIdentity(url)).toBe(durableReplayDestinationIdentity(url));
     expect(durableReplayDestinationIdentity(url)).not.toBe(durableReplayDestinationIdentity("https://other.example"));
-    // Trailing-slash normalization matches the process-local form.
     expect(durableReplayDestinationIdentity(`${url}/`)).toBe(durableReplayDestinationIdentity(url));
 
     rememberThoughtSignatureForReplay("call_dest_restart", SIGNATURE, scopeFor());
@@ -501,9 +496,6 @@ describe("#1735 thought signature survives history replay", () => {
   });
 
   test("adapter serialization reads the durable store with the post-parse bound scope (#1926 wiring)", async () => {
-    // The server parses BEFORE the route/credential scope exists, so the parser's own
-    // lookup cannot hit; the google adapter's serialization-time fallback must read the
-    // durable store once the scope identity has been bound.
     rememberThoughtSignatureForReplay("call_wire_1", SIGNATURE, scopeFor());
     await flushThoughtSignatureReplayForTests();
     const scope: { clientThreadId: string; current?: unknown } = { clientThreadId: "thread-a" };
@@ -517,7 +509,6 @@ describe("#1735 thought signature survives history replay", () => {
       ],
       tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
     }, scope as never);
-    // Identity binds after parse, as bindRouteReasoningReplayScope does server-side.
     scope.current = scopeFor().current;
     parsed._reasoningReplayScope = scope as never;
     const adapter = createGoogleAdapter(provider);
@@ -525,5 +516,266 @@ describe("#1735 thought signature survives history replay", () => {
     const parts = modelParts(String(req.body));
     const fnPart = parts.find(p => (p as { functionCall?: unknown }).functionCall) as { thoughtSignature?: string } | undefined;
     expect(fnPart?.thoughtSignature).toBe(SIGNATURE);
+  });
+
+  test("adapter invalidation: clear-on-invalid evicts the rejected callId from durable store while preserving others", async () => {
+    const scope = scopeFor();
+    rememberThoughtSignatureForReplay("call_invalid_A", SIGNATURE, scope);
+    rememberThoughtSignatureForReplay("call_valid_B", SIGNATURE_B, scope);
+    await flushThoughtSignatureReplayForTests();
+
+    // Round 1: Turn containing call_invalid_A
+    const parsedA = parseRequestScoped({
+      model: MODEL,
+      stream: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "run A" }] },
+        { type: "function_call", call_id: "call_invalid_A", name: "shell_command", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_invalid_A", output: "error" },
+      ],
+      tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
+    }, scope);
+
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(parsedA);
+
+    // Upstream returns 400 Invalid Argument / thought_signature rejection
+    const errorResponse = new Response(JSON.stringify({
+      error: {
+        code: 400,
+        status: "INVALID_ARGUMENT",
+        message: "Invalid thought_signature provided for function call",
+      },
+    }));
+
+    const events = await adapter.parseResponse!(errorResponse);
+    expect(events[0].type).toBe("error");
+
+    // Verify call_invalid_A is evicted from durable store
+    expect(lookupReplayThoughtSignature("call_invalid_A", scope)).toBeUndefined();
+    // Verify call_valid_B remains intact in durable store
+    expect(lookupReplayThoughtSignature("call_valid_B", scope)).toBe(SIGNATURE_B);
+  });
+
+  test("adapter invalidation: multi-call request rejected by upstream performs conservative batch invalidation", async () => {
+    const scope = scopeFor();
+    const SIG_C = "CiQAx-history-thought-signature-third-call-77";
+    rememberThoughtSignatureForReplay("call_batch_1", SIGNATURE, scope);
+    rememberThoughtSignatureForReplay("call_batch_2", SIGNATURE_B, scope);
+    rememberThoughtSignatureForReplay("call_unrelated_3", SIG_C, scope);
+    await flushThoughtSignatureReplayForTests();
+
+    // Turn containing both call_batch_1 and call_batch_2:
+    const parsed = parseRequestScoped({
+      model: MODEL,
+      stream: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "run batch" }] },
+        { type: "function_call", call_id: "call_batch_1", name: "shell_command", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_batch_1", output: "out1" },
+        { type: "function_call", call_id: "call_batch_2", name: "shell_command", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_batch_2", output: "out2" },
+      ],
+      tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
+    }, scope);
+
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest(parsed);
+
+    // Upstream 400 rejection (Google error payload does not name which callId failed)
+    const errorResponse = new Response(JSON.stringify({
+      error: {
+        code: 400,
+        status: "INVALID_ARGUMENT",
+        message: "Function call is missing a thought_signature in functionCall parts",
+      },
+    }));
+
+    const events = await adapter.parseResponse!(errorResponse);
+    expect(events[0].type).toBe("error");
+
+    // Both injected callIds in the rejected request are evicted (conservative batch eviction)
+    expect(lookupReplayThoughtSignature("call_batch_1", scope)).toBeUndefined();
+    expect(lookupReplayThoughtSignature("call_batch_2", scope)).toBeUndefined();
+    // Unrelated call from another turn is preserved
+    expect(lookupReplayThoughtSignature("call_unrelated_3", scope)).toBe(SIG_C);
+  });
+});
+
+describe("Antigravity Multi-Signature History Stability (Mechanism ②)", () => {
+  beforeEach(() => {
+    __resetAntigravityReplayCache();
+  });
+
+  test("preserves chronological signatures across repeated identical tool calls", () => {
+    const sessionId = "session-hist-1";
+    const model = "gemini-3.7-flash";
+
+    // Round 1: Model calls bash(command: "ls"), returns sig1
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("bash", { command: "ls" }, "sig-turn-1-abcdef123456"),
+    ]);
+
+    // Round 2: Model calls bash(command: "ls") again, returns sig2
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("bash", { command: "ls" }, "sig-turn-2-ghijkl123456"),
+    ]);
+
+    // Round 3: Model calls bash(command: "ls") a third time, returns sig3
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("bash", { command: "ls" }, "sig-turn-3-mnopqr123456"),
+    ]);
+
+    // Client now sends the full history of 3 tool calls without signatures:
+    const contents = [
+      {
+        role: "model",
+        parts: [{ functionCall: { name: "bash", args: { command: "ls" } } }],
+      },
+      {
+        role: "user",
+        parts: [{ functionResponse: { name: "bash", response: { output: "file1" } } }],
+      },
+      {
+        role: "model",
+        parts: [{ functionCall: { name: "bash", args: { command: "ls" } } }],
+      },
+      {
+        role: "user",
+        parts: [{ functionResponse: { name: "bash", response: { output: "file2" } } }],
+      },
+      {
+        role: "model",
+        parts: [{ functionCall: { name: "bash", args: { command: "ls" } } }],
+      },
+    ];
+
+    applyAntigravityReplay(model, sessionId, contents);
+
+    // Verify each occurrence gets its corresponding historical signature without prefix mutation:
+    const part1 = contents[0].parts[0] as { thoughtSignature?: string };
+    const part2 = contents[2].parts[0] as { thoughtSignature?: string };
+    const part3 = contents[4].parts[0] as { thoughtSignature?: string };
+
+    expect(part1.thoughtSignature).toBe("sig-turn-1-abcdef123456");
+    expect(part2.thoughtSignature).toBe("sig-turn-2-ghijkl123456");
+    expect(part3.thoughtSignature).toBe("sig-turn-3-mnopqr123456");
+  });
+
+  test("handles interleaved repeated and distinct tool calls correctly", () => {
+    const sessionId = "session-hist-interleaved";
+    const model = "gemini-3.7-flash";
+
+    // Round 1: Model calls read(file: "a.ts") -> sigA1
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("read", { file: "a.ts" }, "sig-read-a-1-12345678"),
+    ]);
+
+    // Round 2: Model calls read(file: "b.ts") -> sigB1
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("read", { file: "b.ts" }, "sig-read-b-1-12345678"),
+    ]);
+
+    // Round 3: Model calls read(file: "a.ts") again -> sigA2
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("read", { file: "a.ts" }, "sig-read-a-2-12345678"),
+    ]);
+
+    const contents = [
+      { role: "model", parts: [{ functionCall: { name: "read", args: { file: "a.ts" } } }] },
+      { role: "user", parts: [{ functionResponse: { name: "read", response: { output: "aaa" } } }] },
+      { role: "model", parts: [{ functionCall: { name: "read", args: { file: "b.ts" } } }] },
+      { role: "user", parts: [{ functionResponse: { name: "read", response: { output: "bbb" } } }] },
+      { role: "model", parts: [{ functionCall: { name: "read", args: { file: "a.ts" } } }] },
+    ];
+
+    applyAntigravityReplay(model, sessionId, contents);
+
+    expect((contents[0].parts[0] as any).thoughtSignature).toBe("sig-read-a-1-12345678");
+    expect((contents[2].parts[0] as any).thoughtSignature).toBe("sig-read-b-1-12345678");
+    expect((contents[4].parts[0] as any).thoughtSignature).toBe("sig-read-a-2-12345678");
+  });
+
+
+
+  test("does not overwrite existing thoughtSignature provided by client", () => {
+    const sessionId = "session-hist-3";
+    const model = "gemini-3.7-flash";
+
+    observeAntigravityReplay(model, sessionId, [
+      fcPart("grep", { pattern: "test" }, "sig-cached-1234567890"),
+    ]);
+
+    const contents = [
+      {
+        role: "model",
+        parts: [{ functionCall: { name: "grep", args: { pattern: "test" } }, thoughtSignature: "client-provided-sig" }],
+      },
+    ];
+
+    applyAntigravityReplay(model, sessionId, contents);
+
+    const part = contents[0].parts[0] as { thoughtSignature?: string };
+    expect(part.thoughtSignature).toBe("client-provided-sig");
+  });
+});
+
+describe("Durable Thought-Signature Replay Store Single-Call Invalidation (Mechanism ①)", () => {
+  let previousHome: string | undefined;
+  let testDir: string;
+
+  const scope: OcxReasoningReplayScopeRef = {
+    clientThreadId: "thread-123",
+    current: {
+      providerName: "antigravity",
+      adapterName: "google",
+      modelId: "gemini-3.7-flash",
+      credentialDurableIdentity: "cred-xyz-12345",
+      providerDestinationDurableIdentity: "dest-abc-67890",
+    },
+  };
+
+  beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+    setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+    resetThoughtSignatureReplayForTests();
+    previousHome = process.env.OPENCODEX_HOME;
+    testDir = mkdtempSync(join(tmpdir(), "ocx-tsig-inval-"));
+    process.env.OPENCODEX_HOME = testDir;
+  });
+
+  afterEach(async () => {
+    await flushThoughtSignatureReplayForTests();
+    resetThoughtSignatureReplayForTests();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    rmSync(testDir, { recursive: true, force: true });
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
+  });
+
+  test("can remember and selectively forget a specific callId", () => {
+    const callId1 = "call-001";
+    const callId2 = "call-002";
+    const sig1 = "sig-val-001-1234567890abcdef";
+    const sig2 = "sig-val-002-1234567890abcdef";
+
+    rememberThoughtSignatureForReplay(callId1, sig1, scope);
+    rememberThoughtSignatureForReplay(callId2, sig2, scope);
+
+    expect(lookupReplayThoughtSignature(callId1, scope)).toBe(sig1);
+    expect(lookupReplayThoughtSignature(callId2, scope)).toBe(sig2);
+
+    // Evict only callId1
+    const forgotten = forgetThoughtSignatureForReplay(callId1, scope);
+    expect(forgotten).toBe(true);
+
+    // callId1 is gone
+    expect(lookupReplayThoughtSignature(callId1, scope)).toBeUndefined();
+    // callId2 remains intact
+    expect(lookupReplayThoughtSignature(callId2, scope)).toBe(sig2);
+
+    // Forgetting non-existent callId returns false
+    expect(forgetThoughtSignatureForReplay("call-999", scope)).toBe(false);
   });
 });

@@ -16,6 +16,7 @@ import {
   thoughtSignatureReplaySalt,
 } from "../src/responses/thought-signature-replay";
 import { durableReplayCredentialIdentity, durableReplayDestinationIdentity } from "../src/responses/reasoning-replay-cache";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 
 const SIG = "CiQAx-credential-scope-signature-0123456789abcdef";
 
@@ -39,6 +40,8 @@ describe("#1926 durable credential scope", () => {
   let testDir: string;
 
   beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+    setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
     resetThoughtSignatureReplayForTests();
     previousHome = process.env.OPENCODEX_HOME;
     testDir = mkdtempSync(join(tmpdir(), "ocx-tsig-scope-"));
@@ -51,6 +54,8 @@ describe("#1926 durable credential scope", () => {
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
     rmSync(testDir, { recursive: true, force: true });
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
   });
 
   test("two credentials on one destination never share a signature", () => {

@@ -25,7 +25,13 @@ import {
 } from "../src/adapters/google-antigravity-replay";
 import { sanitizeAntigravityClaudeSignatures } from "../src/adapters/google-antigravity-wire";
 
-afterEach(() => setAntigravityReplayLimitsForTests());
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
+
+afterEach(() => {
+  setAntigravityReplayLimitsForTests();
+  setIcaclsRunnerForTests(null);
+  setAsyncIcaclsRunnerForTests(null);
+});
 
 // Sandbox OPENCODEX_HOME: the replay cache now snapshots to disk, and these tests must
 // never touch the real ~/.opencodex.
@@ -33,6 +39,8 @@ let replayTestHome: string;
 const priorOpenCodexHome = process.env["OPENCODEX_HOME"];
 
 beforeEach(() => {
+  setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+  setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
   replayTestHome = mkdtempSync(join(tmpdir(), "ocx-antigravity-replay-test-"));
   process.env["OPENCODEX_HOME"] = replayTestHome;
 });

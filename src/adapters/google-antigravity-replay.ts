@@ -19,6 +19,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 interface ReplayCall {
   signature: string;
+  signatures?: string[];
   sizeBytes: number;
   touchedAtMs: number;
 }
@@ -34,6 +35,7 @@ interface ReplayEntry {
 }
 
 const MIN_SIGNATURE_LEN = 16;
+const MAX_SIGNATURES_PER_CALL = 32;
 const REPLAY_TTL_MS = 60 * 60 * 1000; // 1h
 export const ANTIGRAVITY_REPLAY_MAX_ENTRIES = 10_240;
 const REPLAY_EVICT_BATCH = 128;
@@ -103,16 +105,38 @@ function loadReplaySnapshotEntry(key: string, value: unknown): void {
   for (const pair of rec.byCall) {
     if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") continue;
     if (!/^[0-9a-f]{64}$/.test(pair[0])) continue;
-    const call = pair[1] as { signature?: unknown; touchedAtMs?: unknown } | null;
+    const call = pair[1] as { signature?: unknown; signatures?: unknown; touchedAtMs?: unknown } | null;
     if (!call || typeof call !== "object" || Array.isArray(call)) continue;
     if (typeof call.signature !== "string" || call.signature.length < MIN_SIGNATURE_LEN) continue;
     if (typeof call.touchedAtMs !== "number" || !Number.isFinite(call.touchedAtMs)) continue;
-    // Never trust a serialized sizeBytes: a forged snapshot could claim a tiny
-    // size for a huge signature and bypass every byte cap. Recompute from the
-    // signature itself, exactly like the live write path.
-    const signatureBytes = utf8.encode(call.signature).byteLength;
-    if (signatureBytes > replayLimits.maxSignatureBytes) continue;
-    const callBytes = utf8.encode(pair[0]).byteLength + signatureBytes;
+    let sigs: string[] = [];
+    if (Array.isArray(call.signatures)) {
+      for (const s of call.signatures) {
+        if (typeof s === "string" && s.length >= MIN_SIGNATURE_LEN) {
+          sigs.push(s);
+        }
+      }
+    }
+    if (sigs.length === 0) {
+      sigs = [call.signature];
+    } else if (!sigs.includes(call.signature)) {
+      sigs.push(call.signature);
+    }
+    if (sigs.length > MAX_SIGNATURES_PER_CALL) {
+      sigs = sigs.slice(-MAX_SIGNATURES_PER_CALL);
+    }
+    let totalSigBytes = 0;
+    let anySigOversized = false;
+    for (const s of sigs) {
+      const sb = utf8.encode(s).byteLength;
+      if (sb > replayLimits.maxSignatureBytes) {
+        anySigOversized = true;
+        break;
+      }
+      totalSigBytes += sb;
+    }
+    if (anySigOversized) continue;
+    const callBytes = utf8.encode(pair[0]).byteLength + totalSigBytes;
     if (callBytes > replayLimits.maxBytesPerSession) continue;
     // A duplicated call key would overstate entry.bytes (the map keeps only the
     // last value) and could evict valid sessions; keep the first occurrence.
@@ -122,6 +146,7 @@ function loadReplaySnapshotEntry(key: string, value: unknown): void {
     }
     byCall.set(pair[0], {
       signature: call.signature,
+      signatures: sigs,
       sizeBytes: callBytes,
       touchedAtMs: call.touchedAtMs,
     });
@@ -226,7 +251,11 @@ async function persistReplaySnapshotNow(): Promise<void> {
     for (const [key, entry] of [...replayCache].sort((a, b) => b[1].lastActiveAtMs - a[1].lastActiveAtMs)) {
       const byCall = [...entry.byCall].map(([callKey, call]) => [
         callKey,
-        { signature: call.signature, touchedAtMs: call.touchedAtMs },
+        {
+          signature: call.signature,
+          ...(call.signatures && call.signatures.length > 1 ? { signatures: call.signatures } : {}),
+          touchedAtMs: call.touchedAtMs,
+        },
       ]);
       const persistEntry: [string, unknown] = [key, {
         byCall,
@@ -644,10 +673,37 @@ export function observeAntigravityReplay(
     const ck = functionCallKey(fc.name, fc.args);
     if (!ck) continue; // only function-call signatures are replayable by identity
     const signatureBytes = utf8.encode(callSig).byteLength;
-    const sizeBytes = utf8.encode(ck).byteLength + signatureBytes;
-    if (signatureBytes > replayLimits.maxSignatureBytes || sizeBytes > replayLimits.maxBytesPerSession) continue;
+    if (signatureBytes > replayLimits.maxSignatureBytes) continue;
+
+    const existingCall = entry.byCall.get(ck);
+    let sigs: string[];
+    if (existingCall) {
+      sigs = existingCall.signatures && existingCall.signatures.length > 0
+        ? [...existingCall.signatures]
+        : [existingCall.signature];
+      if (!sigs.includes(callSig)) {
+        if (sigs.length >= MAX_SIGNATURES_PER_CALL) {
+          sigs.shift();
+        }
+        sigs.push(callSig);
+      }
+    } else {
+      sigs = [callSig];
+    }
+    let totalSigBytes = 0;
+    for (const s of sigs) {
+      totalSigBytes += utf8.encode(s).byteLength;
+    }
+    const sizeBytes = utf8.encode(ck).byteLength + totalSigBytes;
+    if (sizeBytes > replayLimits.maxBytesPerSession) continue;
+
     deleteReplayCall(entry, ck);
-    entry.byCall.set(ck, { signature: callSig, sizeBytes, touchedAtMs: now });
+    entry.byCall.set(ck, {
+      signature: callSig,
+      signatures: sigs,
+      sizeBytes,
+      touchedAtMs: now,
+    });
     entry.bytes += sizeBytes;
     replayBytes += sizeBytes;
     inserted = true;
@@ -692,15 +748,22 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
   if (!entry) {
     return contents;
   }
+
   let touched = false;
-  for (const c of contents as { role?: string; parts?: unknown[] }[]) {
+  // Align from the END of the recorded signature list. History may have been truncated
+  // (compaction / previous_response_id): the last remaining occurrence is the most recent call,
+  // so it must receive the newest signature. Iterate backwards and count every occurrence
+  // (signed or not) so signed Mechanism-① parts still occupy their chronological slot.
+  const reverseOccurrence = new Map<string, number>();
+  for (let ci = (contents as { role?: string; parts?: unknown[] }[]).length - 1; ci >= 0; ci--) {
+    const c = (contents as { role?: string; parts?: unknown[] }[])[ci];
     if (!c || typeof c !== "object" || c.role !== "model" || !Array.isArray(c.parts)) continue;
-    for (const raw of c.parts) {
+    for (let pi = c.parts.length - 1; pi >= 0; pi--) {
+      const raw = c.parts[pi];
       if (!raw || typeof raw !== "object") continue;
       const part = raw as Record<string, unknown>;
       const fc = part.functionCall as { name?: unknown; args?: unknown } | undefined;
       if (!fc) continue;
-      if (part.thoughtSignature !== undefined || part.thought_signature !== undefined) continue;
       const ck = functionCallKey(fc.name, fc.args);
       let call = ck ? entry.byCall.get(ck) : undefined;
       let matchedKey = ck;
@@ -717,27 +780,43 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
           ) {
             try {
               const parsedInput = JSON.parse(trimmedInput);
-            if (parsedInput && typeof parsedInput === "object") {
-              const altKey = functionCallKey(fc.name, parsedInput);
-              if (altKey && entry.byCall.has(altKey)) {
-                call = entry.byCall.get(altKey);
-                matchedKey = altKey;
+              if (parsedInput && typeof parsedInput === "object") {
+                const altKey = functionCallKey(fc.name, parsedInput);
+                if (altKey && entry.byCall.has(altKey)) {
+                  call = entry.byCall.get(altKey);
+                  matchedKey = altKey;
+                }
               }
-            }
             } catch {
               // not JSON, keep default
             }
           }
         }
       }
-      if (call && matchedKey) {
+      if (matchedKey) {
+        const revIdx = reverseOccurrence.get(matchedKey) ?? 0;
+        reverseOccurrence.set(matchedKey, revIdx + 1);
+        if (part.thoughtSignature !== undefined || part.thought_signature !== undefined) {
+          // Already signed (e.g. Mechanism ① or upstream response), preserve it.
+          continue;
+        }
+        if (call) {
+          const sigs = call.signatures && call.signatures.length > 0 ? call.signatures : [call.signature];
+          const chosenSig = revIdx < sigs.length
+            ? sigs[sigs.length - 1 - revIdx]
+            : sigs[sigs.length - 1] ?? call.signature;
+          part.thoughtSignature = chosenSig;
+          entry.byCall.delete(matchedKey);
+          entry.byCall.set(matchedKey, { ...call, touchedAtMs: now });
+          touched = true;
+        }
+      } else if (part.thoughtSignature === undefined && part.thought_signature === undefined && call) {
         part.thoughtSignature = call.signature;
-        entry.byCall.delete(matchedKey);
-        entry.byCall.set(matchedKey, { ...call, touchedAtMs: now });
         touched = true;
       }
     }
   }
+
   if (touched) {
     entry.lastActiveAtMs = now;
     refreshReplaySessionCandidate(replayKey(model, sessionId), entry);
