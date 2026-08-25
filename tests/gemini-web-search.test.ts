@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as storeModule from "../src/oauth/store";
 import { MAX_SIDECAR_RESPONSE_BYTES } from "../src/web-search/parse";
 
@@ -169,6 +169,34 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
       expect(out.error).toContain("native connect failed");
       expect(out.error).not.toMatch(/proxy-user|proxy-secret|gem-token-abc|access_token/);
     } finally {
+      resetProviderTlsProfileForTests();
+    }
+  });
+
+  test("classifies a profiled TimeoutError as a timeout without leaking details", async () => {
+    accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          const timeout = new Error("timed out at http://proxy-user:proxy-secret@example.test:8080/?token=gem-secret");
+          timeout.name = "TimeoutError";
+          throw timeout;
+        },
+      }),
+    });
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const out = await runGeminiWebSearch("q", "google-antigravity", {
+        ...cca,
+        googleMode: "cloud-code-assist",
+        tlsProfile: "antigravity-browser",
+      }, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 });
+      expect(out.error).toContain("timed out");
+      expect(out.error).not.toMatch(/proxy-user|proxy-secret|gem-secret|token=/);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("timeout"));
+    } finally {
+      warning.mockRestore();
       resetProviderTlsProfileForTests();
     }
   });

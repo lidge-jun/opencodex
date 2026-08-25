@@ -48,9 +48,29 @@ function setStatus(providerName: string, status: ProviderTlsProfileStatus): void
   statusByProvider.set(providerName, status);
 }
 
+const SAFE_NATIVE_ERROR_NAMES = new Set(["AbortError", "TimeoutError"]);
+const SAFE_NATIVE_ERROR_CODES = new Set([
+  "ABORT_ERR", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "ENETUNREACH", "ENOTFOUND",
+  "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET",
+]);
+
 function safeProviderTlsError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
-  return new Error(redactErrorMessage(raw));
+  const safe = new Error(redactErrorMessage(raw));
+  if (!error || typeof error !== "object") return safe;
+  const native = error as { name?: unknown; code?: unknown };
+  if (typeof native.name === "string" && SAFE_NATIVE_ERROR_NAMES.has(native.name)) {
+    safe.name = native.name;
+  }
+  if (typeof native.code === "string" && SAFE_NATIVE_ERROR_CODES.has(native.code)) {
+    Object.defineProperty(safe, "code", {
+      configurable: true,
+      enumerable: false,
+      value: native.code,
+      writable: false,
+    });
+  }
+  return safe;
 }
 
 function warnFallbackOnce(): void {

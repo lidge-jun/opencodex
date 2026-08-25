@@ -1267,6 +1267,48 @@ test("CCA image native errors redact proxy credentials", async () => {
   expect(json.error.message).not.toMatch(/proxy-user|proxy-secret|image-secret|api_key/);
 });
 
+test("CCA image preserves profiled TimeoutError semantics", async () => {
+  setProviderTlsRuntimeForTest({
+    importWreq: async () => ({
+      createTransport: async () => ({ close: async () => undefined }),
+      fetch: async () => {
+        const timeout = new Error("timed out at http://proxy-user:proxy-secret@example.test:8080/?token=image-secret");
+        timeout.name = "TimeoutError";
+        throw timeout;
+      },
+    }),
+  });
+  const config = {
+    ...ccaConfig(),
+    providers: {
+      ...ccaConfig().providers,
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
+        tlsProfile: "antigravity-browser",
+      },
+    },
+  } as OcxConfig;
+  saveConfig(config);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+  const response = await handleImages(
+    new Request("http://127.0.0.1/v1/images/generations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a neon cat" }),
+    }),
+    config,
+    "generations",
+    { model: "", provider: "" },
+  );
+  expect(response.status).toBe(504);
+  const json = await response.json() as { error: { message: string } };
+  expect(json.error.message).toContain("timed out");
+  expect(json.error.message).not.toMatch(/proxy-user|proxy-secret|image-secret|token=/);
+});
+
 test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
   const registryHits: CcaFetchRequest[] = [];
   const otherHits: CcaFetchRequest[] = [];

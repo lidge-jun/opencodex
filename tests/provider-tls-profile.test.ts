@@ -275,6 +275,53 @@ describe("Antigravity TLS transport gate", () => {
     expect(bunCalls).toBe(2);
   });
 
+  test("preserves only safe cancellation identity while redacting native details", async () => {
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          const timeout = new Error("timeout at http://proxy-user:proxy-secret@example.test:8080/?access_token=secret-token");
+          timeout.name = "TimeoutError";
+          Object.assign(timeout, { code: "ETIMEDOUT", cause: new Error("secret cause") });
+          throw timeout;
+        },
+      }),
+    });
+    const executor = providerTlsFetch("google-antigravity", canonicalProvider, globalThis.fetch);
+    let caught: unknown;
+    try {
+      await executor("https://daily-cloudcode-pa.googleapis.com/v1internal");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).toMatchObject({ name: "TimeoutError", code: "ETIMEDOUT" });
+    expect((caught as Error).message).not.toMatch(/proxy-user|proxy-secret|secret-token|access_token/);
+    expect((caught as { cause?: unknown }).cause).toBeUndefined();
+    expect((caught as Error).stack).not.toContain("secret-token");
+  });
+
+  test("preserves AbortError without replaying through Bun", async () => {
+    let bunCalls = 0;
+    const bunFetch = mock(async () => {
+      bunCalls += 1;
+      return new Response("bun");
+    }) as typeof globalThis.fetch;
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => {
+          const abort = new Error("aborted at http://proxy-user:proxy-secret@example.test");
+          abort.name = "AbortError";
+          throw abort;
+        },
+      }),
+    });
+    const executor = providerTlsFetch("google-antigravity", canonicalProvider, bunFetch);
+    await expect(executor("https://daily-cloudcode-pa.googleapis.com/v1internal")).rejects.toMatchObject({ name: "AbortError" });
+    expect(bunCalls).toBe(0);
+  });
+
   test("rejects private and metadata DNS answers before native dispatch", async () => {
     for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) delete process.env[key];
     process.env.NO_PROXY = "";
