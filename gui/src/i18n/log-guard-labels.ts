@@ -4,6 +4,7 @@ export type LogGuardLabelKey =
   | "inspectionOnly"
   | "externalSqliteHome"
   | "inspectionUnavailable"
+  | "metricsSkippedLarge"
   | "protection"
   | "compat"
   | "quiet"
@@ -37,6 +38,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: 'Inspection only',
     externalSqliteHome: 'External SQLite storage',
     inspectionUnavailable: "Diagnostic log inspection is unavailable.",
+    metricsSkippedLarge: "Row metrics skipped: the database is above {threshold}, and scanning it would stall the proxy.",
     protection: "Protection",
     compat: "Compatibility",
     quiet: "Quiet",
@@ -63,6 +65,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: 'Nur Inspektion',
     externalSqliteHome: 'Externer SQLite-Speicher',
     inspectionUnavailable: "Die Diagnoseprotokoll-Inspektion ist nicht verfügbar.",
+    metricsSkippedLarge: "Zeilenmetriken übersprungen: Die Datenbank ist größer als {threshold}; ein Scan würde den Proxy blockieren.",
     protection: "Schutz",
     compat: "Kompatibilität",
     quiet: "Leise",
@@ -89,6 +92,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: "Inspection uniquement",
     externalSqliteHome: "Stockage SQLite externe",
     inspectionUnavailable: "L’inspection des journaux de diagnostic est indisponible.",
+    metricsSkippedLarge: "Métriques de lignes ignorées : la base dépasse {threshold} et son analyse bloquerait le proxy.",
     protection: "Protection",
     compat: "Compatibilité",
     quiet: "Silencieux",
@@ -115,6 +119,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: '검사 전용',
     externalSqliteHome: '외부 SQLite 저장소',
     inspectionUnavailable: "진단 로그 검사를 사용할 수 없습니다.",
+    metricsSkippedLarge: "행 지표를 건너뛰었습니다. 데이터베이스가 {threshold}보다 커서 스캔하면 프록시가 멈춥니다.",
     protection: "보호",
     compat: "호환 모드",
     quiet: "조용한 모드",
@@ -141,6 +146,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: '仅检查',
     externalSqliteHome: '外部 SQLite 存储',
     inspectionUnavailable: "诊断日志检查当前不可用。",
+    metricsSkippedLarge: "已跳过行指标：数据库超过 {threshold}，扫描会阻塞代理。",
     protection: "保护",
     compat: "兼容模式",
     quiet: "静默模式",
@@ -167,6 +173,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: '僅檢查',
     externalSqliteHome: '外部 SQLite 儲存空間',
     inspectionUnavailable: "診斷記錄檢查目前無法使用。",
+    metricsSkippedLarge: "已略過列指標：資料庫超過 {threshold}，掃描會阻塞代理。",
     protection: "保護",
     compat: "相容模式",
     quiet: "靜默模式",
@@ -193,6 +200,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: 'Только проверка',
     externalSqliteHome: 'Внешнее хранилище SQLite',
     inspectionUnavailable: "Проверка диагностических журналов недоступна.",
+    metricsSkippedLarge: "Метрики строк пропущены: база больше {threshold}, и её сканирование заблокировало бы прокси.",
     protection: "Защита",
     compat: "Совместимость",
     quiet: "Тихий режим",
@@ -219,6 +227,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: '検査のみ',
     externalSqliteHome: '外部 SQLite ストレージ',
     inspectionUnavailable: "診断ログの検査を利用できません。",
+    metricsSkippedLarge: "行メトリクスをスキップしました。データベースが {threshold} を超えており、走査するとプロキシが停止します。",
     protection: "保護",
     compat: "互換モード",
     quiet: "静音モード",
@@ -245,6 +254,7 @@ const LABELS: Record<Locale, Record<LogGuardLabelKey, string>> = {
     inspectionOnly: 'Yalnızca inceleme',
     externalSqliteHome: 'Harici SQLite depolaması',
     inspectionUnavailable: "Tanılama günlüğü incelemesi kullanılamıyor.",
+    metricsSkippedLarge: "Satır ölçümleri atlandı: veritabanı {threshold} sınırının üzerinde ve taranması proxy’yi kilitler.",
     protection: "Koruma",
     compat: "Uyumluluk",
     quiet: "Sessiz",

@@ -129,3 +129,43 @@ test("Storage overview does not render arbitrary Log Guard error strings", () =>
   expect(html).not.toContain("/private/state/logs_2.sqlite");
   expect(html).not.toContain("failed");
 });
+
+/**
+ * A skipped scan must SAY it was skipped (#2605).
+ *
+ * Above the size threshold the server returns `metrics: null` so a cold inspection cannot stall
+ * the proxy thread. Rendering that as an absent row block reads as "this database has no rows" —
+ * the exact confusion the server's null-vs-zero distinction exists to prevent, and the more
+ * misleading the larger the database actually is.
+ */
+test("a skipped large-database scan states the reason instead of rendering no rows", () => {
+  const large = report();
+  large.codexLogs!.files.databaseBytes = 1_468_923_904;
+  large.codexLogs!.metrics = null;
+  large.codexLogs!.metricsSkipped = { reason: "database_too_large", thresholdBytes: 67_108_864 };
+
+  const html = renderToStaticMarkup(
+    <LanguageProvider>
+      <StorageWorkspace report={large} locale="en" />
+    </LanguageProvider>,
+  );
+
+  expect(html).toContain('data-testid="log-guard-metrics-skipped"');
+  expect(html).toContain("Row metrics skipped");
+  // The threshold is stated, so the reader can tell why this database crossed it.
+  expect(html).toContain("64 MiB");
+  // The file sizes still render: only the row aggregates were skipped, not the inspection.
+  expect(html).toContain("1.4 GiB");
+  // And it must not silently show a row count it never computed.
+  expect(html).not.toContain(">400<");
+});
+
+test("a database under the threshold still renders full row metrics", () => {
+  const html = renderToStaticMarkup(
+    <LanguageProvider>
+      <StorageWorkspace report={report()} locale="en" />
+    </LanguageProvider>,
+  );
+  expect(html).not.toContain('data-testid="log-guard-metrics-skipped"');
+  expect(html).toContain("400");
+});

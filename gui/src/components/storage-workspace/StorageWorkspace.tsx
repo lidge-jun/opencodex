@@ -209,6 +209,22 @@ function CodexLogGuardPanel({
             </div>
           </>
         )}
+        {/*
+          Say WHY the rows are missing (#2605). Skipping the aggregates above the size threshold
+          is what keeps a cold inspection off the proxy thread, but silently dropping the row
+          block reads as "this database has no rows" — the exact confusion the null-vs-zero
+          distinction on the server exists to prevent. A user who sees a 1 GB database and no
+          row count deserves the reason.
+        */}
+        {!metrics && report.metricsSkipped && (
+          <div className="stw-kv-row" data-testid="log-guard-metrics-skipped">
+            <dt>{t("storage.col.rows")}</dt>
+            <dd className="muted">
+              {logGuardLabel(locale, "metricsSkippedLarge")
+                .replace("{threshold}", formatBytes(report.metricsSkipped.thresholdBytes, locale))}
+            </dd>
+          </div>
+        )}
         <div className="stw-kv-row">
           <dt><code>sqlite_home</code></dt>
           <dd className="stw-kv-mono">
