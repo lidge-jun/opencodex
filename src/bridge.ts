@@ -7,7 +7,15 @@ import type {
   OcxUsage,
 } from "./types";
 import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
-import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
+import {
+  adapterFailureFromMessage,
+  classifyError,
+  cyberPolicyErrorType,
+  CYBER_POLICY_ERROR_CODE,
+  isCyberPolicyCode,
+  type OcxErrorPayload,
+} from "./lib/errors";
+import { redactSecretString } from "./lib/redact";
 import { repairFreeformToolInput } from "./responses/apply-patch-envelope";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { isTruncatedStopReason, truncationReasonFor } from "./responses/truncated-stop-reason";
@@ -114,18 +122,19 @@ function toolCallArgumentsUsable(args: string): boolean {
 }
 
 function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>): { httpStatus: number; error: OcxErrorPayload } {
+  const message = redactSecretString(event.message);
   if (event.status === undefined && event.errorType === undefined && event.code === undefined) {
-    return adapterFailureFromMessage(event.message);
+    return adapterFailureFromMessage(message);
   }
-  const fallback = adapterFailureFromMessage(event.message);
+  const fallback = adapterFailureFromMessage(message);
   let httpStatus = event.status ?? fallback.httpStatus;
-  const error = classifyError(httpStatus, event.errorType ?? fallback.error.type, event.message);
+  const error = classifyError(httpStatus, event.errorType ?? fallback.error.type, message);
   if (event.errorType !== undefined) error.type = event.errorType;
   if (event.code !== undefined) error.code = event.code;
   // Codex maps cyber_policy on HTTP 400 (body) or mid-stream code; never leave it as 502.
   if (isCyberPolicyCode(error.code) || isCyberPolicyCode(event.code)) {
     error.code = CYBER_POLICY_ERROR_CODE;
-    error.type = "invalid_request_error";
+    error.type = cyberPolicyErrorType(event.errorType);
     httpStatus = 400;
   }
   return { httpStatus, error };
@@ -1296,7 +1305,9 @@ export function bridgeToResponsesSSE(
                   ...(event.usage ? { usage: responsesUsage(event.usage) } : {}),
                   error: failure.error,
                   last_error: failure.error,
-                  ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
+                  ...(isCyberPolicyCode(failure.error.code)
+                    ? { retryable: false }
+                    : event.retryable !== undefined ? { retryable: event.retryable } : {}),
                 },
               });
               reportTerminal("failed");
@@ -1952,7 +1963,9 @@ function buildResponseJSONWithBudget(
     model: modelId, output,
     ...(endTurn !== undefined ? { end_turn: endTurn } : {}),
     ...(failure ? { error: failure.error, last_error: failure.error } : {}),
-    ...(errorEvent?.retryable !== undefined ? { retryable: errorEvent.retryable } : {}),
+    ...(failure && isCyberPolicyCode(failure.error.code)
+      ? { retryable: false }
+      : errorEvent?.retryable !== undefined ? { retryable: errorEvent.retryable } : {}),
     ...(incompleteEvent ? {
       incomplete_details: {
         reason: incompleteEvent.reason,
@@ -1981,12 +1994,15 @@ export function formatErrorResponse(
   const error = classifyError(status, type, message);
   if (isCyberPolicyCode(options?.code)) {
     error.code = CYBER_POLICY_ERROR_CODE;
-    error.type = "invalid_request_error";
+    error.type = cyberPolicyErrorType(type);
   }
   const finalStatus = error.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
   const headers = new Headers({ "Content-Type": "application/json" });
   const retryAfter = options?.retryAfter?.trim();
-  if (retryAfter && retryAfter.length > 0 && retryAfter.length <= 128) {
+  if (error.code !== CYBER_POLICY_ERROR_CODE
+    && retryAfter
+    && retryAfter.length > 0
+    && retryAfter.length <= 128) {
     headers.set("Retry-After", retryAfter);
   }
   return new Response(JSON.stringify({ error }), {

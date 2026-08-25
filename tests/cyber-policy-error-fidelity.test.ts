@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
-import { bridgeToResponsesSSE, formatErrorResponse } from "../src/bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../src/bridge";
 import {
   chatCompletionsErrorBody,
   chatCompletionsErrorResponse,
@@ -15,7 +15,8 @@ import {
 } from "../src/lib/errors";
 import { formatPassthroughUpstreamError } from "../src/server/responses/passthrough-error";
 import { consumeComboFailure } from "../src/server/responses/core";
-import type { AdapterEvent } from "../src/types";
+import { handleResponses } from "../src/server/responses";
+import type { AdapterEvent, OcxConfig } from "../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
@@ -36,6 +37,9 @@ const CURSOR_SESSION_CYBER_MESSAGE =
 
 const OPENAI_CYBER_MESSAGE =
   "OpenAI flagged this request for potential high-risk cybersecurity activity. Please try a less sensitive prompt.";
+
+const SECRET_CYBER_MESSAGE = `${OPENAI_CYBER_MESSAGE} Authorization: Bearer cybersecret123456`;
+const REDACTED_CYBER_MESSAGE = `${OPENAI_CYBER_MESSAGE} Authorization: Bearer [REDACTED]`;
 
 const CODEX_FALLBACK_MESSAGE = "This request has been flagged for possible cybersecurity risk.";
 
@@ -81,7 +85,7 @@ async function collectAdapter(gen: AsyncGenerator<AdapterEvent>): Promise<Adapte
 describe("cyber_policy error fidelity", () => {
   test("classifyError maps cyber messages and explicit type to cyber_policy", () => {
     expect(classifyError(400, "upstream_error", OPENAI_CYBER_MESSAGE)).toMatchObject({
-      type: "invalid_request_error",
+      type: CYBER_POLICY_ERROR_CODE,
       code: CYBER_POLICY_ERROR_CODE,
     });
     expect(classifyError(502, "upstream_error", CURSOR_SESSION_CYBER_MESSAGE)).toMatchObject({
@@ -108,7 +112,7 @@ describe("cyber_policy error fidelity", () => {
   test("adapterFailureFromMessage prefers HTTP 400 + cyber_policy (not 502)", () => {
     expect(adapterFailureFromMessage(OPENAI_CYBER_MESSAGE)).toMatchObject({
       httpStatus: 400,
-      error: { type: "invalid_request_error", code: CYBER_POLICY_ERROR_CODE },
+      error: { type: CYBER_POLICY_ERROR_CODE, code: CYBER_POLICY_ERROR_CODE },
     });
     expect(adapterFailureFromMessage(CURSOR_SESSION_CYBER_MESSAGE)).toMatchObject({
       httpStatus: 400,
@@ -122,34 +126,117 @@ describe("cyber_policy error fidelity", () => {
     await expect(fromMessage.json()).resolves.toEqual({
       error: {
         message: OPENAI_CYBER_MESSAGE,
-        type: "invalid_request_error",
+        type: CYBER_POLICY_ERROR_CODE,
         code: CYBER_POLICY_ERROR_CODE,
       },
     });
 
-    const fromCode = formatErrorResponse(502, "upstream_error", "blocked by safety", {
+    const fromCode = formatErrorResponse(502, "server_error", "blocked by safety", {
       code: CYBER_POLICY_ERROR_CODE,
+      retryAfter: "120",
     });
     expect(fromCode.status).toBe(400);
+    expect(fromCode.headers.get("retry-after")).toBeNull();
     await expect(fromCode.json()).resolves.toMatchObject({
-      error: { code: CYBER_POLICY_ERROR_CODE, type: "invalid_request_error" },
+      error: { code: CYBER_POLICY_ERROR_CODE, type: "server_error" },
     });
   });
 
   test("passthrough HTTP 400 cyber body is relayed verbatim", async () => {
     const body = JSON.stringify(CYBER_ERROR_BODY);
-    const response = formatPassthroughUpstreamError(400, body);
+    const response = formatPassthroughUpstreamError(400, body, {
+      headers: new Headers({ "content-type": "application/json", "retry-after": "120" }),
+    });
     expect(response.status).toBe(400);
     expect(await response.text()).toBe(body);
+    expect(response.headers.get("retry-after")).toBeNull();
+
+    const codeOnlyBody = JSON.stringify({
+      error: { message: "blocked by policy", type: "server_error", code: CYBER_POLICY_ERROR_CODE },
+    });
+    const codeOnlyResponse = formatPassthroughUpstreamError(400, codeOnlyBody, {
+      headers: new Headers({ "content-type": "application/json", "retry-after": "120" }),
+    });
+    expect(await codeOnlyResponse.text()).toBe(codeOnlyBody);
+    expect(codeOnlyResponse.headers.get("retry-after")).toBeNull();
   });
 
   test("consumeComboFailure preserves cyber_policy code as HTTP 400", async () => {
-    const upstream = new Response(JSON.stringify(CYBER_ERROR_BODY), { status: 400 });
+    const upstream = new Response(JSON.stringify(CYBER_ERROR_BODY), {
+      status: 400,
+      headers: { "retry-after": "120" },
+    });
+    const failure = await consumeComboFailure(upstream);
+    expect(failure.response.status).toBe(400);
+    expect(failure.response.headers.get("retry-after")).toBeNull();
+    expect(failure.upstreamCode).toBe(CYBER_POLICY_ERROR_CODE);
+    await expect(failure.response.json()).resolves.toMatchObject({
+      error: {
+        code: CYBER_POLICY_ERROR_CODE,
+        type: "invalid_request",
+        message: OPENAI_CYBER_MESSAGE,
+      },
+    });
+  });
+
+  test("ordinary Responses HTTP failure preserves structured cyber type and exact safe message", async () => {
+    const upstream = Bun.serve({
+      port: 0,
+      fetch() {
+        return Response.json({
+          error: {
+            message: SECRET_CYBER_MESSAGE,
+            type: "server_error",
+            code: CYBER_POLICY_ERROR_CODE,
+          },
+        }, { status: 400, headers: { "retry-after": "120" } });
+      },
+    });
+    const config = {
+      port: 0,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-chat",
+          baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+          apiKey: "fixture-key",
+          allowPrivateNetwork: true,
+        },
+      },
+    } as OcxConfig;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "mock/test-model", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      expect(response.headers.get("retry-after")).toBeNull();
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          message: REDACTED_CYBER_MESSAGE,
+          type: "server_error",
+          code: CYBER_POLICY_ERROR_CODE,
+        },
+      });
+    } finally {
+      upstream.stop(true);
+    }
+  });
+
+  test("message-only combo cyber failures preserve structured type and redact the message", async () => {
+    const upstream = new Response(JSON.stringify({
+      error: { type: "server_error", message: SECRET_CYBER_MESSAGE },
+    }), { status: 400 });
     const failure = await consumeComboFailure(upstream);
     expect(failure.response.status).toBe(400);
     expect(failure.upstreamCode).toBe(CYBER_POLICY_ERROR_CODE);
     await expect(failure.response.json()).resolves.toMatchObject({
-      error: { code: CYBER_POLICY_ERROR_CODE, type: "invalid_request_error" },
+      error: {
+        type: "server_error",
+        code: CYBER_POLICY_ERROR_CODE,
+        message: REDACTED_CYBER_MESSAGE,
+      },
     });
   });
 
@@ -170,18 +257,11 @@ describe("cyber_policy error fidelity", () => {
       status: 400,
     });
 
-    const frames = await collectSse(bridgeToResponsesSSE(replay([
-      { type: "text_delta", text: "partial" },
-      {
-        type: "error",
-        message: OPENAI_CYBER_MESSAGE,
-        code: CYBER_POLICY_ERROR_CODE,
-        status: 400,
-      },
-    ]), "openai/gpt-5.4"));
+    expect(events.find(e => e.type === "error")).toMatchObject({ errorType: "invalid_request" });
+    const frames = await collectSse(bridgeToResponsesSSE(replay(events), "openai/gpt-5.4"));
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
     expect(failed.error).toMatchObject({
-      type: "invalid_request_error",
+      type: "invalid_request",
       code: CYBER_POLICY_ERROR_CODE,
       message: OPENAI_CYBER_MESSAGE,
     });
@@ -191,10 +271,25 @@ describe("cyber_policy error fidelity", () => {
 
   test("message-only cyber adapter error still classifies (no silent 502)", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
-      { type: "error", message: OPENAI_CYBER_MESSAGE },
+      { type: "error", message: SECRET_CYBER_MESSAGE, retryable: true },
     ]), "openai/gpt-5.4"));
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
-    expect(failed.error).toMatchObject({ code: CYBER_POLICY_ERROR_CODE });
+    expect(failed.error).toMatchObject({
+      type: CYBER_POLICY_ERROR_CODE,
+      code: CYBER_POLICY_ERROR_CODE,
+      message: REDACTED_CYBER_MESSAGE,
+    });
+    expect(failed.retryable).toBe(false);
+    expect(JSON.stringify(failed)).not.toContain("cybersecret123456");
+
+    const buffered = buildResponseJSON([
+      { type: "error", message: SECRET_CYBER_MESSAGE, retryable: true },
+    ], "openai/gpt-5.4");
+    expect(buffered).toMatchObject({
+      status: "failed",
+      retryable: false,
+      error: { code: CYBER_POLICY_ERROR_CODE, message: REDACTED_CYBER_MESSAGE },
+    });
   });
 
   test("chat completions error envelope preserves cyber_policy and model_not_found", async () => {
@@ -202,6 +297,14 @@ describe("cyber_policy error fidelity", () => {
       error: {
         message: OPENAI_CYBER_MESSAGE,
         type: "invalid_request_error",
+        param: null,
+        code: CYBER_POLICY_ERROR_CODE,
+      },
+    });
+    expect(chatCompletionsErrorBody(400, OPENAI_CYBER_MESSAGE)).toEqual({
+      error: {
+        message: OPENAI_CYBER_MESSAGE,
+        type: CYBER_POLICY_ERROR_CODE,
         param: null,
         code: CYBER_POLICY_ERROR_CODE,
       },
@@ -217,7 +320,7 @@ describe("cyber_policy error fidelity", () => {
     const response = chatCompletionsErrorResponse(502, OPENAI_CYBER_MESSAGE, "server_error");
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: CYBER_POLICY_ERROR_CODE, param: null },
+      error: { type: "server_error", code: CYBER_POLICY_ERROR_CODE, param: null },
     });
     // Non-cyber classification must not rewrite HTTP status.
     const rateLimited = chatCompletionsErrorResponse(502, "Rate limit reached for model", "server_error");
@@ -236,7 +339,7 @@ describe("cyber_policy error fidelity", () => {
         response: {
           status: "failed",
           error: {
-            message: OPENAI_CYBER_MESSAGE,
+            message: SECRET_CYBER_MESSAGE,
             type: "invalid_request_error",
             code: CYBER_POLICY_ERROR_CODE,
           },
@@ -257,8 +360,9 @@ describe("cyber_policy error fidelity", () => {
     expect(errorFrame?.data.error).toMatchObject({
       code: CYBER_POLICY_ERROR_CODE,
       type: "invalid_request_error",
-      message: OPENAI_CYBER_MESSAGE,
+      message: REDACTED_CYBER_MESSAGE,
     });
+    expect(JSON.stringify(errorFrame?.data)).not.toContain("cybersecret123456");
   });
 
   test("openai-chat cyber_policy forces HTTP 400 even when upstream status is 5xx", async () => {

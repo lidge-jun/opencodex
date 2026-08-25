@@ -260,6 +260,43 @@ describe("server terminal guard integration", () => {
     expect(text).toContain("Provider continuation error 429");
   });
 
+  test("terminal-guard continuation preserves structured cyber_policy semantics", async () => {
+    const secret = "OpenAI flagged this request for potential high-risk cybersecurity activity. Authorization: Bearer continuationsecret123456";
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) return anthropicSse(firstTurn);
+      return Response.json({
+        error: {
+          message: secret,
+          type: "server_error",
+          code: "cyber_policy",
+        },
+      }, { status: 400, headers: { "retry-after": "120" } });
+    }) as typeof fetch;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+      }),
+    }), config, { model: "", provider: "" });
+
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(sends).toBe(2);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).toContain('"type":"server_error"');
+    expect(text).toContain('"code":"cyber_policy"');
+    expect(text).toContain("Authorization: Bearer [REDACTED]");
+    expect(text).not.toContain("continuationsecret123456");
+    expect(text).not.toContain("Provider continuation error 400");
+  });
+
   test("terminal-guard continuation abort during the 429 wait yields 499 without replaying", async () => {
     const abortConfig = {
       ...config,

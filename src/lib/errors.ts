@@ -6,9 +6,16 @@ export interface OcxErrorPayload {
 
 /** OpenAI / Codex hard block for high-risk cybersecurity activity (HTTP 400 or mid-stream). */
 export const CYBER_POLICY_ERROR_CODE = "cyber_policy";
+export const CYBER_POLICY_FALLBACK_MESSAGE = "Request blocked by the upstream cybersecurity policy.";
 
 export function isCyberPolicyCode(code: string | null | undefined): boolean {
   return code === CYBER_POLICY_ERROR_CODE;
+}
+
+/** Preserve a structured upstream error type; otherwise use the dedicated policy identity. */
+export function cyberPolicyErrorType(type: string | null | undefined): string {
+  const trimmed = typeof type === "string" ? type.trim() : "";
+  return trimmed || CYBER_POLICY_ERROR_CODE;
 }
 
 /**
@@ -139,9 +146,11 @@ export function classifyError(status: number, type: string, message: string): Oc
     return { message, type: "invalid_request_error", code: "client_closed_request" };
   }
   // Codex only shows the dedicated cyber UI when error.code === "cyber_policy".
-  // Prefer that code (and invalid_request_error) over generic remaps / 502 upstream_server_error.
+  // The public wire does not establish invalid_request_error as the canonical type, so
+  // message-only classification keeps the dedicated identity instead of inventing one.
+  // Structured callers re-apply their real upstream type with cyberPolicyErrorType().
   if (type === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(text)) {
-    return { message, type: "invalid_request_error", code: CYBER_POLICY_ERROR_CODE };
+    return { message, type: CYBER_POLICY_ERROR_CODE, code: CYBER_POLICY_ERROR_CODE };
   }
   // A LOCAL preflight refusal keeps its own code (#1524). The message necessarily says
   // "context window" -- that is what it is refusing on -- so the generic remap below would

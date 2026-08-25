@@ -1,8 +1,28 @@
 import { formatErrorResponse } from "../../bridge";
+import { isCyberPolicyCode, isCyberPolicyMessage } from "../../lib/errors";
 import {
   resolveClientRetryAfter,
   validateClientRetryAfterHeader,
 } from "../../lib/retry-after";
+
+function isCyberPolicyBody(body: string): boolean {
+  if (isCyberPolicyMessage(body)) return true;
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const response = parsed.response && typeof parsed.response === "object" && !Array.isArray(parsed.response)
+      ? parsed.response as Record<string, unknown>
+      : undefined;
+    for (const candidate of [parsed.error, response?.error, response?.last_error, parsed.last_error, parsed]) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      const record = candidate as Record<string, unknown>;
+      if (isCyberPolicyCode(typeof record.code === "string" ? record.code : undefined)) return true;
+      if (typeof record.message === "string" && isCyberPolicyMessage(record.message)) return true;
+    }
+  } catch {
+    /* non-JSON body — message detection above is the only safe fallback */
+  }
+  return false;
+}
 
 /**
  * Passthrough adapters historically relayed upstream non-2xx bodies verbatim.
@@ -32,18 +52,22 @@ export function formatPassthroughUpstreamError(
   const now = options?.now ?? Date.now();
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
   const originalValid = validateClientRetryAfterHeader(upstreamRetryAfter, now);
-  const resolved = resolveClientRetryAfter({
-    status,
-    message: trimmed || `Provider error ${status}: (empty body)`,
-    upstreamRetryAfter,
-    now,
-  });
+  const cyberPolicyFailure = isCyberPolicyBody(trimmed);
+  const resolved = cyberPolicyFailure
+    ? undefined
+    : resolveClientRetryAfter({
+      status,
+      message: trimmed || `Provider error ${status}: (empty body)`,
+      upstreamRetryAfter,
+      now,
+    });
 
   if (trimmed) {
     const needsSet = resolved !== undefined && upstreamRetryAfter !== resolved;
-    const needsDelete = resolved === undefined
-      && upstreamRetryAfter !== undefined
-      && originalValid === undefined;
+    const needsDelete = (cyberPolicyFailure && upstreamRetryAfter !== undefined)
+      || (resolved === undefined
+        && upstreamRetryAfter !== undefined
+        && originalValid === undefined);
 
     if (!needsSet && !needsDelete) {
       return new Response(bodyText, {

@@ -1331,6 +1331,57 @@ test("chat-native redacts structured provider errors before returning them", asy
   }
 });
 
+test("chat-native preserves a structured cyber_policy type on JSON and SSE failures", async () => {
+  const secret = "blocked by upstream policy Authorization: Bearer chatnativesecret123456";
+  const safeMessage = "blocked by upstream policy Authorization: Bearer [REDACTED]";
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = await req.json() as { stream?: boolean };
+      const error = {
+        message: secret,
+        type: "server_error",
+        code: "cyber_policy",
+        status: 502,
+      };
+      if (body.stream) {
+        return new Response(`data: ${JSON.stringify({ error })}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return Response.json(error, { status: 502, headers: { "retry-after": "120" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const request = (stream: boolean) => fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    const jsonResponse = await request(false);
+    expect(jsonResponse.status).toBe(400);
+    expect(jsonResponse.headers.get("retry-after")).toBeNull();
+    await expect(jsonResponse.json()).resolves.toMatchObject({
+      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+    });
+
+    const sseResponse = await request(true);
+    expect(sseResponse.status).toBe(200);
+    const sseText = await sseResponse.text();
+    expect(sseText).toContain('"type":"server_error"');
+    expect(sseText).toContain('"code":"cyber_policy"');
+    expect(sseText).toContain("Authorization: Bearer [REDACTED]");
+    expect(sseText).not.toContain("chatnativesecret123456");
+    expect(sseText).not.toContain("data: [DONE]");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("chat-native preserves same-key retry, key rotation, usage, and request logging", async () => {
   const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
   const { clearKeyCooldowns } = await import("../src/providers/key-failover");
@@ -2663,6 +2714,66 @@ test("inbound chat-completions honors the override when stripping sampling (#404
   }
 });
 
+test("/v1/chat/completions non-OK upstream preserves top-level structured cyber_policy type", async () => {
+  const secret = "blocked by upstream policy Authorization: Bearer chathttpsecret123456";
+  const safeMessage = "blocked by upstream policy Authorization: Bearer [REDACTED]";
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({
+        message: secret,
+        type: "server_error",
+        code: "cyber_policy",
+      }, { status: 400, headers: { "retry-after": "120" } });
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(`${url.pathname.slice("/backend-api/codex".length)}${url.search}`, upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: ["Bear" + "er", "caller-direct-token"].join(" "),
+      },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(response.headers.get("retry-after")).toBeNull();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+    });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("/v1/chat/completions non-OK upstream preserves structured model_not_found", async () => {
   const upstream = Bun.serve({
     port: 0,
@@ -2781,6 +2892,70 @@ test("/v1/chat/completions status:failed replay normalizes translation_buffer_li
     expect(response.status).toBe(502);
     const json = await response.json() as { error?: { code?: string; type?: string } };
     expect(json.error).toMatchObject({ code: "translation_buffer_limit", type: "upstream_error" });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/v1/chat/completions status:failed replay preserves structured cyber_policy type", async () => {
+  const secret = "blocked by upstream policy Authorization: Bearer chatreplaysecret123456";
+  const safeMessage = "blocked by upstream policy Authorization: Bearer [REDACTED]";
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({
+        id: "resp_policy",
+        object: "response",
+        status: "failed",
+        error: {
+          message: secret,
+          type: "server_error",
+          code: "cyber_policy",
+        },
+      });
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return originalFetch(new URL(`${url.pathname.slice("/backend-api/codex".length)}${url.search}`, upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: ["Bear" + "er", "caller-direct-token"].join(" "),
+      },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+    });
   } finally {
     await server.stop(true);
     upstream.stop(true);
