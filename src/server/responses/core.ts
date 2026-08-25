@@ -5144,6 +5144,7 @@ async function handleResponsesInner(
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               providerName: route.providerName,
               modelId: nextParsed.modelId,
+              pacingSlotAcquired: true,
             }),
           });
         }

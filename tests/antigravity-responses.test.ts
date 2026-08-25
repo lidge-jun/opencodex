@@ -112,6 +112,62 @@ describe("Antigravity Responses integration", () => {
     expect(timers.size).toBe(0);
   });
 
+  test("an empty-completion continuation uses one pacing admission", async () => {
+    let now = 0;
+    const timers = new Map<number, { at: number; callback: () => void }>();
+    let nextTimer = 1;
+    const runtime: RequestPacingRuntime = {
+      now: () => now,
+      random: () => 0,
+      setTimer: (callback, delayMs) => {
+        const id = nextTimer++;
+        timers.set(id, { at: now + delayMs, callback });
+        return id;
+      },
+      clearTimer: handle => { timers.delete(handle as number); },
+      enqueueMicrotask: callback => callback(),
+    };
+    const advanceBy = (delayMs: number) => {
+      const target = now + delayMs;
+      while (true) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= target)
+          .sort((left, right) => left[1].at - right[1].at || left[0] - right[0])[0];
+        if (!due) break;
+        const [id, timer] = due;
+        timers.delete(id);
+        now = timer.at;
+        timer.callback();
+      }
+      now = target;
+    };
+    setProviderRequestPacingRuntimeForTest(runtime);
+    let sends = 0;
+    const testConfig = config();
+    testConfig.emptyCompletionRetry = true;
+    const provider = testConfig.providers["google-antigravity"]! as OcxConfig["providers"][string] & {
+      fetch: typeof globalThis.fetch;
+    };
+    provider.requestPacing = { enabled: true, minIntervalMs: 100 };
+    provider.fetch = (async () => {
+      sends += 1;
+      return sends === 1
+        ? Response.json({ response: { candidates: [{ finishReason: "STOP" }] } })
+        : completed();
+    }) as typeof globalThis.fetch;
+
+    const pending = handleResponses(request(), testConfig, { model: "", provider: "" }, {});
+    for (let index = 0; index < 100; index += 1) await Promise.resolve();
+    expect(sends).toBe(1);
+    advanceBy(100);
+    for (let index = 0; index < 20; index += 1) await Promise.resolve();
+
+    expect(sends).toBe(2);
+    expect(providerRequestPacingStatus("google-antigravity", provider).queued).toBe(0);
+    expect(timers.size).toBe(0);
+    expect((await pending).status).toBe(200);
+  });
+
   test("selects the Google adapter and observes a CCA SSE error before returning it", async () => {
     const seen: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
