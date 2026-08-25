@@ -18,7 +18,7 @@ I only wanted to add the feature to my fork, not upstream. The forked one is the
 
 Default `gh pr create` target is **`yansigit/opencodex`**, base = the fork's daily-driver branch (usually `origin/main`). Do **not** pass `--repo lidge-jun/opencodex`. Fetch `upstream/dev` only to update the fork; that fetch is not permission to file an upstream PR.
 
-Leftover git branch `overlay` is retired; it is not a merge target. Open fork PRs against `origin/main`.
+Leftover git branch `overlay` is retired; it is not a merge target. Feature and maintenance PRs target `dev` first; releases and promotions reflect from `dev` to `main`.
 
 The rest of this skill is the **upstream** review-readiness gate. Use it only after the user has explicitly asked to contribute a change to `lidge-jun/opencodex`. Fork-only work skips `maintainer-sponsored`, screenshot-for-upstream-gate, and the four-box Ready ritual.
 

@@ -15,7 +15,7 @@ const event: SyncEvent = {
 
 const result: PrepareResult = {
   status: "merged",
-  branch: "sync/upstream-20260824",
+  branch: "sync/upstream-v2.32.0-1111111",
   resolutions: [{
     path: "package.json",
     classification: "recipe",
@@ -49,14 +49,14 @@ describe("fork sync draft pull requests", () => {
 
     expect(number).toBe(17);
     expect(requests.map(request => [request.input, request.init?.method ?? "GET"])).toEqual([
-      ["https://api.github.com/repos/yansigit/opencodex/pulls?state=open&base=main", "GET"],
+      ["https://api.github.com/repos/yansigit/opencodex/pulls?state=open&base=dev", "GET"],
       ["https://api.github.com/repos/yansigit/opencodex/pulls", "POST"],
     ]);
     const body = JSON.parse(String(requests[1]?.init?.body));
     expect(body).toMatchObject({
       title: "sync: upstream v2.32.0",
-      head: "sync/upstream-20260824",
-      base: "main",
+      head: "sync/upstream-v2.32.0-1111111",
+      base: "dev",
       draft: true,
     });
     expect(body.body).toContain(event.latestTagSha);
@@ -76,7 +76,7 @@ describe("fork sync draft pull requests", () => {
           state: "open",
           draft: true,
           head: { ref: result.branch },
-          base: { ref: "main" },
+          base: { ref: "dev" },
         }])
         : response({ number: 23 });
     };

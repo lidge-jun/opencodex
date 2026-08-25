@@ -18,9 +18,14 @@ async function run(
 }
 
 function branchFor(event: SyncEvent): string {
-  const date = new Date(event.detectedAt);
-  if (Number.isNaN(date.getTime())) throw new Error("detectedAt is not a valid date");
-  return `sync/upstream-${date.toISOString().slice(0, 10).replaceAll("-", "")}`;
+  const tag = (event.latestTag || "unknown-release")
+    .replace(/[^0-9A-Za-z._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "unknown-release";
+  const sha = (event.latestTagSha || "unknown-sha")
+    .replace(/[^0-9A-Za-z]+/g, "")
+    .slice(0, 7) || "unknown";
+  return `sync/upstream-${tag}-${sha}`;
 }
 
 function conflictedPaths(stdout: string): string[] {
@@ -47,7 +52,7 @@ export async function prepareSync(
   }
 
   const branch = branchFor(event);
-  await run(options.runner, ["switch", "-c", branch]);
+  await run(options.runner, ["switch", "-C", branch]);
   const merge = await options.runner(["merge", "--no-ff", "vendor/main"]);
   if (merge.exitCode === 0) {
     return { status: "merged", branch, resolutions: [], unresolved: [] };

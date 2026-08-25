@@ -37,7 +37,7 @@ function summary(event: SyncEvent): string {
     `vendor/main SHA: ${event.vendorMainSha}`,
     `vendor/dev SHA: ${event.vendorDevSha}`,
     `Detected at: ${event.detectedAt}`,
-    event.error ? `Error: ${event.error}` : "Action: prepare a human-reviewed draft PR.",
+    event.error ? `Error: ${event.error}` : "Action: prepare a human-reviewed draft PR targeting dev.",
   ].join("\n");
 }
 

@@ -58,14 +58,24 @@ jobs:
             git push origin "${bootstrap_refs[@]}"
           fi
 
+      - name: Create dev integration worktree
+        env:
+          FORK_SYNC_WORKTREE: ${{ runner.temp }}/fork-sync-dev
+        run: |
+          set -eu
+          git fetch origin dev:refs/remotes/origin/dev
+          git worktree add --detach "$FORK_SYNC_WORKTREE" refs/remotes/origin/dev
+
       - name: Detect and pin vendor refs
         id: pin
         env:
           FORK_SYNC_UPSTREAM_REPO: https://github.com/lidge-jun/opencodex.git
+          FORK_SYNC_WORKTREE: ${{ runner.temp }}/fork-sync-dev
         run: |
           set -eu
+          cd "$FORK_SYNC_WORKTREE"
           event_file="$RUNNER_TEMP/fork-sync-event.json"
-          bun scripts/fork/sync/cli.ts pin > "$event_file"
+          bun "$GITHUB_WORKSPACE/scripts/fork/sync/cli.ts" pin > "$event_file"
           kind="$(jq -r '.kind' "$event_file")"
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
           echo "Fork sync lane: $kind" >> "$GITHUB_STEP_SUMMARY"
@@ -90,11 +100,14 @@ jobs:
       - name: Prepare daily merge
         id: prepare
         if: steps.pin.outputs.kind == 'pin-updated' || steps.pin.outputs.kind == 'main-behind'
+        env:
+          FORK_SYNC_WORKTREE: ${{ runner.temp }}/fork-sync-dev
         run: |
           set -eu
+          cd "$FORK_SYNC_WORKTREE"
           event_file="$(cat "$RUNNER_TEMP/fork-sync-event-path")"
           result_file="$RUNNER_TEMP/fork-sync-prepare.json"
-          bun scripts/fork/sync/cli.ts prepare < "$event_file" > "$result_file"
+          bun "$GITHUB_WORKSPACE/scripts/fork/sync/cli.ts" prepare < "$event_file" > "$result_file"
           status="$(jq -r '.status' "$result_file")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
           if [ "$status" = "merged" ]; then
@@ -114,7 +127,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -eu
-          bun scripts/fork/sync/cli.ts draft-pr < "$RUNNER_TEMP/fork-sync-draft-pr.json"
+          bun "$GITHUB_WORKSPACE/scripts/fork/sync/cli.ts" draft-pr < "$RUNNER_TEMP/fork-sync-draft-pr.json"
 
       # Issue tracking is always enabled for non-noop events.
       - name: Notify GitHub issue
@@ -136,7 +149,7 @@ jobs:
           jq --arg prepareStatus "$handoff_status" \
             '. + {prepareStatus: $prepareStatus}' \
             "$event_file" > "$handoff_file"
-          bun scripts/fork/sync/cli.ts emit < "$handoff_file"
+          bun "$GITHUB_WORKSPACE/scripts/fork/sync/cli.ts" emit < "$handoff_file"
 
       # Cursor handles only conflicts the Action could not resolve or
       # disconnected histories; ordinary daily merges stop at a draft PR.
@@ -151,4 +164,4 @@ jobs:
         run: |
           set -eu
           event_file="$(cat "$RUNNER_TEMP/fork-sync-event-path")"
-          bun scripts/fork/sync/cli.ts emit < "$event_file"
+          bun "$GITHUB_WORKSPACE/scripts/fork/sync/cli.ts" emit < "$event_file"

@@ -28,9 +28,9 @@ function issueText(event: SyncEvent, upstreamRepo: string): {
   const kind = publicValue(event.kind);
   const recommendedLane = publicValue(event.recommendedLane ?? "unspecified");
   const action = event.kind === "history-diverged"
-    ? "Action: review the release and rebuild run/main."
+    ? "Action: review the release and rebuild the sync branch from origin/dev."
     : event.kind === "pin-updated" || event.kind === "main-behind"
-    ? "Action: open or update a merge-from-main draft PR."
+    ? "Action: open or update a draft PR merging upstream into dev."
     : "Action: investigate the fork sync event.";
   const title = `[fork-sync] ${kind}: ${tag}`;
   const body = [

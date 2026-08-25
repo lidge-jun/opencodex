@@ -29,7 +29,7 @@ function bodyFor(event: SyncEvent, result: PrepareResult): string {
   return [
     "<!-- opencodex-fork-sync -->",
     "## Summary",
-    `Merge upstream ${publicValue(event.latestTag)} into the fork default branch.`,
+    `Merge upstream ${publicValue(event.latestTag)} into the fork integration branch (dev).`,
     `Tag SHA: ${publicValue(event.latestTagSha) || "unavailable"}`,
     `Vendor main SHA: ${publicValue(event.vendorMainSha) || "unavailable"}`,
     "",
@@ -80,18 +80,18 @@ export function createDraftPullRequestClient(
       if (!branch) throw new Error("merged prepare result is missing a branch");
       const title = `sync: upstream ${publicValue(event.latestTag) || "unknown-release"}`;
       const body = bodyFor(event, result);
-      const response = await request("/pulls?state=open&base=main");
+      const response = await request("/pulls?state=open&base=dev");
       const openPullRequests = await response.json() as GitHubPullRequest[];
       const matching = openPullRequests.find(pullRequest =>
         pullRequest.state === "open"
-        && pullRequest.base.ref === "main"
+        && pullRequest.base.ref === "dev"
         && pullRequest.head.ref === branch
         && (pullRequest.title.includes(event.latestTag)
           || (pullRequest.body ?? "").includes(event.latestTagSha)));
       const payload = {
         title,
         head: branch,
-        base: "main",
+        base: "dev",
         body,
         draft: true,
       };

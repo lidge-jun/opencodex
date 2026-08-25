@@ -10,5 +10,5 @@ Add these repository secrets to the fork:
 - `FORK_SYNC_CURSOR_WEBHOOK_SECRET`
 
 The automation must stop after preparing the disposable rebuild, decision
-table, and draft PR. A human reviews and merges `origin/main`; this
+table, and draft PR. A human reviews and merges `origin/dev`; this
 implementation does not open the Automations editor.

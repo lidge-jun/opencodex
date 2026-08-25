@@ -2,7 +2,11 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { assessSponsoredSurface, isRestrictedPath } = require("./pr-sponsored-surface.cjs");
+const {
+  assessSponsoredSurface,
+  isAgentProtectedPath,
+  isRestrictedPath,
+} = require("./pr-sponsored-surface.cjs");
 
 describe("isRestrictedPath", () => {
   it("covers auth, workflow, release, and dependency surfaces", () => {
@@ -27,6 +31,29 @@ describe("isRestrictedPath", () => {
       "docs-site/src/content/docs/x.md",
     ]) {
       assert.equal(isRestrictedPath(path), false, path);
+    }
+  });
+});
+
+describe("isAgentProtectedPath", () => {
+  it("escalates optional-Lab boundaries, provider code, and rename sources", () => {
+    for (const file of [
+      { filename: "src/router.ts" },
+      { filename: "src/server/lifecycle.ts" },
+      { filename: "src/providers/new-provider.ts" },
+      { filename: "docs-site/new.md", previous_filename: "src/server/responses/core.ts" },
+    ]) {
+      assert.equal(isAgentProtectedPath(file), true, JSON.stringify(file));
+    }
+  });
+
+  it("allows the two scheduled maintenance surfaces", () => {
+    for (const file of [
+      { filename: "README.md" },
+      { filename: "docs-site/src/content/docs/x.md" },
+      { filename: "tests/router.test.ts" },
+    ]) {
+      assert.equal(isAgentProtectedPath(file), false, JSON.stringify(file));
     }
   });
 });
