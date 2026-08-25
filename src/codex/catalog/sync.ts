@@ -1957,11 +1957,12 @@ export function invalidateCodexModelsCacheWithPermit(
     // The catalog-only sync override applies here too so an explicit refresh
     // keeps the cache consistent with the catalog it just wrote.
     if (!shouldSyncCodexOnStart(loadConfig()) && options?.allowWhenDesiredDisabled !== true) return false;
-    const catalogPath = readCodexCatalogPath();
+    const catalogPath = readCodexCatalogPathForHome(owningCodexHome);
     if (!existsSync(catalogPath)) return false;
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const models = catalog.models ?? catalog;
-    const currentCache = readCatalog(activeCodexModelsCachePath());
+    const cachePath = join(owningCodexHome, "models_cache.json");
+    const currentCache = readCatalog(cachePath);
     const existingSlugs = new Set(models.flatMap((entry: RawEntry) =>
       typeof entry.slug === "string" ? [entry.slug] : []));
     const currentConfig = loadConfig();
@@ -1989,7 +1990,7 @@ export function invalidateCodexModelsCacheWithPermit(
       models: [...models, ...observedAccountModels],
     };
     replaceCodexModelsCache(permit, owningCodexHome, {
-      path: activeCodexModelsCachePath(),
+      path: cachePath,
       content: `${JSON.stringify(wrapper, null, 2)}\n`,
     });
     return true;
