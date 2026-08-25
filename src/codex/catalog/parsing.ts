@@ -320,6 +320,9 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     ?? (isNativeOpenAiEntry(entry) ? entry.slug as string : undefined);
   if (!nativeSlug) return;
   const override = NATIVE_OPENAI_CONTEXT_OVERRIDES[nativeSlug];
+  // Captured before any override/cap rewrites the row: a retained compaction threshold only
+  // describes the window it arrived with.
+  const incomingContextWindow = typeof entry.context_window === "number" ? entry.context_window : undefined;
   if (override) {
     // Read the effective values through the accessors rather than re-deriving them from the
     // static table: this function used to apply only the provider cap, so a per-model window
@@ -352,7 +355,14 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     : undefined;
   if (effectiveContext !== undefined) {
     const derivedAutoCompactTokenLimit = nativeOpenAiAutoCompactTokenLimit(nativeSlug, limits);
-    const retainedAutoCompactTokenLimit = isNativeOpenAiEntry(entry)
+    // Only trust a retained threshold that still describes THIS window. When sync corrects the
+    // window, the old number is an artifact of the old one: a 115_200 limit retained from a
+    // 128k row would pin a corrected 272k model to 42% of its real window and compact every
+    // long turn early. Lower-is-policy still holds whenever the window is unchanged.
+    const retainedDescribesCurrentContext = incomingContextWindow === undefined
+      || incomingContextWindow === effectiveContext;
+    const retainedAutoCompactTokenLimit = retainedDescribesCurrentContext
+      && isNativeOpenAiEntry(entry)
       && typeof entry.auto_compact_token_limit === "number"
       && Number.isSafeInteger(entry.auto_compact_token_limit)
       && entry.auto_compact_token_limit > 0
