@@ -18,7 +18,7 @@ export function outboundProxyConfigured(
 }
 
 function proxyValue(key: ProxyEnvKey, env: ProxyEnvMap): string | undefined {
-  const value = (env[key] ?? env[key.toLowerCase()] ?? "").trim();
+  const value = env[key]?.trim() || env[key.toLowerCase()]?.trim();
   return value || undefined;
 }
 

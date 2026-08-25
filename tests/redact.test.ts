@@ -559,5 +559,10 @@ describe("redactErrorMessage", () => {
     expect(redacted).toBe("malformed native socks5://proxy.test:99999 connection failed");
     expect(redacted).not.toContain("alice");
     expect(redacted).not.toContain("secret");
+
+    const withSlash = redactErrorMessage("malformed socks5://alice:sec/ret@proxy.test:99999/path connection failed");
+    expect(withSlash).toBe("malformed socks5://proxy.test:99999/path connection failed");
+    expect(withSlash).not.toContain("alice");
+    expect(withSlash).not.toContain("sec/ret");
   });
 });
