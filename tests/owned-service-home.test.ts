@@ -35,11 +35,27 @@ test("Windows owned-service-home fixture masks manager queries in a real child",
       const schtasks = join(system, "schtasks.exe");
       const sc = join(system, "sc.exe");
       const text = (value: unknown) => Buffer.isBuffer(value) ? value.toString("utf8") : String(value ?? "");
-      const exactScheduler = spawnSync(schtasks, ["/query", "/tn", "opencodex-proxy", "/xml"], { encoding: "buffer" });
-      const foreignScheduler = spawnSync(schtasks, ["/query", "/tn", "foreign-opencodex-proxy", "/xml"], { encoding: "buffer" });
-      const extraScheduler = spawnSync(schtasks, ["/query", "/tn", "opencodex-proxy", "/xml", "/extra"], { encoding: "buffer" });
-      const exactNative = spawnSync(sc, ["query", "opencodex-proxy-native"], { encoding: "buffer" });
-      const extraNative = spawnSync(sc, ["query", "opencodex-proxy-native", "extra"], { encoding: "buffer" });
+      const serviceProbe = (label: string, executable: string, args: string[]) => {
+        const probe = spawnSync(executable, args, {
+          encoding: "buffer",
+          timeout: 5_000,
+          windowsHide: true,
+        });
+        // A timeout (or any spawn failure) is a failed probe, not an absent
+        // service. Keep the real pass-through result visible via status/stderr.
+        if (probe.error || probe.status === null) {
+          const detail = probe.error instanceof Error
+            ? probe.error.message
+            : String(probe.error ?? "no exit status");
+          throw new Error(label + " failed: " + detail);
+        }
+        return probe;
+      };
+      const exactScheduler = serviceProbe("exact scheduler", schtasks, ["/query", "/tn", "opencodex-proxy", "/xml"]);
+      const foreignScheduler = serviceProbe("foreign scheduler", schtasks, ["/query", "/tn", "foreign-opencodex-proxy", "/xml"]);
+      const extraScheduler = serviceProbe("extra scheduler", schtasks, ["/query", "/tn", "opencodex-proxy", "/xml", "/extra"]);
+      const exactNative = serviceProbe("exact native", sc, ["query", "opencodex-proxy-native"]);
+      const extraNative = serviceProbe("extra native", sc, ["query", "opencodex-proxy-native", "extra"]);
       const result = inspectServiceManagerInstallation({
         platform: "win32",
         home: process.env.USERPROFILE,

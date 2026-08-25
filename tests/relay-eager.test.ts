@@ -1058,6 +1058,72 @@ describe("relaySseEagerBounded — bounded queue", () => {
     );
   });
 
+  test("(b2) pause resolver rechecks an abort that wins before installation", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const realUpstream = new AbortController();
+    let abortOnNextSignalCheck = false;
+    let predicateAbortTriggered = false;
+    const signal = new Proxy(realUpstream.signal, {
+      get(target, property) {
+        if (property === "aborted" && abortOnNextSignalCheck) {
+          abortOnNextSignalCheck = false;
+          predicateAbortTriggered = true;
+          realUpstream.abort(new Error("deterministic pause interleave"));
+          // Return the pre-abort value for this predicate evaluation. The abort
+          // event has already fired, so the resolver installed by paused() must
+          // observe the new value on its post-install check.
+          return false;
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const upstream = {
+      signal,
+      abort: (reason?: unknown) => realUpstream.abort(reason),
+    } as unknown as AbortController;
+
+    let resolveDone!: () => void;
+    const done = new Promise<void>(resolve => { resolveDone = resolve; });
+    const previousOnDone = hooks.onDone;
+    hooks.onDone = () => {
+      previousOnDone();
+      resolveDone();
+    };
+    hooks.rewritePayload = payload => {
+      // This callback runs after the chunk is read and before the bounded-queue
+      // predicate. The proxy then aborts exactly while that predicate is being
+      // evaluated, before paused() installs its resolver.
+      abortOnNextSignalCheck = true;
+      return payload;
+    };
+
+    const relayed = relaySseEagerBounded(up.stream, upstream, hooks, { maxQueueBytes: 1 });
+    const reader = relayed.getReader();
+    up.push(sse(DELTA));
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        done,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("pause resolver did not observe the deterministic abort")),
+            watchdogMs(2_000),
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      await reader.cancel().catch(() => {});
+      realUpstream.abort(new Error("test cleanup"));
+    }
+
+    expect(predicateAbortTriggered).toBe(true);
+    expect(rec.dones).toBe(1);
+  });
+
   test("(f) cancel while paused wakes the gate — onDone fires, no deadlock", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();
