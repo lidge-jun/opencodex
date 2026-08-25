@@ -424,3 +424,40 @@ describe("cyber_policy error fidelity", () => {
     })).toBe("stop");
   });
 });
+
+describe("#2488 nested policy identity is not hidden by an outer envelope", () => {
+  /**
+   * normalizeUpstreamErrorText took the FIRST candidate carrying any string field, while
+   * isCyberPolicyBody scans EVERY candidate. A generic outer wrapper therefore won over a
+   * nested cyber_policy, so the failure read as an ordinary retryable upstream error - a retry
+   * across a safety boundary. Both detectors must agree on the same body.
+   */
+  const nestedBody = JSON.stringify({
+    error: { message: "Upstream request failed" },
+    response: {
+      last_error: {
+        code: CYBER_POLICY_ERROR_CODE,
+        type: "policy_violation",
+        message: "blocked by policy",
+      },
+    },
+  });
+
+  test("a nested policy code is found behind a generic outer envelope", async () => {
+    const failure = await consumeComboFailure(new Response(nestedBody, { status: 502 }));
+    expect(failure.upstreamCode).toBe(CYBER_POLICY_ERROR_CODE);
+    expect(failure.response.status).toBe(400);
+    expect(failure.response.headers.get("retry-after")).toBeNull();
+  });
+
+  test("a generic nested error keeps ordinary upstream classification", async () => {
+    const genericBody = JSON.stringify({
+      error: { message: "Upstream request failed" },
+      response: { last_error: { code: "server_error", message: "boom" } },
+    });
+    const failure = await consumeComboFailure(new Response(genericBody, { status: 502 }));
+    expect(failure.upstreamCode).not.toBe(CYBER_POLICY_ERROR_CODE);
+    expect(failure.response.status).toBe(502);
+  });
+});
+
