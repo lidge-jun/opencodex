@@ -31,10 +31,10 @@ export interface SubagentDelegationSectionProps {
   onUltraModeSave: (patch: UltraModePatch) => void;
   ultraLoadFailed: boolean;
   onUltraModeRetry: () => void;
-  keepNativeChatGptOnV1: boolean;
-  nativeParentOverride: V2NativeParentOverrideState;
-  nativeParentOverrideSaving: boolean;
-  onNativeParentOverrideSave: (state: V2NativeParentOverrideState) => void;
+  keepNativeChatGptOnV1?: boolean;
+  nativeParentOverride?: V2NativeParentOverrideState;
+  nativeParentOverrideSaving?: boolean;
+  onNativeParentOverrideSave?: (state: V2NativeParentOverrideState) => void;
 }
 
 export default function SubagentDelegationSection({
@@ -55,10 +55,10 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
-  keepNativeChatGptOnV1,
-  nativeParentOverride,
-  nativeParentOverrideSaving,
-  onNativeParentOverrideSave,
+  keepNativeChatGptOnV1 = false,
+  nativeParentOverride = { enabled: false, model: null, active: false },
+  nativeParentOverrideSaving = false,
+  onNativeParentOverrideSave = () => {},
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
