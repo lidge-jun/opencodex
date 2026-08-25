@@ -52,12 +52,44 @@ describe("package tree integrity", () => {
       changeTimeNs: 100n,
       size: 500n,
     };
-    const guard = createPackageTreeIntegrityGuard(() => observation);
+    // An explicit clock: `status()` reuses an `ok` reading for a second so the guard does not
+    // stat the manifest on every request, and two calls in the same millisecond would otherwise
+    // never re-observe.
+    let clock = 0;
+    const guard = createPackageTreeIntegrityGuard(() => observation, () => clock);
 
     expect(guard.status()).toEqual({ ok: true });
 
     observation = { ...observation, inode: 11n, changeTimeNs: 200n };
+    clock += 2_000;
     expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+  });
+
+  test("an ok reading is reused briefly, and a bad one is never cached", () => {
+    let observation: PackageTreeObservation | null = {
+      device: 1n, inode: 10n, changeTimeNs: 100n, size: 500n,
+    };
+    let observations = 0;
+    let clock = 0;
+    const guard = createPackageTreeIntegrityGuard(
+      () => { observations += 1; return observation; },
+      () => clock,
+    );
+
+    // Hot path: repeated calls inside the window cost one observation, not one each.
+    expect(guard.status()).toEqual({ ok: true });
+    expect(guard.status()).toEqual({ ok: true });
+    expect(guard.status()).toEqual({ ok: true });
+    expect(observations).toBe(2); // one at construction, one for the first status()
+
+    // A failure is re-observed every time, so a repaired install recovers on its own rather
+    // than staying refused for the rest of a window.
+    clock += 2_000;
+    observation = null;
+    expect(guard.status()).toEqual({ ok: false, reason: "package_tree_unreadable" });
+    const afterFirstFailure = observations;
+    expect(guard.status()).toEqual({ ok: false, reason: "package_tree_unreadable" });
+    expect(observations).toBe(afterFirstFailure + 1);
   });
 
   test("fails closed when the package manifest disappears", () => {
