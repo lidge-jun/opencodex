@@ -208,7 +208,7 @@ export function resolveAntigravityAccountForSession(
 }
 
 const RATE_LIMIT_CODES = new Set(["RATE_LIMIT_EXCEEDED", "TOO_MANY_REQUESTS"]);
-const QUOTA_CODES = new Set(["QUOTA_EXCEEDED", "RESOURCE_EXHAUSTED"]);
+const QUOTA_CODES = new Set(["QUOTA_EXCEEDED"]);
 const GEO_CODES = new Set(["LOCATION_NOT_SUPPORTED", "REGION_NOT_SUPPORTED", "GEO_BLOCKED"]);
 
 export function normalizeAntigravityProviderError(value: unknown): AntigravityProviderError | null {
@@ -236,8 +236,7 @@ export function classifyAntigravityProviderError(value: unknown): AntigravitySyn
   const error = normalizeAntigravityProviderError(value);
   if (!error) return null;
   const message = error.message?.toLowerCase() ?? "";
-  if ((QUOTA_CODES.has(error.code ?? "") || error.code === "RESOURCE_EXHAUSTED")
-    && /quota|resource[ _-]?exhausted/.test(message)) return "quota";
+  if (QUOTA_CODES.has(error.code ?? "") || (error.code === "RESOURCE_EXHAUSTED" && /quota|resource[ _-]?exhausted/.test(message))) return "quota";
   if (error.status === 429 || RATE_LIMIT_CODES.has(error.code ?? "") || (error.code === "RESOURCE_EXHAUSTED" && /rate[- ]limit|too many requests/.test(message))) {
     return "rate-limit";
   }

@@ -6,6 +6,7 @@ import {
   antigravitySessionKeyFromParts,
   bindAntigravitySessionAffinity,
   clearAntigravityRoutingState,
+  classifyAntigravityProviderError,
   getAntigravityAccountHealthSnapshot,
   recordAntigravityCooldown,
   recordAntigravitySyntheticFailure,
@@ -77,5 +78,11 @@ describe("google antigravity strict account affinity", () => {
     expect(recordAntigravitySyntheticFailure(ids.a, { code: 403, status: "PERMISSION_DENIED", message: "Location is not supported" }, 1000)).toBe("geoblock");
     expect(getAntigravityAccountHealthSnapshot(ids.a, 2000)).toMatchObject({ cooldownKind: "geoblock" });
     expect(resolveAntigravityAccountForSession("new-conversation", 2000)).toMatchObject({ accountId: ids.a, reason: "active-cooled", cooldownKind: "geoblock" });
+  });
+
+  test("classifies QUOTA_EXCEEDED as quota even without message", () => {
+    expect(classifyAntigravityProviderError({ code: "QUOTA_EXCEEDED", status: 429 })).toBe("quota");
+    expect(classifyAntigravityProviderError({ code: "RESOURCE_EXHAUSTED", status: 429, message: "rate limit exceeded" })).toBe("rate-limit");
+    expect(classifyAntigravityProviderError({ code: "RESOURCE_EXHAUSTED", status: 429, message: "quota exceeded" })).toBe("quota");
   });
 });
