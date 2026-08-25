@@ -150,6 +150,43 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("v2 native parent override round-trips trimmed and isolates malformed hand edits", () => {
+    const defaults = getDefaultConfig();
+    const valid = validateConfigCandidate({
+      ...defaults,
+      v2NativeParentOverride: { enabled: false, model: "  relay/model  " },
+    });
+    expect(valid).toMatchObject({
+      ok: true,
+      config: { v2NativeParentOverride: { enabled: false, model: "relay/model" } },
+    });
+
+    writeConfig({
+      port: 12345,
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+      defaultProvider: "custom",
+      v2NativeParentOverride: { enabled: "yes", model: 42 },
+    });
+    const loaded = loadConfig();
+    expect(loaded.v2NativeParentOverride).toBeUndefined();
+    expect(loaded.providers.custom).toBeDefined();
+    expect(loaded.port).toBe(12345);
+  });
+
+  test("v2 native parent override rejects malformed programmatic writes", () => {
+    const defaults = getDefaultConfig();
+    for (const override of [
+      { enabled: "yes", model: "relay/model" },
+      { enabled: true, model: "   " },
+      { enabled: true, model: null },
+      { enabled: true, model: "relay/model", extra: true },
+    ]) {
+      const result = validateConfigCandidate({ ...defaults, v2NativeParentOverride: override });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("v2NativeParentOverride");
+    }
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);

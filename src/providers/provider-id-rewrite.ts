@@ -82,6 +82,7 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
 
   const scalarOwners: Array<[Record<string, unknown> | undefined, string]> = [
     [config as unknown as Record<string, unknown>, "injectionModel"],
+    [config.v2NativeParentOverride as Record<string, unknown> | undefined, "model"],
     [config.shadowCallIntercept as Record<string, unknown> | undefined, "model"],
     [config.webSearchSidecar as Record<string, unknown> | undefined, "model"],
     [config.visionSidecar as Record<string, unknown> | undefined, "model"],

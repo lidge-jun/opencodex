@@ -161,6 +161,14 @@ describe("OpenAI provider option migration matrix", () => {
     });
   });
 
+  test("rewrites the native parent override target from legacy OpenAI provider", () => {
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      v2NativeParentOverride: { enabled: true, model: "openai-multi/gpt-parent" },
+    }));
+    expect(result.config.v2NativeParentOverride).toEqual({ enabled: true, model: "gpt-parent" });
+  });
+
   test("merges selectedModels stably and deduplicates rewritten ids", () => {
     const result = projectOpenAiTierMigration(cfg({
       openaiProviderTierVersion: 1,

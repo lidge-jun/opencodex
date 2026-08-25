@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +10,7 @@ import {
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../src/codex/catalog/kinds";
 import { buildCatalogEntriesFromObservedState } from "../src/codex/catalog/sync";
 import { cmdV2 } from "../src/cli/v2";
-import { loadConfig } from "../src/config";
+import { loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 import type { OcxConfig } from "../src/types";
@@ -111,6 +111,10 @@ function putV2(body: unknown): Request {
     headers: { "content-type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   });
+}
+
+function putNativeParentOverride(body: unknown): Request {
+  return putV2({ v2NativeParentOverride: body });
 }
 
 describe("keep-native-v1 restamp path", () => {
@@ -281,5 +285,221 @@ describe("/api/v2 keepNativeChatGptOnV1", () => {
     );
     expect(bad?.status).toBe(400);
     expect(converges).toBe(3);
+  });
+});
+
+describe("/api/v2 v2NativeParentOverride", () => {
+  function overrideConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+    return {
+      providers: { relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" } },
+      port: 10100,
+      defaultProvider: "relay",
+      multiAgentMode: "v2",
+      ...overrides,
+    } as OcxConfig;
+  }
+
+  function featureToggle(): (enabled: boolean) => void {
+    const path = join(process.env.CODEX_HOME!, "config.toml");
+    return enabled => {
+      const content = readFileSync(path, "utf8");
+      writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+    };
+  }
+
+  test("combined PUT rejects override activation against prospective disabling state", async () => {
+    isolateHomes();
+    const cases = [
+      { multiAgentMode: "v1" },
+      { keepNativeChatGptOnV1: true },
+      { upstreamDisabled: true },
+    ] as const;
+    for (const change of cases) {
+      writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+      const config = overrideConfig();
+      saveConfig(config);
+      const body = {
+        ...(change.multiAgentMode ? { multiAgentMode: change.multiAgentMode } : {}),
+        ...(change.keepNativeChatGptOnV1 !== undefined ? { keepNativeChatGptOnV1: change.keepNativeChatGptOnV1 } : {}),
+        ...(change.upstreamDisabled ? { enabled: false } : {}),
+        v2NativeParentOverride: { enabled: true, model: "relay/parent" },
+      };
+      const response = await handleManagementAPI(
+        putV2(body), new URL("http://localhost/api/v2"), config,
+        { toggleCodexMultiAgentV2: featureToggle(), createManagementConvergeCodex: catalogConvergenceFactory() },
+      );
+      expect(response?.status).toBe(400);
+      expect(loadConfig().v2NativeParentOverride).toBeUndefined();
+    }
+  });
+
+  test("combined PUT accepts activation against prospective enabling state", async () => {
+    isolateHomes();
+    const cases = [
+      { initial: { multiAgentMode: "v1" }, body: { multiAgentMode: "v2" } },
+      { initial: { keepNativeChatGptOnV1: true }, body: { keepNativeChatGptOnV1: false } },
+      { initial: { upstreamDisabled: true }, body: { enabled: true } },
+    ] as const;
+    for (const change of cases) {
+      writeFileSync(
+        join(process.env.CODEX_HOME!, "config.toml"),
+        `[features.multi_agent_v2]\nenabled = ${change.initial.upstreamDisabled ? "false" : "true"}\n`,
+      );
+      const config = overrideConfig(change.initial.upstreamDisabled ? {} : change.initial);
+      if (change.initial.upstreamDisabled) config.multiAgentMode = "v2";
+      saveConfig(config);
+      const response = await handleManagementAPI(
+        putV2({ ...change.body, v2NativeParentOverride: { enabled: true, model: "relay/parent" } }),
+        new URL("http://localhost/api/v2"), config,
+        { toggleCodexMultiAgentV2: featureToggle(), createManagementConvergeCodex: catalogConvergenceFactory() },
+      );
+      expect(response?.status).toBe(200);
+      expect((await response?.json()).v2NativeParentOverride).toMatchObject({ enabled: true, model: "relay/parent", active: true });
+    }
+  });
+
+  test("GET defaults inactive and PUT persists only the override without catalog convergence", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+      },
+      hostname: "127.0.0.1",
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+      unrelated: "preserve",
+    } as OcxConfig;
+    saveConfig(config);
+    let converges = 0;
+    const deps = { createManagementConvergeCodex: catalogConvergenceFactory(() => { converges++; }) };
+
+    const initial = await handleManagementAPI(getV2(), new URL("http://localhost/api/v2"), config, deps);
+    expect((await initial?.json()).v2NativeParentOverride).toEqual({ enabled: false, model: null, active: false });
+
+    const saved = await handleManagementAPI(
+      putNativeParentOverride({ enabled: true, model: "  relay/parent  " }),
+      new URL("http://localhost/api/v2"), config, deps,
+    );
+    expect(saved?.status).toBe(200);
+    expect((await saved?.json()).v2NativeParentOverride).toEqual({ enabled: true, model: "relay/parent", active: true });
+    expect(converges).toBe(0);
+    expect(loadConfig()).toMatchObject({
+      unrelated: "preserve",
+      v2NativeParentOverride: { enabled: true, model: "relay/parent" },
+    });
+  });
+
+  test("GET reports a canonical transport alias as inactive", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["parent"],
+        },
+      },
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+      v2NativeParentOverride: { enabled: true, model: "alias/parent" },
+    } as OcxConfig;
+    saveConfig(config);
+
+    const response = await handleManagementAPI(getV2(), new URL("http://localhost/api/v2"), config);
+    expect(response?.status).toBe(200);
+    expect((await response?.json()).v2NativeParentOverride).toEqual({
+      enabled: true,
+      model: "alias/parent",
+      active: false,
+    });
+  });
+
+  test("PUT rejects an ineligible or malformed complete object atomically", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["parent"],
+        },
+      },
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+      unrelated: "preserve",
+    } as OcxConfig;
+    saveConfig(config);
+    const before = JSON.stringify(loadConfig());
+    for (const body of [
+      { enabled: true },
+      { enabled: true, model: "gpt-5.6-sol" },
+      { enabled: true, model: "unknown-provider/model" },
+      { enabled: "yes", model: "relay/parent" },
+    ]) {
+      const response = await handleManagementAPI(
+        putNativeParentOverride(body), new URL("http://localhost/api/v2"), config,
+      );
+      expect(response?.status).toBe(400);
+      expect(JSON.stringify(loadConfig())).toBe(before);
+    }
+  });
+
+  test("PUT rejects canonical transport aliases while retaining the complete object atomically", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        alias: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          models: ["parent"],
+        },
+      },
+      port: 10100,
+      defaultProvider: "openai",
+      multiAgentMode: "v2",
+    } as OcxConfig;
+    saveConfig(config);
+    const before = JSON.stringify(loadConfig());
+
+    const response = await handleManagementAPI(
+      putNativeParentOverride({ enabled: true, model: "alias/parent" }),
+      new URL("http://localhost/api/v2"), config,
+    );
+    expect(response?.status).toBe(400);
+    expect(JSON.stringify(loadConfig())).toBe(before);
+  });
+
+  test("disabled override retains its selected target", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config: OcxConfig = {
+      providers: { relay: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" } },
+      port: 10100,
+      defaultProvider: "relay",
+      multiAgentMode: "v2",
+      v2NativeParentOverride: { enabled: true, model: "relay/parent" },
+    } as OcxConfig;
+    saveConfig(config);
+    const response = await handleManagementAPI(
+      putNativeParentOverride({ enabled: false, model: "relay/parent" }),
+      new URL("http://localhost/api/v2"), config,
+    );
+    expect(response?.status).toBe(200);
+    expect((await response?.json()).v2NativeParentOverride).toEqual({ enabled: false, model: "relay/parent", active: false });
   });
 });

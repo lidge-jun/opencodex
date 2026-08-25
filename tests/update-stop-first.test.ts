@@ -1,11 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runNpmCachePreflight } from "../src/update/npm-cache-preflight.mjs";
 import { killProxy } from "../src/lib/process-control";
+import { SERVER_BUDGET_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
+setDefaultTimeout(SPAWN_BUDGET_MS);
 const repoRoot = join(import.meta.dir, "..");
 
 function freePort(): Promise<number> {
@@ -21,7 +23,7 @@ function freePort(): Promise<number> {
 }
 
 async function waitForProxy(port: number): Promise<boolean> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + SERVER_BUDGET_MS;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, {

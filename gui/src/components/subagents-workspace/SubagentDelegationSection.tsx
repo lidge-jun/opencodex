@@ -7,11 +7,11 @@
  * gets called first.
  */
 import { useState } from "react";
-import { Select } from "../../ui";
+import { Select, Switch } from "../../ui";
 import { useT } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
 import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
-import type { UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
+import type { UltraModePatch, UltraModeState, V2NativeParentOverrideState } from "../../pages/use-subagent-delegation";
 
 export interface SubagentDelegationSectionProps {
   model: string;
@@ -31,6 +31,10 @@ export interface SubagentDelegationSectionProps {
   onUltraModeSave: (patch: UltraModePatch) => void;
   ultraLoadFailed: boolean;
   onUltraModeRetry: () => void;
+  keepNativeChatGptOnV1?: boolean;
+  nativeParentOverride?: V2NativeParentOverrideState;
+  nativeParentOverrideSaving?: boolean;
+  onNativeParentOverrideSave?: (state: V2NativeParentOverrideState) => void;
 }
 
 export default function SubagentDelegationSection({
@@ -51,12 +55,18 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
+  keepNativeChatGptOnV1 = false,
+  nativeParentOverride = { enabled: false, model: null, active: false },
+  nativeParentOverrideSaving = false,
+  onNativeParentOverrideSave = () => {},
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
   // Proactive message, so it must render as OFF (and the toggle can install the
   // preset). Only a nonblank hint is "on".
   const ultraOn = (ultraMode.hintText ?? "").trim().length > 0;
+  const nativeParentTargets = available.filter(option => option.canonical !== true);
+  const nativeParentCanActivate = ultraMode.multiAgentV2Enabled && !keepNativeChatGptOnV1 && nativeParentOverride.model !== null;
 
   return (
     <div className="swi-delegation">
@@ -175,6 +185,47 @@ export default function SubagentDelegationSection({
           />
         </div>
       )}
+
+      <div className="swi-delegation-row">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.nativeParentOverride")}</div>
+          <div className="muted setting-hint">{t("sub.nativeParentOverrideHint")}</div>
+          <div className="muted setting-hint">{t("sub.nativeParentOverridePrivacyWarning")}</div>
+        </div>
+        <div className="swi-delegation-controls">
+          <Select
+            value={nativeParentOverride.model ?? ""}
+            options={[
+              { value: "", label: t("dash.injectionNone") },
+              ...nativeParentTargets.map(option => ({
+                value: option.namespaced,
+                label: formatNamespacedModelId(`${option.provider}/${option.model}`, t),
+              })),
+            ]}
+            onChange={value => onNativeParentOverrideSave({
+              enabled: value ? nativeParentOverride.enabled : false,
+              model: value || null,
+              active: nativeParentOverride.active,
+            })}
+            disabled={nativeParentOverrideSaving}
+            label={t("sub.nativeParentOverrideModel")}
+            align="right"
+          />
+          <Switch
+            on={nativeParentOverride.enabled}
+            onClick={() => onNativeParentOverrideSave({
+              enabled: !nativeParentOverride.enabled,
+              model: nativeParentOverride.model,
+              active: nativeParentOverride.active,
+            })}
+            disabled={nativeParentOverrideSaving || (!nativeParentOverride.enabled && !nativeParentCanActivate)}
+            label={t("sub.nativeParentOverride")}
+          />
+        </div>
+        {!nativeParentCanActivate && !nativeParentOverride.active && (
+          <div className="muted setting-hint">{t("sub.nativeParentOverrideV2Required")}</div>
+        )}
+      </div>
 
       <div className="swi-delegation-row swi-prompt-editor">
         <div className="setting-copy">

@@ -25,6 +25,7 @@ routes, and limits delegated work.
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
+| `v2NativeParentOverride?` | `{ enabled?: boolean; model?: string }` | off | Experimental V2-only routed replacement for an eligible ChatGPT-native root parent. See [V2 native parent override](#v2-native-parent-override). |
 | `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
 Manage the surface with the dashboard or
@@ -51,6 +52,43 @@ The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/ef
 `/api/subagent-models`, `/api/subagent-roles`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
 the custom prompt is the `prompt` field on that API. Role catalog updates are a full replace, or
 `PUT { "remove": "<id>" }` to delete one id against the live catalog.
+
+## V2 native parent override
+
+`v2NativeParentOverride` is an experimental, default-off setting for the V2 collaboration surface.
+It replaces an eligible ChatGPT-native V2 root parent with one configured routed model before that
+parent executes, so its V2 child tasks are plaintext. It does not change child model choices or
+decrypt the Codex protocol.
+
+```json
+{
+  "v2NativeParentOverride": {
+    "enabled": true,
+    "model": "anthropic/claude-sonnet-5"
+  }
+}
+```
+
+`model` is a trimmed, nonblank configured model id. The target must resolve to a noncanonical
+provider; there is no default target. Enabling it requires `multiAgentMode: "v2"`, the upstream
+`multi_agent_v2` flag, a target, and `keepNativeChatGptOnV1` unset or false. A selected target may
+remain stored while the setting is disabled. A malformed hand-edited subtree disables this
+optional feature without invalidating providers or the rest of the configuration.
+
+When `active` is true, OpenCodex checks the resolved source provider and V2 request markers, then
+looks up the configured target through normal routing. Missing, disabled, unroutable, or canonical
+targets fail closed; an eligible request is never silently sent to ChatGPT. The target is read per
+request, so later parent turns and routed root compaction follow a changed target. Changing the
+mode, upstream V2 flag, or Keep ChatGPT on v1 makes subsequent requests skip the override while
+preserving the stored target and enabled selection. Native children are preserved; a native child
+that creates a routed grandchild can still create an unreadable encrypted task. Nested parent
+override, automatic selection, fallback, per-thread pinning, and CLI support are not part of this
+setting.
+
+The Codex UI can continue to display the originally selected native model even when OpenCodex
+executes the root on the routed target. Prompts, repository context, conversation history, and tool
+results are sent to that provider and inherit its availability, context window, instruction/tool
+behavior, latency, cost, and privacy characteristics.
 
 The Codex Auth page can also toggle Codex's own `default_mode_request_user_input`
 feature flag (`GET`/`PUT /api/codex-auth/features/default-mode-request-user-input`). Enabling it

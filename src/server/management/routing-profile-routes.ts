@@ -188,6 +188,9 @@ function migrateProfileModelReferences(
   if (config.injectionModel && config.injectionModel === oldPublicModel) {
     config.injectionModel = newPublicModel;
   }
+  if (config.v2NativeParentOverride?.model && config.v2NativeParentOverride.model === oldPublicModel) {
+    config.v2NativeParentOverride = { ...config.v2NativeParentOverride, model: newPublicModel };
+  }
   if (config.shadowCallIntercept?.model && config.shadowCallIntercept.model === oldPublicModel) {
     config.shadowCallIntercept = { ...config.shadowCallIntercept, model: newPublicModel };
   }
