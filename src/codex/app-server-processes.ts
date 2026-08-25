@@ -750,6 +750,11 @@ const CATALOG_STATE_UNKNOWN_TTL_MS = 250;
  * previous reading immediately keeps that cost off the turn without pretending it is
  * fresh -- the refresh it triggers is what makes the next reading current.
  *
+ * Measured from expiry rather than from when the reading was taken, so a `fresh`
+ * entry stays servable for its own TTL plus this bound. Anchoring it to expiry keeps
+ * the stale window independent of the TTL -- a cap on total age would quietly turn
+ * this path off if the TTL were ever raised past it.
+ *
  * Bounded rather than unlimited: if the refresh keeps failing, an observation this
  * old stops being evidence about the machine and it is better to wait for a real one.
  * `unknown` is never served this way -- it is a failure to observe, not an
@@ -895,7 +900,7 @@ export async function collectCodexAppServerCatalogStateForRequest(
   // this entry already says.
   const servableStale = cached
     && cached.status.state !== "unknown"
-    && now - cached.atMs < CATALOG_STATE_MAX_STALE_MS
+    && now - cached.atMs < catalogStateTtlMs(cached.status.state) + CATALOG_STATE_MAX_STALE_MS
     ? cached.status
     : null;
   if (requestCatalogStateFlight
