@@ -292,6 +292,24 @@ describe("cyber_policy error fidelity", () => {
     });
   });
 
+  test("thrown cyber failures are redacted and explicitly non-retryable", async () => {
+    async function* throwingEvents(): AsyncGenerator<AdapterEvent> {
+      throw new Error(SECRET_CYBER_MESSAGE);
+    }
+    const frames = await collectSse(bridgeToResponsesSSE(throwingEvents(), "openai/gpt-5.4"));
+    const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
+    expect(failed).toMatchObject({
+      status: "failed",
+      retryable: false,
+      error: {
+        type: CYBER_POLICY_ERROR_CODE,
+        code: CYBER_POLICY_ERROR_CODE,
+        message: REDACTED_CYBER_MESSAGE,
+      },
+    });
+    expect(JSON.stringify(failed)).not.toContain("cybersecret123456");
+  });
+
   test("chat completions error envelope preserves cyber_policy and model_not_found", async () => {
     expect(chatCompletionsErrorBody(400, OPENAI_CYBER_MESSAGE, "invalid_request_error", CYBER_POLICY_ERROR_CODE)).toEqual({
       error: {
