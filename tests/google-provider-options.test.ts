@@ -49,6 +49,25 @@ describe("Google provider options", () => {
         }), providerConfig(providerName, provider), { model: "", provider: "" });
         expect(response.status).toBe(400);
       }
+      for (const [providerName, provider, body] of [
+        [
+          "google-ai-studio",
+          { adapter: "google", googleMode: "ai-studio", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" },
+          { ...base, provider_options: { google: { cached_content: "projects/project/locations/global/cachedContents/cache-1" } } },
+        ],
+        [
+          "google-vertex",
+          { adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", apiKey: "key" },
+          { ...base, provider_options: { google: { cached_content: "cachedContents/cache-1" } } },
+        ],
+      ] as const) {
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }), providerConfig(providerName, provider), { model: "", provider: "" });
+        expect(response.status).toBe(400);
+      }
       expect(fetches).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
