@@ -260,6 +260,16 @@ class Fixture {
   }
 
   async teardown(): Promise<void> {
+    // P10 is `ocx uninstall`: on success it removes its own OPENCODEX_HOME, so there is nothing
+    // left to uninstall and invoking the CLI again would fail on a home that no longer exists.
+    // The gate below still runs, which is what actually proves the host was restored.
+    if (!existsSync(this.ocx)) {
+      await emptyRegistrationGate(this.unit);
+      for (const path of this.lockAllowlist) if (existsSync(path)) unlinkSync(path);
+      sameManifest(this.outsideManifest(), this.baselineOutside, `${this.row}: outside-temp-root`);
+      rmSync(this.root, { recursive: true, force: true });
+      return;
+    }
     const cleanup = await spawnResult([process.execPath, cliPath, "service", "uninstall"], { cwd: this.root, env: this.env() });
     if (cleanup.exitCode !== 0 && existsSync(this.unit)) {
       fail(`${this.row}: fixture service teardown failed\n${cleanup.stderr}\n${cleanup.stdout}`);
@@ -267,7 +277,7 @@ class Fixture {
     await emptyRegistrationGate(this.unit);
     for (const path of this.lockAllowlist) if (existsSync(path)) unlinkSync(path);
     sameManifest(this.outsideManifest(), this.baselineOutside, `${this.row}: outside-temp-root`);
-    rmSync(this.root, { recursive: true });
+    rmSync(this.root, { recursive: true, force: true });
   }
 }
 
