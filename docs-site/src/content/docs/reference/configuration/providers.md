@@ -279,6 +279,42 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 `ocx account use anthropic <id>` switching when unsure.
 :::
 
+### `oauthAccountFailover` (experimental)
+
+Rotates to another logged-in account of the same provider when one is rate-limited, for OAuth
+providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot, Google Antigravity,
+and Nous. Off by default.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `oauthAccountFailover.enabled?` | `boolean` | `false` | Enable 429 cooldown failover across stored OAuth accounts. |
+
+Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
+selection, no probe leases. It answers one question — the account that just returned 429 is
+cooled, is there another one available.
+
+The Codex pool and the Anthropic pool are excluded and keep their own rotation; enabling this
+changes neither. A provider with a single stored account is a strict no-op, and no cooldown is
+recorded for it.
+
+On a 429 the failed account is cooled using `Retry-After` when present (capped at 15 minutes)
+or a default backoff, and the request is replayed on the next eligible account, up to three
+rotations per request. An account flagged for reauthentication is never selected. Cooldowns are
+process-local, so a restart forgets them.
+
+Rotation carries the alternate account's **full** credential snapshot, not just its bearer, so a
+provider that pairs routing metadata with its token — Antigravity's Cloud Code Assist project id,
+for example — cannot end up sending one account's token with another account's metadata.
+
+Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter
+events rather than an HTTP status, and the standalone Antigravity image endpoint has its own
+request path; neither rotates yet.
+
+:::caution[Experimental]
+Rotating across subscription accounts spends a second account's quota and may violate provider
+terms. Leave this disabled unless that is a tradeoff you have decided to make.
+:::
+
 ### Managed record shapes
 
 `apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings.
