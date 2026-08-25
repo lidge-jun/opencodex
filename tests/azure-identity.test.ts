@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   AZURE_IDENTITY_UNAVAILABLE_ERROR,
   __resetAzureCredentialCache,
+  __azureCredentialCacheStateForTests,
   getAzureAccessToken,
   invalidateAzureCredentialCache,
   setAzureCredentialFactoryForTests,
@@ -66,6 +67,27 @@ describe("Azure identity credential helper", () => {
     expect(await getAzureAccessToken(provider("client-a"))).toBe("client-a-3");
     expect(await getAzureAccessToken(provider("client-b"))).toBe("client-b-2");
     expect(constructions).toEqual(["client-a", "client-b", "client-a"]);
+  });
+
+  test("targeted invalidation blocks stale in-flight construction and cleans tracking state", async () => {
+    let releaseOld!: (credential: { getToken: (scope: string) => Promise<{ token: string }> }) => void;
+    let constructions = 0;
+    setAzureCredentialFactoryForTests(() => {
+      constructions++;
+      if (constructions === 1) return new Promise(resolve => { releaseOld = resolve; });
+      return { getToken: async () => ({ token: "fresh-token" }) };
+    });
+
+    const oldRequest = getAzureAccessToken(provider("client")).catch(() => "old-failed");
+    await Bun.sleep(0);
+    invalidateAzureCredentialCache("client");
+    expect(__azureCredentialCacheStateForTests()).toMatchObject({ inflight: 0 });
+
+    expect(await getAzureAccessToken(provider("client"))).toBe("fresh-token");
+    releaseOld({ getToken: async () => ({ token: "old-token" }) });
+    await oldRequest;
+    expect(__azureCredentialCacheStateForTests()).toEqual({ credentials: 1, inflight: 0, invalidatedInflight: 0 });
+    expect(await getAzureAccessToken(provider("client"))).toBe("fresh-token");
   });
 
   test("redacts SDK failures and blank tokens behind one stable error", async () => {

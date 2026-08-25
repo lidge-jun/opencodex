@@ -18,7 +18,7 @@ export type AzureLoggerModuleLoader = () => Promise<{
 
 const credentials = new Map<string, AzureTokenCredential>();
 const inflight = new Map<string, Promise<AzureTokenCredential>>();
-const cacheKeyGenerations = new Map<string, number>();
+const invalidatedInflight = new Set<Promise<AzureTokenCredential>>();
 let testFactory: AzureCredentialFactory | undefined;
 let testModuleLoader: AzureIdentityModuleLoader | undefined;
 let testLoggerModuleLoader: AzureLoggerModuleLoader | undefined;
@@ -65,16 +65,16 @@ async function credentialFor(clientId: string): Promise<AzureTokenCredential> {
   const running = inflight.get(clientId);
   if (running) return running;
   const generation = cacheGeneration;
-  const keyGeneration = cacheKeyGenerations.get(clientId) ?? 0;
   let promise!: Promise<AzureTokenCredential>;
   promise = Promise.resolve((testFactory ?? loadDefaultAzureCredential)(clientId ? { managedIdentityClientId: clientId } : undefined))
     .then(credential => {
-      if (cacheGeneration === generation && (cacheKeyGenerations.get(clientId) ?? 0) === keyGeneration) {
+      if (cacheGeneration === generation && !invalidatedInflight.has(promise)) {
         credentials.set(clientId, credential);
       }
       return credential;
     })
     .finally(() => {
+      invalidatedInflight.delete(promise);
       if (inflight.get(clientId) === promise) inflight.delete(clientId);
     });
   inflight.set(clientId, promise);
@@ -88,9 +88,22 @@ export function azureIdentityClientId(provider: Pick<OcxProviderConfig, "azureCr
 
 export function invalidateAzureCredentialCache(clientId: string): void {
   const key = clientId.trim();
-  cacheKeyGenerations.set(key, (cacheKeyGenerations.get(key) ?? 0) + 1);
+  const running = inflight.get(key);
+  if (running) invalidatedInflight.add(running);
   credentials.delete(key);
   inflight.delete(key);
+}
+
+export function __azureCredentialCacheStateForTests(): {
+  credentials: number;
+  inflight: number;
+  invalidatedInflight: number;
+} {
+  return {
+    credentials: credentials.size,
+    inflight: inflight.size,
+    invalidatedInflight: invalidatedInflight.size,
+  };
 }
 
 export async function getAzureAccessToken(provider: OcxProviderConfig): Promise<string> {
@@ -110,9 +123,9 @@ export function setAzureCredentialFactoryForTests(factory: AzureCredentialFactor
   testFactory = factory;
   testModuleLoader = undefined;
   testLoggerModuleLoader = undefined;
-  cacheKeyGenerations.clear();
   credentials.clear();
   inflight.clear();
+  invalidatedInflight.clear();
 }
 
 export function __resetAzureCredentialCache(): void {
@@ -120,9 +133,9 @@ export function __resetAzureCredentialCache(): void {
   testFactory = undefined;
   testModuleLoader = undefined;
   testLoggerModuleLoader = undefined;
-  cacheKeyGenerations.clear();
   credentials.clear();
   inflight.clear();
+  invalidatedInflight.clear();
 }
 
 let cacheGeneration = 0;
@@ -131,9 +144,9 @@ export function setAzureIdentityModuleLoaderForTests(loader: AzureIdentityModule
   cacheGeneration++;
   testFactory = undefined;
   testModuleLoader = loader;
-  cacheKeyGenerations.clear();
   credentials.clear();
   inflight.clear();
+  invalidatedInflight.clear();
 }
 
 export function setAzureLoggerModuleLoaderForTests(loader: AzureLoggerModuleLoader): void {
