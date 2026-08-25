@@ -336,6 +336,7 @@ import { responsesJsonToSseStream } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 import {
   emptyCompletionRetryEnabled,
+  observeEmptyCompletion,
   guardEmptyCompletionEventStream,
 } from "./empty-completion-guard";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
@@ -4525,7 +4526,16 @@ async function handleResponsesInner(
             // signal — run the adapter transport again against a fresh queue.
             continuation: runTurnRetrySource,
           })
-        : eventSource;
+        // Guard off (the default): leave the stream alone, but record that the turn ended
+        // empty so the user has something to correlate instead of an unexplained blank
+        // result (#2472). Retrying by default would re-send a turn that may already have had
+        // billable side effects, so the honest default is observability, not recovery.
+        : observeEmptyCompletion(eventSource, () => {
+          console.warn(
+            `[opencodex] ${route.providerName}/${route.modelId} completed with no output text `
+            + "and no tool call. Set \"emptyCompletionRetry\": true to retry such turns once.",
+          );
+        });
       const sseStream = bridgeToResponsesSSE(
         guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {

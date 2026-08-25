@@ -36,6 +36,41 @@ export function emptyCompletionRetryEnabled(
 export const EMPTY_COMPLETION_RETRY_FAILED_CODE = "empty_completion_retry_failed";
 
 /**
+ * Observe an event stream for the empty-completion shape WITHOUT changing it (#2472).
+ *
+ * The guard above is opt-in, so with the default configuration a turn that completes with no
+ * output text and no tool call passes through untouched and the client records a silent
+ * success. That is the reported symptom: an empty result nobody can explain, with no trace
+ * that the proxy saw anything unusual.
+ *
+ * This is deliberately a passthrough observer, not a second guard. Retrying by default would
+ * re-send a turn that may have already had billable side effects; the honest default is to
+ * leave the stream alone and make the occurrence visible, so a user can correlate it and
+ * decide whether to enable the retry.
+ */
+export async function* observeEmptyCompletion(
+  events: AsyncIterable<AdapterEvent>,
+  onEmptyTurn: () => void,
+): AsyncGenerator<AdapterEvent> {
+  let sawContent = false;
+  let sawTerminal = false;
+  for await (const event of events) {
+    // Reasoning is deliberately NOT content, matching the guard: a reasoning-only stream that
+    // ends with nothing is the canonical shape of this failure.
+    if (isContentEvent(event)) sawContent = true;
+    if (isTerminalEvent(event)) {
+      sawTerminal = true;
+      // Only a successful terminal is the silent failure. `error` and `incomplete` are already
+      // a stated outcome the client can render, so flagging them would be noise.
+      if (!sawContent && event.type === "done") onEmptyTurn();
+    }
+    yield event;
+  }
+  // A stream that ends before any terminal is the pre-output EOF variant of the same failure.
+  if (!sawContent && !sawTerminal) onEmptyTurn();
+}
+
+/**
  * Terminal stop reasons the bridge renders as a visible `response.incomplete`
  * (max_tokens / content_filter). Those are already a stated failure, not the
  * silent empty success this guard exists to catch, and retrying the identical

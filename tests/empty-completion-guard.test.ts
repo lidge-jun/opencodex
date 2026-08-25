@@ -5,6 +5,7 @@ import {
   emptyCompletionRetryEnabled,
   guardEmptyCompletionEventStream,
   isContentEvent,
+  observeEmptyCompletion,
 } from "../src/server/responses/empty-completion-guard";
 import type { AdapterEvent } from "../src/types";
 
@@ -376,3 +377,71 @@ describe("empty-completion guard retry", () => {
     expect(events).toEqual([{ type: "text_delta", text: "partial" }]);
   });
 });
+
+describe("#2472 an empty turn is observable even when the retry guard is off", () => {
+  /**
+   * The guard is opt-in, so by default a turn that completes with no output text and no tool
+   * call passes through untouched and the client records a silent success — the reported
+   * "empty result nobody can explain". This observer changes nothing about the stream; it only
+   * makes the occurrence visible so a user can correlate it and decide whether to enable the
+   * retry. Retrying by default would re-send a turn that may already have had billable side
+   * effects.
+   */
+  async function drain(events: AdapterEvent[]): Promise<{ out: AdapterEvent[]; empties: number }> {
+    let empties = 0;
+    const out: AdapterEvent[] = [];
+    for await (const event of observeEmptyCompletion(eventsOf(...events), () => { empties += 1; })) {
+      out.push(event);
+    }
+    return { out, empties };
+  }
+
+  test("a reasoning-only turn that completes is flagged", async () => {
+    const { out, empties } = await drain([
+      { type: "reasoning_delta", text: "thinking" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]);
+    expect(empties).toBe(1);
+    // Passthrough: the stream is untouched.
+    expect(out.map(e => e.type)).toEqual(["reasoning_delta", "done"]);
+  });
+
+  test("a turn that produced text is not flagged", async () => {
+    const { empties } = await drain([
+      { type: "text_delta", text: "hello" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]);
+    expect(empties).toBe(0);
+  });
+
+  test("a tool call counts as content", async () => {
+    const { empties } = await drain([
+      { type: "tool_call_start", id: "c1", name: "shell" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]);
+    expect(empties).toBe(0);
+  });
+
+  test("an empty text delta is not content", async () => {
+    // Some batch adapters always carry "", which would otherwise mask the failure.
+    const { empties } = await drain([
+      { type: "text_delta", text: "" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]);
+    expect(empties).toBe(1);
+  });
+
+  test("a stated failure is not flagged as a silent one", async () => {
+    // error/incomplete already render for the client; flagging them would be noise.
+    const viaError = await drain([{ type: "error", message: "boom" } as AdapterEvent]);
+    expect(viaError.empties).toBe(0);
+    const viaIncomplete = await drain([{ type: "incomplete", reason: "max_tokens" } as AdapterEvent]);
+    expect(viaIncomplete.empties).toBe(0);
+  });
+
+  test("a pre-output EOF is the same failure and is flagged", async () => {
+    const { empties } = await drain([]);
+    expect(empties).toBe(1);
+  });
+});
+
