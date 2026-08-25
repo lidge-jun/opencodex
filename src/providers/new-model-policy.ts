@@ -16,6 +16,26 @@ export interface NewModelPolicyResult {
   overflow: boolean;
 }
 
+/**
+ * Whether a transition actually changes persisted state.
+ *
+ * `updatedAt` moves on every successful fetch, so comparing whole baselines would report a
+ * change every time and rewrite config.json on every catalog convergence — a write amplification
+ * that also churns the config generation other writers revalidate against. Only the fields that
+ * carry meaning are compared.
+ */
+function baselineDiffers(prior: KnownModelBaseline | undefined, next: KnownModelBaseline): boolean {
+  if (!prior) return true;
+  const sameList = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+  if (!sameList(prior.ids, next.ids) || !sameList(prior.removed, next.removed)) return true;
+  const priorMissing = prior.missing ?? {};
+  const nextMissing = next.missing ?? {};
+  const keys = new Set([...Object.keys(priorMissing), ...Object.keys(nextMissing)]);
+  for (const key of keys) if (priorMissing[key] !== nextMissing[key]) return true;
+  return false;
+}
+
 /** Pure successful-discovery transition. An absent baseline bootstraps without hiding anything. */
 export function applyNewModelPolicy(options: {
   provider: string;
@@ -100,17 +120,27 @@ export function reconcileSuccessfulModelDiscoveries(options: {
       now: options.now,
     });
     if (result.overflow) continue;
+    const priorBaseline = known[provider];
+    const baselineChanged = baselineDiffers(priorBaseline, result.nextBaseline);
     known[provider] = result.nextBaseline;
+    // Keep the previous timestamp when nothing else moved, so a steady-state roster does not
+    // make the baseline look dirty on the next comparison either.
+    if (!baselineChanged && priorBaseline) known[provider] = priorBaseline;
     if (result.slugsToDisable.length) {
       const disabled = options.config.disabledModels ??= [];
-      for (const slug of result.slugsToDisable) if (!disabled.includes(slug)) disabled.push(slug);
+      for (const slug of result.slugsToDisable) {
+        if (disabled.includes(slug)) continue;
+        disabled.push(slug);
+        changed = true;
+      }
     }
     if (result.arrivals.length) {
       const recent = discovery.recentArrivals ??= {};
       recent[provider] = [...(recent[provider] ?? []), ...result.arrivals]
         .slice(-MAX_RECENT_ARRIVALS_PER_PROVIDER);
+      changed = true;
     }
-    changed = true;
+    if (baselineChanged) changed = true;
   }
   return changed;
 }

@@ -34,4 +34,49 @@ describe("new-model policy", () => {
     expect(reconcileSuccessfulModelDiscoveries({ config, models: [{ provider: "vendor", id: "a" }], authoritativeProviders: [], now })).toBe(false);
     expect(config.modelDiscovery.knownModels.vendor.ids).toEqual(["a", "b"]);
   });
+
+  /**
+   * The steady state is the common case: a provider's roster is identical on almost every
+   * convergence, and convergence runs on every catalog write. Reporting "changed" there would
+   * rewrite config.json each time and move the config generation that other writers revalidate
+   * against — a write amplification with no user-visible cause.
+   */
+  test("an unchanged roster reports no change, so convergence does not rewrite config", () => {
+    const config = {
+      port: 10100, defaultProvider: "vendor", providers: { vendor: {} },
+      modelDiscovery: {
+        newModelPolicy: "off" as const,
+        knownModels: { vendor: { ids: ["a", "b"], removed: [], updatedAt: "2026-01-01T00:00:00Z" } },
+      },
+    };
+    const changed = reconcileSuccessfulModelDiscoveries({
+      config,
+      models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "b" }],
+      authoritativeProviders: ["vendor"],
+      now,
+    });
+    expect(changed).toBe(false);
+    // The timestamp is deliberately NOT advanced: a bumped updatedAt would make the very next
+    // comparison look dirty and reintroduce the rewrite it just avoided.
+    expect(config.modelDiscovery.knownModels.vendor.updatedAt).toBe("2026-01-01T00:00:00Z");
+  });
+
+  test("a genuine arrival still reports a change and records the disable", () => {
+    const config = {
+      port: 10100, defaultProvider: "vendor", providers: { vendor: {} },
+      modelDiscovery: {
+        newModelPolicy: "off" as const,
+        knownModels: { vendor: { ids: ["a"], removed: [], updatedAt: "2026-01-01T00:00:00Z" } },
+      },
+    } as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"];
+    const changed = reconcileSuccessfulModelDiscoveries({
+      config,
+      models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "b" }],
+      authoritativeProviders: ["vendor"],
+      now,
+    });
+    expect(changed).toBe(true);
+    expect(config.disabledModels).toEqual(["vendor/b"]);
+    expect(config.modelDiscovery!.knownModels!.vendor!.updatedAt).toBe(now);
+  });
 });
