@@ -149,6 +149,12 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { listManagementModelRows, loadExportModels } from "./model-rows";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import {
+  hasModelPreset,
+  markModelPresetDiverged,
+  materializeModelPreset,
+  modelPresetFor,
+} from "../../providers/model-presets";
 
 /**
  * Counts read back off the SERIALIZED document rather than recomputed from the input rows.
@@ -543,6 +549,104 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     return jsonResponse({ selected, available, liveModelCounts });
   }
+  if (url.pathname === "/api/model-presets" && req.method === "GET") {
+    // Preview without applying: rules evaluated against the CURRENT catalog, so the count the
+    // user sees is the count they would get.
+    const models = await fetchAllModels(config);
+    const byProvider = new Map<string, string[]>();
+    for (const m of models) {
+      const ids = byProvider.get(m.provider) ?? [];
+      ids.push(m.id);
+      byProvider.set(m.provider, ids);
+    }
+    const providers: Record<string, unknown> = {};
+    for (const [name, prov] of Object.entries(config.providers)) {
+      const preset = modelPresetFor(name);
+      if (!preset) continue;
+      const catalogIds = byProvider.get(name) ?? [];
+      const presetIds = materializeModelPreset(name, catalogIds);
+      providers[name] = {
+        mode: prov.modelPreset?.mode ?? "all",
+        ...(prov.modelPreset?.appliedVersion !== undefined
+          ? { appliedVersion: prov.modelPreset.appliedVersion }
+          : {}),
+        availableVersion: preset.version,
+        presetIds,
+        presetCount: presetIds.length,
+        totalCount: catalogIds.length,
+        ...(prov.modelPreset?.fallback ? { fallback: prov.modelPreset.fallback } : {}),
+      };
+    }
+    return jsonResponse({ providers });
+  }
+  if (url.pathname === "/api/model-presets" && req.method === "PUT") {
+    let body: { provider?: unknown; mode?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const provider = typeof body.provider === "string" ? body.provider : "";
+    if (!provider || !hasOwnProvider(config.providers, provider)) {
+      return jsonResponse({ error: "unknown provider" }, provider ? 404 : 400);
+    }
+    const mode = body.mode;
+    if (mode !== "preset" && mode !== "all" && mode !== "custom") {
+      return jsonResponse({ error: "mode must be preset, all, or custom" }, 400);
+    }
+    const target = config.providers[provider];
+    if (mode === "all") {
+      // Same effect as today's empty-list PUT: no allowlist, no marker to reconcile.
+      delete target.selectedModels;
+      delete target.modelPreset;
+      persistConfig(config);
+      return jsonResponse({ ok: true, provider, mode, selected: [], catalogRefresh: await convergeCodexCatalog() });
+    }
+    if (mode === "custom") {
+      // Keep whatever is selected; only the marker changes, so a user can pin their edits
+      // without the proxy re-materializing over them.
+      target.modelPreset = { ...(target.modelPreset ?? {}), mode: "custom" };
+      persistConfig(config);
+      return jsonResponse({ ok: true, provider, mode, selected: [...(target.selectedModels ?? [])] });
+    }
+    if (!hasModelPreset(provider)) {
+      return jsonResponse({ error: `no model preset is shipped for provider '${provider}'` }, 400);
+    }
+    const models = await fetchAllModels(config);
+    const catalogIds = models.filter(m => m.provider === provider).map(m => m.id);
+    const presetIds = materializeModelPreset(provider, catalogIds);
+    const preset = modelPresetFor(provider)!;
+    if (presetIds.length === 0) {
+      // NEVER write an empty allowlist from a preset: empty means ALL, so it would silently
+      // un-curate instead of curating. Keep the previous selection and record the fallback so
+      // the next convergence can retry.
+      target.modelPreset = {
+        mode: "all",
+        appliedVersion: preset.version,
+        appliedAt: new Date().toISOString(),
+        fallback: "preset-empty",
+      };
+      persistConfig(config);
+      return jsonResponse({
+        ok: true,
+        provider,
+        mode: "all",
+        fallback: "preset-empty",
+        selected: [...(target.selectedModels ?? [])],
+      });
+    }
+    target.selectedModels = presetIds;
+    target.modelPreset = {
+      mode: "preset",
+      appliedVersion: preset.version,
+      appliedAt: new Date().toISOString(),
+    };
+    persistConfig(config);
+    return jsonResponse({
+      ok: true,
+      provider,
+      mode: "preset",
+      appliedVersion: preset.version,
+      selected: presetIds,
+      catalogRefresh: await convergeCodexCatalog(),
+    });
+  }
   if (url.pathname === "/api/selected-models" && req.method === "PUT") {
     let body: { provider?: unknown; models?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
@@ -556,6 +660,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // Empty list clears the allowlist (provider reverts to exposing all models).
     if (models.length > 0) config.providers[provider].selectedModels = models;
     else delete config.providers[provider].selectedModels;
+    // Divergence is detected at the WRITE path, not by diffing (#2465): a user edit while the
+    // provider is in preset mode makes the selection theirs, and the proxy must never
+    // re-materialize over it afterwards.
+    markModelPresetDiverged(config.providers[provider]);
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({ ok: true, provider, selected: models, catalogRefresh });

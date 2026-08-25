@@ -275,6 +275,31 @@ export interface OcxProviderConfig {
    * full set so the user can pick). See devlog issue_052_provider-model-allowlist.
    */
   selectedModels?: string[];
+  /**
+   * Model-preset marker for `selectedModels` (#2465). Absent means "all", exactly today's
+   * semantics — an existing provider is never narrowed by an upgrade.
+   *
+   * The preset is a SEED, not a lock: `selectedModels` holds concrete ids materialized from
+   * the shipped rules, so every existing consumer and older binaries keep working against a
+   * plain allowlist. Divergence is detected at the WRITE path rather than by diffing — any user
+   * edit while the mode is "preset" flips it to "custom", after which the proxy never
+   * re-materializes. That collapses upgrade reconciliation to a version compare.
+   *
+   * Deliberately distinct from `deriveProviderPresets`, which curates WHICH PROVIDERS to offer.
+   * This curates which MODELS a provider exposes; the code says "model preset" throughout.
+   */
+  modelPreset?: {
+    mode: "preset" | "all" | "custom";
+    /** MODEL_PRESETS version materialized into `selectedModels`. */
+    appliedVersion?: number;
+    appliedAt?: string;
+    /**
+     * Set when materialization matched nothing and the provider fell back to "all". A preset
+     * must never write an empty allowlist, because empty means ALL and would silently
+     * un-curate; the fallback marker lets the next convergence retry.
+     */
+    fallback?: "preset-empty";
+  };
   /** Provider-wide fallback when context metadata is absent; otherwise caps the reported window. */
   contextWindow?: number;
   /** Per-model fallback when context metadata is absent; otherwise caps the reported window. */
