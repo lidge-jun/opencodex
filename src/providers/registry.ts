@@ -1369,12 +1369,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
     /* [Decision Log]
-    - 목적과 의도: Route GPT 5.6 Luna to the Responses endpoint that OpenCode Go documents for that exact model.
+    - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, and Muse Spark 1.2 Contributor (#2617).
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.
     - 검토한 주요 대안: Change the whole provider to Responses; infer the wire from model-family names; add one registry-only exact-model default.
-    - 선택한 방식: Declare only `gpt-5.6-luna` as `openai-responses` through the existing registry default mechanism.
+    - 선택한 방식: Declare only the named models as `openai-responses` through the existing registry default mechanism; the map stays an exact-model allowlist rather than a family or provider-wide rule.
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
-    - 장점, 단점 및 영향: Luna reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
+    - 장점, 단점 및 영향: Each listed model reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
     modelWireDefaults: { "gpt-5.6-luna": "openai-responses", "muse-spark-1.2-contributor": "openai-responses" },
     modelContextWindows: {
