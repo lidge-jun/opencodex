@@ -30,6 +30,7 @@ import {
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
+import { providerEmptyToolOutputConfigError } from "../src/config/provider-validation";
 import { providerServiceTierConfigError, withProviderServiceTierDTO } from "../src/server/management/provider-capability-config";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
@@ -330,12 +331,41 @@ describe("provider management validation", () => {
       baseUrl: "https://relay.example/v1",
       annotateEmptyToolOutputs: true,
     };
-    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    expect(providerEmptyToolOutputConfigError("relay", provider)).toBeNull();
     for (const annotateEmptyToolOutputs of ["yes", 42, {}, []]) {
-      expect(providerManagementConfigError("relay", {
+      expect(providerEmptyToolOutputConfigError("relay", {
         ...provider,
         annotateEmptyToolOutputs,
       })).toContain("annotateEmptyToolOutputs");
+    }
+  });
+
+  test("provider POST rejects a non-boolean annotateEmptyToolOutputs at the management boundary", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            annotateEmptyToolOutputs: "yes",
+          },
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: expect.stringContaining("annotateEmptyToolOutputs"),
+      });
+    } finally {
+      await server.stop(true);
     }
   });
 

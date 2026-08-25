@@ -123,6 +123,16 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
   return null;
 }
 
+/** Validate the management DTO boundary for the opt-in empty-tool-output annotation. */
+export function providerEmptyToolOutputConfigError(name: string, provider: unknown): string | null {
+  const raw = provider as Record<string, unknown> | null | undefined;
+  const value = raw === null || raw === undefined ? undefined : raw.annotateEmptyToolOutputs;
+  if (value !== undefined && typeof value !== "boolean") {
+    return `provider ${name} annotateEmptyToolOutputs must be a boolean`;
+  }
+  return null;
+}
+
 export function reasoningSummaryDeliveryRecordConfigError(
   value: unknown,
   supportsReasoningSummaries: unknown,
