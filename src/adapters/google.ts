@@ -671,14 +671,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     const text = errorMessage ?? "";
     const isInvalidArgument = /invalid_argument|invalid argument/i.test(text);
     const isSignatureError = /signature|thought_signature|thoughtSignature/i.test(text);
-    if (provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex") {
-      if (replayModel && replaySession && (isInvalidArgument || isSignatureError)) {
-        clearAntigravityReplay(replayModel, replaySession);
-      }
-      if (isSignatureError) {
-        for (const callId of lastInjectedCallIds) {
-          forgetThoughtSignatureForReplay(callId, lastReasoningReplayScope);
-        }
+    // The in-memory Antigravity replay cache only exists for CCA/Vertex, so clearing it stays
+    // scoped to those modes (replayModel/replaySession are undefined elsewhere anyway).
+    if (
+      (provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+      && replayModel && replaySession && (isInvalidArgument || isSignatureError)
+    ) {
+      clearAntigravityReplay(replayModel, replaySession);
+    }
+    // The DURABLE store is not mode-scoped: signatures are remembered through
+    // rememberAndSerializeExtraContent and read back by lookupReplayThoughtSignature on every
+    // Google mode, including AI Studio. Gating eviction on CCA/Vertex therefore left AI Studio
+    // with rejected signatures cached forever, replaying them into every subsequent turn — the
+    // store poisons itself and the request keeps failing. Eviction follows the same scope the
+    // write does.
+    if (isSignatureError) {
+      for (const callId of lastInjectedCallIds) {
+        forgetThoughtSignatureForReplay(callId, lastReasoningReplayScope);
       }
     }
   }

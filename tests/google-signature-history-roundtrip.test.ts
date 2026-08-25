@@ -779,3 +779,85 @@ describe("Durable Thought-Signature Replay Store Single-Call Invalidation (Mecha
     expect(forgetThoughtSignatureForReplay("call-999", scope)).toBe(false);
   });
 });
+
+describe("#2513 rejected signatures are evicted on every Google mode", () => {
+  let previousHome: string | undefined;
+  let testDir: string;
+
+  beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+    setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" }));
+    __resetAntigravityReplayCache();
+    resetThoughtSignatureReplayForTests();
+    previousHome = process.env.OPENCODEX_HOME;
+    testDir = mkdtempSync(join(tmpdir(), "ocx-tsig-mode-"));
+    process.env.OPENCODEX_HOME = testDir;
+  });
+
+  afterEach(async () => {
+    await flushThoughtSignatureReplayForTests();
+    resetThoughtSignatureReplayForTests();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    rmSync(testDir, { recursive: true, force: true });
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
+  });
+
+  /**
+   * The durable store is NOT mode-scoped: a signature is remembered and looked up on every
+   * Google mode, AI Studio included. Eviction used to be gated on cloud-code-assist/vertex,
+   * so an AI Studio turn whose signature the upstream rejected kept replaying that same
+   * rejected signature out of the store on every following turn.
+   */
+  for (const [label, modeProvider] of [
+    ["ai-studio", aiStudioProvider],
+    ["vertex", provider],
+  ] as const) {
+    test(`${label}: a rejected signature does not survive in the durable store`, async () => {
+      const scope = scopeFor("thread-evict", MODEL, "google");
+      const parsed = { ...firstTurn(), _reasoningReplayScope: scope } as unknown as OcxParsedRequest;
+
+      const adapter = createGoogleAdapter(modeProvider);
+      // Warm the store the way a real turn does, then replay it so the adapter records the
+      // call id as injected for this turn.
+      rememberThoughtSignatureForReplay("call_evict_1", SIGNATURE, scope);
+      await flushThoughtSignatureReplayForTests();
+      expect(lookupReplayThoughtSignature("call_evict_1", scope)).toBe(SIGNATURE);
+
+      const replayParsed = parseRequestScoped({
+        model: MODEL,
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "run pwd" }] },
+          {
+            type: "function_call",
+            call_id: "call_evict_1",
+            name: "shell_command",
+            arguments: JSON.stringify({ command: "pwd" }),
+          },
+          { type: "function_call_output", call_id: "call_evict_1", output: "/workspace" },
+        ],
+        tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
+      }, scope);
+      await adapter.buildRequest(replayParsed);
+      void parsed;
+
+      // The upstream rejects the replayed signature.
+      const events = await adapter.parseResponse!(new Response(
+        JSON.stringify({
+          error: {
+            code: 400,
+            status: "INVALID_ARGUMENT",
+            message: "Function call is missing a thought_signature in functionCall parts",
+          },
+        }),
+        { status: 400 },
+      ));
+      expect(events.some((event: AdapterEvent) => event.type === "error")).toBe(true);
+
+      await flushThoughtSignatureReplayForTests();
+      expect(lookupReplayThoughtSignature("call_evict_1", scope)).toBeUndefined();
+    });
+  }
+});
+
