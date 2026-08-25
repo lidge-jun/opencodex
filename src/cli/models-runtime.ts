@@ -22,6 +22,8 @@ const USAGE = `Usage:
   ocx models <enable|disable> <provider/model|native-model> [--native] [--json]
   ocx models provider <name> <on|off> [--json]
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
+  ocx models preset show [--provider <name>] [--json]
+  ocx models preset apply <provider> [--all] [--json]
   ocx models context <status|value <tokens> [--set-all]|provider <name> on [--value <tokens>]|provider <name> off|all <on|off>> [--json]
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]`;
 
@@ -162,6 +164,68 @@ async function selected(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`${provider}: ${models.length ? models.join(", ") : "all models"}`]);
 }
 
+
+interface ModelPresetView {
+  mode: string;
+  appliedVersion?: number;
+  availableVersion: number;
+  presetIds: string[];
+  presetCount: number;
+  totalCount: number;
+  fallback?: string;
+}
+
+function presetLine(name: string, view: ModelPresetView): string {
+  const parts = [`${name}: mode=${view.mode}`];
+  if (view.appliedVersion !== undefined && view.appliedVersion !== view.availableVersion) {
+    parts.push(`applied v${view.appliedVersion}, available v${view.availableVersion}`);
+  } else {
+    parts.push(`preset v${view.availableVersion}`);
+  }
+  parts.push(`(${view.presetCount} of ${view.totalCount} models)`);
+  if (view.fallback) parts.push(`fallback=${view.fallback}`);
+  return parts.join(" ");
+}
+
+async function preset(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const action = (args.shift() ?? "show").toLowerCase();
+  const wantsJson = takeFlag(args, "--json");
+  if (action === "show") {
+    const only = takeOption(args, "--provider")?.trim();
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest<{ providers?: Record<string, ModelPresetView> }>("/api/model-presets", {}, deps);
+    const providers = result.providers ?? {};
+    const entries = Object.entries(providers).filter(([name]) => !only || name === only);
+    const lines = entries.length > 0
+      ? entries.map(([name, view]) => presetLine(name, view))
+      // A provider with no shipped preset is not an error: it simply has nothing to curate.
+      : [only ? `${only}: no model preset is shipped for this provider` : "no providers have a shipped model preset"];
+    printData(only ? providers[only] ?? {} : result, wantsJson, lines);
+    return;
+  }
+  if (action !== "apply") throw new CliUsageError(`unknown preset action '${action}'`, USAGE);
+  const provider = args.shift()?.trim();
+  const all = takeFlag(args, "--all");
+  if (!provider) throw new CliUsageError("provider is required", USAGE);
+  rejectArgs(args, USAGE);
+  const mode = all ? "all" : "preset";
+  const result = await runtimeRequest<{ selected?: string[]; fallback?: string; appliedVersion?: number }>(
+    "/api/model-presets",
+    { method: "PUT", body: JSON.stringify({ provider, mode }) },
+    deps,
+  );
+  const selectedIds = result.selected ?? [];
+  const line = result.fallback === "preset-empty"
+    // Never silently narrow to nothing: empty means ALL, so a zero-match preset keeps what was
+    // there and says so.
+    ? `${provider}: preset matched no models — selection unchanged (fallback to all)`
+    : all
+      ? `${provider}: showing all models (allowlist cleared)`
+      : `${provider}: preset v${result.appliedVersion ?? "?"} applied — ${selectedIds.length} models selected`;
+  printData(result, wantsJson, [line]);
+}
+
 async function context(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
@@ -236,6 +300,7 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   else if (sub === "disable") action = () => visibility(false, argv, deps);
   else if (sub === "provider") action = () => providerVisibility(argv, deps);
   else if (sub === "selected") action = () => selected(argv, deps);
+  else if (sub === "preset") action = () => preset(argv, deps);
   else if (sub === "context") action = () => context(argv, deps);
   else if (sub === "shadow") action = () => shadow(argv, deps);
   if (!action) return null;

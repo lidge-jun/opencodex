@@ -428,7 +428,7 @@ export async function handleModels(args: string[]): Promise<void> {
     handleCustomList(rest);
     return;
   }
-  if (["live", "edit", "enable", "disable", "provider", "selected", "context", "shadow"].includes(subcommand ?? "")) {
+  if (["live", "edit", "enable", "disable", "provider", "selected", "preset", "context", "shadow"].includes(subcommand ?? "")) {
     const { handleModelsRuntimeCommand } = await import("./models-runtime");
     const code = await handleModelsRuntimeCommand(subcommand!, rest);
     if (code !== null) process.exitCode = code;

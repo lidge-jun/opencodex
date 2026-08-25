@@ -5668,3 +5668,105 @@ describe("Codex reasoning-effort capability clamp", () => {
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
+
+describe("#2465 model preset management routes", () => {
+  const originalFetchForPresets = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetchForPresets; clearModelCache(); });
+
+  function presetConfig(selected?: string[], marker?: Record<string, unknown>) {
+    return {
+      port: 10100,
+      defaultProvider: "openrouter",
+      providers: {
+        openrouter: {
+          adapter: "openai-chat",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "k",
+          liveModels: false,
+          models: [
+            "anthropic/claude-opus-5",
+            "openai/gpt-5.6-sol",
+            "meta-llama/llama-2-7b",
+            "some-vendor/ancient-v1",
+          ],
+          ...(selected ? { selectedModels: selected } : {}),
+          ...(marker ? { modelPreset: marker } : {}),
+        },
+      },
+    } as unknown as Parameters<typeof handleManagementAPI>[2];
+  }
+
+  async function call(config: Parameters<typeof handleManagementAPI>[2], method: string, body?: unknown) {
+    const url = new URL("http://127.0.0.1/api/model-presets");
+    const init: RequestInit = body === undefined
+      ? { method }
+      : { method, body: JSON.stringify(body), headers: { "content-type": "application/json" } };
+    const response = await handleManagementAPI(new Request(url, init), url, config);
+    return { status: response!.status, body: await response!.json() as Record<string, unknown> };
+  }
+
+  test("GET previews the preset against the current catalog without applying it", async () => {
+    clearModelCache();
+    const config = presetConfig();
+    const { body } = await call(config, "GET");
+    const view = (body.providers as Record<string, Record<string, unknown>>).openrouter;
+    expect(view.mode).toBe("all");
+    expect(view.presetIds).toEqual(["anthropic/claude-opus-5", "openai/gpt-5.6-sol"]);
+    expect(view.totalCount).toBe(4);
+    // Preview must not mutate: the provider is still unfiltered.
+    expect(config.providers.openrouter.selectedModels).toBeUndefined();
+  });
+
+  test("PUT preset materializes concrete ids and records the version", async () => {
+    clearModelCache();
+    const config = presetConfig();
+    const { body } = await call(config, "PUT", { provider: "openrouter", mode: "preset" });
+    expect(body.mode).toBe("preset");
+    expect(config.providers.openrouter.selectedModels).toEqual([
+      "anthropic/claude-opus-5",
+      "openai/gpt-5.6-sol",
+    ]);
+    // Concrete ids, not patterns: the visibility hot path and older binaries stay compatible.
+    expect(config.providers.openrouter.modelPreset?.mode).toBe("preset");
+    expect(config.providers.openrouter.modelPreset?.appliedVersion).toBeGreaterThan(0);
+  });
+
+  test("PUT all clears both the allowlist and the marker", async () => {
+    clearModelCache();
+    const config = presetConfig(["anthropic/claude-opus-5"], { mode: "preset", appliedVersion: 1 });
+    await call(config, "PUT", { provider: "openrouter", mode: "all" });
+    expect(config.providers.openrouter.selectedModels).toBeUndefined();
+    expect(config.providers.openrouter.modelPreset).toBeUndefined();
+  });
+
+  test("a preset matching nothing never writes an empty allowlist", async () => {
+    clearModelCache();
+    // Empty means ALL, so a zero-match preset must keep the previous selection rather than
+    // silently un-curating the provider.
+    const config = presetConfig(["some-vendor/ancient-v1"]);
+    config.providers.openrouter.models = ["some-vendor/ancient-v1"];
+    const { body } = await call(config, "PUT", { provider: "openrouter", mode: "preset" });
+    expect(body.fallback).toBe("preset-empty");
+    expect(config.providers.openrouter.selectedModels).toEqual(["some-vendor/ancient-v1"]);
+    expect(config.providers.openrouter.modelPreset?.mode).toBe("all");
+    expect(config.providers.openrouter.modelPreset?.fallback).toBe("preset-empty");
+  });
+
+  test("an unknown provider and an invalid mode are rejected", async () => {
+    clearModelCache();
+    const config = presetConfig();
+    expect((await call(config, "PUT", { provider: "nope", mode: "preset" })).status).toBe(404);
+    expect((await call(config, "PUT", { provider: "openrouter", mode: "sideways" })).status).toBe(400);
+  });
+
+  test("a provider with no shipped preset cannot be switched into preset mode", async () => {
+    clearModelCache();
+    const config = presetConfig();
+    (config.providers as Record<string, unknown>).groq = {
+      adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", apiKey: "k", liveModels: false, models: ["x"],
+    };
+    const { status } = await call(config, "PUT", { provider: "groq", mode: "preset" });
+    expect(status).toBe(400);
+  });
+});
+

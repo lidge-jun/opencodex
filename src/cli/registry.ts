@@ -167,7 +167,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "models",
     aliases: ["model"],
-    usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|context|shadow> ...",
+    usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|preset|context|shadow> ...",
     summary: "List models and manage custom (manually registered) models.",
     details: [
       "List available models from static config with no subcommand (liveModels may add more at runtime).",
