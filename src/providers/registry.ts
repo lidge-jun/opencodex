@@ -1392,8 +1392,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
     },
     modelReasoningEfforts: {
+      "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "qwen3.8-max": QWEN38_REASONING_EFFORTS,
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],

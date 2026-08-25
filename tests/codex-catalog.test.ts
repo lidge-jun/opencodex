@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_OPENAI_MODELS, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiCapabilitySourceSlug, nativeOpenAiContextWindow, nativeReasoningEfforts, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel, upstreamNativeEntry } from "../src/codex/catalog";
+import { applyProviderConfigHints } from "../src/codex/catalog/provider-fetch";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -30,7 +31,8 @@ import {
 import type { OcxConfig } from "../src/types";
 import { COMBO_NAMESPACE } from "../src/combos";
 import type { NormalizedComboConfig } from "../src/combos/types";
-import { enrichProviderFromRegistry } from "../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { enrichProviderFromCatalog } from "../src/oauth/key-providers";
 import { handleManagementAPI } from "../src/server/management-api";
 import { OAUTH_PROVIDERS } from "../src/oauth";
@@ -4288,6 +4290,21 @@ describe("Codex catalog routed normalization", () => {
     expect(models.filter(m => `${m.provider}/${m.id}` === "opencode-go/glm-5.2")).toHaveLength(1);
   });
 
+  test("opencode-go live rows inherit same-model reasoning ladders from registry metadata (#2410)", () => {
+    const provider = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go")!);
+
+    const models = ["gpt-5.6-luna", "qwen3.8-max"].map(id => applyProviderConfigHints(
+      "opencode-go",
+      provider,
+      { provider: "opencode-go", id },
+    ));
+
+    expect(models.find(model => model.id === "gpt-5.6-luna")?.reasoningEfforts)
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(models.find(model => model.id === "qwen3.8-max")?.reasoningEfforts)
+      .toEqual(["low", "medium", "xhigh"]);
+  });
+
   test("opencode-go catalog sync appends jawcode rows with provider context-cap metadata", () => {
     const models = augmentRoutedModelsWithMetadata(
       [],
@@ -5769,4 +5786,3 @@ describe("#2465 model preset management routes", () => {
     expect(status).toBe(400);
   });
 });
-
