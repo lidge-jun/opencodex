@@ -18,18 +18,21 @@ export function gatewayInboundProtocols(claudeCodeEnabled: boolean): GatewayInbo
 }
 
 /**
- * Classify a `/v1/models` row. Bare IDs keep their callable id; `owned_by`
- * decides native/combo/custom so combo aliases are not labeled OpenAI.
+ * Classify a `/v1/models` row. Bare IDs keep their callable id; the explicit
+ * combo marker takes precedence over the compatibility-oriented `owned_by`.
  */
 export function classifyExternalModel(row: {
   id: string;
   owned_by?: string;
+  is_combo?: boolean;
 }): ExternalModelRow {
   const slashIndex = row.id.indexOf("/");
   const ownedBy = typeof row.owned_by === "string" && row.owned_by.trim()
     ? row.owned_by.trim()
     : undefined;
-  const provider = slashIndex > 0
+  const provider = row.is_combo === true
+    ? "combo"
+    : slashIndex > 0
     ? row.id.slice(0, slashIndex)
     : (ownedBy ?? "openai");
   const native = slashIndex < 0 && provider === "openai";

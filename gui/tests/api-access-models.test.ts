@@ -15,8 +15,8 @@ describe("classifyExternalModel", () => {
     });
   });
 
-  test("classifies bare combo aliases from owned_by without rewriting the id", () => {
-    expect(classifyExternalModel({ id: "fast-chat", owned_by: "combo" })).toEqual({
+  test("classifies bare combo aliases from the explicit marker without rewriting the id", () => {
+    expect(classifyExternalModel({ id: "fast-chat", owned_by: "openai", is_combo: true })).toEqual({
       id: "fast-chat",
       displayName: "fast-chat",
       provider: "combo",

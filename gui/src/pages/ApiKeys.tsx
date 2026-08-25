@@ -161,7 +161,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         : null);
     if (!rawRows) throw new Error(t("api.modelsLoadFailed"));
     const rows = rawRows
-      .filter((row): row is { id: string; owned_by?: string } => (
+      .filter((row): row is { id: string; owned_by?: string; is_combo?: boolean } => (
         typeof row === "object"
         && row !== null
         && typeof (row as { id?: unknown }).id === "string"
