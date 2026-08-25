@@ -2,12 +2,15 @@ import type { ProviderQuota } from "../providers/quota";
 
 function collectResetCandidates(quota: ProviderQuota): number[] {
   const candidates: number[] = [];
-  if (typeof quota.fiveHourResetAt === "number") candidates.push(quota.fiveHourResetAt);
-  if (typeof quota.weeklyResetAt === "number") candidates.push(quota.weeklyResetAt);
-  if (typeof quota.monthlyResetAt === "number") candidates.push(quota.monthlyResetAt);
+  const push = (value: number | undefined): void => {
+    if (value !== undefined && Number.isFinite(value)) candidates.push(value);
+  };
+  push(quota.fiveHourResetAt);
+  push(quota.weeklyResetAt);
+  push(quota.monthlyResetAt);
   if (quota.customWindows) {
     for (const w of quota.customWindows) {
-      if (typeof w.resetAt === "number") candidates.push(w.resetAt);
+      push(w.resetAt);
     }
   }
   return candidates;

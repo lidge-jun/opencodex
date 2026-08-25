@@ -433,6 +433,20 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set rejects --sticky outside round-robin instead of dropping it", async () => {
+    const runtime = fakeRuntime();
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await handleComboCommand([
+        "set", "demo", "--targets", "a/m1", "--strategy", "random", "--sticky", "5",
+      ], runtime.deps);
+      expect(code).toBe(2);
+      expect(runtime.requests).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("combo set forwards the explicit native-alias compatibility contract", async () => {
     const runtime = fakeRuntime();
     const code = await handleComboCommand([

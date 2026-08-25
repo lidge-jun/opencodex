@@ -18,6 +18,7 @@ import {
   comboRequestHasImageInput,
   concreteComboRequestBody,
   coolComboTarget,
+  earliestQuotaResetAt,
   getCombo,
   isComboTargetInCooldown,
   isValidComboId,
@@ -569,6 +570,16 @@ describe("deterministic combo selection", () => {
 
     config.providers.a!.disabled = false;
     expect(pickComboTarget(config, "free")?.target.provider).toBe("a");
+  });
+
+  test("reset-window treats non-finite reset timestamps as unknown", () => {
+    const now = Date.now();
+    expect(earliestQuotaResetAt({ updatedAt: now, fiveHourResetAt: Number.POSITIVE_INFINITY }, now)).toBeNull();
+    expect(earliestQuotaResetAt({ updatedAt: now, weeklyResetAt: Number.NaN }, now)).toBeNull();
+    expect(earliestQuotaResetAt({
+      updatedAt: now,
+      customWindows: [{ label: "burst", percent: 100, resetAt: Number.POSITIVE_INFINITY }],
+    }, now)).toBeNull();
   });
 
   test("routes a concrete combo target without re-entering its shadowing alias", () => {
