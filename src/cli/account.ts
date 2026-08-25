@@ -16,7 +16,7 @@ const MAIN_CODEX_ID = "__main__";
 const REPLACEMENT_STYLE_OAUTH = new Set(["kiro"]);
 
 const ACCOUNT_USAGE = `Usage:
-  ocx account list [provider] [--json] [--all]
+  ocx account list [provider] [--json] [--all] [--quota [--refresh]]
   ocx account current <provider> [--json]
   ocx account use <provider> <account-or-key-id|main> [--json]
   ocx account refresh <provider> [--json]
@@ -75,11 +75,29 @@ function priorityText(row: AccountRow): string {
   return row.priority > 0 ? `+${row.priority}` : String(row.priority);
 }
 
-export function formatAccountTable(rows: AccountRow[]): string {
+/**
+ * Compact per-account quota for the opt-in QUOTA column: the two windows an operator actually
+ * decides on before a long session. The full breakdown stays in `--json`.
+ */
+function quotaText(row: AccountRow): string {
+  if ((row as { quotaUnavailable?: boolean }).quotaUnavailable) return "unavailable";
+  const quota = row.quota;
+  if (!quota) return "-";
+  const parts: string[] = [];
+  // Two spellings reach this DTO: the per-account provider probe reports `fiveHourPercent`,
+  // while the Codex pool reports the same idea as `shortPercent`.
+  const short = quota.fiveHourPercent ?? quota.shortPercent;
+  if (typeof short === "number") parts.push(`5h ${short}%`);
+  if (typeof quota.weeklyPercent === "number") parts.push(`wk ${quota.weeklyPercent}%`);
+  return parts.length > 0 ? parts.join(" ") : "-";
+}
+
+export function formatAccountTable(rows: AccountRow[], withQuota = false): string {
   const header = ["PROVIDER", "TYPE", "ID", "PLAN/LABEL", "PRIORITY", "STATUS"];
+  if (withQuota) header.push("QUOTA");
   const data = rows.map(r => {
     const keyLabel = r.masked && r.label !== r.masked ? `${r.masked} (${r.label})` : r.masked;
-    return [
+    const cols = [
       r.provider,
       r.type,
       displayId(r.id),
@@ -87,6 +105,8 @@ export function formatAccountTable(rows: AccountRow[]): string {
       priorityText(r),
       statusText(r),
     ];
+    if (withQuota) cols.push(quotaText(r));
+    return cols;
   });
   const widths = header.map((h, i) => Math.max(h.length, ...data.map(d => d[i]!.length)));
   const line = (cols: string[]) => cols.map((c, i) => c.padEnd(widths[i]!)).join("  ").trimEnd();
@@ -96,6 +116,10 @@ export function formatAccountTable(rows: AccountRow[]): string {
 async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = consumeFlag(rest, "--json");
   const showAll = consumeFlag(rest, "--all");
+  // Opt-in: the server probes the upstream once per stored credential, so the default listing
+  // stays a cheap local read (#2566). --refresh bypasses the server-side TTL.
+  const wantsQuota = consumeFlag(rest, "--quota");
+  const refreshQuota = consumeFlag(rest, "--refresh");
   const name = rest.shift();
   const leftover = leftoverArgsError(rest);
   if (leftover) {
@@ -139,7 +163,7 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
   const rows: AccountRow[] = [];
   const notes: string[] = [];
   for (const t of targets) {
-    const r = await fetchRows(deps, baseUrl, t.name, t.type);
+    const r = await fetchRows(deps, baseUrl, t.name, t.type, wantsQuota ? { refresh: refreshQuota } : undefined);
     if (r.networkDown) return proxyUnreachable();
     if (r.errorJson) {
       if (name) return apiError(r.errorJson, `failed to list ${t.name}`);
@@ -174,7 +198,7 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
     console.log(JSON.stringify({ accounts: rows, notes }, null, 2));
     return 0;
   }
-  if (rows.length > 0) console.log(formatAccountTable(rows));
+  if (rows.length > 0) console.log(formatAccountTable(rows, wantsQuota));
   for (const n of notes) console.log(n);
   if (rows.length === 0 && notes.length === 0) console.log("No stored accounts or keys.");
   return 0;

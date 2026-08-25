@@ -140,7 +140,7 @@ and the plan/label column falls back across plan, masked email, label, and maske
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
@@ -152,6 +152,20 @@ returns:
 
 ```text
 { accounts: AccountRow[], notes: string[] }
+```
+
+`--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
+per-account probe (Anthropic today). It is opt-in because the proxy probes the upstream once per
+stored credential; the default listing stays a local read. `--refresh` bypasses the cached
+result. An account with no per-account quota shows `-`, and one whose probe failed shows
+`unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
+full breakdown per account, not just the two summarized windows:
+
+```text
+$ ocx account list anthropic --quota
+PROVIDER   TYPE   ID        PLAN/LABEL         PRIORITY  STATUS  QUOTA
+anthropic  oauth  1278f8da  a***r@big5lms.com  -                 5h 7% wk 62%
+anthropic  oauth  e112f28b  k***1@gmail.com    -         active  5h 9% wk 45%
 ```
 
 ### `ocx account current <provider> [--json]`

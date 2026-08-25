@@ -10,6 +10,7 @@ import { handleClientIntegrationCommand, handleGrokCommand } from "../src/cli/in
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
 import { providerQuotaLine } from "../src/cli/account-extended";
+import { formatAccountTable } from "../src/cli/account";
 
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
@@ -730,3 +731,40 @@ describe("#2565 ocx provider quota renders bars, not a count", () => {
     expect(providerQuotaLine("plain", report("plain", {}) as never)).toBe("plain");
   });
 });
+
+describe("#2566 per-account quota in ocx account list", () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    provider: "anthropic",
+    type: "oauth" as const,
+    id: "acc-1",
+    label: "a@example.test",
+    active: false,
+    ...over,
+  });
+
+  test("the QUOTA column only exists when it is asked for", () => {
+    // The server probes the upstream once per stored credential for quota=1, so the default
+    // listing must stay a cheap local read.
+    expect(formatAccountTable([row()] as never)).not.toContain("QUOTA");
+    expect(formatAccountTable([row()] as never, true)).toContain("QUOTA");
+  });
+
+  test("both DTO spellings of the sub-day window render as 5h", () => {
+    // The per-account provider probe reports fiveHourPercent; the Codex pool reports the same
+    // idea as shortPercent.
+    expect(formatAccountTable([row({ quota: { fiveHourPercent: 7, weeklyPercent: 62 } })] as never, true))
+      .toContain("5h 7% wk 62%");
+    expect(formatAccountTable([row({ quota: { shortPercent: 3, weeklyPercent: 10 } })] as never, true))
+      .toContain("5h 3% wk 10%");
+  });
+
+  test("a provider without per-account quota is blank, not zero", () => {
+    // Blank means "not probed"; 0% would claim the account is fully drained.
+    expect(formatAccountTable([row({ provider: "xai" })] as never, true)).toContain("-");
+  });
+
+  test("an account whose probe failed says so instead of reading as empty", () => {
+    expect(formatAccountTable([row({ quotaUnavailable: true })] as never, true)).toContain("unavailable");
+  });
+});
+
