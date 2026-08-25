@@ -740,6 +740,23 @@ const CATALOG_STATE_TTL_MS = 5_000;
  */
 const CATALOG_STATE_UNKNOWN_TTL_MS = 250;
 
+/**
+ * How long a real observation may still be SERVED after it expires, while a refresh
+ * runs behind it (#2499).
+ *
+ * The probe is advisory and, on Windows, slow: `Invoke-CimMethod GetOwner` costs
+ * ~0.4s per candidate process, so a cold probe routinely outlives the 5s TTL and
+ * every turn that misses the cache pays for it on the request path. Serving the
+ * previous reading immediately keeps that cost off the turn without pretending it is
+ * fresh -- the refresh it triggers is what makes the next reading current.
+ *
+ * Bounded rather than unlimited: if the refresh keeps failing, an observation this
+ * old stops being evidence about the machine and it is better to wait for a real one.
+ * `unknown` is never served this way -- it is a failure to observe, not an
+ * observation, and it already has its own short window for exactly that reason.
+ */
+export const CATALOG_STATE_MAX_STALE_MS = 60_000;
+
 export function catalogStateTtlMs(state: CodexAppServerCatalogState): number {
   return state === "unknown" ? CATALOG_STATE_UNKNOWN_TTL_MS : CATALOG_STATE_TTL_MS;
 }
@@ -853,16 +870,30 @@ export async function collectCodexAppServerCatalogStateForRequest(
     catalogMtimeMs: io.catalogMtimeMs,
     now: io.now,
   };
-  if (requestCatalogStateCache
+  const cached = requestCatalogStateCache
     && requestCatalogStateCache.generation === generation
     && sameRequestCatalogStateIdentity(requestCatalogStateCache.identity, identity)
-    && now - requestCatalogStateCache.atMs < catalogStateTtlMs(requestCatalogStateCache.status.state)) {
-    return requestCatalogStateCache.status;
+    ? requestCatalogStateCache
+    : null;
+  if (cached && now - cached.atMs < catalogStateTtlMs(cached.status.state)) {
+    return cached.status;
   }
+  // An expired real reading is still worth handing back while the refresh runs. It
+  // cannot have been invalidated by an ocx catalog write: every such write calls
+  // `resetCodexAppServerCatalogStateCache`, which advances the generation and drops
+  // this entry, so a generation match means no write has landed since it was taken.
+  // What it can miss is an app-server that started or stopped meanwhile -- and a
+  // server started after the reading is newer than the catalog, which is the `fresh`
+  // this entry already says.
+  const servableStale = cached
+    && cached.status.state !== "unknown"
+    && now - cached.atMs < CATALOG_STATE_MAX_STALE_MS
+    ? cached.status
+    : null;
   if (requestCatalogStateFlight
     && requestCatalogStateFlight.generation === generation
     && sameRequestCatalogStateIdentity(requestCatalogStateFlight.identity, identity)) {
-    return requestCatalogStateFlight.promise;
+    return servableStale ?? requestCatalogStateFlight.promise;
   }
 
   const refresh = async (): Promise<CodexAppServerCatalogStatus> => {
@@ -934,7 +965,9 @@ export async function collectCodexAppServerCatalogStateForRequest(
   });
   flight = { generation, identity, promise };
   requestCatalogStateFlight = flight;
-  return flight.promise;
+  // `promise` already absorbs its own failures, so leaving it unawaited here cannot
+  // surface as an unhandled rejection; the next caller picks up whatever it stored.
+  return servableStale ?? flight.promise;
 }
 
 /**
