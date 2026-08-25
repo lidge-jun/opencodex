@@ -1187,8 +1187,16 @@ describe("request-path catalog state serves stale while revalidating (#2499)", (
     releases[0]([...APP_SERVER]);
     await expect(cold).resolves.toMatchObject({ state: "fresh" });
 
-    // Past the point where the reading stops being evidence about the machine.
-    clock.ms += CATALOG_STATE_MAX_STALE_MS;
+    // One tick inside the bound, which runs from expiry rather than from when the
+    // reading was taken: still served, still without waiting.
+    clock.ms += catalogStateTtlMs("fresh") + CATALOG_STATE_MAX_STALE_MS - 1;
+    const last = collectCodexAppServerCatalogStateForRequest(io);
+    expect(await settledWithoutTheProbe(last)).toMatchObject({ state: "fresh" });
+
+    // One tick past it, where the reading stops being evidence about the machine.
+    // That call joins the refresh the previous one started rather than waiting on a
+    // second enumeration, so releasing that one probe is what settles it.
+    clock.ms += 1;
     const tooOld = collectCodexAppServerCatalogStateForRequest(io);
     expect(await settledWithoutTheProbe(tooOld)).toBe("waited");
     releases[1]([...APP_SERVER]);
