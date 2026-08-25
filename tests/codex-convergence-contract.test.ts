@@ -372,10 +372,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 6 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 7 + 8 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 7],
-    ["model-routes.ts", 6],
+    ["model-routes.ts", 8],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -387,10 +387,33 @@ test("the route inventory contains exactly the specified 7 + 6 + 2 + 2 convergen
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 7,
-    "model-routes.ts": 6,
+    "model-routes.ts": 8,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });
+});
+
+/**
+ * Same discipline as the reload-route assertion below: the count above went 6 -> 8 for the
+ * model-preset routes (#2465), and a bare count that only ever rises stops being a contract.
+ * Assert those two calls specifically, so a later bump cannot pass while some OTHER route
+ * quietly gained one, or while a preset route lost its own convergence.
+ *
+ * Both are write paths that change which models ship to the catalog — applying a preset
+ * narrows it, clearing back to "all" widens it — so each must converge for exactly the same
+ * reason `PUT /api/selected-models` does.
+ */
+test("both model-preset write paths converge the Codex catalog", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "..", "src", "server", "management", "model-routes.ts"),
+    "utf8",
+  );
+  const handlerStart = source.indexOf('url.pathname === "/api/model-presets" && req.method === "PUT"');
+  expect(handlerStart).toBeGreaterThan(-1);
+  const handlerBody = source.slice(handlerStart, source.indexOf("url.pathname ===", handlerStart + 1));
+  // The "all" branch and the materialize branch each converge; "custom" only moves the marker,
+  // so it deliberately does not.
+  expect(handlerBody.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(2);
 });
 
 /**
