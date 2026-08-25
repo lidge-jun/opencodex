@@ -660,7 +660,7 @@ export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" 
 export interface OcxComboTarget {
   provider: string;
   model: string;
-  /** Relative SWRR batch weight. Default 1; valid range 1..10000. */
+  /** Relative target weight for round-robin batches and random selection. Default 1; valid range 1..10000. */
   weight?: number;
 }
 
