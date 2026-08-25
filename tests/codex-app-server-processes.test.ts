@@ -1092,6 +1092,20 @@ describe("request-path catalog state serves stale while revalidating (#2499)", (
     return { io, releases, enumerations: () => releases.length };
   }
 
+  /**
+   * Yield until the released refresh has stored its result, or give up loudly.
+   *
+   * A fixed sleep would be a bet on how many turns the refresh's continuation
+   * needs, and losing that bet on a slow runner looks like a product bug rather
+   * than a slow machine. This waits for the condition instead of for a duration.
+   */
+  async function drainUntil(predicate: () => boolean, what: string) {
+    for (let attempt = 0; attempt < 1_000; attempt += 1) {
+      if (predicate()) return;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  }
   /** Did *promise* settle without the pending probe being released? */
   async function settledWithoutTheProbe<T>(promise: Promise<T> | T): Promise<T | "waited"> {
     return Promise.race([
@@ -1147,8 +1161,17 @@ describe("request-path catalog state serves stale while revalidating (#2499)", (
     expect(await settledWithoutTheProbe(served)).toMatchObject({ state: "fresh" });
 
     // The background refresh finds the machine empty now.
+    let refreshed = false;
+    served.then(() => {}).catch(() => {});
     releases[1]([]);
-    await new Promise(resolve => setTimeout(resolve, 5));
+    // The refresh has landed once a read at the same instant reports the new
+    // state; before that it still answers from the entry it is replacing.
+    await drainUntil(() => {
+      void collectCodexAppServerCatalogStateForRequest(io).then(seen => {
+        if (seen.state === "not_running") refreshed = true;
+      });
+      return refreshed;
+    }, "the background refresh to store not_running");
 
     // Served from the refreshed entry, still without waiting.
     clock.ms += 1;
@@ -1170,6 +1193,43 @@ describe("request-path catalog state serves stale while revalidating (#2499)", (
     expect(await settledWithoutTheProbe(tooOld)).toBe("waited");
     releases[1]([...APP_SERVER]);
     await expect(tooOld).resolves.toMatchObject({ state: "fresh" });
+  });
+
+  test("a failed refresh does not evict the reading it was refreshing", async () => {
+    const clock = { ms: 5_000_000 };
+    const releases: Array<(snapshots: Array<{ pid: number; commandLine: string }>) => void> = [];
+    const rejects: Array<(reason: Error) => void> = [];
+    const io = {
+      platform: "win32" as const,
+      now: () => clock.ms,
+      listSnapshotsAsync: () =>
+        new Promise<Array<{ pid: number; commandLine: string }>>((resolve, reject) => {
+          releases.push(resolve);
+          rejects.push(reject);
+        }),
+      readStartMsBatchAsync: async (pids: number[]) => new Map(pids.map(pid => [pid, 2_000] as const)),
+      catalogMtimeMs: () => 1_000,
+    };
+
+    const cold = collectCodexAppServerCatalogStateForRequest(io);
+    releases[0]([{ pid: 42, commandLine: APP_SERVER_COMMAND_LINE }]);
+    await expect(cold).resolves.toMatchObject({ state: "fresh" });
+
+    // Expire it, take the stale answer, and let the refresh it started fail.
+    clock.ms += catalogStateTtlMs("fresh") + 1;
+    const served = collectCodexAppServerCatalogStateForRequest(io);
+    expect(await settledWithoutTheProbe(served)).toMatchObject({ state: "fresh" });
+    rejects[1](new Error("windows_enum_incomplete"));
+    await drainUntil(() => rejects.length === 2, "the failing refresh to be started");
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // The transient failure must not have replaced the observation. Caching
+    // `unknown` over it would take the answer away from the next caller: `unknown`
+    // is not servable, so that caller would wait for a probe instead of being
+    // handed the reading it would otherwise have had.
+    clock.ms += 1;
+    const after = collectCodexAppServerCatalogStateForRequest(io);
+    expect(await settledWithoutTheProbe(after)).toMatchObject({ state: "fresh" });
   });
 
   test("`unknown` is never served stale -- a failure to observe is not an observation", async () => {
