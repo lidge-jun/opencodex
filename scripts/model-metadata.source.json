@@ -81169,7 +81169,6 @@
 			"maxTokens": 30000,
 			"compat": {
 				"supportsImageDetailOriginal": false,
-				"supportsReasoningSummary": false,
 				"includeEncryptedReasoning": false
 			},
 			"thinking": {

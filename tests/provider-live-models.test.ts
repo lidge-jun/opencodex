@@ -41,6 +41,7 @@ afterEach(() => {
   clearModelCache(PROVIDER);
   clearModelCache(HY3_PROVIDER);
   clearModelCache(HY3_CONTROL_PROVIDER);
+  clearModelCache("xai");
 });
 
 describe("live provider model discovery (authority + fallback)", () => {
@@ -77,6 +78,34 @@ describe("live provider model discovery (authority + fallback)", () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  test("xAI live discovery hides the multi-agent beta alias and keeps the dated deployment", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        { id: "grok-4.20-multi-agent-0309" },
+        { id: "grok-4.20-multi-agent-beta-latest" },
+        { id: "grok-4.6" },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      providers: {
+        xai: withTestFetch({
+          baseUrl: "https://api.x.ai/v1",
+          adapter: "openai-chat",
+          authMode: "key",
+          apiKey: "sk-test",
+          liveModels: true,
+          models: ["grok-4.6"],
+        }),
+      },
+    } as unknown as OcxConfig);
+    const ids = models.filter(model => model.provider === "xai").map(model => model.id);
+
+    expect(ids).toContain("grok-4.20-multi-agent-0309");
+    expect(ids).toContain("grok-4.6");
+    expect(ids).not.toContain("grok-4.20-multi-agent-beta-latest");
   });
 
   test("HY3 compatibility guard hides only opencode-go/hy3-preview from live discovery", async () => {

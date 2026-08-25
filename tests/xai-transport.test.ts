@@ -634,7 +634,13 @@ describe("xAI reasoning_content cache preservation", () => {
       "grok-4.20-multi-agent-0309",
       provider("oauth"),
       "chat",
-    ).adapter).toBe("openai-chat");
+    ).adapter).toBe("openai-responses");
+    expect(resolveWireProtocolOverride(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      provider("key"),
+      "chat",
+    ).adapter).toBe("openai-responses");
     expect(XAI_RESPONSES_OPT_IN_MODELS).not.toContain("grok-4.20-multi-agent-0309");
     expect(entry?.models).toContain("grok-build-0.1");
     for (const noReasoning of entry?.noReasoningModels ?? []) {

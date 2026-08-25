@@ -3767,6 +3767,8 @@ describe("Codex catalog routed normalization", () => {
           contextWindow: 1_000_000,
           inputModalities: ["text", "image"],
         });
+      expect(models.find(model => model.provider === "xai" && model.id === "grok-4.20-multi-agent-0309")?.supportsReasoningSummaries)
+        .toBeUndefined();
       expect(getModelMetadata("xai", "grok-4.20-multi-agent-0309")).toMatchObject({
         contextWindow: 1_000_000,
         maxTokens: 30_000,
@@ -3774,6 +3776,7 @@ describe("Codex catalog routed normalization", () => {
         reasoning: true,
         cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
       });
+      expect(getModelMetadata("xai", "grok-4.20-multi-agent-0309")).not.toHaveProperty("supportsReasoningSummaries");
       expect(models.some(model => model.id === "configured-ghost")).toBe(false);
       expect(warning.mock.calls.flat().join(" ")).not.toContain("omitted configured model ids");
     } finally {
