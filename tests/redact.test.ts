@@ -553,4 +553,11 @@ describe("redactErrorMessage", () => {
       expect(redacted).not.toContain("fragment");
     }
   });
+
+  test("redacts credentials from malformed URLs where new URL throws", () => {
+    const redacted = redactErrorMessage("malformed native socks5://alice:secret@proxy.test:99999 connection failed");
+    expect(redacted).toBe("malformed native socks5://proxy.test:99999 connection failed");
+    expect(redacted).not.toContain("alice");
+    expect(redacted).not.toContain("secret");
+  });
 });

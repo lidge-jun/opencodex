@@ -18,12 +18,12 @@ export function outboundProxyConfigured(
 }
 
 function proxyValue(key: ProxyEnvKey, env: ProxyEnvMap): string | undefined {
-  const value = env[key]?.trim() || env[key.toLowerCase()]?.trim();
+  const value = (env[key] ?? env[key.toLowerCase()] ?? "").trim();
   return value || undefined;
 }
 
 export function noProxyMatches(url: URL, env: ProxyEnvMap = process.env): boolean {
-  const raw = env.NO_PROXY?.trim() || env.no_proxy?.trim() || "";
+  const raw = (env.NO_PROXY ?? env.no_proxy ?? "").trim();
   const hostname = url.hostname.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   for (const value of raw.split(",")) {

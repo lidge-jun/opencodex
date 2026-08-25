@@ -424,5 +424,11 @@ describe("Antigravity proxy selection", () => {
     expect(proxyForUrl("https://daily-cloudcode-pa.googleapis.com/v1", env)).toBeUndefined();
     expect(proxyForUrl("https://other.example/v1", env)).toBe("http://proxy-user:secret@example.test:8080");
     expect(proxyForUrl("http://other.example/v1", { ALL_PROXY: "http://all.example:8080" })).toBe("http://all.example:8080");
+    // Uppercase NO_PROXY takes precedence over lowercase no_proxy even when empty
+    expect(proxyForUrl("https://daily-cloudcode-pa.googleapis.com/v1", {
+      HTTPS_PROXY: "http://proxy-user:secret@example.test:8080",
+      NO_PROXY: "",
+      no_proxy: "daily-cloudcode-pa.googleapis.com",
+    })).toBe("http://proxy-user:secret@example.test:8080");
   });
 });

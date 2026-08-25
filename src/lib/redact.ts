@@ -490,7 +490,8 @@ export function redactUrlForLog(url: string): string {
     parsed.hash = "";
     return parsed.toString();
   } catch {
-    return redactSecretString(url.split("?")[0] ?? url);
+    const stripped = (url.split(/[?#]/)[0] ?? url).replace(/:\/\/[^/@\s]+@/g, "://");
+    return redactSecretString(stripped);
   }
 }
 
