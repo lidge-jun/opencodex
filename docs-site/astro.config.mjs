@@ -21,7 +21,7 @@ export default defineConfig({
   vite: { build: { cssMinify: "esbuild" } },
   integrations: [
     starlight({
-      title: "opencodex",
+      title: "hubapi",
       description:
         "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.",
       tagline: "Use any LLM with OpenAI Codex and Claude Code.",
@@ -102,6 +102,7 @@ export default defineConfig({
             { label: "Image Bridge", translations: { fr: "Pont d’images", ko: "이미지 브릿지", "zh-CN": "图像桥接", "zh-TW": "圖像橋接", ru: "Image Bridge", ja: "画像ブリッジ", tr: "Image Bridge" }, slug: "guides/image-bridge" },
             { label: "Video Bridge", translations: { fr: "Pont vidéo", ko: "비디오 브릿지", "zh-CN": "视频桥接", "zh-TW": "影片橋接", ru: "Video Bridge", ja: "動画ブリッジ", tr: "Video Bridge" }, slug: "guides/video-bridge" },
             { label: "Web Dashboard", translations: { fr: "Tableau de bord web", ko: "웹 대시보드", "zh-CN": "网页控制台", "zh-TW": "網頁儀表板", ru: "Веб-дашборд", ja: "ウェブダッシュボード", tr: "Web Kontrol Paneli" }, slug: "guides/web-dashboard" },
+            { label: "Hosted hub", translations: { fr: "Hub hébergé", ko: "호스팅 허브", "zh-CN": "托管中转站", "zh-TW": "託管中轉站", ru: "Хостинговый hub", ja: "ホステッドhub", tr: "Barındırılan hub" }, slug: "guides/hosted-hub" },
             { label: "Sub-agent Surface", translations: { fr: "Interface des sous-agents", ko: "서브에이전트 서피스", "zh-CN": "子代理界面", "zh-TW": "子代理介面", ru: "Интерфейс подагентов", ja: "サブエージェントサーフェス", tr: "Alt Ajan Arayüzü" }, slug: "guides/sub-agent-surface" },
           ],
         },

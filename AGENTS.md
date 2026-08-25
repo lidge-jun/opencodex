@@ -15,6 +15,9 @@ Bun-native TypeScript with no separate server compile step.
 - `tests/` — flat Bun tests (`tests/*.test.ts`); shared fixtures in
   `tests/helpers/`, broader scenarios in `tests/e2e-style/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
+- `hub/` — optional hosted user/control plane and public portal for hubapi; it
+  must remain absent from the local OpenCodex request path unless explicitly
+  activated.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
 - `go/` — retired Go native-runtime experiment; kept only where the TypeScript
   runtime still references it. New work does not go here.
@@ -27,6 +30,311 @@ Bun-native TypeScript with no separate server compile step.
 
 Read the nearest nested `AGENTS.md` before changing files in a scoped
 directory (`src/`, `gui/`, `docs-site/`, `scripts/`, `.github/`).
+
+## Phase-one PRD-driven frontend secondary development
+
+The phase-one product work in this checkout is an **incremental secondary
+development of the public OpenCodex GitHub repository**, not a greenfield
+rewrite. [`PRD.md`](./PRD.md) is the product and acceptance authority for this
+work. This section adds project-specific implementation boundaries; all other
+rules in this file and the nearest nested `AGENTS.md` continue to apply.
+
+### Product brand boundary
+
+- The user-facing product brand for this secondary-development line is
+  **`hubapi`** (lowercase wordmark).
+- Keep upstream implementation identities intact wherever compatibility depends
+  on them: repository/package names, the `ocx` CLI, config paths, HTTP headers,
+  storage keys, service identifiers, upstream documentation links, and protocol
+  contracts remain OpenCodex unless a separately approved migration exists.
+- Public marketing, hosted-portal copy, and GUI chrome must use `hubapi` and
+  must not present the upstream project name as the visible product brand.
+  Technical reference pages may retain an upstream name only where it is part
+  of an actual command, package, path, endpoint, header, protocol contract, or
+  source link; never rename those compatibility identifiers for appearance.
+
+Apply three reasoning disciplines throughout the work:
+
+- **Polanyi:** recover the operator's tacit workflow from surrounding code,
+  tests, docs, and real UI states before changing the visible structure;
+- **Occam:** choose the smallest compatible extension of the existing system,
+  with no parallel abstraction when an established one is sufficient;
+- **Cross-validation:** verify material product claims against at least source
+  plus tests or shipped docs, and report unknowns instead of guessing.
+
+### Authority and conflict resolution
+
+Use this order when deciding what is true:
+
+1. current source and tests on the latest inspected `upstream/dev`;
+2. `structure/` invariants and the nearest `AGENTS.md`;
+3. shipped user documentation in `docs-site/`;
+4. `PRD.md` for phase-one product scope and acceptance;
+5. generated mockups for visual intent only.
+
+The PRD cannot make a nonexistent API, field, metric, or security guarantee
+real. If the PRD and current code disagree, verify the current upstream state,
+record the mismatch, and update or explicitly amend the PRD before
+implementation. Never silently invent data or widen the backend to make a
+mockup appear functional.
+
+### Upstream baseline
+
+Before the first implementation change and again before each milestone:
+
+1. read `PRD.md` and the nearest scoped `AGENTS.md`;
+2. fetch or otherwise inspect the current `upstream/dev` head;
+3. record the exact upstream commit used for the work;
+4. inspect local changes and branch divergence before rebasing or merging;
+5. re-check affected routes, API shapes, tests, docs, and security invariants.
+
+Do not replace the repository with a scaffold, copy another dashboard over it,
+or build a parallel application. Preserve upstream history and keep changes
+reviewable as an incremental diff. Never overwrite user changes while syncing
+with upstream.
+
+### Default writable scope
+
+The original phase-one slice is a frontend and documentation program. The
+separately approved hosted hubapi slice also permits work under `hub/` and its
+focused tests, but does not silently widen the local runtime. The expected
+writable scope is:
+
+- `gui/src/` — application shell, pages, components, styles, data validation,
+  routing compatibility, accessibility, and i18n;
+- `gui/tests/` and directly relevant repository tests — focused regression
+  coverage for changed behavior;
+- `docs-site/src/` — Landing Page, public assets, styles, and user-facing docs;
+- `PRD.md` and design documentation when verified scope or behavior changes.
+- `hub/` — only for the optional public user, session, credit, recharge-code,
+  admission, and portal implementation described below.
+
+Reuse existing management APIs and existing GUI data-access patterns. A visual
+or navigation change does not authorize changes to `src/`, config formats,
+provider adapters, routing algorithms, authentication, OAuth, credential
+storage, release automation, or GitHub workflows.
+
+If a verified PRD requirement truly cannot be met with existing APIs, stop
+before changing backend code and report:
+
+- the exact requirement and user flow;
+- the current API/source evidence;
+- the smallest proposed contract change;
+- security, privacy, compatibility, test, and documentation impact;
+- a frontend-only fallback.
+
+Backend work starts only after that expansion is explicitly approved. It must
+then follow `src/AGENTS.md`, include focused tests, and preserve all core/Lab
+boundaries.
+
+### Explicitly forbidden shortcuts
+
+- Do not copy New API or other AGPL frontend source, components, styles, text,
+  or branded assets into this MIT repository.
+- Do not implement the mockup-only API-key expiry, pause/resume, model ACL,
+  RPM/TPM, source IP, domain, Origin, or management-permission controls unless
+  a separately approved backend contract exists.
+- Do not add organizations, team RBAC, wallets, payment processors, orders,
+  subscriptions, invoices, or autonomous commercial actions. The approved
+  hosted slice is limited to users, sessions, public API credentials, an
+  integer credit ledger, and recharge codes under the isolation rules below.
+- Do not edit `gui/dist` or any generated build output by hand.
+- Do not introduce a second router, state framework, CSS framework, analytics
+  SDK, remote font, or runtime dependency merely to reproduce a mockup.
+- Do not add telemetry or external network calls from the Landing Page or GUI.
+- Do not display or log prompts, response bodies, full API keys, reusable admin
+  tokens, emails, or account identifiers.
+- Do not weaken same-origin GUI sessions, CSRF evidence, management/data-plane
+  credential separation, CORS, `X-Frame-Options`, or CSP.
+- Do not import optional Lab modules into the core request path.
+- Do not remove legacy hash redirects or change Back/Forward behavior without
+  a documented migration and regression coverage.
+
+### Design and content truth
+
+Generated images are non-authoritative examples. Their dates, request counts,
+model names, prices, latency, success rates, quotas, and statuses are sample
+content. Every implemented value must come from a verified current endpoint or
+render as an honest `N/A`, unknown, unavailable, partial-coverage, or stale
+state.
+
+Keep these distinctions visible:
+
+- configured route preview vs. durable historical route evidence;
+- measured/reported usage vs. estimated/unsupported usage;
+- list-price equivalent estimate vs. a bill or charge;
+- success vs. degraded success with recovery work remaining;
+- empty data vs. data that failed to load;
+- live data vs. cached or stale data.
+
+Use the repository's established Chinese term `提供方`; mockups that say
+`供应商` do not override shipped terminology. User-facing strings must follow
+the GUI i18n rules and be added to every existing locale.
+
+### Architecture constraints
+
+- Keep the existing React + TypeScript + Vite + Bun GUI.
+- Keep the Astro + Starlight documentation site and its existing localization
+  model.
+- Preserve Hash routing and all compatibility redirects listed in `PRD.md`.
+- Promote or regroup navigation by reusing existing pages and components; do
+  not create parallel state or duplicate API-key, Codex Auth, model, or
+  integration implementations.
+- Keep the public Landing Page separate from the local management surface. It
+  must not call `/api/*`, infer local status, or expose a management credential.
+- Preserve independent resource loading: one slow catalog or provider must not
+  block unrelated key, log, or endpoint management.
+- Use the existing component, token, cache, bounded-fetch, and validation
+  patterns before adding abstractions.
+- Default to zero new dependencies. Any dependency change requires an explicit
+  need, alternatives analysis, lockfile review, and security review.
+
+### Implementation sequence
+
+For each PRD milestone or page:
+
+1. name the PRD requirement and acceptance criteria being implemented;
+2. inspect the current page, API handler, response types, tests, docs, and
+   nearby reusable components;
+3. write a small implementation plan with affected files and data contracts;
+4. implement the smallest coherent vertical slice;
+5. add or update focused tests for behavior, routing, data validation, and
+   accessibility where applicable;
+6. run proportional checks before moving to the next slice;
+7. inspect the page in a real browser at the required responsive sizes and in
+   light/dark themes;
+8. update user documentation when behavior or navigation changes;
+9. report exactly what was verified and what remains unverified.
+
+Do not claim a whole page or milestone complete because static layout renders.
+Completion requires real API-backed states, loading/empty/error/stale states,
+keyboard behavior, responsive behavior, i18n, tests, build, and visual
+inspection as specified by `PRD.md`.
+
+### Phase-one validation gates
+
+For GUI milestone completion:
+
+```bash
+cd gui
+bun test tests
+bun run lint
+bun run lint:i18n
+bun run build
+```
+
+For Landing Page or public documentation changes:
+
+```bash
+cd docs-site
+bun install --frozen-lockfile
+bun run build
+```
+
+If approved work changes `src/`, shared behavior, dependencies, auth, routing,
+or config, also run the repository-level gates required by the relevant scoped
+instructions, including `bun run typecheck`, `bun run test`, and
+`bun run privacy:scan` where applicable.
+
+Before calling phase one complete, satisfy every item in the PRD Definition of
+Done. A PR that changes the GUI must include real screenshots, target `dev`,
+and follow the repository PR template and review policy.
+
+## Optional hubapi hosted control plane
+
+The hosted hubapi capability is an **optional public admission and accounting
+edge**, not a replacement provider router. OpenCodex remains the only component
+that selects providers, adapts protocols, and sends provider requests. Public
+user traffic reaches the edge first; the edge authenticates and accounts for
+the request, replaces the public credential with an internal admission secret,
+then streams the request to a private OpenCodex listener.
+
+This boundary is required because the existing GUI and `/api/*` management
+routes are a local operator surface. A public user credential, session, or
+recharge code must never authenticate to or be forwarded into that surface.
+
+### Activation and isolation
+
+- Hosted mode is off by default. Ordinary `ocx start` must import no `hub/`
+  module, open no hub database, start no hub timer, and bind no hub listener.
+- Start the public edge through an explicit hub command/configuration. It must
+  use a different listener and route namespace from the private management UI.
+- `src/router.ts`, `src/server/lifecycle.ts`, and
+  `src/server/responses/core.ts` must not import `hub/`, directly or
+  transitively. The public edge calls the existing data-plane HTTP contract;
+  it does not register a second routing engine inside core.
+- Hosted startup fails closed when its internal admission secret, public
+  origin, database path, proxy target, or production bind configuration is
+  missing or unsafe. Placeholder/default secrets are forbidden.
+- Single-node SQLite is permitted for the first hosted slice only. The process
+  must take an exclusive instance lock and document that multiple replicas are
+  unsupported until a transactional PostgreSQL adapter exists.
+
+### Authentication and secret handling
+
+- There is no default administrator or known bootstrap password. Create the
+  first admin only through a one-time, local-only bootstrap command/token and
+  invalidate the bootstrap capability after use.
+- Hash passwords with `Bun.password` Argon2id. Never offer plaintext or
+  reversible password modes.
+- Browser authentication uses opaque server-side sessions in `Secure`,
+  `HttpOnly`, `SameSite` cookies. Rotate on login and privilege change; store
+  only a session digest; enforce expiry, revocation, Origin checks, and CSRF on
+  state-changing requests.
+- Public API keys and recharge codes use CSPRNG material, are revealed once,
+  and are stored as an HMAC digest with a non-secret prefix/suffix for lookup
+  and display. Never store or return their full plaintext after creation.
+- Secrets, session IDs, full API keys, recharge codes, emails, prompts,
+  response bodies, and reusable account identifiers must not appear in URLs,
+  browser storage, ordinary logs, analytics, error bodies, or cache keys.
+
+### Ledger and authorization
+
+- Credits are integers in a documented smallest unit; floating-point balances
+  are forbidden.
+- The ledger is append-only. Recharge, reservation, settlement, refund, and
+  administrative adjustment each require an immutable reason and unique
+  idempotency key. Balance is derived or transactionally maintained from ledger
+  entries; it is never changed by an unrecorded update.
+- Recharge redemption and request charging must be atomic under concurrency.
+  A code redeems once, and a request settles once even after retries.
+- Every user resource is authorized by the authenticated subject on the
+  server. An object ID, request ID, or URL is never treated as authorization.
+- Admin actions require a distinct admin role, recent authentication for
+  sensitive actions, an audit event, and rate limits. Public user roles never
+  gain access to OpenCodex management routes.
+
+### SimpleCard secondary-development boundary
+
+`runtimepoet/simplecard` may be used as an MIT-licensed domain reference only.
+Do not vendor its Next.js/Spring Boot runtime or dependency graph. Reimplement
+the approved concepts in Bun/TypeScript and the existing React/Vite design
+system. If any substantial source fragment is copied, retain the required MIT
+notice and record the exact file/commit provenance.
+
+Detailed security findings belong only in ignored scratch space under `.tmp/`
+until fixed or publicly disclosed. Tracked documents may state generic security
+requirements and the integration decision, but must not publish an unfixed
+exploit path or pre-disclosure reasoning.
+
+### Hosted-slice validation gates
+
+Every authentication, authorization, credential, ledger, or admission change
+requires focused regression tests plus:
+
+```bash
+bun run typecheck
+bun run test
+bun run privacy:scan
+bun run audit:high
+```
+
+Also test session fixation, CSRF/origin rejection, brute-force throttling,
+cross-user object access, one-time secret reveal, concurrent recharge, request
+idempotency, insufficient credit, log redaction, private-management isolation,
+stream cancellation, and local-mode zero activation. Payment, wallet signing,
+external publication, and any action spending the user's identity, credits, or
+reputation remain human-approved and outside this slice.
 
 ## Optional subsystems stay off the core path
 

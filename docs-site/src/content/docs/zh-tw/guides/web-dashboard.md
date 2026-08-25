@@ -47,7 +47,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |
 | **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型。 |
 | **Models** | 開關原生 GPT 與路由模型，設定 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 數量。 |
-| **Logs** | 自動重新整理近期請求，顯示 token、請求強度、實際模型、provider、狀態、request id、耗時和錯誤詳情。 |
+| **Logs** | 使用 cursor 瀏覽持久化請求後設資料，支援服務端 provider、模型、狀態、協定、Key、策略與 fallback 篩選，並將 Debug 保持為獨立分頁。詳情讀取已記錄的路由決策、嘗試序列、最終目標與結果；舊記錄沒有軌跡時保持未知。 |
 | **Usage / Debug** | 檢視 token usage 覆蓋率與趨勢，或啟用可選的 provider transport 和 usage 提取診斷。 |
 | **Stop** | 優雅地停止代理和已安裝的後臺服務，恢復原生 Codex 並退出（`POST /api/stop`）。 |
 
@@ -133,7 +133,7 @@ GUI 是代理 JSON 管理 API 之上的輕量用戶端。常用 endpoint 包括�
 | `GET /api/codex-auth/accounts?refresh=1` | 列出主帳號與池帳號、強制重新整理配額，並回傳主帳號的 `hasCredential` / terminal `needsReauth` 狀態。 |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 選擇下一次請求使用的帳號並設定帳號池路由。 |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 透過瀏覽器登入新增池帳號。 |
-| `GET /api/logs?tail=50&provider=...&status=5xx` | 使用 tail、provider、精確狀態碼或狀態類別篩選近期請求後設資料。 |
+| `GET /api/request-history?limit=200&cursor=...` · `GET /api/request-history/:requestId/route-decision` | 使用 cursor 瀏覽持久化後設資料，並讀取已記錄的 why-this-route 證據。舊 `/api/logs` 僅保留相容用途。 |
 | `GET` / `PUT /api/subagent-models` | 讀取或設定五個置頂的 `spawn_agent` override 模型。 |
 | `POST /api/stop` | 停止代理/服務，恢復原生 Codex 並退出。 |
 

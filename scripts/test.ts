@@ -1,6 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+
+const DEFAULT_BATCH_SIZE = 96;
+const TEST_FILE_PATTERN = /(?:\.(?:test|spec)|_(?:test|spec))\.(?:js|jsx|ts|tsx)$/;
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -56,6 +59,93 @@ export function createIsolatedTestEnvironment(
     cleanup() {
       rmSync(root, { recursive: true, force: true });
     },
+  };
+}
+
+export function collectTestFiles(root = "tests"): string[] {
+  const files: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && TEST_FILE_PATTERN.test(entry.name)) files.push(relative(process.cwd(), path).replaceAll("\\", "/"));
+    }
+  };
+  visit(root);
+  return files.sort((left, right) => left.localeCompare(right, "en"));
+}
+
+export function partitionTestFiles(files: readonly string[], batchSize: number): string[][] {
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1) throw new Error("test batch size must be a positive integer");
+  const batches: string[][] = [];
+  for (let index = 0; index < files.length; index += batchSize) batches.push(files.slice(index, index + batchSize));
+  return batches;
+}
+
+function configuredBatchSize(value: string | undefined): number {
+  if (value === undefined || value === "") return DEFAULT_BATCH_SIZE;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 500) {
+    throw new Error("OCX_TEST_BATCH_SIZE must be an integer between 1 and 500");
+  }
+  return parsed;
+}
+
+export async function acquireTestRunLock(
+  lockPath = join(tmpdir(), "opencodex-full-test.lock"),
+  options: { pollMs?: number; maxWaitMs?: number } = {},
+): Promise<() => void> {
+  if (process.env.OCX_TEST_NO_QUEUE === "1") return () => {};
+  const pollMs = options.pollMs ?? 5_000;
+  const maxWaitMs = options.maxWaitMs ?? 45 * 60_000;
+  const startedAt = Date.now();
+  const token = crypto.randomUUID();
+  const ownerPath = join(lockPath, "owner.json");
+  let announced = false;
+  for (;;) {
+    try {
+      mkdirSync(lockPath);
+      writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, token }), { flag: "wx" });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let owner: { pid?: unknown; token?: unknown } | null = null;
+      let oldEnoughToReclaim = false;
+      try {
+        owner = JSON.parse(readFileSync(ownerPath, "utf8")) as { pid?: unknown; token?: unknown };
+      } catch {
+        try { oldEnoughToReclaim = Date.now() - statSync(lockPath).mtimeMs > 30_000; } catch { /* lock changed; retry */ }
+      }
+      let ownerAlive = true;
+      if (typeof owner?.pid === "number" && Number.isInteger(owner.pid) && owner.pid > 0) {
+        try { process.kill(owner.pid, 0); } catch (probeError) {
+          ownerAlive = (probeError as NodeJS.ErrnoException).code === "EPERM";
+        }
+      } else if (oldEnoughToReclaim) ownerAlive = false;
+      if (!ownerAlive) {
+        const stalePath = `${lockPath}.stale-${process.pid}-${crypto.randomUUID()}`;
+        try {
+          renameSync(lockPath, stalePath);
+          rmSync(stalePath, { recursive: true, force: true });
+        } catch { /* another waiter won the stale-lock race */ }
+        continue;
+      }
+      if (Date.now() - startedAt > maxWaitMs) throw new Error("timed out waiting for the exclusive test-runner lock");
+      if (!announced) {
+        announced = true;
+        console.warn(`[test] another full suite owns ${lockPath}; waiting for it to finish.`);
+      }
+      await Bun.sleep(pollMs);
+    }
+  }
+  return () => {
+    try {
+      const owner = JSON.parse(readFileSync(ownerPath, "utf8")) as { token?: unknown };
+      if (owner.token !== token) return;
+      const releasedPath = `${lockPath}.released-${process.pid}-${crypto.randomUUID()}`;
+      renameSync(lockPath, releasedPath);
+      rmSync(releasedPath, { recursive: true, force: true });
+    } catch { /* ownership already ended or changed */ }
   };
 }
 
@@ -135,20 +225,36 @@ async function waitForExclusiveRun(selfPid: number): Promise<void> {
 }
 
 if (import.meta.main) {
-  const isolated = createIsolatedTestEnvironment();
+  let releaseLock = () => {};
   try {
     const requestedTests = process.argv.slice(2);
+    if (requestedTests.length === 0) releaseLock = await acquireTestRunLock();
     await waitForExclusiveRun(process.pid);
     const startedAt = Date.now();
-    const child = Bun.spawnSync(
-      [process.execPath, "test", "--isolate", ...(requestedTests.length > 0 ? requestedTests : ["./tests/"])],
-      {
-        env: isolated.env,
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      },
-    );
+    const batches = requestedTests.length > 0
+      ? [requestedTests]
+      : partitionTestFiles(collectTestFiles(), configuredBatchSize(process.env.OCX_TEST_BATCH_SIZE));
+    if (batches.length === 0) throw new Error("no test files found");
+    if (requestedTests.length === 0) console.warn(`[test] running ${batches.flat().length} files in ${batches.length} fresh Bun processes.`);
+    let exitCode = 0;
+    for (const [index, batch] of batches.entries()) {
+      const isolated = createIsolatedTestEnvironment();
+      try {
+        if (batches.length > 1) console.warn(`[test] batch ${index + 1}/${batches.length} (${batch.length} files)`);
+        const child = Bun.spawnSync([process.execPath, "test", "--isolate", ...batch], {
+          env: isolated.env,
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        });
+        if (!child.success) {
+          exitCode = child.exitCode ?? 1;
+          break;
+        }
+      } finally {
+        isolated.cleanup();
+      }
+    }
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     if (requestedTests.length === 0 && elapsedSeconds > 600) {
       console.warn(
@@ -156,8 +262,11 @@ if (import.meta.main) {
         + "Check for another test runner, a busy CPU, or a test that started polling something real.",
       );
     }
-    process.exitCode = child.exitCode ?? 1;
+    process.exitCode = exitCode;
+  } catch (error) {
+    console.error(`[test] ${(error as Error).message}`);
+    process.exitCode = 1;
   } finally {
-    isolated.cleanup();
+    releaseLock();
   }
 }

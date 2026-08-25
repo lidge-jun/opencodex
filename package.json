@@ -18,6 +18,7 @@
   "files": [
     "bin",
     "src",
+    "hub",
     "gui/dist",
     "assets/banner.png",
     "assets/architecture.png",
@@ -37,6 +38,9 @@
     "dev": "bun run src/cli/index.ts start",
     "dev:proxy": "bun run src/cli/index.ts start",
     "dev:gui": "cd gui && bun run dev",
+    "hub:start": "bun run hub/src/cli.ts start",
+    "hub:bootstrap-admin": "bun run hub/src/cli.ts bootstrap-admin --password-stdin",
+    "hub:typecheck": "bun x tsc -p hub/tsconfig.json --noEmit",
     "start": "bun run src/cli/index.ts start",
     "test": "bun scripts/test.ts",
     "typecheck": "bun x tsc --noEmit",

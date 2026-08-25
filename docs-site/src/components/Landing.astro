@@ -28,6 +28,27 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const prefix = locale ? `${base}${locale}/` : base;
 
 const fr = {
+	'Product': 'Produit',
+	'How it works': 'Fonctionnement',
+	'Integrations': 'Intégrations',
+	'Documentation': 'Documentation',
+	'One entry point for every AI model.': 'Un seul point d’entrée pour tous vos modèles d’IA.',
+	'Clients': 'Clients',
+	'Local routing layer': 'Couche de routage locale',
+	'One local endpoint': 'Un point de terminaison local',
+	'Protocol translation': 'Traduction de protocoles',
+	'Policy and fallback': 'Règles et repli',
+	'Task aliases select the route': 'Les alias de tâche sélectionnent la route',
+	'Route evidence, not a black box.': 'Des preuves de routage, pas une boîte noire.',
+	'Illustrative route': 'Exemple de route',
+	'Requested': 'Demandé',
+	'Policy': 'Règle',
+	'Provider': 'Fournisseur',
+	'Delivered': 'Livré',
+	'Every step stays inspectable in the local dashboard: requested model, matched policy, provider attempts, fallback reason, latency, tokens, and cost when the provider reports it.': 'Chaque étape reste consultable dans le tableau de bord local : modèle demandé, règle appliquée, tentatives des fournisseurs, raison du repli, latence, jetons et coût lorsque le fournisseur le communique.',
+	'Local by default. Credentials stay at the boundary.': 'Local par défaut. Les identifiants restent à la frontière.',
+	'The dashboard talks to the loopback management API. Provider credentials are masked in the interface, request bodies are not exposed, and hubapi adds no analytics or remote telemetry.': 'Le tableau de bord communique avec l’API de gestion en boucle locale. Les identifiants des fournisseurs sont masqués, le contenu des requêtes n’est pas exposé et hubapi n’ajoute ni analytique ni télémétrie distante.',
+	'Read the security model': 'Lire le modèle de sécurité',
 	'Install': 'Installer',
 	'Start the proxy': 'Démarrer le proxy',
 	'Inject a provider into Codex': 'Ajouter un fournisseur à Codex',
@@ -58,21 +79,24 @@ const fr = {
 	'Contributing': 'Contribuer',
 	'Run ': 'Exécutez ',
 	' on any LLM.': ' sur n’importe quel LLM.',
-	'opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.': 'opencodex est un proxy local qui fournit Codex et Claude Code sur un même port. Il traduit chaque format de protocole vers n’importe quel fournisseur, dans les deux sens, avec la diffusion en continu, les appels d’outils, le raisonnement et les images. Aucune modification des clients.',
+	'hubapi is a local gateway with a private routing core. It serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.': 'hubapi est une passerelle locale dotée d’un cœur de routage privé. Elle fournit Codex et Claude Code sur un même port et traduit chaque protocole vers n’importe quel fournisseur, avec diffusion en continu, appels d’outils, raisonnement et images. Aucune modification des clients.',
+	'The hubapi SaaS layer gives users one AI API and task routes such as coding, vision, fast, or private. The private routing core selects a matching model from the configured providers using capability and operating evidence — without classifying prompt text.': 'La couche SaaS hubapi fournit aux utilisateurs une seule API d’IA et des routes de tâche comme coding, vision, fast ou private. Le cœur de routage privé sélectionne un modèle compatible parmi les fournisseurs configurés à partir de preuves de capacité et d’exploitation, sans classifier le texte des prompts.',
 	'Get Started': 'Commencer',
 	'Supported providers': 'Fournisseurs pris en charge',
 	'40+ providers': 'Plus de 40 fournisseurs',
-	'The opencodex dashboard — live proxy status, routed providers, and available models': 'Le tableau de bord opencodex : état du proxy en direct, fournisseurs routés et modèles disponibles',
-	'Install. Start. Codex, rerouted.': 'Installez. Démarrez. Codex est redirigé.',
-	'Install.': 'Installez.',
-	'Start.': 'Démarrez.',
-	'Codex, rerouted.': 'Codex est redirigé.',
+	'The hubapi dashboard — live proxy status, routed providers, and available models': 'Le tableau de bord hubapi : état du proxy en direct, fournisseurs routés et modèles disponibles',
+	'Connect. Authenticate. Models ready.': 'Connectez. Authentifiez. Les modèles sont prêts.',
+	'Connect.': 'Connectez.',
+	'Authenticate.': 'Authentifiez.',
+	'Models ready.': 'Les modèles sont prêts.',
 	'Full quickstart': 'Démarrage rapide complet',
 	'Watch Codex run on a routed model.': 'Regardez Codex exécuter une tâche sur un modèle routé.',
 	'Codex App running a task on a routed non-OpenAI model': 'Codex App exécutant une tâche sur un modèle routé autre qu’OpenAI',
-	'One task, streamed end to end through opencodex.': 'Une tâche diffusée de bout en bout par opencodex.',
+	'One task, streamed end to end through hubapi.': 'Une tâche diffusée de bout en bout par hubapi.',
 	'One proxy, the whole surface.': 'Un seul proxy pour toute la plateforme.',
 	'Any provider': 'N’importe quel fournisseur',
+	'Task-based model routing': 'Routage des modèles par tâche',
+	'Expose stable task aliases to clients. The private routing core filters candidates by required capabilities, then ranks them with health, latency, cost, and quota evidence.': 'Exposez des alias de tâche stables aux clients. Le cœur de routage privé filtre les candidats selon les capacités requises, puis les classe avec les preuves de santé, latence, coût et quota.',
 	'Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.': 'Cinq adaptateurs couvrent Anthropic Messages, Google Gemini, Azure, le transfert direct des Responses d’OpenAI et tous les points de terminaison Chat Completions compatibles avec OpenAI, soit plus de 40 fournisseurs intégrés.',
 	'OAuth or API key': 'OAuth ou clé API',
 	'Log in with your xAI, Anthropic, or Kimi account — auto-refreshed — forward your ChatGPT login, or paste a key.': 'Connectez votre compte xAI, Anthropic ou Kimi avec actualisation automatique, transférez votre connexion ChatGPT ou collez une clé.',
@@ -84,13 +108,13 @@ const fr = {
 	'Sub-agents': 'Sous-agents',
 	'Pin up to five routed or native models for Codex spawn_agent, and switch the v1 / base / v2 surface globally.': 'Épinglez jusqu’à cinq modèles routés ou natifs pour spawn_agent dans Codex et changez globalement d’interface v1, base ou v2.',
 	'ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.': 'ocx claude lance Claude Code sur le même port : tous les modèles routés figurent dans le sélecteur /model, le contexte automatique atteint 1 M, la liste de sous-agents est disponible et votre connexion claude.ai reste active.',
-	'Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar': 'Claude Code exécutant un modèle routé par opencodex, avec gpt-5.6-luna-medium actif dans la barre d’état',
+	'Claude Code running a routed model through hubapi — gpt-5.6-luna-medium active in the status bar': 'Claude Code exécutant un modèle routé par hubapi, avec gpt-5.6-luna-medium actif dans la barre d’état',
 	'Search & vision sidecars': 'Services auxiliaires de recherche et de vision',
 	'Give non-OpenAI models real web search and image understanding through a gpt-5.4-mini sidecar.': 'Ajoutez aux modèles autres qu’OpenAI une véritable recherche web et la compréhension des images grâce à un service auxiliaire gpt-5.4-mini.',
-	'ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.': 'ocx init ajoute un fournisseur à votre configuration Codex et partage un catalogue de modèles unique entre Codex CLI, TUI, App et SDK. ocx stop restaure proprement Codex dans son état natif.',
+	'export OPENAI_API_KEY="$HUBAPI_KEY" writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.': 'export OPENAI_API_KEY="$HUBAPI_KEY" ajoute un fournisseur à votre configuration Codex et partage un catalogue de modèles unique entre Codex CLI, TUI, App et SDK. ocx stop restaure proprement Codex dans son état natif.',
 	'Documentation map': 'Plan de la documentation',
 	'Explore the docs': 'Explorer la documentation',
-	'opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider’s Terms of Service before connecting.': 'opencodex est un projet communautaire indépendant, sans affiliation avec OpenAI, Anthropic ou tout autre fournisseur, et sans approbation de leur part. Certains fournisseurs peuvent restreindre les comptes qui acheminent leur trafic par des proxys tiers ; consultez les conditions d’utilisation de chaque fournisseur avant de vous connecter.',
+	'hubapi is an independent product built on the open-source routing foundation. It is not affiliated with or endorsed by OpenAI, Anthropic, or any provider. Some providers may restrict proxy traffic — review each provider’s Terms before connecting.': 'hubapi est un produit indépendant basé sur le socle de routage open source. Il n’est affilié ni approuvé par OpenAI, Anthropic ou un fournisseur. Certains fournisseurs peuvent limiter le trafic via proxy ; consultez leurs conditions avant de vous connecter.',
 } as const;
 
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
@@ -127,15 +151,14 @@ const providers: { label: string; path?: string }[] = [
 ];
 
 const quickstartMini = [
-	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
-	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
+		{ cmd: 'export OPENAI_BASE_URL="https://YOUR_HUBAPI_ORIGIN/v1"', note: t('Set the hubapi Base URL', 'hubapi Base URL 설정', '设置 hubapi Base URL', 'Укажите Base URL hubapi', 'hubapi Base URL を設定', '設定 hubapi Base URL', 'hubapi Base URL ayarla') },
+		{ cmd: 'export OPENAI_API_KEY="hub_live_REPLACE_ME"', note: t('Add your user key', '사용자 키 추가', '填入用户密钥', 'Добавьте ключ пользователя', 'ユーザーキーを設定', '填入用戶金鑰', 'Kullanıcı anahtarını ekle') },
 ];
 
 const quickstart = [
-	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
-	{ cmd: 'ocx init', note: t('Inject a provider into Codex', 'Codex에 프로바이더 주입', '向 Codex 注入 provider', 'Внедрение провайдера в Codex', 'プロバイダーを Codex に注入', '向 Codex 注入供應商', "Codex'e bir sağlayıcı ekleyin") },
-	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
-	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', 'Codex가 ocx를 경유', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex は ocx 経由に', 'Codex 現在經由 ocx 路由', 'Codex artık ocx üzerinden yönlendirilir') },
+		{ cmd: 'export OPENAI_BASE_URL="https://YOUR_HUBAPI_ORIGIN/v1"', note: t('Set the hubapi Base URL', 'hubapi Base URL 설정', '设置 hubapi Base URL', 'Укажите Base URL hubapi', 'hubapi Base URL を設定', '設定 hubapi Base URL', 'hubapi Base URL ayarla') },
+		{ cmd: 'export OPENAI_API_KEY="hub_live_REPLACE_ME"', note: t('Add your user key', '사용자 키 추가', '填入用户密钥', 'Добавьте ключ пользователя', 'ユーザーキーを設定', '填入用戶金鑰', 'Kullanıcı anahtarını ekle') },
+		{ cmd: 'curl "$OPENAI_BASE_URL/models" -H "Authorization: Bearer $OPENAI_API_KEY"', note: t('Read the verified model aliases', '검증된 모델 별칭 확인', '读取已验证模型别名', 'Получите проверенные псевдонимы моделей', '検証済みモデル別名を確認', '讀取已驗證模型別名', 'Doğrulanmış model takma adlarını oku') },
 ];
 
 // full docs map for the closing sitemap band (also the mobile path to every section)
@@ -154,7 +177,7 @@ const docsMap = [
 		label: t('Guides', '가이드', '指南', 'Руководства', 'ガイド', '指南', 'Kılavuzlar'),
 		icon: 'book',
 		links: [
-			{ label: t('Providers', '프로바이더', '提供商', 'Провайдеры', 'プロバイダー', '供應商', 'Sağlayıcılar'), href: `${prefix}guides/providers/` },
+			{ label: t('Providers', '프로바이더', '提供方', 'Провайдеры', 'プロバイダー', '供應商', 'Sağlayıcılar'), href: `${prefix}guides/providers/` },
 			{ label: t('Model Routing', '모델 라우팅', '模型路由', 'Маршрутизация моделей', 'モデルルーティング', '模型路由', 'Model Yönlendirme'), href: `${prefix}guides/model-routing/` },
 			{ label: t('Combos', '콤보', '组合', 'Комбо', 'コンボ', '組合', 'Kombolar'), href: `${prefix}guides/combos/` },
 			{ label: t('Codex Integration', 'Codex 통합', 'Codex 集成', 'Интеграция с Codex', 'Codex 連携', 'Codex 整合', 'Codex Entegrasyonu'), href: `${prefix}guides/codex-integration/` },
@@ -202,28 +225,25 @@ const docsMap = [
 	     scale-depth morph). -->
 	<div class="lp-scenes">
 	<section class="lp-scene lp-scene-hero">
-	<div class="lp-scene-inner lp-hero-field">
+		<div class="lp-scene-inner lp-hero-field">
 		<div class="lp-field-bg" aria-hidden="true">
 			<Image src={heroFieldLight} alt="" class="lp-field-light" loading="eager" widths={[1024, 2048]} sizes="100vw" />
 			<Image src={heroFieldDark} alt="" class="lp-field-dark" loading="lazy" widths={[1024, 2048]} sizes="100vw" />
 		</div>
+		<nav class="lp-product-nav" aria-label={t('Product', '제품', '产品', 'Продукт', '製品', '產品', 'Ürün')}>
+			<a href="#capabilities">{t('Product', '제품 기능', '产品能力', 'Возможности', '製品機能', '產品能力', 'Ürün')}</a>
+			<a href="#how-it-works">{t('How it works', '작동 방식', '工作原理', 'Как это работает', '仕組み', '運作原理', 'Nasıl çalışır')}</a>
+			<a href="#integrations">{t('Integrations', '통합', '集成', 'Интеграции', '連携', '整合', 'Entegrasyonlar')}</a>
+			<a href="#documentation">{t('Documentation', '문서', '文档', 'Документация', 'ドキュメント', '文件', 'Dokümantasyon')}</a>
+			<a href="https://github.com/lidge-jun/opencodex">GitHub</a>
+		</nav>
 		<div class="lp-hero-copy">
-			{/* Product-word drum: the H1 performs the claim — the proxy serves both
-			    Codex and Claude Code. 4-face rotateX cylinder, fixed slot width via
-			    inline-grid stacking; reduced-motion collapses to a static pairing. */}
-			<h1 id="_top">
-				{t('Run ', '', '让 ', 'Запускайте ', '実行 ', '讓 ', '')}<span class="lp-drum" aria-label="Codex and Claude">
-					<span class="lp-drum-spin" aria-hidden="true">
-						<span class="lp-drum-face lp-drum-codex">Codex</span>
-						<span class="lp-drum-face lp-drum-claude">Claude</span>
-						<span class="lp-drum-face lp-drum-codex">Codex</span>
-						<span class="lp-drum-face lp-drum-claude">Claude</span>
-					</span>
-					<span class="lp-drum-static" aria-hidden="true">Codex<span class="lp-drum-dot"> · </span>Claude</span>
-				</span>{t(' on any LLM.', '를 어떤 LLM 위에서든.', ' 跑在任意 LLM 上。', ' на любой LLM.', ' を任意の LLM 上で。', ' 跑在任意 LLM 上。', ' dilediğiniz LLM ile çalıştırın.')}
-			</h1>
+			<p class="lp-eyebrow">hubapi · task-routed AI gateway</p>
+			<h1 id="_top">{t('One entry point for every AI model.', '하나의 진입점으로 모든 AI 모델을 연결하세요.', '一个入口，连接你的全部 AI 模型。', 'Одна точка входа для всех ваших ИИ-моделей.', '1 つの入口から、すべての AI モデルへ。', '一個入口，連接你的全部 AI 模型。', 'Tüm AI modelleriniz için tek giriş noktası.')}</h1>
 			<p class="lp-sub">
-				{t('opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'opencodex는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'opencodex — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'opencodex は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機代理，用同一個連接埠同時服務 Codex 與 Claude Code —— 將各自的線路格式雙向翻譯為任意供應商，支援流式、工具呼叫、推理與圖像。無需修補用戶端。', 'opencodex, Codex ve Claude Code’u tek bir port üzerinden sunan yerel bir proxy’dir — her bir hat formatını dilediğiniz sağlayıcıya dönüştürür; akış (streaming), araç çağrıları (tool calls), akıl yürütme (reasoning) ve görseller her iki yönde de sorunsuz iletilir. İstemci tarafında sıfır yama.')}
+				{t('hubapi is a local gateway with a private routing core. It serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'hubapi는 비공개 라우팅 코어를 갖춘 로컬 게이트웨이입니다. 하나의 포트로 Codex와 Claude Code를 제공하고 모든 프로바이더로 프로토콜을 변환하며 스트리밍, 도구 호출, 추론과 이미지를 지원합니다.', 'hubapi 是内置私有路由核心的本地网关。它用一个端口同时服务 Codex 与 Claude Code，将协议转换到任意提供方，并支持流式、工具调用、推理与图像。无需修补客户端。', 'hubapi — локальный шлюз с приватным ядром маршрутизации. Он обслуживает Codex и Claude Code через один порт, транслирует протоколы для разных провайдеров и поддерживает стриминг, инструменты, рассуждения и изображения.', 'hubapi は 非公開ルーティングコアを備えたローカルゲートウェイです。1 つのポートで Codex と Claude Code を提供し、任意のプロバイダーへプロトコルを変換します。', 'hubapi 是內建私有路由核心的本機閘道。它用一個連接埠同時服務 Codex 與 Claude Code，將協定轉換到任意供應商，並支援串流、工具呼叫、推理與圖像。', 'hubapi, özel bir yönlendirme çekirdeğine sahip yerel bir ağ geçididir. Codex ve Claude Code’u tek porttan sunar, protokolleri sağlayıcılara dönüştürür ve akış, araç çağrısı, akıl yürütme ile görselleri destekler.')}
+				<br />
+				{t('The hubapi SaaS layer gives users one AI API and task routes such as coding, vision, fast, or private. The private routing core selects a matching model from the configured providers using capability and operating evidence — without classifying prompt text.', 'hubapi SaaS 계층은 사용자에게 하나의 AI API와 coding, vision, fast, private 같은 작업 경로를 제공합니다. 비공개 라우팅 코어는 프롬프트 텍스트를 분류하지 않고 기능 및 운영 근거로 설정된 프로바이더에서 적합한 모델을 선택합니다.', 'hubapi SaaS 层向用户提供一个 AI API，以及 coding、vision、fast、private 等任务路由。私有路由核心根据能力与运行证据从已配置的提供方中选择匹配模型，不分析提示词正文。', 'SaaS-слой hubapi даёт пользователям один API ИИ и маршруты задач: coding, vision, fast или private. Приватное ядро маршрутизации подбирает модель среди настроенных провайдеров по данным о возможностях и работе, не классифицируя текст запроса.', 'hubapi SaaS レイヤーは、1 つの AI API と coding、vision、fast、private などのタスクルートを提供します。非公開ルーティングコアはプロンプト本文を分類せず、能力と運用証拠に基づいて設定済みプロバイダーから適合モデルを選びます。', 'hubapi SaaS 層向用戶提供一個 AI API，以及 coding、vision、fast、private 等任務路由。私有路由核心根據能力與運作證據從已設定的供應商中選擇匹配模型，不分析提示詞正文。', 'hubapi SaaS katmanı kullanıcılara tek bir AI API ile coding, vision, fast veya private gibi görev rotaları sunar. Özel yönlendirme çekirdeği, istem metnini sınıflandırmadan yetenek ve çalışma kanıtlarına göre yapılandırılmış sağlayıcılardan uygun modeli seçer.')}
 			</p>
 			<div class="lp-cta">
 				<a class="lp-btn-primary" href={`${prefix}getting-started/installation/`}>
@@ -232,7 +252,7 @@ const docsMap = [
 				</a>
 				<a class="lp-btn-ghost" href="https://github.com/lidge-jun/opencodex">GitHub</a>
 			</div>
-		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的 provider', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的供應商', 'Desteklenen sağlayıcılar')}>
+		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的提供方', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的供應商', 'Desteklenen sağlayıcılar')}>
 				{providers.map((p) => (
 					<li>
 						{p.path && (
@@ -243,11 +263,35 @@ const docsMap = [
 						{p.label}
 					</li>
 				))}
-				<li class="lp-chip-more"><a href={`${prefix}guides/providers/`}>{t('40+ providers', '프로바이더 40+', '40+ providers', '40+ провайдеров', '40+ プロバイダー', '40+ 供應商', '40+ sağlayıcı')}</a></li>
+				<li class="lp-chip-more"><a href={`${prefix}guides/providers/`}>{t('40+ providers', '프로바이더 40+', '40+ 提供方', '40+ провайдеров', '40+ プロバイダー', '40+ 供應商', '40+ sağlayıcı')}</a></li>
 			</ul>
 		</div>
-		<div class="lp-stage-in">
-			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的 provider 与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル', 'opencodex 儀表板 —— 即時代理狀態、路由的供應商與可用模型', 'opencodex kontrol paneli — canlı proxy durumu, yönlendirilen sağlayıcılar ve kullanılabilir modeller')} loading="eager" />
+		<div class="lp-stage-in" id="how-it-works">
+			<div class="lp-topology" aria-label={t('How it works', '작동 방식', '工作原理', 'Как это работает', '仕組み', '運作原理', 'Nasıl çalışır')}>
+				<div class="lp-topology-column">
+					<span class="lp-topology-label">{t('Clients', '클라이언트', '客户端', 'Клиенты', 'クライアント', '用戶端', 'İstemciler')}</span>
+					<div class="lp-topology-node">Codex</div>
+					<div class="lp-topology-node">Claude Code</div>
+				</div>
+				<div class="lp-route-line" aria-hidden="true"><span></span></div>
+				<div class="lp-topology-core">
+					<span class="lp-topology-label">{t('Local routing layer', '로컬 라우팅 계층', '本地路由层', 'Локальный слой маршрутизации', 'ローカルルーティング層', '本機路由層', 'Yerel yönlendirme katmanı')}</span>
+					<strong>hubapi</strong>
+					<ul>
+						<li>{t('One local endpoint', '하나의 로컬 엔드포인트', '一个本地端点', 'Одна локальная точка', '1 つのローカルエンドポイント', '一個本機端點', 'Tek yerel uç nokta')}</li>
+						<li>{t('Protocol translation', '프로토콜 변환', '协议转换', 'Трансляция протоколов', 'プロトコル変換', '協定轉換', 'Protokol dönüşümü')}</li>
+						<li>{t('Task aliases select the route', '작업 별칭으로 경로 선택', '任务别名选择路由', 'Псевдоним задачи выбирает маршрут', 'タスク別名でルートを選択', '任務別名選擇路由', 'Görev takma adı rotayı seçer')}</li>
+						<li>{t('Policy and fallback', '정책 및 폴백', '策略与回退', 'Правила и резерв', 'ポリシーとフォールバック', '策略與回退', 'İlke ve yedekleme')}</li>
+					</ul>
+				</div>
+				<div class="lp-route-line" aria-hidden="true"><span></span></div>
+				<div class="lp-topology-column">
+					<span class="lp-topology-label">{t('Providers', '프로바이더', '提供方', 'Провайдеры', 'プロバイダー', '供應商', 'Sağlayıcılar')}</span>
+					<div class="lp-topology-node">Anthropic · Gemini</div>
+					<div class="lp-topology-node">Grok · DeepSeek · Ollama</div>
+				</div>
+			</div>
+			<Image src={dashboard} alt={t('The hubapi dashboard — live proxy status, routed providers, and available models', 'hubapi 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'hubapi 控制台 —— 实时代理状态、路由的提供方与可用模型', 'Панель hubapi — статус прокси, маршрутизированные провайдеры и доступные модели', 'hubapi ダッシュボード — プロキシ状態、ルーティング済みプロバイダー、利用可能モデル', 'hubapi 儀表板 —— 即時代理狀態、路由的供應商與可用模型', 'hubapi paneli — canlı proxy durumu, yönlendirilen sağlayıcılar ve modeller')} loading="eager" />
 		</div>
 	</div>
 	</section>
@@ -255,10 +299,10 @@ const docsMap = [
 	<!-- quickstart sheet scene -->
 	<section class="lp-scene lp-scene-quick">
 	<div class="lp-scene-inner lp-quick">
-		<div class="lp-kinetic" aria-label={t('Install. Start. Codex, rerouted.', '설치. 시작. Codex는 그대로.', '安装。启动。Codex 即刻改道。', 'Установите. Запустите. Codex — по новому маршруту.', 'インストール。起動。Codex を経路変更。', '安裝。啟動。Codex 即刻改道。', 'Kurun. Başlatın. Codex, anında yönlendirildi.')}>
-			<p class="lp-kline">{t('Install.', '설치.', '安装。', 'Установите.', 'インストール。', '安裝。', 'Kurun.')}</p>
-			<p class="lp-kline">{t('Start.', '시작.', '启动。', 'Запустите.', '起動。', '啟動。', 'Başlatın.')}</p>
-			<p class="lp-kline lp-kline-accent">{t('Codex, rerouted.', 'Codex는 그대로.', 'Codex 即刻改道。', 'Codex — по новому маршруту.', 'Codex を経路変更。', 'Codex 即刻改道。', 'Codex, anında yönlendirildi.')}</p>
+		<div class="lp-kinetic" aria-label={t('Connect. Authenticate. Models ready.', '연결. 인증. 모델 준비 완료.', '连接。鉴权。模型即刻可用。', 'Подключитесь. Авторизуйтесь. Модели готовы.', '接続。認証。モデルの準備完了。', '連線。驗證。模型即刻可用。', 'Bağlanın. Kimlik doğrulayın. Modeller hazır.')}>
+			<p class="lp-kline">{t('Connect.', '연결.', '连接。', 'Подключитесь.', '接続。', '連線。', 'Bağlanın.')}</p>
+			<p class="lp-kline">{t('Authenticate.', '인증.', '鉴权。', 'Авторизуйтесь.', '認証。', '驗證。', 'Kimlik doğrulayın.')}</p>
+			<p class="lp-kline lp-kline-accent">{t('Models ready.', '모델 준비 완료.', '模型即刻可用。', 'Модели готовы.', 'モデルの準備完了。', '模型即刻可用。', 'Modeller hazır.')}</p>
 		</div>
 		<div class="lp-quick-side">
 			<div class="lp-terminal">
@@ -278,20 +322,24 @@ const docsMap = [
 			<canvas class="lp-scrub-canvas" data-base={base} data-count="158" width="960" height="856" aria-label={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')}></canvas>
 			<Image src={demo} alt={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')} loading="lazy" class="lp-scrub-poster" />
 		</div>
-		<p class="lp-scrub-caption">{t('One task, streamed end to end through opencodex.', '작업 하나가 opencodex를 관통해 끝까지 스트리밍됩니다.', '一个任务，经 opencodex 全程流式完成。', 'Одна задача — стриминг через opencodex от начала до конца.', '1 つのタスクが opencodex を経てエンドツーエンドでストリーミングされます。', '一個任務，經 opencodex 全程流式完成。', 'Tek bir görev, opencodex üzerinden uçtan uca canlı akışla tamamlanır.')}</p>
+			<p class="lp-scrub-caption">{t('One task, streamed end to end through hubapi.', '하나의 작업이 hubapi를 통해 끝까지 스트리밍됩니다.', '一个任务，经 hubapi 全程流式完成。', 'Одна задача — поток через hubapi от начала до конца.', '1 つのタスクが hubapi を通じてエンドツーエンドでストリーミングされます。', '一個任務，經 hubapi 全程串流完成。', 'Tek bir görev hubapi üzerinden uçtan uca aktarılır.')}</p>
 	</div>
 	</section>
 	</div>
 
 	<!-- feature bento: dominant cell + content-weighted spans -->
-	<section class="lp-bento">
+	<section class="lp-bento" id="capabilities">
 		<h2 class="lp-bento-title">{t('One proxy, the whole surface.', '프록시 하나로 전체 서피스를.', '一个代理，覆盖全部能力。', 'Один прокси — все возможности.', '1 つのプロキシでサーフェス全体を。', '一個代理，覆蓋全部能力。', 'Tek bir proxy, tüm yetenekler.')}</h2>
 		<div class="lp-grid">
 			<article class="lp-cell lp-cell-providers">
-				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.plug} /></svg>{t('Any provider', '모든 프로바이더', '任意 provider', 'Любой провайдер', '任意のプロバイダー', '任意供應商', 'Dilediğiniz sağlayıcı')}</h3>
+				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.plug} /></svg>{t('Any provider', '모든 프로바이더', '任意提供方', 'Любой провайдер', '任意のプロバイダー', '任意供應商', 'Dilediğiniz sağlayıcı')}</h3>
 				<p>
-					{t('Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.', '어댑터 다섯 개가 Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 커버합니다 — 내장 프로바이더 40+.', '五个适配器覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 兼容的 Chat Completions 端点 —— 内置 40+ provider。', 'Пять адаптеров покрывают Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough и любую OpenAI-совместимую конечную точку Chat Completions — 40+ встроенных провайдеров.', '5 つのアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — 組み込みプロバイダー 40+。', '五個適配器覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 相容的 Chat Completions 端點 —— 內建 40+ 供應商。', 'Beş adaptör; Anthropic Messages, Google Gemini, Azure, OpenAI Responses doğrudan geçişi ve tüm OpenAI uyumlu Chat Completions uç noktalarını kapsar — 40+ dahili sağlayıcı.')}
+					{t('Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.', '어댑터 다섯 개가 Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 커버합니다 — 내장 프로바이더 40+.', '五个适配器覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 兼容的 Chat Completions 端点 —— 内置 40+ 提供方。', 'Пять адаптеров покрывают Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough и любую OpenAI-совместимую конечную точку Chat Completions — 40+ встроенных провайдеров.', '5 つのアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — 組み込みプロバイダー 40+。', '五個適配器覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 相容的 Chat Completions 端點 —— 內建 40+ 供應商。', 'Beş adaptör; Anthropic Messages, Google Gemini, Azure, OpenAI Responses doğrudan geçişi ve tüm OpenAI uyumlu Chat Completions uç noktalarını kapsar — 40+ dahili sağlayıcı.')}
 				</p>
+			</article>
+			<article class="lp-cell">
+				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.picker} /></svg>{t('Task-based model routing', '작업 기반 모델 라우팅', '按任务路由模型', 'Маршрутизация по задачам', 'タスク別モデルルーティング', '按任務路由模型', 'Göreve göre model yönlendirme')}</h3>
+				<p>{t('Expose stable task aliases to clients. The private routing core filters candidates by required capabilities, then ranks them with health, latency, cost, and quota evidence.', '클라이언트에 안정적인 작업 별칭을 제공합니다. 비공개 라우팅 코어는 필요한 기능으로 후보를 필터링한 뒤 상태, 지연 시간, 비용, 할당량 근거로 순위를 정합니다.', '向客户端提供稳定的任务别名。私有路由核心先按所需能力过滤候选，再依据健康、延迟、成本和额度证据排序。', 'Клиенты используют стабильные псевдонимы задач. Приватное ядро маршрутизации фильтрует кандидатов по нужным возможностям, затем ранжирует их по данным о состоянии, задержке, стоимости и квоте.', 'クライアントには安定したタスク別名を公開します。非公開ルーティングコアは必要な能力で候補を絞り、健全性、遅延、コスト、クォータの証拠で順位付けします。', '向用戶端提供穩定的任務別名。私有路由核心先按所需能力過濾候選，再依據健康、延遲、成本和額度證據排序。', 'İstemcilere kararlı görev takma adları sunulur. Özel yönlendirme çekirdeği adayları gerekli yeteneklere göre filtreler; ardından sağlık, gecikme, maliyet ve kota kanıtlarıyla sıralar.')}</p>
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.key} /></svg>{t('OAuth or API key', 'OAuth 또는 API 키', 'OAuth 或 API key', 'OAuth или API-ключ', 'OAuth または API キー', 'OAuth 或 API key', 'OAuth veya API anahtarı')}</h3>
@@ -313,7 +361,7 @@ const docsMap = [
 			<article class="lp-cell lp-cell-claude">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.terminal} /></svg>Claude Code</h3>
 				<p>{t('ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ocx claude가 같은 포트로 Claude Code를 띄웁니다 — 라우팅된 모든 모델이 /model 선택기에 뜨고, 최대 1M auto-context, 로스터 서브에이전트, claude.ai 로그인은 그대로 유지됩니다.', 'ocx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ocx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ocx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。', 'ocx claude 讓 Claude Code 連線同一連接埠 —— 所有路由模型出現在 /model 選擇器中，auto-context 最高 1M，roster 子代理，claude.ai 登入保持不變。', 'ocx claude, Claude Code’u aynı port üzerinden başlatır — /model seçicisindeki tüm yönlendirilmiş modeller, 1M’a kadar otomatik bağlam, alt ajanlar ve claude.ai oturumunuz aktif kalır.')}</p>
-				<img src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar', 'opencodex로 라우팅된 모델에서 돌아가는 Claude Code — 상태 표시줄에 gpt-5.6-luna-medium 활성', '通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型', 'Claude Code на маршрутизированной модели через opencodex — gpt-5.6-luna-medium активна в строке состояния', 'opencodex でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示', '透過 opencodex 執行路由模型的 Claude Code —— 狀態列顯示 gpt-5.6-luna-medium 為目前模型', 'opencodex üzerinden yönlendirilen modeli çalıştıran Claude Code — durum çubuğunda gpt-5.6-luna-medium aktif')} loading="lazy" />
+				<img src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through hubapi — gpt-5.6-luna-medium active in the status bar', 'hubapi로 라우팅된 모델에서 실행되는 Claude Code', '通过 hubapi 运行路由模型的 Claude Code', 'Claude Code на маршрутизированной модели через hubapi', 'hubapi でルーティングされたモデルを実行する Claude Code', '透過 hubapi 執行路由模型的 Claude Code', 'hubapi üzerinden yönlendirilen modeli çalıştıran Claude Code')} loading="lazy" />
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.search} /></svg>{t('Search & vision sidecars', '검색 & 비전 사이드카', '搜索与视觉边车', 'Сайдкары поиска и зрения', '検索 & ビジョンサイドカー', '搜尋與視覺邊車', 'Arama & görme sidecar’ları')}</h3>
@@ -321,7 +369,7 @@ const docsMap = [
 			</article>
 			<article class="lp-cell lp-cell-terminal">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.code} /></svg>{t('Quickstart', '퀵스타트', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門', 'Hızlı Başlangıç')}</h3>
-				<p>{t('ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'ocx init이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ocx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'ocx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'ocx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'ocx init が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ocx stop でネイティブ Codex に綺麗に復元します。', 'ocx init 將供應商寫入 Codex 設定，CLI、TUI、App 與 SDK 共享同一模型目錄。ocx stop 可乾淨地恢復原生 Codex。', 'ocx init, Codex yapılandırmanıza bir sağlayıcı yazar; Codex CLI, TUI, App ve SDK aynı model kataloğunu paylaşır. ocx stop ile yerel Codex’e temiz bir şekilde geri dönebilirsiniz.')}</p>
+				<p>{t('export OPENAI_API_KEY="$HUBAPI_KEY" writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'export OPENAI_API_KEY="$HUBAPI_KEY"이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ocx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'export OPENAI_API_KEY="$HUBAPI_KEY" 将提供方写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'export OPENAI_API_KEY="$HUBAPI_KEY" записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'export OPENAI_API_KEY="$HUBAPI_KEY" が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ocx stop でネイティブ Codex に綺麗に復元します。', 'export OPENAI_API_KEY="$HUBAPI_KEY" 將供應商寫入 Codex 設定，CLI、TUI、App 與 SDK 共享同一模型目錄。ocx stop 可乾淨地恢復原生 Codex。', 'export OPENAI_API_KEY="$HUBAPI_KEY", Codex yapılandırmanıza bir sağlayıcı yazar; Codex CLI, TUI, App ve SDK aynı model kataloğunu paylaşır. ocx stop ile yerel Codex’e temiz bir şekilde geri dönebilirsiniz.')}</p>
 				<div class="lp-terminal">
 					<div class="lp-terminal-bar"><span>zsh</span></div>
 					<pre>{quickstart.map((line) => (<code><span class="lp-prompt">$ </span>{line.cmd}<span class="lp-note">  # {line.note}</span>{'\n'}</code>))}</pre>
@@ -330,8 +378,33 @@ const docsMap = [
 		</div>
 	</section>
 
+	<section class="lp-evidence" id="integrations">
+		<div class="lp-evidence-copy">
+			<p class="lp-section-kicker">Routing evidence</p>
+			<h2>{t('Route evidence, not a black box.', '블랙박스가 아닌 라우팅 근거.', '路由有据可查，而不是黑箱。', 'Маршрут с доказательствами, а не чёрный ящик.', 'ブラックボックスではなく、追跡できるルート。', '路由有據可查，而不是黑箱。', 'Kara kutu değil, izlenebilir rota kanıtı.')}</h2>
+			<p>{t('Every step stays inspectable in the local dashboard: requested model, matched policy, provider attempts, fallback reason, latency, tokens, and cost when the provider reports it.', '요청 모델, 일치한 정책, 프로바이더 시도, 폴백 사유, 지연 시간, 토큰과 제공되는 비용까지 로컬 대시보드에서 모든 단계를 확인할 수 있습니다.', '每一步都可在本地控制台中核查：请求模型、命中策略、提供方尝试、回退原因、延迟、Token，以及提供方返回时的成本。', 'Каждый шаг доступен в локальной панели: запрошенная модель, сработавшее правило, попытки провайдеров, причина резерва, задержка, токены и стоимость, если провайдер её сообщает.', '要求モデル、適用ポリシー、プロバイダー試行、フォールバック理由、遅延、トークン、そして提供される場合のコストまで、ローカルダッシュボードで確認できます。', '每一步都可在本機控制台中核查：請求模型、命中策略、供應商嘗試、回退原因、延遲、Token，以及供應商回傳時的成本。', 'İstenen model, eşleşen ilke, sağlayıcı denemeleri, yedekleme nedeni, gecikme, tokenlar ve bildirildiğinde maliyet dahil her adım yerel panelde incelenebilir.')}</p>
+		</div>
+		<div class="lp-trace-card" aria-label={t('Illustrative route', '예시 경로', '示例路由', 'Пример маршрута', 'ルート例', '範例路由', 'Örnek rota')}>
+			<div class="lp-trace-meta"><span>{t('Illustrative route', '예시 경로', '示例路由', 'Пример маршрута', 'ルート例', '範例路由', 'Örnek rota')}</span><span class="lp-status-dot">200 · 1.8s</span></div>
+			<ol class="lp-trace">
+				<li><span>{t('Requested', '요청', '请求', 'Запрошено', '要求', '請求', 'İstenen')}</span><code>gpt-5.6</code></li>
+				<li><span>{t('Policy', '정책', '策略', 'Правило', 'ポリシー', '策略', 'İlke')}</span><code>coding-primary</code></li>
+				<li><span>{t('Provider', '프로바이더', '提供方', 'Провайдер', 'プロバイダー', '供應商', 'Sağlayıcı')}</span><code>anthropic</code></li>
+				<li><span>{t('Delivered', '전달됨', '最终模型', 'Получено', '配信', '最終模型', 'Sunulan')}</span><code>claude-sonnet-4-6</code></li>
+			</ol>
+		</div>
+		<div class="lp-privacy-card">
+			<div class="lp-privacy-mark" aria-hidden="true">⌂</div>
+			<div>
+				<h3>{t('Local by default. Credentials stay at the boundary.', '기본은 로컬. 자격 증명은 경계에 유지됩니다.', '默认本地运行，凭据留在边界内。', 'Локально по умолчанию. Учётные данные остаются на границе.', 'ローカルが既定。認証情報は境界内に。', '預設本機執行，憑證留在邊界內。', 'Varsayılan olarak yerel. Kimlik bilgileri sınırda kalır.')}</h3>
+				<p>{t('The dashboard talks to the loopback management API. Provider credentials are masked in the interface, request bodies are not exposed, and hubapi adds no analytics or remote telemetry.', '대시보드는 루프백 관리 API와 통신합니다. 프로바이더 자격 증명은 화면에서 마스킹되고 요청 본문은 노출되지 않으며, hubapi는 분석이나 원격 텔레메트리를 추가하지 않습니다.', '控制台只连接回环管理 API。提供方凭据在界面中保持遮蔽，不暴露请求正文，hubapi 不添加分析或远程遥测。', 'Панель работает с API управления на loopback. Учётные данные скрыты, тела запросов не раскрываются, hubapi не добавляет аналитику или удалённую телеметрию.', 'ダッシュボードはループバック管理 API と通信します。プロバイダー認証情報はマスクされ、リクエスト本文は公開されず、hubapi は分析やリモートテレメトリを追加しません。', '控制台只連接回環管理 API。供應商憑證在介面中保持遮蔽，不揭露請求正文，hubapi 不新增分析或遠端遙測。', 'Panel yalnızca loopback yönetim API’siyle konuşur. Sağlayıcı bilgileri arayüzde maskelenir, istek gövdeleri gösterilmez ve hubapi analiz ya da uzak telemetri eklemez.')}</p>
+				<a class="lp-inline-link" href={`${prefix}reference/architecture/`}>{t('Read the security model', '보안 모델 읽기', '查看安全模型', 'О модели безопасности', 'セキュリティモデルを読む', '查看安全模型', 'Güvenlik modelini okuyun')} →</a>
+			</div>
+		</div>
+	</section>
+
 	<!-- full docs sitemap band: every section reachable from the landing -->
-	<section class="lp-next" aria-label={t('Documentation map', '문서 맵', '文档地图', 'Карта документации', 'ドキュメントマップ', '文件地圖', 'Dokümantasyon haritası')}>
+	<section class="lp-next" id="documentation" aria-label={t('Documentation map', '문서 맵', '文档地图', 'Карта документации', 'ドキュメントマップ', '文件地圖', 'Dokümantasyon haritası')}>
 		<h2>{t('Explore the docs', '문서 살펴보기', '浏览文档', 'Изучите документацию', 'ドキュメントを探る', '瀏覽文件', 'Dokümantasyonu Keşfedin')}</h2>
 		<div class="lp-next-grid">
 			{docsMap.map((group) => (
@@ -349,13 +422,13 @@ const docsMap = [
 
 	<p class="lp-disclaimer">
 		{t(
-			'opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider\u2019s Terms of Service before connecting.',
-			'opencodex는 독립 커뮤니티 프로젝트이며 OpenAI, Anthropic 등 어떤 프로바이더와도 제휴하거나 보증받지 않습니다. 일부 프로바이더는 서드파티 프록시 경유 트래픽 계정을 제한할 수 있으니 연결 전 각 프로바이더의 이용약관을 확인하세요.',
-			'opencodex 是独立的社区项目，与 OpenAI、Anthropic 或任何其他 provider 均无关联或背书。部分 provider 可能限制经第三方代理路由流量的账号 —— 连接前请查阅各 provider 的服务条款。',
-			'opencodex — независимый проект сообщества, никак не связанный с OpenAI, Anthropic или любым другим провайдером и не одобренный ими. Некоторые провайдеры могут ограничивать аккаунты, направляющие трафик через сторонние прокси, — перед подключением ознакомьтесь с условиями обслуживания каждого провайдера.',
-			'opencodex は独立したコミュニティプロジェクトであり、OpenAI、Anthropic などいかなるプロバイダーとも提携・推奨されるものではありません。一部のプロバイダーはサードパーティプロキシ経由のトラフィックを使用するアカウントを制限する可能性があります — 接続前に各プロバイダーの利用規約を確認してください。',
-			'opencodex 是獨立的社群專案，與 OpenAI、Anthropic 或任何其他供應商均無關聯或背書。部分供應商可能限制經第三方代理路由流量的帳號 —— 連線前請查閱各供應商的服務條款。',
-			'opencodex bağımsız bir topluluk projesidir; OpenAI, Anthropic veya başka bir sağlayıcı ile bağlantılı veya onlar tarafından onaylanmış değildir. Bazı sağlayıcılar trafiği üçüncü taraf proxy’ler üzerinden yönlendiren hesapları sınırlandırabilir — bağlanmadan önce her sağlayıcının Hizmet Şartlarını inceleyin.'
+			'hubapi is an independent product built on the open-source routing foundation. It is not affiliated with or endorsed by OpenAI, Anthropic, or any provider. Some providers may restrict proxy traffic — review each provider’s Terms before connecting.',
+			'hubapi는 오픈소스 비공개 라우팅 코어를 갖춘 독립 제품이며 OpenAI, Anthropic 또는 어떤 프로바이더와도 제휴하거나 보증받지 않습니다. 연결 전 각 프로바이더의 이용약관을 확인하세요.',
+			'hubapi 是基于开源路由底座的独立产品，与 OpenAI、Anthropic 或任何提供方均无关联或背书。部分提供方可能限制代理流量，连接前请查阅其服务条款。',
+			'hubapi — независимый продукт на базе открытой системы маршрутизации; он не связан и не одобрен OpenAI, Anthropic или провайдерами. Перед подключением ознакомьтесь с их условиями.',
+			'hubapi はオープンソースの 非公開ルーティングコアを備えた独立製品で、OpenAI、Anthropic、各プロバイダーとは提携・推奨関係にありません。接続前に利用規約を確認してください。',
+			'hubapi 是基於開源路由底座的獨立產品，與 OpenAI、Anthropic 或任何供應商均無關聯或背書。連線前請查閱其服務條款。',
+			'hubapi, açık kaynak yönlendirme temeli üzerine kurulu bağımsız bir üründür; OpenAI, Anthropic veya sağlayıcılarla bağlantılı ya da onlar tarafından onaylanmış değildir. Bağlanmadan önce koşulları inceleyin.'
 		)}
 	</p>
 </div>

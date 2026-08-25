@@ -1,0 +1,14 @@
+#!/usr/sbin/nft -f
+
+# Service-scoped host guard. It leaves the host's existing firewall policy
+# untouched while making the private OpenCodex and hub listeners unreachable
+# from non-loopback interfaces. Change the two ports only if deployment config
+# changes them, then validate with: sudo nft --check --file hubapi-guard.nft
+table inet hubapi_guard {
+  chain input {
+    type filter hook input priority -10; policy accept;
+
+    iifname "lo" accept
+    tcp dport { 10100, 10400 } counter drop comment "hubapi private listeners"
+  }
+}

@@ -12,7 +12,7 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconShuffle, IconTerminal } from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -21,6 +21,7 @@ import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
+import { normalizeHashPath } from "./hash-routing";
 
 installApiAuthFetch();
 
@@ -42,31 +43,57 @@ const PAGE_TKEY: Record<Page, TKey> = {
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const THEME_KEY = "ocx-theme";
 
-/**
- * Every sidebar row maps one-to-one onto a page again.
- *
- * The Claude row was the exception: a second entry pointing at a tab of Integrations,
- * which needed `subPath`, `activeHashes`, and an `isNavEntryActive` helper whose only
- * job was stopping the sidebar from lighting two rows and claiming the user was in two
- * places. Removing the duplicate removed all four.
- */
 type NavEntry = {
   id: Page;
   tkey: TKey;
   Icon: typeof IconGrid;
+  subPath?: string;
 };
 
-const NAV: NavEntry[] = [
-  { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
-  { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
-  { id: "providers", tkey: "nav.providers", Icon: IconServer },
-  { id: "models", tkey: "nav.models", Icon: IconBoxes },
-  { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
-  { id: "logs", tkey: "nav.logs", Icon: IconList },
-  { id: "usage", tkey: "nav.usage", Icon: IconActivity },
-  { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
-  { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
+type NavGroup = { tkey: TKey; entries: NavEntry[] };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    tkey: "navGroup.overview",
+    entries: [{ id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid }],
+  },
+  {
+    tkey: "navGroup.resources",
+    entries: [
+      { id: "providers", tkey: "nav.providers", Icon: IconServer },
+      { id: "models", tkey: "nav.models", Icon: IconBoxes },
+      { id: "integrations", subPath: "keys", tkey: "api.title", Icon: IconKey },
+    ],
+  },
+  {
+    tkey: "navGroup.observability",
+    entries: [
+      { id: "usage", tkey: "nav.usage", Icon: IconActivity },
+      { id: "logs", tkey: "nav.logs", Icon: IconList },
+    ],
+  },
+  {
+    tkey: "navGroup.automation",
+    entries: [
+      { id: "models", subPath: "routing", tkey: "routing.title", Icon: IconShuffle },
+      { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
+    ],
+  },
+  {
+    tkey: "navGroup.system",
+    entries: [
+      { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
+      { id: "startup", tkey: "nav.startup", Icon: IconTerminal },
+      { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
+    ],
+  },
 ];
+
+const NAV = NAV_GROUPS.flatMap(group => group.entries);
+
+function navTarget(entry: NavEntry): string {
+  return entry.subPath ? `${entry.id}/${entry.subPath}` : entry.id;
+}
 
 const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
 const THEME_TKEY: Record<Theme, TKey> = { light: "theme.light", dark: "theme.dark", system: "theme.system" };
@@ -89,20 +116,24 @@ export default function App() {
    * on `.main-inner`, which is App's element. Models owns every other tab concern.
    */
   const [modelsTab, setModelsTab] = useState<ModelsTab>(readModelsTab);
+  const [routeHash, setRouteHash] = useState(() => normalizeHashPath(window.location.hash));
   useEffect(() => {
-    const syncModelsTab = () => setModelsTab(readModelsTab());
-    window.addEventListener("hashchange", syncModelsTab);
-    window.addEventListener("popstate", syncModelsTab);
+    const syncRoute = () => {
+      setModelsTab(readModelsTab());
+      setRouteHash(normalizeHashPath(window.location.hash));
+    };
+    window.addEventListener("hashchange", syncRoute);
+    window.addEventListener("popstate", syncRoute);
     return () => {
-      window.removeEventListener("hashchange", syncModelsTab);
-      window.removeEventListener("popstate", syncModelsTab);
+      window.removeEventListener("hashchange", syncRoute);
+      window.removeEventListener("popstate", syncRoute);
     };
   }, []);
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const { locale, setLocale } = useI18n();
   const t = useT();
 
-  // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
+  // Tablet and narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -164,7 +195,7 @@ export default function App() {
 
   // Growing the window past the breakpoint dismisses the drawer state.
   useEffect(() => {
-    const mq = window.matchMedia("(min-width: 761px)");
+    const mq = window.matchMedia("(min-width: 1024px)");
     const onChange = () => { if (mq.matches) setNavOpen(false); };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
@@ -197,7 +228,7 @@ export default function App() {
   const brand = (
     <div className="brand">
       <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
-      <span className="name">opencodex</span>
+      <span className="name">{t("app.name")}</span>
       <span className="ver">v{displayedVersion}</span>
     </div>
   );
@@ -233,36 +264,32 @@ export default function App() {
             <IconX />
           </button>
         </div>
-        <nav>
-          {/*
-            Codex Auth was once filtered out of this list whenever the workspace layout
-            was active, on the grounds that the Providers workspace embeds the same
-            account pool. It is now promoted to the second slot instead: there is only
-            one layout, so that filter would have hidden the page permanently.
-          */}
-          {/*
-            The sidebar is navigation only — no row owns a mutation. That rule was
-            written when the Claude row carried the Claude Code connection switch;
-            ClaudeCode owns GET/PUT /api/claude-code now, and the row itself is gone.
-          */}
-          {NAV.map(entry => {
-            const { id, tkey, Icon } = entry;
-            const active = id === page;
-            return (
-              <div key={id} className="nav-entry">
-                <button type="button" className={`nav-item${active ? " active" : ""}`}
-                  data-page={id}
-                  onClick={() => {
-                    // Deliberate sidebar navigation — push a history entry.
-                    navigateToPage(id);
-                    setNavOpen(false);
-                  }}
-                  aria-current={active ? "page" : undefined}>
-                  <Icon /> {t(tkey)}
-                </button>
+        <nav aria-label={t("nav.main")}>
+          {NAV_GROUPS.map(group => (
+            <section className="nav-group" key={group.tkey} aria-labelledby={`nav-${group.tkey}`}>
+              <h2 className="nav-group-label" id={`nav-${group.tkey}`}>{t(group.tkey)}</h2>
+              <div className="nav-group-items">
+                {group.entries.map(entry => {
+                  const { id, subPath, tkey, Icon } = entry;
+                  const exactEntry = NAV.find(candidate => navTarget(candidate) === routeHash);
+                  const active = exactEntry ? exactEntry === entry : !subPath && id === page;
+                  return (
+                    <div key={navTarget(entry)} className="nav-entry">
+                      <button type="button" className={`nav-item${active ? " active" : ""}`}
+                        data-page={navTarget(entry)}
+                        onClick={() => {
+                          navigateToPage(id, subPath);
+                          setNavOpen(false);
+                        }}
+                        aria-current={active ? "page" : undefined}>
+                        <Icon /> <span>{t(tkey)}</span>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </section>
+          ))}
         </nav>
         <div className="sidebar-foot">
           <div className="lang-toggle">

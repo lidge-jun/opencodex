@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { createIsolatedTestEnvironment } from "../scripts/test";
+import { acquireTestRunLock, collectTestFiles, createIsolatedTestEnvironment, partitionTestFiles } from "../scripts/test";
 import {
   decodeWindowsIdentityPowerShellOutputForTests,
   windowsIdentityPowerShellCommandForTests,
@@ -9,6 +9,48 @@ import {
 } from "../src/codex/user-identity";
 
 describe("test runner isolation", () => {
+  test("discovers supported test names deterministically and ignores unrelated files", () => {
+    const root = mkdtempSync(join(process.platform === "win32" ? process.env.TEMP! : "/tmp", "opencodex-test-discovery-"));
+    try {
+      mkdirSync(join(root, "nested"));
+      writeFileSync(join(root, "z.test.ts"), "");
+      writeFileSync(join(root, "nested", "a_spec.tsx"), "");
+      writeFileSync(join(root, "nested", "notes.ts"), "");
+      expect(collectTestFiles(root).map(path => path.slice(path.indexOf(root.split(/[\\/]/).at(-1)!)))).toEqual([
+        `${root.split(/[\\/]/).at(-1)}/nested/a_spec.tsx`,
+        `${root.split(/[\\/]/).at(-1)}/z.test.ts`,
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("partitions every file once and rejects unsafe batch sizes", () => {
+    expect(partitionTestFiles(["a", "b", "c", "d", "e"], 2)).toEqual([["a", "b"], ["c", "d"], ["e"]]);
+    expect(() => partitionTestFiles(["a"], 0)).toThrow("positive integer");
+  });
+
+  test("serializes simultaneous full-suite owners with an atomic lock", async () => {
+    const root = mkdtempSync(join(process.platform === "win32" ? process.env.TEMP! : "/tmp", "opencodex-test-lock-"));
+    const lockPath = join(root, "suite.lock");
+    try {
+      const releaseFirst = await acquireTestRunLock(lockPath, { pollMs: 5, maxWaitMs: 1_000 });
+      let secondResolved = false;
+      const second = acquireTestRunLock(lockPath, { pollMs: 5, maxWaitMs: 1_000 }).then(release => {
+        secondResolved = true;
+        return release;
+      });
+      await Bun.sleep(20);
+      expect(secondResolved).toBe(false);
+      releaseFirst();
+      const releaseSecond = await second;
+      expect(secondResolved).toBe(true);
+      releaseSecond();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("redirects user homes to a disposable root", () => {
     const isolated = createIsolatedTestEnvironment({ PATH: "/test/bin", HOME: "/real/home" });
     try {

@@ -22,8 +22,13 @@ import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-tit
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
 import {
+  EMPTY_HISTORY_FILTERS,
+  requestHistoryFiltersActive,
+  requestHistoryUrl,
+  type RequestHistoryFilters,
+} from "./logs-request-history";
+import {
   sanitizeLogEntryRouteDecision,
-  validCachedRouteDecision,
 } from "./log-route-decision";
 
 function logsCacheKey(apiBase: string): string {
@@ -172,24 +177,320 @@ export interface LogEntry {
   };
 }
 
-function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
-  if (!Array.isArray(cached)) return null;
-  for (const entry of cached) {
+interface RequestHistoryIndexStatus {
+  schemaVersion: number;
+  indexedRows: number;
+  sourceSize: number;
+  sourceMtimeMs: number;
+  builtAtMs: number;
+  lastError: string | null;
+}
+
+interface RequestHistoryPage {
+  entries: LogEntry[];
+  nextCursor?: string;
+  hasMore: boolean;
+  index: RequestHistoryIndexStatus;
+}
+
+interface RouteDecisionExplanation {
+  requestId: string;
+  routeDecision: LogEntry["routeDecision"] | null;
+  attemptSequence: LogAttempt[];
+  outcome: {
+    status: number;
+    terminalStatus?: string;
+    closeReason?: string;
+    errorCode?: string;
+    durationMs?: number;
+    usageStatus?: LogUsageStatus;
+  };
+  summary: {
+    requestedModel: string;
+    routeKind: string | null;
+    profileId?: string;
+    revision?: string;
+    selected?: { provider: string; model: string } | null;
+    finalProvider: string;
+    finalModel: string;
+  };
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validHistoryIndex(value: unknown): value is RequestHistoryIndexStatus {
+  const index = record(value);
+  return Boolean(index
+    && finiteNumber(index.schemaVersion)
+    && finiteNumber(index.indexedRows)
+    && finiteNumber(index.sourceSize)
+    && finiteNumber(index.sourceMtimeMs)
+    && finiteNumber(index.builtAtMs)
+    && (index.lastError === null || boundedString(index.lastError)));
+}
+
+const LOG_USAGE_STATUSES = new Set<LogUsageStatus>(["reported", "unreported", "unsupported", "estimated"]);
+const METRIC_REASONS = new Set<MetricUnavailableReason>([
+  "usage_missing", "usage_unsupported", "output_missing", "invalid_duration",
+  "price_unmatched", "invalid_cache_breakdown", "invalid_usage", "combo_attempt_unavailable",
+]);
+const ESTIMATE_REASONS = new Set<CostEstimateReason>([
+  "usage_estimated", "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound",
+]);
+
+function normalizeUsage(value: unknown): UsageBreakdown | null {
+  const usage = record(value);
+  if (!usage || !finiteNumber(usage.inputTokens) || !finiteNumber(usage.outputTokens)) return null;
+  const result: UsageBreakdown = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+  for (const key of ["contextTotalTokens", "totalTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens"] as const) {
+    if (usage[key] !== undefined) {
+      if (!finiteNumber(usage[key])) return null;
+      result[key] = usage[key];
+    }
+  }
+  if (usage.estimated !== undefined) {
+    if (typeof usage.estimated !== "boolean") return null;
+    result.estimated = usage.estimated;
+  }
+  return result;
+}
+
+function normalizeMatchedPrice(value: unknown): MatchedPriceInfo | null {
+  const price = record(value);
+  if (!price || !boundedString(price.provider) || !boundedString(price.modelId)
+    || !["jawcode", "expected", "user"].includes(String(price.source))
+    || !["verified", "verified-derived"].includes(String(price.status))) return null;
+  return {
+    provider: price.provider,
+    modelId: price.modelId,
+    source: price.source as MatchedPriceInfo["source"],
+    status: price.status as MatchedPriceInfo["status"],
+    ...(boundedString(price.jawcodeProvider) ? { jawcodeProvider: price.jawcodeProvider } : {}),
+    ...(boundedString(price.sourceRef) ? { sourceRef: price.sourceRef } : {}),
+    ...(boundedString(price.verifiedAt) ? { verifiedAt: price.verifiedAt } : {}),
+  };
+}
+
+function normalizeDisplayMetrics(value: unknown): LogDisplayMetrics | null {
+  const metrics = record(value);
+  const throughput = record(metrics?.tokPerSecond);
+  const cost = record(metrics?.cost);
+  if (!metrics || !throughput || !cost) return null;
+  let tokPerSecond: TokPerSecondResult;
+  if (throughput.kind === "value" && finiteNumber(throughput.value) && typeof throughput.estimated === "boolean") {
+    tokPerSecond = { kind: "value", value: throughput.value, estimated: throughput.estimated };
+  } else if (throughput.kind === "unavailable" && METRIC_REASONS.has(throughput.reason as MetricUnavailableReason)) {
+    tokPerSecond = { kind: "unavailable", reason: throughput.reason as MetricUnavailableReason };
+  } else return null;
+
+  let normalizedCost: CostResult;
+  if (cost.kind === "unavailable" && METRIC_REASONS.has(cost.reason as MetricUnavailableReason)) {
+    normalizedCost = { kind: "unavailable", reason: cost.reason as MetricUnavailableReason };
+  } else if (cost.kind === "value") {
+    const estimate = record(cost.estimate);
+    const parts = record(estimate?.cost);
+    if (!estimate || !parts || typeof estimate.estimated !== "boolean"
+      || ![parts.input, parts.output, parts.cacheRead, parts.cacheWrite, parts.total].every(finiteNumber)
+      || !Array.isArray(cost.estimateReasons) || cost.estimateReasons.length > 10
+      || cost.estimateReasons.some(reason => !ESTIMATE_REASONS.has(reason as CostEstimateReason))) return null;
+    const price = estimate.price === undefined ? undefined : normalizeMatchedPrice(estimate.price);
+    if (estimate.price !== undefined && !price) return null;
+    const attemptPrices = estimate.attempts === undefined ? undefined : Array.isArray(estimate.attempts) && estimate.attempts.length <= 100
+      ? estimate.attempts.map(value => {
+        const row = record(value);
+        const matched = normalizeMatchedPrice(row?.price);
+        return row && finiteNumber(row.ordinal) && matched ? { ordinal: row.ordinal, price: matched } : null;
+      })
+      : null;
+    if (attemptPrices === null || attemptPrices?.some(row => row === null)) return null;
+    normalizedCost = {
+      kind: "value",
+      estimate: {
+        cost: {
+          input: Number(parts.input),
+          output: Number(parts.output),
+          cacheRead: Number(parts.cacheRead),
+          cacheWrite: Number(parts.cacheWrite),
+          total: Number(parts.total),
+        },
+        estimated: estimate.estimated,
+        ...(typeof estimate.priorityLowerBound === "boolean" ? { priorityLowerBound: estimate.priorityLowerBound } : {}),
+        ...(price ? { price } : {}),
+        ...(attemptPrices ? { attempts: attemptPrices as Array<{ ordinal: number; price: MatchedPriceInfo }> } : {}),
+      },
+      estimateReasons: cost.estimateReasons as CostEstimateReason[],
+    };
+  } else return null;
+  return { tokPerSecond, cost: normalizedCost };
+}
+
+function parseLogAttempt(value: unknown): LogAttempt | null {
+  const attempt = record(value);
+  if (!attempt || !finiteNumber(attempt.ordinal) || !boundedString(attempt.provider)
+    || !boundedString(attempt.model) || !boundedString(attempt.adapter, 160)
+    || !finiteNumber(attempt.status) || !finiteNumber(attempt.durationMs) || !finiteNumber(attempt.sendCount)
+    || !Array.isArray(attempt.recoveryKinds) || attempt.recoveryKinds.length > 100
+    || attempt.recoveryKinds.some(kind => !boundedString(kind, 80))
+    || !LOG_USAGE_STATUSES.has(attempt.usageStatus as LogUsageStatus)) return null;
+  const usage = attempt.usage === undefined ? undefined : normalizeUsage(attempt.usage);
+  const displayMetrics = attempt.displayMetrics === undefined ? undefined : normalizeDisplayMetrics(attempt.displayMetrics);
+  if ((attempt.usage !== undefined && !usage) || (attempt.displayMetrics !== undefined && !displayMetrics)) return null;
+  return {
+    ordinal: attempt.ordinal,
+    provider: attempt.provider,
+    model: attempt.model,
+    adapter: attempt.adapter,
+    status: attempt.status,
+    durationMs: attempt.durationMs,
+    sendCount: attempt.sendCount,
+    recoveryKinds: attempt.recoveryKinds as AttemptRecoveryKind[],
+    usageStatus: attempt.usageStatus as LogUsageStatus,
+    ...(finiteNumber(attempt.inputTokenEstimate) ? { inputTokenEstimate: attempt.inputTokenEstimate } : {}),
+    ...(usage ? { usage } : {}),
+    ...(finiteNumber(attempt.totalTokens) ? { totalTokens: attempt.totalTokens } : {}),
+    ...(boundedString(attempt.errorCode) ? { errorCode: attempt.errorCode } : {}),
+    ...(finiteNumber(attempt.firstOutputMs) ? { firstOutputMs: attempt.firstOutputMs } : {}),
+    ...(boundedString(attempt.requestedEffort, 160) ? { requestedEffort: attempt.requestedEffort } : {}),
+    ...(boundedString(attempt.effectiveEffort, 160) ? { effectiveEffort: attempt.effectiveEffort } : {}),
+    ...(boundedString(attempt.reasoningWireField, 160) ? { reasoningWireField: attempt.reasoningWireField } : {}),
+    ...(["string", "boolean"].includes(typeof attempt.reasoningWireValue) || finiteNumber(attempt.reasoningWireValue)
+      ? { reasoningWireValue: attempt.reasoningWireValue as string | number | boolean }
+      : {}),
+    ...(displayMetrics ? { displayMetrics } : {}),
+  };
+}
+
+function normalizeLogEntries(value: unknown): LogEntry[] | null {
+  if (!Array.isArray(value) || value.length > 2_000) return null;
+  const entries: LogEntry[] = [];
+  for (const candidate of value) {
+    const entry = record(candidate) as unknown as LogEntry | null;
     if (
       !entry
-      || typeof entry !== "object"
-      || typeof entry.timestamp !== "number"
-      || typeof entry.model !== "string"
-      || typeof entry.provider !== "string"
-      || typeof entry.status !== "number"
-      || typeof entry.durationMs !== "number"
+      || !finiteNumber(entry.timestamp)
+      || typeof entry.model !== "string" || entry.model.length > 500
+      || typeof entry.provider !== "string" || entry.provider.length > 500
+      || !finiteNumber(entry.status)
+      || !finiteNumber(entry.durationMs)
       || (entry.shadowCallRewrittenFrom !== undefined && typeof entry.shadowCallRewrittenFrom !== "string")
-      || !validCachedRouteDecision(entry.routeDecision)
     ) {
       return null;
     }
+    for (const key of ["requestId", "surface", "conversationId", "requestedEffort", "effectiveEffort", "reasoningWireField", "requestedServiceTier", "requestedSpeedLabel", "configuredServiceTier", "configuredSpeedLabel", "responseServiceTier", "resolvedModel", "errorCode", "upstreamError"] as const) {
+      if (entry[key] !== undefined && !boundedString(entry[key])) return null;
+    }
+    if (entry.reasoningWireValue !== undefined
+      && !["string", "boolean"].includes(typeof entry.reasoningWireValue)
+      && !finiteNumber(entry.reasoningWireValue)) return null;
+    if (entry.modelSupportsServiceTier !== undefined && typeof entry.modelSupportsServiceTier !== "boolean") return null;
+    if (entry.usageStatus !== undefined && !LOG_USAGE_STATUSES.has(entry.usageStatus)) return null;
+    if (entry.totalTokens !== undefined && !finiteNumber(entry.totalTokens)) return null;
+    if (entry.firstOutputMs !== undefined && !finiteNumber(entry.firstOutputMs)) return null;
+    const usage = entry.usage === undefined ? undefined : normalizeUsage(entry.usage);
+    const displayMetrics = entry.displayMetrics === undefined ? undefined : normalizeDisplayMetrics(entry.displayMetrics);
+    const attempts = entry.attempts === undefined ? undefined : Array.isArray(entry.attempts) && entry.attempts.length <= 100
+      ? entry.attempts.map(parseLogAttempt)
+      : null;
+    if ((entry.usage !== undefined && !usage) || (entry.displayMetrics !== undefined && !displayMetrics)
+      || attempts === null || attempts?.some(attempt => attempt === null)) return null;
+    entries.push(sanitizeLogEntryRouteDecision({
+      ...entry,
+      ...(usage ? { usage } : {}),
+      ...(displayMetrics ? { displayMetrics } : {}),
+      ...(attempts ? { attempts: attempts as LogAttempt[] } : {}),
+    }));
   }
-  return cached;
+  return entries;
+}
+
+function validCachedLogs(cached: unknown): LogEntry[] | null {
+  return normalizeLogEntries(cached);
+}
+
+function parseLogPayload(payload: unknown): { entries: LogEntry[]; history: RequestHistoryPage | null } {
+  if (Array.isArray(payload)) {
+    const entries = normalizeLogEntries(payload);
+    if (!entries) throw new Error("invalid_log_response");
+    return { entries, history: null };
+  }
+  const body = record(payload);
+  if (!body) throw new Error("invalid_log_response");
+  if ("entries" in body) {
+    const entries = normalizeLogEntries(body.entries);
+    if (!entries || typeof body.hasMore !== "boolean" || !validHistoryIndex(body.index)
+      || (body.nextCursor !== undefined && (typeof body.nextCursor !== "string" || body.nextCursor.length > 4_096))) {
+      throw new Error("invalid_log_response");
+    }
+    const history: RequestHistoryPage = {
+      entries,
+      hasMore: body.hasMore,
+      index: body.index,
+      ...(typeof body.nextCursor === "string" ? { nextCursor: body.nextCursor } : {}),
+    };
+    return { entries, history };
+  }
+  if (!Array.isArray(body.logs)) throw new Error("invalid_log_response");
+  const entries = normalizeLogEntries(body.logs);
+  if (!entries) throw new Error("invalid_log_response");
+  return { entries, history: null };
+}
+
+function boundedString(value: unknown, max = 500): value is string {
+  return typeof value === "string" && value.length <= max;
+}
+
+function parseRouteExplanation(payload: unknown, detail: LogEntry): RouteDecisionExplanation {
+  const body = record(payload);
+  const summary = record(body?.summary);
+  const outcome = record(body?.outcome);
+  const selected = summary?.selected === null ? null : summary ? record(summary.selected) : null;
+  if (!body || !boundedString(body.requestId) || body.requestId !== detail.requestId || !summary || !outcome
+    || !boundedString(summary.requestedModel) || !(summary.routeKind === null || boundedString(summary.routeKind, 80))
+    || !(summary.selected === null || (selected && boundedString(selected.provider) && boundedString(selected.model)))
+    || !boundedString(summary.finalProvider) || !boundedString(summary.finalModel)
+    || !finiteNumber(outcome.status)
+    || (outcome.usageStatus !== undefined && !LOG_USAGE_STATUSES.has(outcome.usageStatus as LogUsageStatus))
+    || !Array.isArray(body.attemptSequence) || body.attemptSequence.length > 100) {
+    throw new Error("invalid_route_explanation");
+  }
+  const attemptSequence = body.attemptSequence.map(parseLogAttempt);
+  if (attemptSequence.some(attempt => attempt === null)) throw new Error("invalid_route_explanation");
+  const sanitizedRoute = body.routeDecision === null
+    ? null
+    : sanitizeLogEntryRouteDecision({ ...detail, routeDecision: body.routeDecision as LogEntry["routeDecision"] }).routeDecision;
+  if (body.routeDecision !== null && sanitizedRoute === undefined) throw new Error("invalid_route_explanation");
+  return {
+    requestId: body.requestId,
+    routeDecision: sanitizedRoute ?? null,
+    attemptSequence: attemptSequence as LogAttempt[],
+    outcome: {
+      status: outcome.status,
+      ...(boundedString(outcome.terminalStatus, 160) ? { terminalStatus: outcome.terminalStatus } : {}),
+      ...(boundedString(outcome.closeReason, 500) ? { closeReason: outcome.closeReason } : {}),
+      ...(boundedString(outcome.errorCode, 500) ? { errorCode: outcome.errorCode } : {}),
+      ...(finiteNumber(outcome.durationMs) ? { durationMs: outcome.durationMs } : {}),
+      ...(typeof outcome.usageStatus === "string" ? { usageStatus: outcome.usageStatus as LogUsageStatus } : {}),
+    },
+    summary: {
+      requestedModel: summary.requestedModel,
+      routeKind: summary.routeKind,
+      ...(boundedString(summary.profileId, 160) ? { profileId: summary.profileId } : {}),
+      ...(boundedString(summary.revision, 160) ? { revision: summary.revision } : {}),
+      ...(selected && boundedString(selected.provider) && boundedString(selected.model)
+        ? { selected: { provider: selected.provider, model: selected.model } }
+        : {}),
+      finalProvider: summary.finalProvider,
+      finalModel: summary.finalModel,
+    },
+  };
 }
 
 function displayTokenTotal(log: LogEntry): number | undefined {
@@ -368,6 +669,14 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
+  const [historyIndex, setHistoryIndex] = useState<RequestHistoryIndexStatus | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [hasMore, setHasMore] = useState(false);
+  const [olderLogs, setOlderLogs] = useState<LogEntry[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState(false);
+  const [historyFilterDraft, setHistoryFilterDraft] = useState<RequestHistoryFilters>(EMPTY_HISTORY_FILTERS);
+  const [historyFilters, setHistoryFilters] = useState<RequestHistoryFilters>(EMPTY_HISTORY_FILTERS);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The proxy's own zone, so timestamps read the same as the server's logs rather than being
@@ -417,21 +726,35 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const selectTab = selectLogsTab;
 
   const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
-    const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+    let res = await fetch(requestHistoryUrl(apiBase, historyFilters), { signal });
+    // Keep the GUI usable with older local proxies during a rolling upgrade. Current
+    // The routing core uses cursor history; only an absent endpoint falls back to the legacy ring.
+    if (res.status === 404 && !requestHistoryFiltersActive(historyFilters)) {
+      res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+    }
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const raw = Array.isArray(body) ? body : (body.logs ?? []);
-    const next = raw.map(sanitizeLogEntryRouteDecision);
+    const { entries, history } = parseLogPayload(await res.json());
+    const next = entries.toSorted((a, b) => a.timestamp - b.timestamp);
+    if (history) {
+      setHistoryIndex(history.index);
+      setNextCursor(history.nextCursor);
+      setHasMore(history.hasMore);
+    } else {
+      setHistoryIndex(null);
+      setNextCursor(undefined);
+      setHasMore(false);
+      setOlderLogs(previous => previous.length ? [] : previous);
+    }
     writeSessionListCache(resourceKey, next);
     return next;
-  }, [apiBase, resourceKey]);
+  }, [apiBase, historyFilters, resourceKey]);
 
   // The resource layer owns the request and the 2s poll. It keeps held rows through a quiet
   // poll on its own, which is what the old silent/non-silent split was hand-rolling — and an
   // empty successful response is now a real empty result rather than a cold load.
   const logsResource = useDataSurface<LogEntry[]>(
     resourceKey,
-    [apiBase],
+    [apiBase, historyFilters],
     loadLogs,
     {
       isEmpty: rows => rows.length === 0,
@@ -441,8 +764,50 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     },
   );
   const logsState = logsResource.state;
-  const logs = logsState.data ?? cachedLogs ?? [];
+  const newestLogs = logsState.data ?? cachedLogs ?? [];
+  const logs = [...newestLogs, ...olderLogs]
+    .filter((entry, index, entries) => {
+      const key = entry.requestId;
+      return key ? entries.findIndex(candidate => candidate.requestId === key) === index : true;
+    })
+    .toSorted((a, b) => a.timestamp - b.timestamp);
   const fetchLogs = logsResource.refresh;
+
+  const loadOlder = useCallback(async () => {
+    if (!nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    setOlderError(false);
+    try {
+      const res = await fetch(requestHistoryUrl(apiBase, historyFilters, nextCursor));
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+      const { history: page } = parseLogPayload(await res.json());
+      if (!page) throw new Error("invalid_log_response");
+      const rows = page.entries;
+      setOlderLogs(previous => [...previous, ...rows]);
+      setNextCursor(page.nextCursor);
+      setHasMore(page.hasMore);
+      setHistoryIndex(page.index);
+    } catch {
+      setOlderError(true);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [apiBase, historyFilters, loadingOlder, nextCursor]);
+
+  const applyHistoryFilters = () => {
+    setOlderLogs([]);
+    setNextCursor(undefined);
+    setHasMore(false);
+    setHistoryFilters(historyFilterDraft);
+  };
+
+  const clearHistoryFilters = () => {
+    setOlderLogs([]);
+    setNextCursor(undefined);
+    setHasMore(false);
+    setHistoryFilterDraft(EMPTY_HISTORY_FILTERS);
+    setHistoryFilters(EMPTY_HISTORY_FILTERS);
+  };
 
   // A single failed tick on a two-second poll is noise, but an outage that never recovers must not
   // leave the user reading stale rows as if they were current. Count consecutive failures and speak
@@ -561,6 +926,15 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       >
       <p className="page-sub">{t("logs.subtitle")}</p>
 
+      {historyIndex && (
+        <div className="logs-history-status" role="status">
+          <span>{t("logs.history.indexed", { count: historyIndex.indexedRows })}</span>
+          {historyIndex.lastError && historyIndex.lastError !== "created" && (
+            <span className="badge badge-amber">{t("logs.history.repaired")}</span>
+          )}
+        </div>
+      )}
+
       <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
         <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
@@ -609,6 +983,33 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           </button>
         )}
       </div>
+
+      <details className="logs-history-filters">
+        <summary>{t("logs.filter.advanced")}</summary>
+        <form
+          className="logs-history-filter-grid"
+          onSubmit={event => { event.preventDefault(); applyHistoryFilters(); }}
+        >
+          <label>{t("logs.filter.provider")}<input className="input mono" value={historyFilterDraft.provider} onChange={event => setHistoryFilterDraft(value => ({ ...value, provider: event.target.value }))} /></label>
+          <label>{t("logs.filter.model")}<input className="input mono" value={historyFilterDraft.model} onChange={event => setHistoryFilterDraft(value => ({ ...value, model: event.target.value }))} /></label>
+          <label>{t("logs.filter.requestedModel")}<input className="input mono" value={historyFilterDraft.requestedModel} onChange={event => setHistoryFilterDraft(value => ({ ...value, requestedModel: event.target.value }))} /></label>
+          <label>{t("logs.filter.status")}<input className="input mono" inputMode="numeric" pattern="[1-5][0-9]{2}" value={historyFilterDraft.status} onChange={event => setHistoryFilterDraft(value => ({ ...value, status: event.target.value }))} /></label>
+          <label>{t("logs.filter.protocol")}<input className="input mono" value={historyFilterDraft.inboundProtocol} onChange={event => setHistoryFilterDraft(value => ({ ...value, inboundProtocol: event.target.value }))} /></label>
+          <label>{t("logs.filter.apiKey")}<input className="input mono" value={historyFilterDraft.apiKeyId} onChange={event => setHistoryFilterDraft(value => ({ ...value, apiKeyId: event.target.value }))} /></label>
+          <label>{t("logs.filter.profile")}<input className="input mono" value={historyFilterDraft.profileId} onChange={event => setHistoryFilterDraft(value => ({ ...value, profileId: event.target.value }))} /></label>
+          <label>{t("logs.filter.fallback")}
+            <select className="input" value={historyFilterDraft.fallback} onChange={event => setHistoryFilterDraft(value => ({ ...value, fallback: event.target.value as RequestHistoryFilters["fallback"] }))}>
+              <option value="">{t("logs.filter.fallback.any")}</option>
+              <option value="true">{t("logs.filter.fallback.yes")}</option>
+              <option value="false">{t("logs.filter.fallback.no")}</option>
+            </select>
+          </label>
+          <div className="logs-history-filter-actions">
+            <button type="submit" className="btn btn-primary btn-sm">{t("logs.filter.apply")}</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={clearHistoryFilters}>{t("logs.filter.clearAll")}</button>
+          </div>
+        </form>
+      </details>
 
       {conversationTotals && (
         <div className="logs-conversation-totals">
@@ -794,6 +1195,19 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             </tbody>
           </table>
         </div>
+        {historyIndex && (hasMore || olderError) && (
+          <div className="logs-history-more">
+            {olderError && <span className="muted">{t("logs.history.loadError")}</span>}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void loadOlder()}
+              disabled={loadingOlder || !nextCursor}
+            >
+              {loadingOlder ? t("common.loading") : olderError ? t("common.retry") : t("logs.history.loadOlder")}
+            </button>
+          </div>
+        )}
         </>
       )}
 
@@ -801,6 +1215,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <LogDetailDialog
           detail={detail}
           detailInfo={detailInfo}
+          apiBase={apiBase}
           localeCode={locale}
           localeTag={localeTag}
           serverTimeZone={serverTimeZone}
@@ -829,10 +1244,11 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
+  detail, detailInfo, apiBase, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
+  apiBase: string;
   localeCode: string;
   localeTag?: string;
   serverTimeZone?: string;
@@ -842,9 +1258,37 @@ function LogDetailDialog({
 }) {
   const dialogRef = useModalDialog(true);
   const [copied, setCopied] = useState(false);
+  const [routeExplanation, setRouteExplanation] = useState<RouteDecisionExplanation | null>(null);
+  const [routeLoading, setRouteLoading] = useState(Boolean(detail.requestId));
+  const [routeLoadFailed, setRouteLoadFailed] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
   const reasoningWire = reasoningWireLabel(detail);
+
+  useEffect(() => {
+    if (!detail.requestId) return;
+    const controller = new AbortController();
+    fetch(`${apiBase}/api/request-history/${encodeURIComponent(detail.requestId)}/route-decision`, {
+      signal: controller.signal,
+    })
+      .then(async response => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json() as Promise<unknown>;
+      })
+      .then(body => {
+        setRouteExplanation(parseRouteExplanation(body, detail));
+        setRouteLoading(false);
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setRouteLoadFailed(true);
+        setRouteLoading(false);
+      });
+    return () => controller.abort();
+  }, [apiBase, detail]);
+
+  const routeDecision = routeExplanation?.routeDecision ?? (routeExplanation ? undefined : detail.routeDecision);
+  const routeAttempts = routeExplanation?.attemptSequence ?? detail.attempts ?? [];
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -917,23 +1361,30 @@ function LogDetailDialog({
 
         <section className="log-detail-section" aria-labelledby="log-detail-route">
           <h4 id="log-detail-route" className="log-detail-section-title">{t("logs.detail.route.section")}</h4>
-          {detail.routeDecision ? (
+          {routeLoadFailed && <Notice tone="warn">{t("logs.detail.route.loadError")}</Notice>}
+          {routeLoading && !routeDecision ? (
+            <p className="log-detail-notes-line muted" role="status">{t("logs.detail.route.loading")}</p>
+          ) : routeDecision ? (
             <div className="log-detail-grid">
-              <span className="muted">{t("logs.detail.route.kind")}</span><span className="mono">{detail.routeDecision.routeKind ?? "–"}</span>
-              {detail.routeDecision.profile?.id && (
-                <><span className="muted">{t("logs.detail.route.profile")}</span>
-                  <span className="mono">{detail.routeDecision.profile.id} ({detail.routeDecision.profile.revision})</span></>
+              {routeExplanation?.summary.requestedModel && (
+                <><span className="muted">{t("logs.detail.route.requested")}</span>
+                  <span className="mono">{routeExplanation.summary.requestedModel}</span></>
               )}
-              {detail.routeDecision.selected?.provider && (
+              <span className="muted">{t("logs.detail.route.kind")}</span><span className="mono">{routeDecision.routeKind ?? "–"}</span>
+              {routeDecision.profile?.id && (
+                <><span className="muted">{t("logs.detail.route.profile")}</span>
+                  <span className="mono">{routeDecision.profile.id} ({routeDecision.profile.revision})</span></>
+              )}
+              {routeDecision.selected?.provider && (
                 <><span className="muted">{t("logs.detail.route.selected")}</span>
                   <span className="mono">
-                    {detail.routeDecision.selected.provider}/{detail.routeDecision.selected.model}
-                    {detail.routeDecision.selected.reason ? ` — ${detail.routeDecision.selected.reason}` : ""}
+                    {routeDecision.selected.provider}/{routeDecision.selected.model}
+                    {routeDecision.selected.reason ? ` — ${routeDecision.selected.reason}` : ""}
                   </span></>
               )}
               <span className="muted">{t("logs.detail.route.candidates")}</span>
               <span className="mono">
-                {(detail.routeDecision.candidates ?? []).map(candidate => {
+                {(routeDecision.candidates ?? []).map(candidate => {
                   const provider = typeof candidate.provider === "string" && candidate.provider.length > 0
                     ? candidate.provider
                     : "–";
@@ -948,6 +1399,14 @@ function LogDetailDialog({
                   return `${provider}/${model}${mark}`;
                 }).join("  ") || "–"}
               </span>
+              {routeExplanation && (
+                <>
+                  <span className="muted">{t("logs.detail.route.final")}</span>
+                  <span className="mono">{routeExplanation.summary.finalProvider}/{routeExplanation.summary.finalModel}</span>
+                  <span className="muted">{t("logs.detail.route.outcome")}</span>
+                  <span className="mono">{routeExplanation.outcome.status}{routeExplanation.outcome.errorCode ? ` · ${routeExplanation.outcome.errorCode}` : ""}</span>
+                </>
+              )}
             </div>
           ) : (
             <p className="log-detail-notes-line muted">{t("logs.detail.route.unknown")}</p>
@@ -1003,7 +1462,7 @@ function LogDetailDialog({
           )}
         </section>
 
-        {detail.attempts?.length ? (
+        {routeAttempts.length ? (
           <section className="log-detail-section" aria-labelledby="log-detail-attempts">
             <h4 id="log-detail-attempts" className="log-detail-section-title">{t("logs.detail.section.attempts")}</h4>
             <p className="log-detail-notes-line muted">{t("logs.detail.attempt.e2eNote")}</p>
@@ -1017,7 +1476,7 @@ function LogDetailDialog({
                   <th className="num">{t("logs.col.estimatedCost")}</th>
                   <th>{t("logs.detail.attempt.reason")}</th>
                 </tr></thead>
-                <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
+                <tbody>{routeAttempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
                   const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;

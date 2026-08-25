@@ -6,6 +6,7 @@ import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import {
   classifyExternalModel,
   externalModelId,
+  gatewayInboundProtocols,
   type ExternalModelRow,
   type GatewayInboundProtocol,
 } from "../api-access-models";
@@ -409,6 +410,39 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         <code>x-opencodex-api-key</code>
         {subtitleParts[1]}
       </p>
+
+      {keysData && (
+        <section className="proxy-gateway-summary" aria-label={t("api.proxy.title")}>
+          <div className="proxy-gateway-summary__status">
+            <span className="proxy-gateway-summary__dot" aria-hidden="true" />
+            <div>
+              <h3>{t("api.proxy.title")}</h3>
+              <p>{t("api.proxy.online")}</p>
+            </div>
+          </div>
+          <div className="proxy-gateway-summary__flow" aria-label={t("api.proxy.flowLabel")}>
+            <span>{t("api.proxy.clients")}</span>
+            <b aria-hidden="true">→</b>
+            <strong>{t("app.name")}</strong>
+            <b aria-hidden="true">→</b>
+            <span>{t("api.proxy.providers")}</span>
+          </div>
+          <div className="proxy-gateway-summary__meta">
+            <div>
+              <span>{t("api.proxy.baseUrl")}</span>
+              <code>{endpoints.baseUrl}</code>
+            </div>
+            <div>
+              <span>{t("api.proxy.protocols")}</span>
+              <p>{gatewayInboundProtocols(claudeCodeEnabled).map(protocolLabel).join(" · ")}</p>
+            </div>
+            <div>
+              <span>{t("api.proxy.auth")}</span>
+              <code>x-opencodex-api-key</code>
+            </div>
+          </div>
+        </section>
+      )}
 
       {actionError && <Notice tone="err">{actionError}</Notice>}
       {keysState.showError && keysData && <Notice tone="err">{t("api.keysLoadFailed")}</Notice>}

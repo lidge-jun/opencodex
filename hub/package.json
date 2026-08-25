@@ -1,0 +1,14 @@
+{
+  "name": "@hubapi/hosted-edge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/cli.ts start",
+    "bootstrap-admin": "bun run src/cli.ts bootstrap-admin --password-stdin",
+    "typecheck": "bun x tsc -p tsconfig.json --noEmit",
+    "test": "bun test ../tests/hub-auth.test.ts ../tests/hub-billing.test.ts ../tests/hub-admission.test.ts ../tests/hub-portal.test.ts ../tests/hub-network-firewall.test.ts"
+  },
+  "engines": {
+    "bun": ">=1.3.4"
+  }
+}
