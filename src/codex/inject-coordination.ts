@@ -11,7 +11,12 @@ import { atomicWriteFile } from "../config";
 import type { CodexWriteLockResult } from "./codex-write-lock";
 import { inspectCodexCoordinatorPath } from "./coordinator-doctor";
 import { JOURNAL_PATH } from "./journal";
+import { updateIntegrationRecord } from "./integration-record";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
+import type {
+  CodexArtifactId,
+  CodexProvenanceEntry,
+} from "./convergence-types";
 import {
   codexWriteCoordination,
   type CodexWriteCandidate,
@@ -176,6 +181,49 @@ export function captureCodexPreImages(): CodexPreImages {
     profile: readOrNull(CODEX_PROFILE_PATH),
     journal: readOrNull(JOURNAL_PATH),
   };
+}
+
+function provenanceBaseline(bytes: string | null): CodexProvenanceEntry["baseline"] {
+  if (bytes === null) return { kind: "absent" };
+  return {
+    kind: "present",
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    bytesBase64: Buffer.from(bytes).toString("base64"),
+  };
+}
+
+function provenancePostImage(path: string): string | null {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/** Append evidence for an already-committed native transaction, best-effort. */
+export function recordCodexNativeTransactionProvenance(
+  preImages: CodexPreImages,
+  txId: string,
+) {
+  const at = new Date().toISOString();
+  const surfaces: readonly [CodexArtifactId, string, string | null][] = [
+    [{ kind: "config" }, CODEX_CONFIG_PATH, preImages.config],
+    [{ kind: "generated-profile" }, CODEX_PROFILE_PATH, preImages.profile],
+    [{ kind: "injection-journal" }, JOURNAL_PATH, preImages.journal],
+  ];
+  const entries: readonly CodexProvenanceEntry[] = surfaces.map(([artifact, path, baseline]) => ({
+    artifact,
+    baseline: provenanceBaseline(baseline),
+    postImage: provenancePostImage(path),
+    txId,
+    at,
+  }));
+  return updateIntegrationRecord(record => ({
+    ...record,
+    provenance: {
+      entries: [...(record.provenance?.entries ?? []), ...entries],
+    },
+  }));
 }
 
 /**
