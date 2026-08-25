@@ -73,6 +73,10 @@ export interface CodexLogGuardReport {
     reclaimableBytes: number;
     estimatedLogBytes: number | null;
   };
+  metricsSkipped?: null | {
+    reason: "database_too_large";
+    thresholdBytes: number;
+  };
 }
 
 export interface StorageReport {

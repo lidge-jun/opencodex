@@ -11,6 +11,9 @@ import {
 
 const IMMUTABLE_READONLY_FLAGS = constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI;
 const KNOWN_LOG_LEVELS = new Set(["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]);
+// The issue reporter measured a ~1 GB database taking 17.3s for GROUP BY level
+// alone; skipping all row aggregates above 64 MiB reduced /api/storage to 628ms.
+const MAX_SYNCHRONOUS_METRICS_DATABASE_BYTES = 64 * 1024 * 1024;
 
 interface CurrentLogColumn {
   name: string;
@@ -115,6 +118,10 @@ export interface CodexLogGuardInspection {
     reclaim: CodexLogGuardCapability;
   };
   metrics: CodexLogGuardMetrics | null;
+  metricsSkipped: null | {
+    reason: "database_too_large";
+    thresholdBytes: number;
+  };
 }
 
 interface ColumnRow {
@@ -167,9 +174,8 @@ function fileSize(path: string): number {
  * repeated stalls without ever serving stale numbers: any write changes the WAL
  * and invalidates the entry.
  *
- * This bounds the repeat cost, not the first one. A cold inspection of a huge
- * database still blocks; moving that work off-thread needs a Worker and is
- * tracked separately.
+ * Memoization bounds repeat cost. The database-size gate below separately bounds
+ * cold request-thread work by omitting these aggregates for large databases.
  */
 type InspectionCacheEntry = {
   key: string;
@@ -233,6 +239,7 @@ function unavailableInspection(): CodexLogGuardInspection {
       reclaim: unavailable,
     },
     metrics: null,
+    metricsSkipped: null,
   };
 }
 
@@ -425,6 +432,7 @@ function inspectCodexLogsUncached(deps: CodexSqliteHomeDeps = {}): CodexLogGuard
       ...common,
       schema,
       metrics: null,
+      metricsSkipped: null,
       capabilities: {
         inspection: { state: "supported" },
         protection: mutation,
@@ -440,6 +448,7 @@ function inspectCodexLogsUncached(deps: CodexSqliteHomeDeps = {}): CodexLogGuard
       ...common,
       schema,
       metrics: null,
+      metricsSkipped: null,
       capabilities: {
         inspection: { state: "supported" },
         protection: mutation,
@@ -458,6 +467,7 @@ function inspectCodexLogsUncached(deps: CodexSqliteHomeDeps = {}): CodexLogGuard
       ...common,
       schema,
       metrics: null,
+      metricsSkipped: null,
       capabilities: {
         inspection: { state: "supported" },
         protection: mutation,
@@ -476,10 +486,17 @@ function inspectCodexLogsUncached(deps: CodexSqliteHomeDeps = {}): CodexLogGuard
         ? { state: "compatible" }
         : { state: "unsupported", reason: "unknown_schema" };
       const mutation = capabilityFor(schema);
+      const metricsSkipped = files.databaseBytes > MAX_SYNCHRONOUS_METRICS_DATABASE_BYTES
+        ? {
+            reason: "database_too_large" as const,
+            thresholdBytes: MAX_SYNCHRONOUS_METRICS_DATABASE_BYTES,
+          }
+        : null;
       return {
         ...common,
         schema,
-        metrics: readMetrics(db, columns),
+        metrics: metricsSkipped === null ? readMetrics(db, columns) : null,
+        metricsSkipped,
         capabilities: {
           inspection: { state: "supported" },
           protection: mutation,
@@ -496,6 +513,7 @@ function inspectCodexLogsUncached(deps: CodexSqliteHomeDeps = {}): CodexLogGuard
       ...common,
       schema,
       metrics: null,
+      metricsSkipped: null,
       capabilities: {
         inspection: { state: "supported" },
         protection: mutation,
