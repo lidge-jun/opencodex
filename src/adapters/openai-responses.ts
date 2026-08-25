@@ -1555,6 +1555,57 @@ export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
   return changed ? next : body;
 }
 
+/**
+ * OpenCode Zen / Go Muse Spark Responses gateway refuses `search_content_types`
+ * on a plain `web_search` tool (400) but accepts it on `web_search_preview`; a
+ * plain `web_search` is also accepted. Probed directly against the gateway on
+ * 2026-08-26: `web_search` + `search_content_types` -> 400, `web_search_preview`
+ * + `search_content_types` -> 200, plain `web_search` -> 200. Luna accepts every
+ * shape, so this is Muse-only. Drop only the field the gateway refuses while
+ * keeping the tool type and every other accepted option intact.
+ */
+function stripMuseSparkUnsupportedWebSearchFields(body: unknown, modelId: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  if (typeof modelId !== "string" || modelId.trim().toLowerCase() !== "muse-spark-1.2-contributor") return body;
+
+  const rewriteTools = (tools: unknown[]): { tools: unknown[]; changed: boolean } => {
+    let changed = false;
+    const rewritten = tools.map(tool => {
+      if (!isPlainObject(tool) || tool.type !== "web_search") return tool;
+      if (!Object.hasOwn(tool, "search_content_types")) return tool;
+      const { search_content_types: _dropped, ...rest } = tool;
+      changed = true;
+      return rest;
+    });
+    return { tools: changed ? rewritten : tools, changed };
+  };
+
+  let next: Record<string, unknown> = body;
+  let changed = false;
+  if (Array.isArray(body.tools)) {
+    const rewritten = rewriteTools(body.tools);
+    if (rewritten.changed) {
+      next = { ...next, tools: rewritten.tools };
+      changed = true;
+    }
+  }
+  if (Array.isArray(next.input)) {
+    let inputChanged = false;
+    const input = next.input.map(item => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      const rewritten = rewriteTools(item.tools);
+      if (!rewritten.changed) return item;
+      inputChanged = true;
+      return { ...item, tools: rewritten.tools };
+    });
+    if (inputChanged) {
+      next = { ...next, input };
+      changed = true;
+    }
+  }
+  return changed ? next : body;
+}
+
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -1766,6 +1817,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.supportsOpenAiWebSearchToolFields === false) {
           outBody = stripOpenAiOnlyWebSearchFields(outBody);
         }
+        outBody = stripMuseSparkUnsupportedWebSearchFields(outBody, parsed.modelId);
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }

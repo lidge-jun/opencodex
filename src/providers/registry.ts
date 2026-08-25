@@ -1343,7 +1343,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Luna reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: { "gpt-5.6-luna": "openai-responses" },
+    modelWireDefaults: { "gpt-5.6-luna": "openai-responses", "muse-spark-1.2-contributor": "openai-responses" },
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // Ox Alpha (stealth 1M multimodal) and the DeepSeek vision preview are
