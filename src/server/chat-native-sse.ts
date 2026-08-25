@@ -1,5 +1,5 @@
 import { chatCompletionsErrorBody } from "../chat/outbound";
-import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import {
   isTranslatorBudgetExceededError,
@@ -226,9 +226,9 @@ export function nativeChatSse(
     if (error) {
       const status = error.status ?? 502;
       const classified = classifyError(status, error.type ?? "upstream_error", error.message);
-      if (isCyberPolicyCode(error.code)) {
+      if (isCyberPolicyCode(error.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
         classified.code = CYBER_POLICY_ERROR_CODE;
-        classified.type = "invalid_request_error";
+        classified.type = cyberPolicyErrorType(error.type);
       } else if (error.code !== undefined && error.code !== null) {
         classified.code = error.code;
       }

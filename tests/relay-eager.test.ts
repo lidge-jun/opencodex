@@ -558,14 +558,16 @@ describe("relaySseEagerBounded — side-effect parity", () => {
       type: "response.failed",
       sequence_number: 18,
       model: "gpt-policy",
+      retryable: true,
       response: {
         id: "resp-structured-policy-eager",
         output: [{ type: "message", id: "item-structured-policy-eager" }],
         status: "failed",
+        retryable: true,
         error: {
           type: "server_error",
           code: "cyber_policy",
-          message: "blocked by upstream policy",
+          message: "blocked by upstream policy Authorization: Bearer relayeagersecret123456",
         },
       },
     });
@@ -577,9 +579,12 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     const text = await readAll(relayed);
     expect(text.match(/event: response\.failed/g)?.length).toBe(1);
     expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
-    expect(text).toContain('"type":"invalid_request_error"');
+    expect(text).toContain('"type":"server_error"');
     expect(text).toContain('"code":"cyber_policy"');
-    expect(text).not.toContain('"type":"server_error"');
+    expect(text.match(/"retryable":false/g)?.length).toBe(2);
+    expect(text).not.toContain('"retryable":true');
+    expect(text).toContain("Authorization: Bearer [REDACTED]");
+    expect(text).not.toContain("relayeagersecret123456");
     expect(text).toContain('"sequence_number":18');
     expect(text).toContain('"model":"gpt-policy"');
     expect(text).toContain('"id":"resp-structured-policy-eager"');

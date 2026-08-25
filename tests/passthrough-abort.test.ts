@@ -245,7 +245,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
         error: {
           type: "server_error",
           code: "cyber_policy",
-          message: "blocked by upstream policy",
+          message: "blocked by upstream policy Authorization: Bearer relaypullsecret123456",
         },
       },
     });
@@ -256,9 +256,10 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     const text = await readAll(relayed);
     expect(text.match(/event: response\.failed/g)?.length).toBe(1);
     expect(text.match(/data: \[DONE\]/g)?.length).toBe(1);
-    expect(text).toContain('"type":"invalid_request_error"');
+    expect(text).toContain('"type":"server_error"');
     expect(text).toContain('"code":"cyber_policy"');
-    expect(text).not.toContain('"type":"server_error"');
+    expect(text).toContain("Authorization: Bearer [REDACTED]");
+    expect(text).not.toContain("relaypullsecret123456");
     expect(text).toContain('"sequence_number":19');
     expect(text).toContain('"model":"gpt-policy"');
     expect(text).toContain('"id":"resp-structured-policy-pull"');

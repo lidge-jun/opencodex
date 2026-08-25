@@ -6,7 +6,13 @@ import {
   collectChatCompletion,
   isChatCompletionsStreamError,
 } from "../chat/outbound";
-import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import {
+  classifyError,
+  cyberPolicyErrorType,
+  CYBER_POLICY_ERROR_CODE,
+  isCyberPolicyCode,
+  isCyberPolicyMessage,
+} from "../lib/errors";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
@@ -281,13 +287,24 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     const detail = activeAdapter.formatErrorBody?.(response.status, response.headers, bodyText) ?? "";
     let upstreamType: string | undefined;
     let upstreamCode: string | null | undefined;
+    let upstreamMessage: string | undefined;
     try {
       const parsedError = JSON.parse(bodyText) as Rec;
       const nested = isRec(parsedError.error) ? parsedError.error : undefined;
-      if (typeof nested?.type === "string") upstreamType = nested.type;
-      if (nested?.code === null || typeof nested?.code === "string") upstreamCode = nested.code;
+      const details = nested ?? parsedError;
+      if (typeof details.type === "string") upstreamType = details.type;
+      if (details.code === null || typeof details.code === "string") upstreamCode = details.code;
+      const rawMessage = typeof details.message === "string"
+        ? details.message
+        : typeof parsedError.error === "string" ? parsedError.error : undefined;
+      if (rawMessage?.trim()) {
+        upstreamMessage = redactSecretString(rawMessage.trim());
+      }
     } catch { /* keep generic classification */ }
-    const message = detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`;
+    const message = upstreamMessage
+      && (isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(upstreamMessage))
+      ? upstreamMessage
+      : detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`;
     const classified = classifyError(
       response.status,
       upstreamType ?? (response.status === 401 ? "authentication_error"
@@ -295,9 +312,9 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
           : response.status >= 500 ? "server_error" : "invalid_request_error"),
       message,
     );
-    if (isCyberPolicyCode(upstreamCode)) {
+    if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
-      classified.type = "invalid_request_error";
+      classified.type = cyberPolicyErrorType(upstreamType);
     } else if (upstreamCode === "model_not_found") {
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
@@ -305,11 +322,13 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400 : response.status;
-    const retryAfter = resolveClientRetryAfter({
-      status: response.status,
-      message: classified.message,
-      upstreamRetryAfter: response.headers.get("retry-after"),
-    });
+    const retryAfter = isCyberPolicyCode(classified.code)
+      ? undefined
+      : resolveClientRetryAfter({
+        status: response.status,
+        message: classified.message,
+        upstreamRetryAfter: response.headers.get("retry-after"),
+      });
     finishLog(status, classified.message);
     return new Response(JSON.stringify(chatCompletionsErrorBody(status, classified.message, classified.type, classified.code)), {
       status,

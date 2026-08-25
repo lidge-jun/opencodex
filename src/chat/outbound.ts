@@ -9,7 +9,14 @@ type Rec = Record<string, unknown>;
 
 import { decodeServerSentEvents, sseFieldValue } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
-import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage } from "../lib/errors";
+import {
+  classifyError,
+  cyberPolicyErrorType,
+  CYBER_POLICY_ERROR_CODE,
+  isCyberPolicyCode,
+  isCyberPolicyMessage,
+} from "../lib/errors";
+import { redactSecretString } from "../lib/redact";
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -48,14 +55,14 @@ export function chatCompletionsUsage(usage: unknown): Rec {
 export function chatCompletionsErrorBody(
   status: number,
   message: string,
-  type = "invalid_request_error",
+  type?: string,
   code?: string | null,
 ): Rec {
   if (isCyberPolicyCode(code) || isCyberPolicyMessage(message)) {
     return {
       error: {
         message,
-        type: "invalid_request_error",
+        type: cyberPolicyErrorType(type),
         param: null,
         code: CYBER_POLICY_ERROR_CODE,
       },
@@ -64,7 +71,7 @@ export function chatCompletionsErrorBody(
   return {
     error: {
       message,
-      type,
+      type: type ?? "invalid_request_error",
       param: null,
       code: code !== undefined
         ? code
@@ -311,8 +318,9 @@ export function responsesSseToChatCompletionsSse(
         // Deliver the error frame then close the stream abnormally (no [DONE]).
         // Do not controller.error() — that can drop already-enqueued bytes from consumers
         // like response.text().
-        const statusHint = details?.status ?? streamErrorStatus(message);
-        const classified = classifyError(statusHint, details?.type ?? "upstream_error", message);
+        const safeMessage = redactSecretString(message);
+        const statusHint = details?.status ?? streamErrorStatus(safeMessage);
+        const classified = classifyError(statusHint, details?.type ?? "upstream_error", safeMessage);
         const translatorOverflow = details?.code === "translation_buffer_limit";
         if (translatorOverflow) {
           upstreamAbort.abort(new Error("upstream translation buffer exceeded the safe limit"));
@@ -324,7 +332,7 @@ export function responsesSseToChatCompletionsSse(
           classified.type = "upstream_error";
         } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
           classified.code = CYBER_POLICY_ERROR_CODE;
-          classified.type = "invalid_request_error";
+          classified.type = cyberPolicyErrorType(details?.type);
         } else if (details?.code !== undefined && details.code !== null && !classified.code) {
           classified.code = details.code;
         }

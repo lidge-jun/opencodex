@@ -71,6 +71,12 @@ import {
   targetKey,
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
+import {
+  CYBER_POLICY_ERROR_CODE,
+  CYBER_POLICY_FALLBACK_MESSAGE,
+  isCyberPolicyCode,
+  isCyberPolicyMessage,
+} from "../../lib/errors";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
@@ -660,6 +666,48 @@ export async function readDisplaySafeErrorText(
     // classification remains owned by the surrounding response pipeline.
     return fallback;
   }
+}
+
+interface NormalizedUpstreamErrorText {
+  safeText: string;
+  message?: string;
+  type?: string;
+  code?: string;
+  cyberPolicy: boolean;
+}
+
+/**
+ * Extract the structured provider error envelope without making `error.type` authoritative.
+ * Policy identity comes from the dedicated code (or the legacy message fallback); a credible
+ * upstream type is only carried through so callers do not erase provider diagnostics.
+ */
+function normalizeUpstreamErrorText(text: string, fallback: string): NormalizedUpstreamErrorText {
+  const safeText = redactSecretString(text).slice(0, 500).trim() || fallback;
+  let message: string | undefined;
+  let type: string | undefined;
+  let code: string | undefined;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const response = parsed.response && typeof parsed.response === "object" && !Array.isArray(parsed.response)
+      ? parsed.response as Record<string, unknown>
+      : undefined;
+    const candidates = [parsed.error, response?.error, response?.last_error, parsed.last_error, parsed];
+    const source = candidates.find((candidate): candidate is Record<string, unknown> => {
+      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+      const record = candidate as Record<string, unknown>;
+      return [record.message, record.type, record.code].some(value => typeof value === "string");
+    });
+    if (!source) return { safeText, cyberPolicy: isCyberPolicyMessage(safeText) };
+    if (typeof source.message === "string" && source.message.trim()) {
+      message = redactSecretString(source.message.trim()).slice(0, 500);
+    }
+    if (typeof source.type === "string" && source.type.trim()) type = source.type.trim();
+    if (typeof source.code === "string" && source.code.trim()) code = source.code.trim();
+  } catch {
+    /* non-JSON upstream body — retain the bounded display-safe text */
+  }
+  const cyberPolicy = isCyberPolicyCode(code) || isCyberPolicyMessage(message ?? safeText);
+  return { safeText, message, type, code, cyberPolicy };
 }
 
 function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
@@ -1312,27 +1360,30 @@ export async function consumeComboFailure(
   let classificationText = fallback;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
+  let upstreamMessage: string | undefined;
+  let upstreamType: string | undefined;
   try {
     const body = await readBoundedResponseBody(response, { signal });
     usage = usageFromComboFailureText(body.text);
     if (body.displaySafe) {
-      const safeText = redactSecretString(body.text).slice(0, 500);
-      if (safeText) classificationText = safeText;
-      try {
-        const parsed = JSON.parse(body.text) as { error?: { code?: unknown } | string };
-        const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.code : undefined;
-        if (typeof nested === "string" && nested.length > 0) upstreamCode = nested;
-      } catch {
-        /* non-JSON upstream body — message-only classification */
-      }
+      const normalized = normalizeUpstreamErrorText(body.text, fallback);
+      classificationText = normalized.safeText;
+      upstreamCode = normalized.code;
+      upstreamMessage = normalized.message;
+      upstreamType = normalized.type;
     }
   } catch (error) {
     if (signal?.aborted) throw error;
     classificationText = fallback;
   }
-  const message = classificationText === fallback
-    ? fallback
-    : `${fallback}: ${classificationText}`;
+  const cyberFailure = isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText);
+  const normalizedUpstreamCode = cyberFailure ? CYBER_POLICY_ERROR_CODE : upstreamCode;
+  const message = cyberFailure
+    ? upstreamMessage
+      ?? (isCyberPolicyCode(upstreamCode) ? CYBER_POLICY_FALLBACK_MESSAGE : classificationText)
+    : classificationText === fallback
+      ? fallback
+      : `${fallback}: ${classificationText}`;
   const upstreamRetryAfter = response.headers.get("retry-after");
   // Client response may get the synthetic "2" fallback; cooldown metadata must not —
   // otherwise coolComboTarget treats it as a 2s cooldown instead of the 60s default.
@@ -1350,13 +1401,18 @@ export async function consumeComboFailure(
     includeDefault: false,
   });
   return {
-    response: formatErrorResponse(response.status, "upstream_error", message, {
-      ...(upstreamCode !== undefined ? { code: upstreamCode } : {}),
-      ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
-    }),
+    response: formatErrorResponse(
+      response.status,
+      cyberFailure ? (upstreamType ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
+      message,
+      {
+        ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
+        ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
+      },
+    ),
     classificationText,
-    ...(upstreamCode !== undefined ? { upstreamCode } : {}),
-    ...(cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
+    ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
     ...(usage ? { usage } : {}),
   };
 }
@@ -4952,29 +5008,41 @@ async function handleResponsesInner(
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
-      const message = enrichOpenCodeZenRateLimitMessage(
-        `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`,
-        {
+      const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      const message = normalized.cyberPolicy
+        ? normalized.message
+          ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
+        : enrichOpenCodeZenRateLimitMessage(
+          `Provider error ${upstreamResponse.status}: ${normalized.safeText}`,
+          {
+            status: upstreamResponse.status,
+            providerName: route.providerName,
+            baseUrl: route.provider.baseUrl,
+            adapter: route.provider.adapter,
+            authMode: route.provider.authMode,
+            hasApiKey: Boolean(route.provider.apiKey?.trim()),
+            upstreamRetryAfter,
+            // This recovery path is the HTTP Responses wire; custom runTurn transports
+            // never reach enrichOpenCodeZenRateLimitMessage here.
+            supportsHttpSameKeyRetry: true,
+          },
+        );
+      const retryAfter = normalized.cyberPolicy
+        ? undefined
+        : resolveClientRetryAfter({
           status: upstreamResponse.status,
-          providerName: route.providerName,
-          baseUrl: route.provider.baseUrl,
-          adapter: route.provider.adapter,
-          authMode: route.provider.authMode,
-          hasApiKey: Boolean(route.provider.apiKey?.trim()),
+          message,
           upstreamRetryAfter,
-          // This recovery path is the HTTP Responses wire; custom runTurn transports
-          // never reach enrichOpenCodeZenRateLimitMessage here.
-          supportsHttpSameKeyRetry: true,
+        });
+      return formatErrorResponse(
+        upstreamResponse.status,
+        normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
+        message,
+        {
+          ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
+          ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
       );
-      const retryAfter = resolveClientRetryAfter({
-        status: upstreamResponse.status,
-        message,
-        upstreamRetryAfter,
-      });
-      return formatErrorResponse(upstreamResponse.status, "upstream_error", message, {
-        ...(retryAfter !== undefined ? { retryAfter } : {}),
-      });
     }
   }
 
@@ -5229,10 +5297,21 @@ async function handleResponsesInner(
 
     if (!response.ok) {
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
+      const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
       yield {
         type: "error",
-        status: response.status,
-        message: `Provider continuation error ${response.status}: ${redactSecretString(errorText.slice(0, 500))}`,
+        status: normalized.cyberPolicy ? 400 : response.status,
+        message: normalized.cyberPolicy
+          ? normalized.message
+            ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
+          : `Provider continuation error ${response.status}: ${normalized.safeText}`,
+        ...(normalized.cyberPolicy
+          ? {
+            errorType: normalized.type ?? CYBER_POLICY_ERROR_CODE,
+            code: CYBER_POLICY_ERROR_CODE,
+            retryable: false,
+          }
+          : {}),
       };
       return;
     }

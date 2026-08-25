@@ -1,9 +1,12 @@
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
+  cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
+  CYBER_POLICY_FALLBACK_MESSAGE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
 } from "../lib/errors";
+import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
@@ -178,13 +181,13 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
       const payload = sseDataPayload(decoder.decode(frame.block));
       const isDone = payload === "[DONE]";
       const parsed = payload === null ? undefined : parseSsePayload(payload);
-      const policyMessage = parsed !== undefined && isPolicyRewriteType(parsed)
-        ? cyberPolicyTerminalMessage(parsed)
+      const policyError = parsed !== undefined && isPolicyRewriteType(parsed)
+        ? cyberPolicyTerminalError(parsed)
         : undefined;
-      const outboundBlock = policyMessage
+      const outboundBlock = policyError
         ? encoder.encode(rewritePolicyTerminalBlock(
           decoder.decode(frame.block),
-          policyFailurePayload(policyMessage, parsed),
+          policyFailurePayload(policyError, parsed),
         ))
         : frame.block;
       if (isDone) {
@@ -387,7 +390,7 @@ function stringField(record: JsonRecord | null, key: string): string | undefined
  * Deliberately inspect structured error fields and known refusal copy only — a
  * bare `cyber_policy` token in an unrelated payload is not sufficient.
  */
-function cyberPolicyTerminalMessage(parsed: unknown): string | undefined {
+function cyberPolicyTerminalError(parsed: unknown): { message: string; type?: string } | undefined {
   const root = asJsonRecord(parsed);
   if (!root) return undefined;
   const response = asJsonRecord(root.response);
@@ -402,13 +405,21 @@ function cyberPolicyTerminalMessage(parsed: unknown): string | undefined {
   for (const candidate of candidates) {
     if (!candidate) continue;
     if (isCyberPolicyCode(stringField(candidate, "code"))) {
-      return stringField(candidate, "message")
-        ?? "Request blocked by the upstream cybersecurity policy.";
+      return {
+        message: stringField(candidate, "message")
+          ?? CYBER_POLICY_FALLBACK_MESSAGE,
+        ...(stringField(candidate, "type") ? { type: stringField(candidate, "type") } : {}),
+      };
     }
   }
   for (const candidate of candidates) {
     const message = stringField(candidate, "message");
-    if (message && isCyberPolicyMessage(message)) return message;
+    if (message && isCyberPolicyMessage(message)) {
+      return {
+        message,
+        ...(stringField(candidate, "type") ? { type: stringField(candidate, "type") } : {}),
+      };
+    }
   }
   return undefined;
 }
@@ -443,11 +454,11 @@ function rewritePolicyTerminalBlock(block: string, payload: string): string {
   return withEvent.join(newline);
 }
 
-function policyFailurePayload(message: string, parsed: unknown): string {
+function policyFailurePayload(policyError: { message: string; type?: string }, parsed: unknown): string {
   const error = {
-    type: "invalid_request_error",
+    type: cyberPolicyErrorType(policyError.type),
     code: CYBER_POLICY_ERROR_CODE,
-    message: message.slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    message: redactSecretString(policyError.message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   const root = asJsonRecord(parsed);
   const originalResponse = asJsonRecord(root?.response);
@@ -459,6 +470,7 @@ function policyFailurePayload(message: string, parsed: unknown): string {
     status: "failed",
     error,
     last_error: error,
+    retryable: false,
   };
   // Responses event metadata such as sequence_number is normally top-level.
   // Keep it (and any other non-error, non-response fields) while replacing only
@@ -469,11 +481,13 @@ function policyFailurePayload(message: string, parsed: unknown): string {
       && key !== "response"
       && key !== "error"
       && key !== "last_error"
+      && key !== "retryable"
     )))
     : {};
   return JSON.stringify({
     ...preservedRoot,
     type: "response.failed",
+    retryable: false,
     response,
   });
 }
@@ -535,9 +549,9 @@ export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStat
     case "response.failed":
       return "failed";
     case "response.incomplete":
-      return cyberPolicyTerminalMessage(parsed) ? "failed" : "incomplete";
+      return cyberPolicyTerminalError(parsed) ? "failed" : "incomplete";
     case "error":
-      return cyberPolicyTerminalMessage(parsed) ? "failed" : null;
+      return cyberPolicyTerminalError(parsed) ? "failed" : null;
     default:
       return null;
   }
@@ -1010,7 +1024,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const status = terminalStatusFromParsed(parsed);
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
-      && cyberPolicyTerminalMessage(parsed) !== undefined;
+      && cyberPolicyTerminalError(parsed) !== undefined;
     if (status) sawTerminal = true;
     if (!reported && handlers.onTerminal && status) {
       try {
