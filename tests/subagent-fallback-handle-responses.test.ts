@@ -23,16 +23,24 @@ import {
   resolveCodexAccountForThreadDetailed,
 } from "../src/codex/routing";
 import {
+  DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS,
   isModelHealthBlocked,
   resetSubagentModelFallbackStateForTests,
   setSubagentQuotaPrimeForTests,
 } from "../src/codex/subagent-model-fallback";
 import { resolveCodexAuthContext, type CodexAuthContext } from "../src/codex/auth-context";
 import { handleResponses } from "../src/server/responses";
+import { resetAgentTaskRecoveryState } from "../src/server/responses/agent-task-recovery";
 import { isEagerRelaySseResponse } from "../src/server/relay";
+import type { ActiveTurnLease } from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { ResponsesTerminalStatus } from "../src/bridge";
+import {
+  codexHeaders,
+  encryptedInput as recoverableEncryptedInput,
+  recoverySse,
+} from "./helpers/agent-task-recovery";
 
 setDefaultTimeout(30_000);
 
@@ -51,6 +59,7 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  resetAgentTaskRecoveryState();
   resetSubagentModelFallbackStateForTests();
 });
 
@@ -60,6 +69,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  resetAgentTaskRecoveryState();
   resetSubagentModelFallbackStateForTests();
   rmSync(testDir, { recursive: true, force: true });
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -840,6 +850,136 @@ describe("native fallback account preview", () => {
     expect(capture.urls.some((url) => url.includes("chatgpt.com/backend-api/codex"))).toBe(true);
     expect(capture.auths.some((auth) => auth?.includes("pool-b_token"))).toBe(true);
     expect(capture.bodies.some((body) => body.includes('"model":"gpt-5.3-codex-spark"'))).toBe(true);
+  });
+
+  test("recovery re-previews the Pool account for the candidate quota scope", async () => {
+    const now = 1_800_000_000_000;
+    let currentNow = now;
+    Date.now = () => currentNow;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      agentTaskRecovery: { enabled: true },
+      subagentModelFallback: ["gpt-5.3-codex-spark"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const requestHeaders = codexHeaders("caller-account", {
+      "session-id": "recovery-candidate-scope-session-private",
+      "thread-id": "recovery-candidate-scope-thread-private",
+    });
+    const bound = await resolveCodexAuthContext(requestHeaders, cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (bound.kind !== "pool") throw new Error("expected pool context");
+    cfg.activeCodexAccountId = "pool-b";
+
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+      modelId: "gpt-5.3-codex-spark",
+      now,
+      resetAt: Math.floor((now + 60 * 60_000) / 1_000),
+    });
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("gpt-5.3-codex-spark", "429", cfg, "pool-b", now);
+    noteSubagentModelFailure(
+      "gpt-5.3-codex-spark",
+      "429",
+      cfg,
+      "pool-a",
+      now,
+      10 * DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS,
+    );
+    noteSubagentModelFailure(
+      "xai/grok-4.5",
+      "429",
+      cfg,
+      undefined,
+      now,
+      10 * DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS,
+    );
+    noteSubagentModelFailure(
+      "grok-4.5",
+      "429",
+      cfg,
+      undefined,
+      now,
+      10 * DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS,
+    );
+
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "shared")).toBe("pool-a");
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "spark")).toBe("pool-b");
+
+    let selectionStarts = 0;
+    let selectionReleases = 0;
+    const turnAdmissionLease = {
+      release() {},
+      beginCodexAccountSelection() {
+        selectionStarts += 1;
+        return {
+          mainProfileDraining: false,
+          claimMainProfile: () => false,
+          release: () => { selectionReleases += 1; },
+        };
+      },
+    } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
+    let finalAuth: CodexAuthContext | undefined;
+    const fetchedUrls: string[] = [];
+    const forwardedBodies: string[] = [];
+    const forwardedAuths: Array<string | null> = [];
+    globalThis.fetch = (async (input, init) => {
+      const raw = typeof init?.body === "string" ? init.body : "";
+      fetchedUrls.push(String(input));
+      forwardedBodies.push(raw);
+      forwardedAuths.push(new Headers(init?.headers).get("authorization"));
+      if (raw.includes("capture_assignment")) {
+        currentNow = now + DEFAULT_SUBAGENT_MODEL_FALLBACK_POLL_MS + 1;
+        return new Response(recoverySse("Use the recovered candidate-scope assignment."), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return Response.json({
+        id: "resp_recovered_candidate_scope",
+        object: "response",
+        status: "completed",
+        model: "gpt-5.3-codex-spark",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await postSpawn(
+      cfg,
+      { model: "xai/grok-4.5", input: recoverableEncryptedInput(), stream: false },
+      {
+        turnAdmissionLease,
+        onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; },
+      },
+      { model: "", provider: "" },
+      requestHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    const bodyRequests = forwardedBodies.map((body, index) => ({
+      body,
+      url: fetchedUrls[index],
+      auth: forwardedAuths[index],
+    })).filter(({ body }) => body.length > 0);
+    expect(bodyRequests).toHaveLength(2);
+    expect(bodyRequests[0]?.body).toContain("capture_assignment");
+    expect(bodyRequests[1]?.body).toContain("Use the recovered candidate-scope assignment.");
+    expect(bodyRequests[1]?.body).toContain('"model":"gpt-5.3-codex-spark"');
+    expect(selectionStarts).toBe(3);
+    expect(selectionReleases).toBe(3);
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(bodyRequests[1]?.auth).toContain("pool-b_token");
   });
 
   test("uses healthier pool account B when active A is above threshold", async () => {
