@@ -2630,14 +2630,23 @@ async function handleResponsesInner(
                   && recoverySelectionAdmission?.mainProfileDraining === true,
               };
               const recoveryNow = Date.now();
-              subagentFallbackAccountPreview = (modelId, previewNow) => previewCodexAccountForRequest(
+              // Carry the entitlement filter through recovery too (#2509/#2623). The scope was
+              // already re-previewed per candidate here; the ELIGIBLE-ACCOUNT set was not, so a
+              // recovered assignment could select an account that is not entitled to the model
+              // and then fail closed at final auth — the same class of stale-selection bug as
+              // the quota scope, one layer over.
+              subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
                 poolAffinityKey,
                 config,
                 previewNow,
                 codexQuotaScopeForModel(modelId),
-                recoverySelectionOptions,
+                { ...recoverySelectionOptions, modelEligibleAccountIds },
               );
-              const recoveryPreviewAccountId = subagentFallbackAccountPreview(parsed.modelId, recoveryNow);
+              const recoveryPreviewAccountId = subagentFallbackAccountPreview(
+                parsed.modelId,
+                recoveryNow,
+                subagentFallbackModelEligibleAccountIdsForModel?.(parsed.modelId),
+              );
               return applySubagentModelFallback(
                 parsed,
                 req.headers,
@@ -2647,6 +2656,7 @@ async function handleResponsesInner(
                 false,
                 recoverySelectionOptions,
                 subagentFallbackAccountPreview,
+                subagentFallbackModelEligibleAccountIdsForModel,
               );
             } finally {
               recoverySelectionAdmission?.release();
