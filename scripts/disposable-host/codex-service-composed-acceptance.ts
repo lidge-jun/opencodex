@@ -266,7 +266,14 @@ class Fixture {
 
   async apiStop(): Promise<ChildResult> {
     const runtime = await this.waitForRuntime();
-    const script = `const r=await fetch(${JSON.stringify(`http://127.0.0.1:${runtime.port}/api/stop`)},{method:"POST",headers:{"x-opencodex-api-key":"disposable-admin-token"}});console.log(r.status,await r.text());if(!r.ok)process.exit(1)`;
+    // Read the token the SERVICE actually minted. The env var only reaches a process this
+    // script launches; the service runs under systemd with its own environment, and
+    // `configuredAdminToken` falls back to `admin-api-token` in the config home. Passing the
+    // env value here produced a 401 against a server that had generated a different token.
+    const tokenPath = join(this.ocx, "admin-api-token");
+    if (!existsSync(tokenPath)) fail(`${this.row}: service did not mint an admin token at ${tokenPath}`);
+    const token = readFileSync(tokenPath, "utf8").trim();
+    const script = `const r=await fetch(${JSON.stringify(`http://127.0.0.1:${runtime.port}/api/stop`)},{method:"POST",headers:{"x-opencodex-api-key":${JSON.stringify(token)}}});console.log(r.status,await r.text());if(!r.ok)process.exit(1)`;
     const result = await spawnResult([process.execPath, "--eval", script], { cwd: this.root, env: this.env() });
     if (result.exitCode !== 0) fail(`${this.row}: POST /api/stop failed\n${result.stderr}\n${result.stdout}`);
     return result;
