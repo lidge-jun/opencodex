@@ -3,7 +3,7 @@ name: Fork PR Mergeable
 on:
   pull_request:
     branches:
-      - main
+      - dev
     types:
       - opened
       - reopened
@@ -58,9 +58,10 @@ jobs:
       - name: Check base ancestry
         run: |
           set -eu
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           if ! git merge-base --is-ancestor "origin/${{ github.base_ref }}" HEAD; then
             echo "The pull request head is not a descendant of origin/${{ github.base_ref }}"
-            echo "Recovery: daily: merge \`origin/main\` into the sync branch; emergency: \`-s ours\` on \`run/main\` only."
+            echo "Recovery: merge \`origin/dev\` into the sync branch before retrying."
             echo "Never ask the human to resolve GitHub's 3-way of a disconnected rebuild."
             exit 1
           fi

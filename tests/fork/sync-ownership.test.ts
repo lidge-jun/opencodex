@@ -55,7 +55,7 @@ describe("fork sync ownership", () => {
 
     expect(JSON.parse(mergePackageJson(ours, theirs))).toEqual({
       name: "@yansigit/opencodex",
-      version: "2.32.0",
+      version: "2.31.0",
       description: "upstream release",
       scripts: { start: "bun src/index.ts" },
       dependencies: { zod: "4.4.3" },

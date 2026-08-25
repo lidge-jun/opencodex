@@ -72,7 +72,7 @@ describe("fork sync GitHub issue notifier", () => {
     expect((fake.calls[1]?.value as { labels: string[] }).labels).toEqual(["fork-sync", "triage"]);
   });
 
-  test("recommends a merge-from-main draft PR for daily-merge events", async () => {
+  test("recommends a dev-targeted draft PR for daily-merge events", async () => {
     const fake = client();
     await createGitHubIssueNotifier({
       client: fake.api,
@@ -81,8 +81,8 @@ describe("fork sync GitHub issue notifier", () => {
 
     const created = fake.calls[1]?.value as { body: string };
     expect(created.body).toContain("recommendedLane: daily-merge");
-    expect(created.body).toContain("open or update a merge-from-main draft PR");
-    expect(created.body).not.toContain("rebuild run/main");
+    expect(created.body).toContain("open or update a draft PR merging upstream into dev");
+    expect(created.body).not.toContain("rebuild the sync branch from origin/dev");
   });
 
   test("reserves the rebuild recommendation for history-diverged events", async () => {
@@ -92,7 +92,7 @@ describe("fork sync GitHub issue notifier", () => {
       upstreamRepo: "lidge-jun/opencodex",
     }).notify(event("history-diverged", "emergency-rebuild"));
     const emergencyBody = emergency.calls[1]?.value as { body: string };
-    expect(emergencyBody.body).toContain("rebuild run/main");
+    expect(emergencyBody.body).toContain("rebuild the sync branch from origin/dev");
 
     const failed = client();
     await createGitHubIssueNotifier({
@@ -101,7 +101,7 @@ describe("fork sync GitHub issue notifier", () => {
     }).notify(event("pin-diverged"));
     const failedBody = failed.calls[1]?.value as { body: string };
     expect(failedBody.body).toContain("investigate the fork sync event");
-    expect(failedBody.body).not.toContain("rebuild run/main");
+    expect(failedBody.body).not.toContain("rebuild the sync branch from origin/dev");
   });
 
   test("does not call GitHub for an already-current event", async () => {

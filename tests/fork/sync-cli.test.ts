@@ -353,12 +353,12 @@ describe("fork sync CLI", () => {
 
     expect(JSON.parse(output[0]!)).toEqual({
       status: "merged",
-      branch: "sync/upstream-20260824",
+      branch: "sync/upstream-v2.29.0-1111111",
       resolutions: [],
       unresolved: [],
     });
     expect(calls).toEqual([
-      ["switch", "-c", "sync/upstream-20260824"],
+      ["switch", "-C", "sync/upstream-v2.29.0-1111111"],
       ["merge", "--no-ff", "vendor/main"],
     ]);
   });
@@ -374,7 +374,7 @@ describe("fork sync CLI", () => {
     };
     const prepareResult: PrepareResult = {
       status: "merged",
-      branch: "sync/upstream-20260824",
+      branch: "sync/upstream-v2.29.0-1111111",
       resolutions: [],
       unresolved: [],
     };
