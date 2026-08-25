@@ -11,6 +11,10 @@ const inputImageBlockSchema = z.object({
 }).refine(v => typeof v.image_url === "string" || typeof v.file_id === "string", {
   message: "input_image requires at least one of image_url or file_id",
 });
+const inputVideoBlockSchema = z.object({
+  type: z.literal("input_video"),
+  video_url: z.string().min(1),
+});
 const inputFileBlockSchema = z.object({
   type: z.literal("input_file"),
   file_id: z.string().optional(),
@@ -24,7 +28,7 @@ const reasoningTextSchema = z.object({ type: z.literal("reasoning_text"), text: 
 // codex-rs FunctionCallOutputContentItem (protocol/src/models.rs): input_text | input_image | encrypted_content.
 const encryptedContentBlockSchema = z.object({ type: z.literal("encrypted_content"), encrypted_content: z.string() });
 
-const inputContentBlockSchema = z.union([inputTextSchema, plainTextSchema, inputImageBlockSchema, inputFileBlockSchema]);
+const inputContentBlockSchema = z.union([inputTextSchema, plainTextSchema, inputImageBlockSchema, inputVideoBlockSchema, inputFileBlockSchema]);
 const outputContentBlockSchema = z.union([outputTextSchema, plainTextSchema, outputRefusalSchema]);
 // Tool outputs on the wire mix codex-rs FunctionCallOutputContentItem with legacy output blocks.
 const toolOutputContentBlockSchema = z.union([

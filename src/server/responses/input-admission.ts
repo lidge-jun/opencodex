@@ -68,7 +68,9 @@ function imageTokens(imageUrl: string): number {
 }
 
 function contentPartTokens(part: OcxContentPart, modelId: string): number {
-  return part.type === "image" ? imageTokens(part.imageUrl) : estimateTokens(part.text, modelId);
+  if (part.type === "image") return imageTokens(part.imageUrl);
+  if (part.type === "video") return imageTokens(part.videoUrl);
+  return estimateTokens(part.text, modelId);
 }
 
 function contentTokens(content: string | readonly OcxContentPart[], modelId: string): number {

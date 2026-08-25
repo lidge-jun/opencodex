@@ -436,6 +436,7 @@ function decodeResultParts(message: OcxToolResultMessage): DecodedResultPart[] |
   if (typeof content === "string") return undefined;
   return content.map((part): DecodedResultPart => {
     if (part.type === "text") return { kind: "text", text: part.text };
+    if (part.type === "video") return { kind: "text", text: "[video]" };
     const decoded = decodeInlineImage(part.imageUrl);
     return decoded ? { kind: "image", ...decoded } : { kind: "undecodable" };
   });

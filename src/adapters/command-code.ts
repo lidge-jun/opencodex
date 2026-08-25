@@ -144,7 +144,8 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
     if (typeof message.content === "string") content.push({ type: "text", text: message.content });
     else for (const part of message.content) {
       if (part.type === "text") content.push({ type: "text", text: part.text });
-      else content.push(wireImagePart(part.imageUrl));
+      else if (part.type === "image") content.push(wireImagePart(part.imageUrl));
+      else content.push({ type: "text", text: "[video]" });
     }
     out.push({ role: "user", content });
   }

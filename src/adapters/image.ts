@@ -18,6 +18,6 @@ export function parseDataUrl(url: string): { mediaType: string; base64: string }
  */
 export function contentPartsToText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
-  const text = content.map(p => (p.type === "text" ? p.text : "[image]")).join("");
+  const text = content.map(p => p.type === "text" ? p.text : p.type === "image" ? "[image]" : "[video]").join("");
   return text || "[image]";
 }

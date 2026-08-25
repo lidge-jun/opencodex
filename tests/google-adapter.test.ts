@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../src/adapters/google";
+import { chatCompletionsToResponsesBody } from "../src/chat/inbound";
+import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
@@ -79,6 +81,53 @@ describe("google adapter — tool result images", () => {
 
     const toolTurn = contents.find(c => c.parts.some(p => "functionResponse" in p));
     expect(toolTurn!.parts.some(p => "inline_data" in p)).toBe(false);
+  });
+});
+
+describe("google adapter — Chat Completions video input", () => {
+  test("carries an inline video through Chat translation onto Gemini inline_data", async () => {
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Summarize this video" },
+          { type: "video_url", video_url: { url: "data:video/mp4;base64,aGVsbG8=" } },
+        ],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const contents = await geminiContents(parsed);
+
+    expect(contents).toContainEqual({
+      role: "user",
+      parts: [
+        { text: "Summarize this video" },
+        { inline_data: { mime_type: "video/mp4", data: "aGVsbG8=" } },
+      ],
+    });
+  });
+
+  test("does not mislabel an arbitrary remote video URL as Gemini file_data", async () => {
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [{ type: "video_url", video_url: { url: "https://example.test/video.mp4" } }],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const contents = await geminiContents(parsed);
+
+    expect(contents).toContainEqual({
+      role: "user",
+      parts: [{ text: "[video: https://example.test/video.mp4]" }],
+    });
+    expect(JSON.stringify(contents)).not.toContain("file_data");
   });
 });
 

@@ -53,6 +53,14 @@ function imageUrlFromPart(part: Rec): string | null {
   return null;
 }
 
+function videoUrlFromPart(part: Rec): string | null {
+  if (part.type !== "video_url") return null;
+  const videoUrl = part.video_url;
+  if (typeof videoUrl === "string" && videoUrl.length > 0) return videoUrl;
+  if (isRec(videoUrl) && typeof videoUrl.url === "string" && videoUrl.url.length > 0) return videoUrl.url;
+  return null;
+}
+
 function userContentToBlocks(content: unknown): Rec[] {
   if (typeof content === "string") {
     return content.length > 0 ? [{ type: "input_text", text: content }] : [];
@@ -70,7 +78,12 @@ function userContentToBlocks(content: unknown): Rec[] {
       continue;
     }
     const imageUrl = imageUrlFromPart(raw);
-    if (imageUrl) blocks.push({ type: "input_image", image_url: imageUrl });
+    if (imageUrl) {
+      blocks.push({ type: "input_image", image_url: imageUrl });
+      continue;
+    }
+    const videoUrl = videoUrlFromPart(raw);
+    if (videoUrl) blocks.push({ type: "input_video", video_url: videoUrl });
   }
   return blocks;
 }

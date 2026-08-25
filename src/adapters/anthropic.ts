@@ -37,6 +37,7 @@ function toAnthropicContentPart(p: OcxContentPart): unknown {
       ? { type: "image", source: { type: "base64", media_type: data.mediaType, data: data.base64 } }
       : { type: "image", source: { type: "url", url: p.imageUrl } };
   }
+  if (p.type === "video") return { type: "text", text: "[video]" };
   return { type: "text", text: p.text };
 }
 

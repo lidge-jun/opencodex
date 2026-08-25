@@ -178,7 +178,7 @@ function geminiTextPart(text: unknown): { text: string } | undefined {
  */
 function geminiToolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
-  const hasContent = content.some(p => p.type === "image" || (typeof p.text === "string" && p.text.length > 0));
+  const hasContent = content.some(p => p.type !== "text" || p.text.length > 0);
   return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
 }
 
@@ -260,6 +260,13 @@ function messagesToGeminiFormat(
               // Gemini takes base64 via inline_data; a remote URL needs a mime type we don't have, so
               // fall back to a short marker rather than inlining the URL as a huge text blob.
               parts.push(data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[image: ${p.imageUrl}]` });
+              continue;
+            }
+            if (p.type === "video") {
+              const data = parseDataUrl(p.videoUrl);
+              // Gemini accepts inline video bytes in the same Part union as images. Arbitrary
+              // remote URLs are not valid fileData references, so retain only a short marker.
+              parts.push(data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[video: ${p.videoUrl}]` });
               continue;
             }
             // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.

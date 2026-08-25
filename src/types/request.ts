@@ -190,8 +190,14 @@ export interface OcxImageContent {
   detail?: string;
 }
 
-/** A user/developer message content part: text or an image (vision). */
-export type OcxContentPart = OcxTextContent | OcxImageContent;
+export interface OcxVideoContent {
+  type: "video";
+  /** A base64 `data:` URL from an OpenAI-compatible `video_url` part. */
+  videoUrl: string;
+}
+
+/** A user/developer message content part: text or native media. */
+export type OcxContentPart = OcxTextContent | OcxImageContent | OcxVideoContent;
 
 export interface OcxThinkingContent {
   type: "thinking";
