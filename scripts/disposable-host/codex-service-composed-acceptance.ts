@@ -151,11 +151,22 @@ class Fixture {
   readonly lock: string;
   readonly lockAllowlist: string[];
   readonly baselineOutside: Record<string, string>;
+  readonly seed: Record<string, unknown>;
 
   constructor(readonly row: RowId) {
     for (const path of [this.userprofile, this.codex, this.ocx]) mkdirSync(path, { recursive: true, mode: 0o700 });
     writeFileSync(join(this.codex, "config.toml"), 'model = "gpt-5"\n');
-    writeFileSync(join(this.ocx, "config.json"), JSON.stringify({
+    // The OpenCodex home is left EMPTY on purpose.
+    //
+    // Ownership is established by the first owned write into an empty directory
+    // (lib/config-ownership.ts `createOwnership`, which returns null for a non-empty root).
+    // Pre-seeding config.json means OpenCodex never claims the home, and `ocx uninstall`
+    // then correctly refuses to delete a directory it cannot prove it owns — so P10 was
+    // failing on the fixture's own shortcut rather than on the production command.
+    //
+    // Writing the seed AFTER the first CLI invocation would work too, but letting the product
+    // create its own home is closer to what P10 actually claims to accept.
+    this.seed = {
       port: 0,
       hostname: "127.0.0.1",
       syncResumeHistory: false,
@@ -172,7 +183,7 @@ class Fixture {
         },
       },
       defaultProvider: "fixture",
-    }, null, 2));
+    };
     this.lock = coordinatorPath(this.codex);
     this.lockAllowlist = [this.lock, `${this.lock}-journal`, `${this.lock}-wal`, `${this.lock}-shm`];
     for (const path of this.lockAllowlist) if (existsSync(path)) fail(`${row}: pre-existing coordinator artifact: ${path}`);
@@ -232,6 +243,13 @@ class Fixture {
   async install(): Promise<void> {
     await this.cli(["service", "install"]);
     if (!existsSync(this.unit)) fail(`${this.row}: install did not create fixture unit`);
+    // Now that the product owns the home, apply the fixture's routing seed. `service install`
+    // wrote a default config.json, so merge rather than replace.
+    const configPath = join(this.ocx, "config.json");
+    const current = existsSync(configPath)
+      ? JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>
+      : {};
+    writeFileSync(configPath, `${JSON.stringify({ ...current, ...this.seed }, null, 2)}\n`, { mode: 0o600 });
   }
 
   async waitForRuntime(): Promise<{ port: number; pid: number }> {
