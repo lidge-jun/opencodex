@@ -105,7 +105,10 @@ export function CodexAccountPoolMainCard({
             </span>
           )}
         </span>
-        {!main?.paused && !isMainActive && !showReauth && !inCooldown && (
+        {/* Same rule as the pool cards: hide the action only once this card owns the pin.
+            `isMainActive` is where routing sits, which is true by default with no pin at
+            all — and that is precisely the state the operator needs the action for (#2554). */}
+        {!main?.paused && pinnedId !== "__main__" && !showReauth && !inCooldown && (
           <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(mainSwitchEntry)}>
             {switchActionLabel}
           </button>

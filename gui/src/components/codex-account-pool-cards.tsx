@@ -100,7 +100,11 @@ export function CodexAccountPoolCards({
                 </span>
               )}
             </span>
-            {!a.paused && !isNext(a) && !showReauth && !inCooldown && (
+            {/* Gated on the pin, not on where routing happens to sit. An account can be
+                effective-active with `pinnedId` null (pool strategy chose it) or with the
+                pin on a sibling; in both cases pinning it is a change the operator can
+                still make, so the action stays (#2554). */}
+            {!a.paused && a.id !== pinnedId && !showReauth && !inCooldown && (
               <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(a)}>
                 {switchActionLabel}
               </button>
