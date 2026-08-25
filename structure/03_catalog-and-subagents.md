@@ -171,6 +171,11 @@ The `multi_agent_v2` feature flag and the logical maximum thread count are separ
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 
+`keepNativeChatGptOnV1` makes mode `v2` a catalog-driven hybrid: OpenCodex disables the global
+`multi_agent_v2` override because codex-rs resolves that override before a model row's explicit
+`multi_agent_version`. Native ChatGPT rows then select v1 from the catalog and routed rows select
+v2. An explicit attempt to enable the global flag while the hybrid pin is active is rejected.
+
 ### What the five-model `spawn_agent` window is, and how V1 differs from V2
 
 `MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/sync.ts`) is **not** a

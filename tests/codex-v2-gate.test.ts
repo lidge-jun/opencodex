@@ -1989,6 +1989,7 @@ describe("3-state multi-agent mode", () => {
     expect(multiAgentModeLine("v1")).toContain("v1");
     expect(multiAgentModeLine("default")).toContain("default");
     expect(multiAgentModeLine("v2")).toContain("v2");
+    expect(multiAgentModeLine("v2", true)).toContain("v2 hybrid");
   });
 
   test("mode default restores upstream pins after a prior forced v2 (stale-clear regression)", () => {

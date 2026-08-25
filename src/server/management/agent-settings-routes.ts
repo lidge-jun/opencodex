@@ -307,9 +307,18 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return jsonResponse({ error: "body.multiAgentModeHintText must be a non-empty string or null" }, 400);
     }
     const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
-    const modeFlag = mode === "v2" ? true : mode === "v1" ? false : undefined;
+    const effectiveMode = mode ?? config.multiAgentMode ?? "default";
+    const effectiveKeepNative = wantsKeepNative
+      ? body.keepNativeChatGptOnV1 === true
+      : config.keepNativeChatGptOnV1 === true;
+    const hybridPinActive = effectiveMode === "v2" && effectiveKeepNative;
+    const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" ? false : undefined;
     if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
-      return jsonResponse({ error: `body.enabled conflicts with multiAgentMode '${mode}'` }, 400);
+      return jsonResponse({
+        error: hybridPinActive
+          ? "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins"
+          : `body.enabled conflicts with multiAgentMode '${mode}'`,
+      }, 400);
     }
     const {
       isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads, transitionMultiAgentV2,
@@ -327,7 +336,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }, 502);
     }
     const warnings: string[] = [];
-    const requestedFlag = wantsFlag ? body.enabled as boolean : modeFlag;
+    if (wantsFlag && body.enabled === true && hybridPinActive) {
+      return jsonResponse({
+        error: "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins",
+      }, 400);
+    }
+    const requestedFlag = wantsFlag
+      ? body.enabled as boolean
+      : modeFlag ?? (wantsKeepNative && hybridPinActive ? false : undefined);
     if (requestedFlag !== undefined || wantsThreads) {
     const targetFlag = requestedFlag ?? isMultiAgentV2Enabled();
     let toggle = deps.toggleCodexMultiAgentV2;
@@ -351,7 +367,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
       else deleteConfigTopLevelKey(config, "keepNativeChatGptOnV1");
       saveConfigPreservingClaudeCode(config);
-      const effectiveMode = mode ?? config.multiAgentMode ?? "default";
       warnings.push(body.keepNativeChatGptOnV1 === true
         ? (effectiveMode === "v2"
           ? "ChatGPT-native models stay on v1 while other models use v2. Applies to new sessions."
