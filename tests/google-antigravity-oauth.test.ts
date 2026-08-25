@@ -4,7 +4,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAccountSet, getCredential, saveCredential } from "../src/oauth/store";
-import { getValidAccessTokenForAccount } from "../src/oauth";
+import { getValidAccessTokenForAccount, getValidAccessTokenSnapshotForAccount } from "../src/oauth";
 import { ANTIGRAVITY_IDE_VERSION } from "../src/adapters/client-fingerprint";
 
 const realFetch = globalThis.fetch;
@@ -215,5 +215,34 @@ describe("antigravity credential persistence (projectId survives the store)", ()
     const after = getAccountSet("google-antigravity")!;
     expect(after.accounts.find(account => account.credential.accountId === "acct-a")?.needsReauth).toBe(true);
     expect(after.accounts.find(account => account.credential.accountId === "acct-b")?.needsReauth).not.toBe(true);
+  });
+
+  test("account refresh keeps the stored project id without CCA discovery", async () => {
+    tmp = join(tmpdir(), `ag-store-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(tmp, { recursive: true });
+    process.env.HOME = tmp;
+    process.env.OPENCODEX_HOME = join(tmp, "ocx");
+    await saveCredential("google-antigravity", {
+      access: "expired-access",
+      refresh: "refresh-account",
+      expires: 0,
+      projectId: "stored-project",
+      accountId: "acct-refresh",
+    });
+    const accountId = getAccountSet("google-antigravity")!.activeAccountId;
+    const calls: string[] = [];
+    routeFetch(url => {
+      calls.push(url);
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh-access", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ cloudaicompanionProject: "unexpected-project" }), { status: 200 });
+    });
+
+    const snapshot = await getValidAccessTokenSnapshotForAccount("google-antigravity", accountId);
+    expect(snapshot.accessToken).toBe("fresh-access");
+    expect(snapshot.projectId).toBe("stored-project");
+    expect(calls.filter(url => url.includes(":loadCodeAssist")).length).toBe(0);
+    expect(await getValidAccessTokenForAccount("google-antigravity", accountId)).toBe("fresh-access");
   });
 });

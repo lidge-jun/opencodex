@@ -642,7 +642,7 @@ export async function refreshAnthropicAccountWithLock(
       writeOAuthRefreshIntent(provider, accountId, generation, now(), deps.flight?.flightId);
       if (deps.signal?.aborted) throw deps.signal.reason;
       if (deps.flight) deps.flight.dispatched = true;
-      const fresh = merged(await def.refresh(stored.refresh, deps.signal), stored);
+      const fresh = merged(await def.refresh(stored.refresh, deps.signal, stored), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,

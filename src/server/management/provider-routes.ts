@@ -48,7 +48,7 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
-import { getProviderTlsProfileStatus } from "../../lib/provider-tls-profile";
+import { clearProviderTlsProfileStatus, getProviderTlsProfileStatus } from "../../lib/provider-tls-profile";
 import { redactErrorMessage } from "../../lib/redact";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
@@ -424,7 +424,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       tlsProfile: p.tlsProfile,
-      tlsProfileStatus: p.tlsProfile === undefined ? "disabled" : getProviderTlsProfileStatus(name),
+      tlsProfileStatus: p.tlsProfile === undefined ? "disabled" : getProviderTlsProfileStatus(name, p),
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
@@ -491,6 +491,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ error: "provider reload source changed" }, 409);
     }
     reconcileLiveStateStores();
+    clearProviderTlsProfileStatus(name);
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
     refreshUserCostOverlays(currentDiskConfig);
@@ -584,6 +585,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         : { ...existing.modelContextWindows };
     }
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
+    clearProviderTlsProfileStatus(name);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
     reconcileLiveStateStores();
@@ -718,6 +720,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
+    if (applied.editorTouched && !pacingOnly) clearProviderTlsProfileStatus(name);
     if (applied.editorTouched && !pacingOnly) {
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
@@ -911,6 +914,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
     delete config.providers[name];
+    clearProviderTlsProfileStatus(name);
     const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
     const droppedCustomModels = dropProviderCustomModels(config, name);
     setProviderContextCap(config, name, false);

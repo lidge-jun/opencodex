@@ -80,6 +80,30 @@ describe("provider TLS profile validation", () => {
 });
 
 describe("Antigravity TLS transport gate", () => {
+  test("does not expose active or fallback state for a replaced provider contract", async () => {
+    const statusFor = (provider: typeof canonicalProvider) => getProviderTlsProfileStatus("google-antigravity", provider);
+    setProviderTlsRuntimeForTest({
+      importWreq: async () => ({
+        createTransport: async () => ({ close: async () => undefined }),
+        fetch: async () => new Response("ok"),
+      }),
+    });
+    await providerTlsFetch("google-antigravity", canonicalProvider, globalThis.fetch)(
+      "https://daily-cloudcode-pa.googleapis.com/v1internal",
+    );
+    expect(statusFor(canonicalProvider)).toBe("active");
+    expect(statusFor({ ...canonicalProvider, baseUrl: "https://cloudcode-pa.googleapis.com" })).toBe("disabled");
+
+    resetProviderTlsProfileForTests();
+    setProviderTlsRuntimeForTest({ importWreq: async () => { throw new Error("native unavailable"); } });
+    const bunFallback = (async () => new Response("bun")) as typeof globalThis.fetch;
+    await providerTlsFetch("google-antigravity", canonicalProvider, bunFallback)(
+      "https://daily-cloudcode-pa.googleapis.com/v1internal",
+    );
+    expect(statusFor(canonicalProvider)).toBe("fallback");
+    expect(statusFor({ ...canonicalProvider, authMode: "key" as never })).toBe("disabled");
+  });
+
   test("recognizes only HTTPS canonical hosts", () => {
     expect(ANTIGRAVITY_TLS_HOSTS).toEqual(new Set([
       "daily-cloudcode-pa.googleapis.com",
@@ -136,7 +160,7 @@ describe("Antigravity TLS transport gate", () => {
       transport,
     });
     expect(new Headers(seen.init?.headers).get("authorization")).toBe("Bearer redacted");
-    expect(getProviderTlsProfileStatus("google-antigravity")).toBe("active");
+    expect(getProviderTlsProfileStatus("google-antigravity", canonicalProvider)).toBe("active");
   });
 
   test("providerFetch routes the opt-in profile while leaving the default executor untouched", async () => {
@@ -260,7 +284,7 @@ describe("Antigravity TLS transport gate", () => {
     expect(bunCalls).toBe(2);
     expect(fallbackInits).toHaveLength(2);
     expect(fallbackInits.every(init => init.redirect === "manual")).toBe(true);
-    expect(getProviderTlsProfileStatus("google-antigravity")).toBe("fallback");
+    expect(getProviderTlsProfileStatus("google-antigravity", canonicalProvider)).toBe("fallback");
 
     resetProviderTlsProfileForTests();
     setProviderTlsRuntimeForTest({

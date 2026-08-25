@@ -3055,6 +3055,18 @@ describe("provider management validation", () => {
       .find(row => row.name === "google-antigravity");
     expect(activeRow?.tlsProfileStatus).toBe("active");
 
+    liveConfig.providers["google-antigravity"] = {
+      ...profiled,
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+    };
+    const replacedRequest = request();
+    const replaced = await handleManagementAPI(replacedRequest, new URL(replacedRequest.url), liveConfig, {});
+    const replacedRow = (JSON.parse(await replaced!.text()) as Array<{ name: string; tlsProfileStatus?: string }>)
+      .find(row => row.name === "google-antigravity");
+    expect(replacedRow?.tlsProfileStatus).toBe("disabled");
+
+    liveConfig.providers["google-antigravity"] = profiled;
+
     liveConfig.providers["google-antigravity"] = { ...profiled, tlsProfile: undefined };
     const removedRequest = request();
     const removed = await handleManagementAPI(removedRequest, new URL(removedRequest.url), liveConfig, {});

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OcxProviderConfig, ProviderTlsProfile } from "../types";
 import { resolvePublicAddresses } from "./destination-policy";
 import { registerOptionalShutdownHook } from "./optional-shutdown-hooks";
@@ -29,6 +30,8 @@ interface InitializedTransport {
   transport: WreqTransport;
 }
 
+type ProviderTlsContract = Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode" | "baseUrl" | "tlsProfile">;
+
 export interface ProviderTlsRuntimeForTest {
   importWreq: () => Promise<WreqModule>;
   resolveDestination?: typeof resolvePublicAddresses;
@@ -39,13 +42,24 @@ const defaultRuntime: ProviderTlsRuntimeForTest = {
 };
 
 let runtime = defaultRuntime;
-const statusByProvider = new Map<string, ProviderTlsProfileStatus>();
+const statusByProvider = new Map<string, { status: ProviderTlsProfileStatus; fingerprint: string }>();
 const transports = new Map<string, Promise<InitializedTransport | undefined>>();
 let shutdownDetach: (() => void) | undefined;
 let fallbackWarned = false;
 
-function setStatus(providerName: string, status: ProviderTlsProfileStatus): void {
-  statusByProvider.set(providerName, status);
+function providerTlsContractFingerprint(providerName: string, provider: ProviderTlsContract): string {
+  return createHash("sha256").update(JSON.stringify([
+    providerName,
+    provider.adapter,
+    provider.authMode,
+    provider.googleMode,
+    provider.baseUrl,
+    provider.tlsProfile,
+  ])).digest("hex");
+}
+
+function setStatus(providerName: string, provider: ProviderTlsContract, status: ProviderTlsProfileStatus): void {
+  statusByProvider.set(providerName, { status, fingerprint: providerTlsContractFingerprint(providerName, provider) });
 }
 
 const SAFE_NATIVE_ERROR_NAMES = new Set(["AbortError", "TimeoutError"]);
@@ -129,8 +143,15 @@ export function isCanonicalAntigravityUrl(input: string | URL): boolean {
   }
 }
 
-export function getProviderTlsProfileStatus(providerName: string): ProviderTlsProfileStatus {
-  return statusByProvider.get(providerName) ?? "disabled";
+export function getProviderTlsProfileStatus(providerName: string, provider: ProviderTlsContract): ProviderTlsProfileStatus {
+  const current = statusByProvider.get(providerName);
+  return current?.fingerprint === providerTlsContractFingerprint(providerName, provider)
+    ? current.status
+    : "disabled";
+}
+
+export function clearProviderTlsProfileStatus(providerName: string): void {
+  statusByProvider.delete(providerName);
 }
 
 function registerShutdownHook(): void {
@@ -179,11 +200,11 @@ export function providerTlsFetch(
   bunFetch: typeof globalThis.fetch,
 ): typeof globalThis.fetch {
   if (provider.tlsProfile === undefined) {
-    setStatus(providerName, "disabled");
+    setStatus(providerName, provider, "disabled");
     return bunFetch;
   }
   if (!profileIsSupported(providerName, provider)) {
-    setStatus(providerName, "fallback");
+    setStatus(providerName, provider, "fallback");
     warnFallbackOnce();
     return bunFetch;
   }
@@ -203,11 +224,11 @@ export function providerTlsFetch(
     }
     const initialized = await getTransport(proxy);
     if (!initialized) {
-      setStatus(providerName, "fallback");
+      setStatus(providerName, provider, "fallback");
       warnFallbackOnce();
       return bunFetch(input, { ...init, redirect: "manual" });
     }
-    setStatus(providerName, "active");
+    setStatus(providerName, provider, "active");
     const wreqInit = {
       ...init,
       transport: initialized.transport,

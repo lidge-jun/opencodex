@@ -4643,6 +4643,7 @@ async function handleResponsesInner(
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName,
           modelId: route.modelId,
+          pacingSlotAcquired: true,
         }),
       });
     } else {
@@ -4751,6 +4752,7 @@ async function handleResponsesInner(
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 providerName: route.providerName,
                 modelId: route.modelId,
+                pacingSlotAcquired: true,
               }),
             });
           }

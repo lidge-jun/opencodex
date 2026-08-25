@@ -8,6 +8,12 @@ import { OAUTH_PROVIDERS } from "../src/oauth";
 import { saveCredential } from "../src/oauth/store";
 import { clearAntigravityRoutingState, getAntigravityAccountHealthSnapshot } from "../src/oauth/antigravity-routing";
 import { getAccountSet } from "../src/oauth/store";
+import {
+  resetProviderRequestPacingForTest,
+  setProviderRequestPacingRuntimeForTest,
+  providerRequestPacingStatus,
+  type RequestPacingRuntime,
+} from "../src/providers/request-pacing";
 import type { OcxConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
@@ -61,12 +67,51 @@ beforeEach(async () => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  resetProviderRequestPacingForTest();
   clearAntigravityRoutingState();
   rmSync(home, { recursive: true, force: true });
   delete process.env.OPENCODEX_HOME;
 });
 
 describe("Antigravity Responses integration", () => {
+  test("a fetchResponse attempt uses its pre-acquired pacing slot only once", async () => {
+    let now = 0;
+    const timers = new Map<number, { at: number; callback: () => void }>();
+    let nextTimer = 1;
+    const runtime: RequestPacingRuntime = {
+      now: () => now,
+      random: () => 0,
+      setTimer: (callback, delayMs) => {
+        const id = nextTimer++;
+        timers.set(id, { at: now + delayMs, callback });
+        return id;
+      },
+      clearTimer: handle => { timers.delete(handle as number); },
+      enqueueMicrotask: callback => callback(),
+    };
+    setProviderRequestPacingRuntimeForTest(runtime);
+    let sends = 0;
+    const testConfig = config();
+    const provider = testConfig.providers["google-antigravity"]! as OcxConfig["providers"][string] & {
+      fetch: typeof globalThis.fetch;
+    };
+    provider.requestPacing = { enabled: true, minIntervalMs: 100 };
+    provider.fetch = (async () => {
+      sends += 1;
+      return completed();
+    }) as typeof globalThis.fetch;
+
+    const pending = handleResponses(request(), testConfig, { model: "", provider: "" }, {});
+    const response = await Promise.race([pending, Bun.sleep(100).then(() => null)]);
+    expect(response).not.toBeNull();
+    if (!response) throw new Error("pacing slot was consumed twice");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("hello");
+    expect({ sends, queued: providerRequestPacingStatus("google-antigravity", provider).queued, timers: timers.size }).toEqual({ sends: 1, queued: 0, timers: 0 });
+    expect(providerRequestPacingStatus("google-antigravity", provider).lastStartedAt).toBe(0);
+    expect(timers.size).toBe(0);
+  });
+
   test("selects the Google adapter and observes a CCA SSE error before returning it", async () => {
     const seen: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

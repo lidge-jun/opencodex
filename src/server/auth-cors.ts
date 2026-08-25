@@ -734,7 +734,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
-    dto.tlsProfileStatus = provider.tlsProfile === undefined ? "disabled" : getProviderTlsProfileStatus(name);
+    dto.tlsProfileStatus = provider.tlsProfile === undefined ? "disabled" : getProviderTlsProfileStatus(name, provider);
     const modelCosts = sanitizeModelCostsForDisplay(provider.modelCosts);
     if (modelCosts) dto.modelCosts = modelCosts;
     // Resolve the note by DESTINATION, not by name. A preset saved under a custom name is
