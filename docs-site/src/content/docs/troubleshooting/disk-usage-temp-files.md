@@ -58,9 +58,10 @@ about two seconds after a change, and once it is near the 24 MB bound the wait
 stretches to at most thirty seconds. A cache that has only just grown therefore
 still takes the short wait once — the longer cadence applies from the write after
 it. A flush is skipped only when this process already wrote the same bytes to the
-same file and that file still matches on disk, so a fresh process rewrites an
-identical snapshot once, and a file changed underneath the proxy is repaired rather
-than left alone.
+same file, that file still matches on disk, and — outside Windows — its mode is
+still owner-only. A fresh process rewrites an identical snapshot once, and a file
+whose contents or permissions changed underneath the proxy is rewritten through the
+hardening path rather than left alone.
 
 Together these keep the write rate roughly flat as the cache grows, instead of
 re-serializing and replacing the whole file every two seconds.

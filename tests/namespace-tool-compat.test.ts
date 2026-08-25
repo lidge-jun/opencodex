@@ -299,6 +299,35 @@ describe("Responses namespace tool compatibility", () => {
       expect(aliases.size).toBe(0);
     });
 
+    // Refusing to REWRITE a malformed selector is not enough on its own. If its name is
+    // already the flattened wire name, it matches the alias map exactly and arms it
+    // anyway — so authorization has to reject the selector itself, whatever name it
+    // carries. Both selector shapes, because a caller can write either.
+    test("a malformed selector already using the flattened wire name authorizes nothing", () => {
+      const forced = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "function", namespace: 1, name: wireName },
+      });
+      expect(forced.aliases.size).toBe(0);
+      expect(restoreRoutedNamespaceCalls({ type: "function_call", name: wireName }, forced.aliases).changed).toBe(false);
+
+      const allowed = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "allowed_tools", mode: "required", tools: [{ type: "function", namespace: 1, name: wireName }] },
+      });
+      expect(allowed.aliases.size).toBe(0);
+    });
+
+    test("an unqualified selector using the wire name still authorizes", () => {
+      // The legitimate shape this must not break: no namespace field at all, naming
+      // the flattened tool directly.
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
+        tools: namespaceTools,
+        tool_choice: { type: "function", name: wireName },
+      });
+      expect(aliases.get(wireName)).toBeDefined();
+    });
+
     test("a correctly qualified selector still authorizes, so this is not deny-all", () => {
       const { aliases } = rewriteRoutedNamespaceToolsForUpstream({
         tools: namespaceTools,

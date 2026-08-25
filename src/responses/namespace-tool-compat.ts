@@ -217,18 +217,27 @@ function rewriteToolList(
  * the failure this layer exists to prevent, and this layer's own response restoration is what put
  * the key on the item.
  */
+/**
+ * A selector's `namespace` is either absent — meaning "unqualified, resolve the bare
+ * name" — or a string naming the group. A present-but-non-string value is neither, and
+ * a malformed selector must not authorize anything: not through the unqualified
+ * fallback, and not by happening to carry an already-flattened wire name, which would
+ * otherwise match the alias map exactly and arm it anyway.
+ */
+function hasMalformedNamespace(value: Record<string, unknown>): boolean {
+  return "namespace" in value && typeof value.namespace !== "string";
+}
+
 function rewriteNamedSelector(
   value: unknown,
   plan: NamespaceRewritePlan,
   bareFallback: boolean,
 ): unknown {
   if (!isPlainObject(value) || typeof value.name !== "string") return value;
-  // An ABSENT namespace is an unqualified selector and may fall back to the bare
-  // name. A PRESENT but non-string one is malformed, and must not take that path:
-  // treating it as absent lets `{type:"function", namespace:1, name:"safe"}` resolve
-  // to a namespace wire name, which then authorizes an alias the caller never named
-  // in any well-formed way. Fail closed and hand the selector back untouched.
-  if ("namespace" in value && typeof value.namespace !== "string") return value;
+  // Malformed: hand it back untouched so no rewrite occurs. Authorization rejects it
+  // separately — returning it unchanged is not by itself enough, because the name it
+  // carries may already BE a wire name.
+  if (hasMalformedNamespace(value)) return value;
   const namespace = value.namespace;
   if (typeof namespace !== "string") {
     if (!bareFallback) return value;
@@ -276,6 +285,9 @@ function authorizedAliases(
     (toolChoice.type === "function" || toolChoice.type === "custom")
     && typeof toolChoice.name === "string"
   ) {
+    // A malformed namespace makes the whole selector untrustworthy, even when its
+    // name is already a flattened wire name that would match the alias map exactly.
+    if (hasMalformedNamespace(toolChoice)) return new Map();
     authorized = new Map([[toolChoice.name, toolChoice.type]]);
   } else if (toolChoice.type === "allowed_tools" && Array.isArray(toolChoice.tools)) {
     authorized = new Map();
@@ -290,6 +302,7 @@ function authorizedAliases(
       if (!isPlainObject(tool)) continue;
       if (tool.type !== "function" && tool.type !== "custom") continue;
       if (typeof tool.name !== "string") continue;
+      if (hasMalformedNamespace(tool)) continue;
       authorized.set(tool.name, tool.type);
     }
   } else {
