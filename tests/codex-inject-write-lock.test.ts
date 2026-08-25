@@ -268,13 +268,13 @@ describe("the lock is on the production path", () => {
   }, SPAWN_BUDGET_MS);
 });
 
-describe("homes the coordinator cannot adopt keep working", () => {
+describe("pre-substrate home adoption", () => {
   /**
    * Every install predating this substrate is routed with no coordinator row,
    * and that row cannot be created over routed bytes. Gating on the lock there
    * would have broken re-injection for the entire installed base.
    */
-  test("a pre-substrate routed home still injects, without a coordinator", () => {
+  test("a pre-substrate routed home adopts and records a coordinated transition", () => {
     writeFileSync(join(codexHome, "config.toml"), [
       'model_provider = "opencodex"',
       'model = "gpt-5.5"',
@@ -289,6 +289,24 @@ describe("homes the coordinator cannot adopt keep working", () => {
     const result = runInject(10100);
     expect(result.success).toBeTrue();
     expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("openai_base_url");
+    const coordinatorPath = resolveCodexCoordinatorDatabasePath(
+      resolveEffectiveUserIdentity(),
+      realpathSync.native(codexHome),
+    );
+    coordinatorCleanup.push(coordinatorPath);
+    expect(existsSync(coordinatorPath)).toBeTrue();
+    const state = parseChildJson<{
+      kind: string;
+      state?: { nativeGeneration: number; history: { status: string } };
+    }>(runChild(["--eval", `
+      const { readCodexTransitionState } = require("./src/codex/transition-state");
+      console.log(JSON.stringify(readCodexTransitionState()));
+    `], {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
+    }), "read adopted transition");
+    expect(state).toMatchObject({ kind: "ready", state: { nativeGeneration: 1 } });
   });
 
   test("a zero-byte coordinator remnant does not wedge a pre-substrate routed home", () => {

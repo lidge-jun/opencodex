@@ -10,7 +10,17 @@
  * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §1.
  */
 import { randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  openSync,
+  realpathSync,
+  unlinkSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { Database } from "bun:sqlite";
 
@@ -38,7 +48,7 @@ import {
 } from "./user-identity";
 
 export const CODEX_COORDINATOR_SCHEMA_VERSION = 1;
-const DURABLE_HISTORY_STATUSES = new Set(["converged", "pending", "running", "blocked", "unknown"]);
+const DURABLE_HISTORY_STATUSES = new Set(["adoption-pending", "converged", "pending", "running", "blocked", "unknown"]);
 const DURABLE_HISTORY_REASONS = new Set([
   "db-busy",
   "permission",
@@ -66,7 +76,7 @@ const CREATE_TRANSITION_TABLE = `
     history_pending_rows INTEGER,
     history_backup_entries INTEGER,
     updated_at TEXT NOT NULL,
-    CHECK (history_status IN ('converged', 'pending', 'running', 'blocked', 'unknown')),
+    CHECK (history_status IN ('adoption-pending', 'converged', 'pending', 'running', 'blocked', 'unknown')),
     CHECK (history_reason IS NULL OR history_reason IN
       ('db-busy', 'permission', 'unreadable', 'schema', 'timeout',
        'shutdown-cancelled', 'worker-died', 'overtaken', 'record-write-failed')),
@@ -75,14 +85,20 @@ const CREATE_TRANSITION_TABLE = `
     CHECK ((native_generation = 0 AND current_tx_id IS NULL)
         OR (native_generation > 0 AND length(trim(current_tx_id)) > 0)),
     CHECK ((native_generation = 0
+            AND history_status = 'unknown'
             AND history_tx_id IS NULL
             AND history_direction IS NULL
             AND history_authority_snapshot_id IS NULL)
+        OR (native_generation = 0
+            AND history_status = 'adoption-pending'
+            AND length(trim(history_tx_id)) > 0
+            AND history_direction IS NOT NULL
+            AND length(trim(history_authority_snapshot_id)) > 0)
         OR (native_generation > 0
             AND history_tx_id = current_tx_id
             AND history_direction IS NOT NULL
             AND length(trim(history_authority_snapshot_id)) > 0)),
-    CHECK (native_generation > 0 OR
+    CHECK (native_generation > 0 OR history_status = 'adoption-pending' OR
       (history_status = 'unknown'
        AND history_reason IS NULL
        AND history_attempts = 0
@@ -99,6 +115,15 @@ const INITIALIZE_TRANSITION_ROW = `
     history_authority_snapshot_id, history_pending_rows,
     history_backup_entries, updated_at
   ) VALUES (1, 0, NULL, 'unknown', NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, ?)`;
+
+const INITIALIZE_ADOPTION_ROW = `
+  INSERT INTO codex_transition_state (
+    singleton, native_generation, current_tx_id,
+    history_status, history_reason, history_attempts,
+    history_next_retry_at, history_tx_id, history_direction,
+    history_authority_snapshot_id, history_pending_rows,
+    history_backup_entries, updated_at
+  ) VALUES (1, 0, NULL, 'adoption-pending', NULL, 0, NULL, ?, ?, ?, NULL, NULL, ?)`;
 
 const SELECT_TRANSITION_ROW = `
   SELECT native_generation, current_tx_id,
@@ -210,8 +235,15 @@ function rowToState(row: TransitionRow | null): CodexTransitionState {
 
   const generation = row.native_generation;
   if (generation === 0) {
-    if (row.current_tx_id !== null || row.history_tx_id !== null
-      || row.history_direction !== null || row.history_authority_snapshot_id !== null) {
+    const ordinaryInitial = row.history_status === "unknown"
+      && row.history_tx_id === null
+      && row.history_direction === null
+      && row.history_authority_snapshot_id === null;
+    const adoptionInitial = row.history_status === "adoption-pending"
+      && Boolean(row.history_tx_id?.trim())
+      && (row.history_direction === "apply" || row.history_direction === "remove")
+      && Boolean(row.history_authority_snapshot_id?.trim());
+    if (row.current_tx_id !== null || (!ordinaryInitial && !adoptionInitial)) {
       throw new CodexCoordinatorTransactionError("The initial coordinator row contains transition metadata.");
     }
   } else if (!row.current_tx_id?.trim()
@@ -234,11 +266,71 @@ function rowToState(row: TransitionRow | null): CodexTransitionState {
     nativeGeneration: generation,
     currentTxId: row.current_tx_id,
     history,
-    historySchedule: generation === 0 ? null : {
+    historySchedule: generation === 0 && row.history_status !== "adoption-pending" ? null : {
       direction: row.history_direction as "apply" | "remove",
       authoritySnapshotId: row.history_authority_snapshot_id as string,
     },
   };
+}
+
+export type CodexCoordinatorAdoptionCheckpoint = "temp-created" | "temp-committed" | "published";
+
+export interface CodexCoordinatorAdoptionOptions {
+  readonly direction: "apply" | "remove";
+  readonly onCheckpoint?: (checkpoint: CodexCoordinatorAdoptionCheckpoint) => void;
+}
+
+function fsyncPath(path: string): void {
+  const fd = openSync(path, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+function publishAdoptionDatabase(
+  finalDatabasePath: string,
+  options: CodexCoordinatorAdoptionOptions,
+): void {
+  const parent = dirname(finalDatabasePath);
+  const tempPath = join(parent, `.${basename(finalDatabasePath)}.adopt-${process.pid}-${randomUUID()}.tmp`);
+  let tempPresent = false;
+  try {
+    const fd = openSync(tempPath, "wx", 0o600);
+    closeSync(fd);
+    tempPresent = true;
+    options.onCheckpoint?.("temp-created");
+
+    const temp = new Database(tempPath, { readwrite: true, create: false });
+    try {
+      temp.exec("PRAGMA journal_mode = DELETE; BEGIN IMMEDIATE");
+      temp.exec(CREATE_TRANSITION_TABLE);
+      temp.query(INITIALIZE_ADOPTION_ROW).run(
+        randomUUID(),
+        options.direction,
+        randomUUID(),
+        new Date().toISOString(),
+      );
+      temp.exec(`PRAGMA user_version = ${CODEX_COORDINATOR_SCHEMA_VERSION}; COMMIT`);
+      readCodexCoordinatorState(temp);
+    } catch (error) {
+      try { temp.exec("ROLLBACK"); } catch { /* commit may already have completed */ }
+      throw error;
+    } finally {
+      temp.close();
+    }
+    fsyncPath(tempPath);
+    options.onCheckpoint?.("temp-committed");
+
+    linkSync(tempPath, finalDatabasePath);
+    options.onCheckpoint?.("published");
+    if (process.platform !== "win32") fsyncPath(parent);
+  } catch (error) {
+    if (errorCode(error) !== "EEXIST") throw error;
+  } finally {
+    if (tempPresent) {
+      try { unlinkSync(tempPath); } catch (error) {
+        if (errorCode(error) !== "ENOENT") throw error;
+      }
+    }
+  }
 }
 
 export function readCodexCoordinatorState(database: Database): CodexTransitionState {
@@ -346,7 +438,10 @@ function createCapability(
   };
 }
 
-export function openCodexCoordinatorTransaction(finalDatabasePath: string): CodexCoordinatorTransactionController {
+export function openCodexCoordinatorTransaction(
+  finalDatabasePath: string,
+  adoption?: CodexCoordinatorAdoptionOptions,
+): CodexCoordinatorTransactionController {
   let database: Database | undefined;
   let transactionOpen = false;
   let closed = false;
@@ -388,6 +483,10 @@ export function openCodexCoordinatorTransaction(finalDatabasePath: string): Code
     } catch (cause) {
       if (errorCode(cause) !== "ENOENT") throw cause;
       databaseWasAbsent = true;
+    }
+    if (databaseWasAbsent && adoption) {
+      publishAdoptionDatabase(finalDatabasePath, adoption);
+      databaseWasAbsent = false;
     }
     database = new Database(finalDatabasePath, { create: true });
     if (databaseWasAbsent) {

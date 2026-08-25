@@ -93,6 +93,8 @@ export interface CodexWriteLockOptions {
   admitted: CodexWriteWitness;
   /** Authoritative synchronous re-read while N and C are both held. */
   readAdmissionUnderLock(): CodexWriteWitness;
+  /** Positively authorized migration of an already-routed pre-substrate home. */
+  adoption?: { readonly direction: "apply" | "remove" };
 }
 
 /**
@@ -304,7 +306,7 @@ export async function withCodexWriteLock<T>(
 
     let transaction: ReturnType<typeof openCodexCoordinatorTransaction> | undefined;
     try {
-      transaction = openCodexCoordinatorTransaction(databasePath);
+      transaction = openCodexCoordinatorTransaction(databasePath, options.adoption);
     } catch (error) {
       // Only contention retries. A malformed database, an unsafe path, or an
       // identity failure will fail identically forever; telling a caller to retry

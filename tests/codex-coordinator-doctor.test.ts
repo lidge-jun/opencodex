@@ -205,3 +205,17 @@ test("a fresh zero-byte coordinator stays on the locked path until it is stable"
   });
   expect(settled.kind).toBe("legacy-uncoordinated");
 });
+
+test("routed homes adopt while indeterminate homes retain the legacy path", () => {
+  rmSync(coordinatorPath, { force: true });
+  expect(codexWriteCoordinationEligibility({
+    coordinatorPath: () => coordinatorPath,
+    residue: () => ({ kind: "residue" }),
+    integrationRecord: () => ({ kind: "missing" }),
+  })).toEqual({ kind: "adopt" });
+  expect(codexWriteCoordinationEligibility({
+    coordinatorPath: () => coordinatorPath,
+    residue: () => ({ kind: "indeterminate" }),
+    integrationRecord: () => ({ kind: "ready" }),
+  })).toMatchObject({ kind: "legacy-uncoordinated" });
+});

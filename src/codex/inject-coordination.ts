@@ -41,6 +41,7 @@ export const DEFAULT_INJECT_LOCK_TIMEOUT_MS = 5_000;
  */
 export type CodexWriteCoordinationEligibility =
   | { kind: "coordinated" }
+  | { kind: "adopt" }
   | { kind: "legacy-uncoordinated"; reason: string }
   | { kind: "refused"; reason: string };
 
@@ -97,6 +98,7 @@ export function codexWriteCoordinationEligibility(deps: {
 
   const residue = deps.residue();
   if (residue.kind === "clean") return { kind: "coordinated" };
+  if (residue.kind === "residue" && !coordinatorIsStableZeroByte) return { kind: "adopt" };
   /*
    * Everything else keeps the path it has always had.
    *

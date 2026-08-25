@@ -953,6 +953,7 @@ export async function injectCodexConfig(
     const coordinated = await withCodexWriteLock(
       {
         timeoutMs: options.lockTimeoutMs ?? DEFAULT_INJECT_LOCK_TIMEOUT_MS,
+        ...(eligibility.kind === "adopt" ? { adoption: { direction: "apply" as const } } : {}),
         admitted: { authoritySnapshotId: witness.comparisonId },
         readAdmissionUnderLock: () => ({
           authoritySnapshotId: recomputeInjectWitness({
@@ -1547,13 +1548,14 @@ export async function restoreNativeCodexAsync(
   let config: CodexRestoreConfigResult;
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
 
-  if (eligibility.kind === "coordinated") {
+  if (eligibility.kind === "coordinated" || eligibility.kind === "adopt") {
     // The restore has no candidate bytes to witness; freshness comes from the
     // filesystem reads and the desired-state re-read performed under the lock.
     const witness = { authoritySnapshotId: "codex-native-restore" };
     const coordinated = await withCodexWriteLock(
       {
         timeoutMs: DEFAULT_INJECT_LOCK_TIMEOUT_MS,
+        ...(eligibility.kind === "adopt" ? { adoption: { direction: "remove" as const } } : {}),
         admitted: witness,
         readAdmissionUnderLock: () => witness,
       },
