@@ -665,9 +665,18 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
-      const effectiveBackend = body.webSearch.backend === "anthropic"
-        ? "anthropic"
-        : body.webSearch.backend === "openai" || body.webSearch.backend === null
+      // Validate against the backend the caller SUBMITTED, across the whole
+      // union — not just openai/anthropic (#2457). The union check above has
+      // already refused unknown literals, so a surviving string is a member;
+      // Array.includes does not narrow, hence the cast. Falling back to the
+      // stored backend for xai/gemini/exa both rejected legal pairs and
+      // accepted illegal ones: a submitted gemini was checked against a stored
+      // openai. null means "unset the backend", and unset resolves to openai.
+      const submittedBackend = body.webSearch.backend;
+      const effectiveBackend = typeof submittedBackend === "string"
+        && WEB_SEARCH_BACKENDS_UNION.includes(submittedBackend as never)
+        ? submittedBackend as typeof WEB_SEARCH_BACKENDS_UNION[number]
+        : submittedBackend === null
           ? "openai"
           : config.webSearchSidecar?.backend ?? "openai";
       const effectiveModel = typeof body.webSearch.model === "string"

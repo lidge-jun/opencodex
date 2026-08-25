@@ -60,6 +60,7 @@ import {
   webSearchCandidateRows,
   webSearchModelIsRejected,
   webSearchModelRejection,
+  type WebSearchBackend,
 } from "./web-search-sidecar-options";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -1118,13 +1119,18 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (field === "webSearchSidecar"
         && (section.model !== undefined || section.backend !== undefined)) {
         const stored = config.claudeCode?.webSearchSidecar;
-        const effectiveBackend = section.backend === "anthropic"
-          ? "anthropic"
-          : section.backend === "openai"
-            ? "openai"
-            : section.backend === null
-              ? config.webSearchSidecar?.backend ?? "openai"
-              : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
+        // Validate against the SUBMITTED backend across the whole union, not
+        // just openai/anthropic (#2457). allowedBackends above already refused
+        // unknown literals; Array.includes does not narrow, hence the cast.
+        // null keeps its own meaning here — drop the override and inherit the
+        // global backend — which is deliberately NOT the sidecar-settings rule.
+        const submittedBackend = section.backend;
+        const effectiveBackend = typeof submittedBackend === "string"
+          && allowedBackends.includes(submittedBackend)
+          ? submittedBackend as WebSearchBackend
+          : submittedBackend === null
+            ? config.webSearchSidecar?.backend ?? "openai"
+            : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
         const effectiveModel = section.model === ""
           ? config.webSearchSidecar?.model
           : typeof section.model === "string"
