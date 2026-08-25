@@ -48,6 +48,10 @@ let server: ReturnType<typeof Bun.serve>;
 let baseUrl = "";
 let activeCodexAccountId: string | null = "chatgpt_1";
 let autoSwitchThreshold = 80;
+const oauthPoolSettings: Record<string, { enabled: boolean; autoSwitchThreshold: number; strategy: string; stickyLimit: number }> = {
+  anthropic: { enabled: false, autoSwitchThreshold: 80, strategy: "quota", stickyLimit: 1 },
+  "google-antigravity": { enabled: false, autoSwitchThreshold: 80, strategy: "quota", stickyLimit: 1 },
+};
 let activeReadFailure: { status: number; error: string } | null = null;
 let oauthListFailure: { provider: string; status: number; error: string } | null = null;
 let keyListFailure: { provider: string; status: number; error: string } | null = null;
@@ -87,6 +91,12 @@ function fixtureConfig(): OcxConfig {
         adapter: "anthropic",
         baseUrl: "https://api.anthropic.com",
         authMode: "oauth",
+      },
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
       },
       kiro: {
         adapter: "anthropic",
@@ -128,7 +138,7 @@ function json(body: unknown, status = 200): Response {
 
 async function mockManagementApi(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const body = req.method === "PUT" || req.method === "POST" ? await req.json() : undefined;
+  const body = req.method === "PUT" || req.method === "PATCH" || req.method === "POST" ? await req.json() : undefined;
   requests.push({ method: req.method, path: url.pathname, search: url.search, body });
 
   if (req.method === "GET" && url.pathname === "/api/codex-auth/accounts") {
@@ -170,6 +180,10 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json({ ok: true, id: payload.id, priority: account.priority });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/codex-auth/accounts/clear-cooldown") {
+    return json({ ok: true, cleared: false });
+  }
+
   if (url.pathname === "/api/codex-auth/active") {
     if (req.method === "PUT") {
       const accountId = (body as { accountId?: string }).accountId;
@@ -191,7 +205,27 @@ async function mockManagementApi(req: Request): Promise<Response> {
   }
 
   if (req.method === "GET" && url.pathname === "/api/oauth/providers") {
-    return json({ providers: ["anthropic", "kiro", "xai"] });
+    return json({ providers: ["anthropic", "google-antigravity", "kiro", "xai"] });
+  }
+
+  if (url.pathname === "/api/oauth/accounts/pool") {
+    const provider = req.method === "GET"
+      ? url.searchParams.get("provider") ?? ""
+      : String((body as { provider?: unknown } | undefined)?.provider ?? "");
+    const settings = oauthPoolSettings[provider];
+    if (!settings) return json({ error: "unsupported pool provider" }, 400);
+    if (req.method === "GET") return json({ provider, ...settings });
+    if (req.method === "PUT" || req.method === "PATCH") {
+      const update = body as { enabled?: boolean; autoSwitchThreshold?: number; strategy?: string; stickyLimit?: number };
+      Object.assign(settings, update);
+      return json({ ok: true, provider, ...settings });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/oauth/accounts/clear-cooldown") {
+    const accountId = String((body as { accountId?: unknown } | undefined)?.accountId ?? "");
+    if (accountId === "unknown-google-account") return json({ error: "account not found" }, 400);
+    return json({ ok: true, cleared: true });
   }
 
   if (req.method === "GET" && url.pathname === "/api/provider-quotas") {
@@ -407,6 +441,8 @@ afterAll(() => {
 beforeEach(() => {
   activeCodexAccountId = "chatgpt_1";
   autoSwitchThreshold = 80;
+  oauthPoolSettings.anthropic = { enabled: false, autoSwitchThreshold: 80, strategy: "quota", stickyLimit: 1 };
+  oauthPoolSettings["google-antigravity"] = { enabled: false, autoSwitchThreshold: 80, strategy: "quota", stickyLimit: 1 };
   activeReadFailure = null;
   oauthListFailure = null;
   keyListFailure = null;
@@ -779,17 +815,89 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     });
   });
 
-  test("21: auto-switch rejects wrong providers, invalid thresholds and missing providers", async () => {
-    const wrongProvider = await run(["auto-switch", "anthropic", "on"]);
+  test("21: auto-switch rejects unsupported providers, invalid thresholds and missing providers", async () => {
+    const wrongProvider = await run(["auto-switch", "kiro", "on"]);
     const invalidThreshold = await run(["auto-switch", "openai", "threshold", "101"]);
     const missingProvider = await run(["auto-switch"]);
 
     expect(wrongProvider.code).toBe(1);
-    expect(wrongProvider.stderr).toContain("auto-switch only applies to the openai Codex account pool");
+    expect(wrongProvider.stderr).toContain("does not support account-pool auto-switch");
     expect(invalidThreshold.code).toBe(1);
     expect(invalidThreshold.stderr).toContain("integer 0-100");
     expect(missingProvider.code).toBe(1);
     expect(missingProvider.stderr).toContain("Usage:");
+  });
+
+  test("OAuth auto-switch uses the generic pool API for Anthropic and Google Antigravity", async () => {
+    const googleOn = await run(["auto-switch", "google-antigravity", "on"]);
+    const googleThreshold = await run(["auto-switch", "google-antigravity", "threshold", "61"]);
+    const googleStatus = await run(["auto-switch", "google-antigravity", "status", "--json"]);
+    const anthropicOff = await run(["auto-switch", "anthropic", "off"]);
+
+    expect(googleOn.code).toBe(0);
+    expect(googleThreshold.code).toBe(0);
+    expect(anthropicOff.code).toBe(0);
+    expect(JSON.parse(googleStatus.stdout)).toMatchObject({
+      provider: "google-antigravity",
+      enabled: true,
+      autoSwitchThreshold: 61,
+    });
+    expect(requests.filter(request => request.path === "/api/oauth/accounts/pool").map(request => ({
+      method: request.method,
+      search: request.search,
+      body: request.body,
+    }))).toEqual([
+      { method: "PUT", search: "", body: { provider: "google-antigravity", enabled: true } },
+      { method: "PUT", search: "", body: { provider: "google-antigravity", enabled: true, autoSwitchThreshold: 61 } },
+      { method: "GET", search: "?provider=google-antigravity", body: undefined },
+      { method: "PUT", search: "", body: { provider: "anthropic", enabled: false } },
+    ]);
+  });
+
+  test("clear-cooldown uses the generic OAuth route for Google and keeps priority unsupported", async () => {
+    const clear = await run(["clear-cooldown", "google-antigravity", "google-account-1", "--json"]);
+    const priority = await run(["priority", "google-antigravity", "google-account-1", "first"]);
+
+    expect(clear.code).toBe(0);
+    expect(JSON.parse(clear.stdout)).toEqual({
+      ok: true,
+      provider: "google-antigravity",
+      id: "google-account-1",
+      cleared: true,
+    });
+    expect(requests.find(request => request.path === "/api/oauth/accounts/clear-cooldown")?.body).toEqual({
+      provider: "google-antigravity",
+      accountId: "google-account-1",
+    });
+    expect(priority.code).toBe(1);
+    expect(priority.stderr).toContain("only applies to the openai Codex account pool");
+  });
+
+  test("Google clear-cooldown returns nonzero for an unknown account without echoing its id", async () => {
+    const unknownId = "unknown-google-account";
+    const result = await run(["clear-cooldown", "google-antigravity", unknownId, "--json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("account not found");
+    expect(result.output).not.toContain(unknownId);
+  });
+
+  test("Google clear-cooldown rejects the Codex-only main alias without exposing its sentinel", async () => {
+    const result = await run(["clear-cooldown", "google-antigravity", "main", "--json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("main");
+    expect(result.output).not.toContain("__main__");
+    expect(requests.some(request => request.path === "/api/oauth/accounts/clear-cooldown")).toBe(false);
+  });
+
+  test("OpenAI clear-cooldown keeps main as the Codex-only account alias", async () => {
+    const result = await run(["clear-cooldown", "openai", "main"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("no active cooldown for main");
+    expect(requests.find(request => request.path === "/api/codex-auth/accounts/clear-cooldown")?.body)
+      .toEqual({ id: "__main__" });
   });
 
   test("22: remove without --yes prints the re-run hint and sends no request", async () => {
@@ -988,8 +1096,26 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     logs.length = 0;
     printSubcommandUsage("account");
     const help = logs.join("\n");
-    for (const command of ["refresh", "auto-switch", "remove", "add-key"]) {
+    for (const command of ["refresh", "auto-switch", "clear-cooldown", "remove", "add-key"]) {
       expect(help).toContain(command);
+    }
+  });
+
+  test("account command and registry help expose the same shipped subcommand inventory", async () => {
+    const command = await run([]);
+    expect(command.code).toBe(1);
+
+    logs.length = 0;
+    printSubcommandUsage("account");
+    const registry = logs.join("\n");
+    const inventory = [
+      "list", "current", "use", "refresh", "auto-switch", "alias", "priority", "remove",
+      "clear-cooldown", "add-key", "import", "login", "reauth", "code", "cancel",
+      "reset-credits", "main",
+    ];
+    for (const subcommand of inventory) {
+      expect(command.stderr, `command usage must include ${subcommand}`).toContain(subcommand);
+      expect(registry, `registry help must include ${subcommand}`).toContain(subcommand);
     }
   });
 

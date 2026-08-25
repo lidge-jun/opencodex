@@ -172,6 +172,38 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두십시오. 확신이 없으면 수동 `ocx account use anthropic <id>` 전환을 우선하십시오.
 :::
 
+### `googleAntigravityAccountPool`(실험적)
+
+이 선택 기능은 `google-antigravity` Cloud Code Assist 공급자에만 Google Antigravity OAuth
+계정을 풀로 묶습니다. 기본값은 비활성화입니다. 이 풀의 자격 증명은 Google AI Studio,
+Vertex AI, 다른 공급자 항목 또는 API 키 경로에 사용되지 않습니다.
+
+| 키 | 타입 | 기본값 | 설명 |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 프로세스 로컬 세션 결속과 최종 429 또는 노출된 402 응답에 대한 제한된 failover를 켭니다. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 범위의 사용량 소진 임계값입니다. `quota`와 `fill-first`는 요청 모델의 `Gem` 또는 `Cla` 계열과 관련된 캐시 사용량의 최댓값을 사용하며, 사용량이 알려지지 않으면 정상 활성 계정을 유지합니다. `0`은 사용량 기반 전환만 끄고 장애 복구는 끄지 않습니다. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 또는 아직 결속되지 않은 세션의 전략입니다. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | 한 번의 `round-robin` 선택에 유지할 새 세션 결속 수입니다. 범위는 1–100이며 다른 전략에는 영향을 주지 않습니다. |
+
+모든 전략은 계정이 적격한 동안 기존 세션 결속을 유지합니다. 새 세션이나 미결속 세션에서 `quota`는
+관련 사용량이 알려지지 않았거나 임계값 미만이면 정상 활성 계정을 유지하고, 이후에는 알려진 사용량이
+가장 낮은 적격 계정을 선택합니다. `round-robin`은 결속을 균등하게 분배하며 일반 순환에는 임계값을
+사용하지 않습니다. `fill-first`는 쿨다운, 사용 불가 또는 소진 임계값에 이를 때까지 활성 계정을
+사용한 다음 다음 적격 계정으로 넘어갑니다.
+
+각 전송은 bearer token과 Cloud Code Assist `projectId`를 함께 담은 세대 고정 OAuth 스냅샷 하나를
+확정합니다. 최종 429 또는 노출된 402는 실패한 계정을 쿨다운시키고 결속을 지운 뒤 다른 적격
+스냅샷으로 요청을 다시 만듭니다. 사용할 수 있는 `Retry-After`가 없으면 기본 쿨다운은 60초이며,
+파싱된 업스트림 값은 최대 15분으로 제한됩니다. 요청 하나당 failover는 최대 3회, 업스트림 전송은
+총 4회까지 허용됩니다. 모든 적격 계정이 쿨다운 중이면 가장 이른 알려진 `Retry-After`와 함께 429를
+클라이언트에 반환합니다.
+
+:::caution[운영 복원력이며 할당량 우회가 아닙니다]
+이 풀은 일시적인 계정 장애를 복구하는 데 사용하고 할당량이나 공급자 제한을 회피하는 데 사용하지
+마십시오. 다중 계정 자동화는 공급자 약관을 위반할 수 있으므로 그 위험을 감수하지 않는다면 비활성화
+상태로 두십시오.
+:::
+
 ### 관리되는 레코드 구조
 
 `apiKeys[]` 항목에는 `id`, `name`, 생성된 `key`, ISO 형식 `createdAt` 문자열이 들어갑니다. `codexAccounts[]` 항목에는 `id`, `email`, `isMain`이 필요하고, 선택적으로 `plan`, `chatgptAccountId`, 개인정보를 해치지 않는 `logLabel`을 둘 수 있습니다. 이런 레코드는 보통 대시보드가 관리합니다.

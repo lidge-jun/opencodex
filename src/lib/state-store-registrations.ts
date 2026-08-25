@@ -31,6 +31,10 @@ import {
   sweepExpiredXaiPermanentFailureVerdicts,
 } from "../oauth";
 import { sweepExpiredAnthropicRoutingHealth } from "../oauth/anthropic-routing";
+import {
+  reconcileGoogleAntigravityRoutingState,
+  sweepExpiredGoogleAntigravityRoutingHealth,
+} from "../oauth/google-antigravity-routing";
 import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/store";
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
@@ -83,6 +87,11 @@ export const STATE_STORE_REGISTRATIONS = [
     reconcileGeneration: reconcileComboTargetCooldowns,
   },
   { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
+  {
+    name: "google-antigravity-routing-health",
+    sweepExpired: sweepExpiredGoogleAntigravityRoutingHealth,
+    reconcileGeneration: reconcileGoogleAntigravityRoutingState,
+  },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
   {
     name: "responses-continuation",

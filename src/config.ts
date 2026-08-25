@@ -833,6 +833,13 @@ const agentTaskRecoverySchema = z.object({
   cacheEntries: z.number().int().min(1).max(512).optional(),
 }).strict();
 
+const googleAntigravityAccountPoolSchema = z.object({
+  enabled: z.boolean().optional(),
+  autoSwitchThreshold: z.number().int().min(0).max(100).optional(),
+  strategy: z.enum(["quota", "round-robin", "fill-first"]).optional(),
+  stickyLimit: z.number().int().min(1).max(100).optional(),
+}).strict();
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
@@ -875,6 +882,8 @@ const configSchema = z.object({
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
+  // Invalid hand edits disable only this opt-in pool; live writes remain strict.
+  googleAntigravityAccountPool: googleAntigravityAccountPoolSchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -2079,6 +2088,15 @@ function loopbackListenerPortError(value: unknown): string | null {
   return null;
 }
 
+function googleAntigravityAccountPoolError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const pool = (value as Record<string, unknown>).googleAntigravityAccountPool;
+  if (pool === undefined) return null;
+  const result = googleAntigravityAccountPoolSchema.safeParse(pool);
+  if (result.success) return null;
+  return `schema_invalid: googleAntigravityAccountPool: ${result.error.issues[0]?.message ?? "invalid pool config"}`;
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
@@ -2089,6 +2107,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexAccountPrioritiesError(value)
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
+    ?? googleAntigravityAccountPoolError(value)
     ?? loopbackListenerPortError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

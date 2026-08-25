@@ -17,7 +17,7 @@ import {
   oauthHealthShowsReauth,
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
-import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
+import AccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginUrlBlock } from "../login-url-block";
 import QuotaBars from "../QuotaBars";
 import { useCopyFeedback } from "../use-copy-feedback";
@@ -325,41 +325,48 @@ export default function ProviderAuthPanel({
         {isOauth && (
           <>
             {item.name === "anthropic" && (
-              <AnthropicAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
+              <AccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
             )}
             {item.name === "google-antigravity" && (
-              <div className="pwi-auth-add-key">
-                <div>
-                  <div id="cockpit-import-description" className="pwi-auth-row-secondary">
-                    {t("pws.cockpitImportDescription")}
+              <>
+                <AccountPoolSettings
+                  apiBase={apiBase}
+                  accountCount={accounts.length}
+                  provider="google-antigravity"
+                />
+                <div className="pwi-auth-add-key">
+                  <div>
+                    <div id="cockpit-import-description" className="pwi-auth-row-secondary">
+                      {t("pws.cockpitImportDescription")}
+                    </div>
+                    <label className="sr-only" htmlFor="cockpit-import-file">{t("pws.cockpitImportFileLabel")}</label>
+                    <input
+                      ref={importFileRef}
+                      id="cockpit-import-file"
+                      type="file"
+                      accept="application/json,.json"
+                      className="sr-only"
+                      aria-describedby="cockpit-import-description cockpit-import-status"
+                      disabled={importBusy}
+                      onChange={event => { void importCockpitFile(event.currentTarget.files?.[0]); }}
+                    />
                   </div>
-                  <label className="sr-only" htmlFor="cockpit-import-file">{t("pws.cockpitImportFileLabel")}</label>
-                  <input
-                    ref={importFileRef}
-                    id="cockpit-import-file"
-                    type="file"
-                    accept="application/json,.json"
-                    className="sr-only"
-                    aria-describedby="cockpit-import-description cockpit-import-status"
-                    disabled={importBusy}
-                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0]); }}
-                  />
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
+                    onClick={() => importFileRef.current?.click()}>
+                    {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
+                  </button>
+                  <div id="cockpit-import-status" role="status" aria-live="polite">
+                    {importStatus === "invalid" && t("pws.cockpitImportInvalid")}
+                    {importStatus === "failed" && t("pws.cockpitImportFailed")}
+                    {importStatus === "complete" && importResult && t("pws.cockpitImportComplete", {
+                      imported: importResult.importedCount,
+                      updated: importResult.updatedCount,
+                      failed: importResult.failedCount,
+                      unsupported: importResult.unsupportedCount,
+                    })}
+                  </div>
                 </div>
-                <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
-                  onClick={() => importFileRef.current?.click()}>
-                  {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
-                </button>
-                <div id="cockpit-import-status" role="status" aria-live="polite">
-                  {importStatus === "invalid" && t("pws.cockpitImportInvalid")}
-                  {importStatus === "failed" && t("pws.cockpitImportFailed")}
-                  {importStatus === "complete" && importResult && t("pws.cockpitImportComplete", {
-                    imported: importResult.importedCount,
-                    updated: importResult.updatedCount,
-                    failed: importResult.failedCount,
-                    unsupported: importResult.unsupportedCount,
-                  })}
-                </div>
-              </div>
+              </>
             )}
             <div className="pwi-auth-status-row">
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />

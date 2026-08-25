@@ -150,13 +150,33 @@ Authorization: Bearer <admin-token>
 | `POST /api/oauth/logout` |選択したプロバイダー資格情報を削除します | 400 不明なプロバイダー。 `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` |マスクされたアカウントを一覧表示するか、アカウントを 1 つ削除する | 400 無効なプロバイダー/ID。 404 アカウントがありません。 `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` |アクティブな OAuth アカウントを選択します | 400 無効なプロバイダー/アカウント。 `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth プール ポリシーの読み取りまたは更新 | 400 非 Anthropic プロバイダーまたは無効なポリシー |
-| `POST /api/oauth/accounts/clear-cooldown` | 1 つの OAuth アカウントのランタイム クールダウンをクリアする | 400 無効なプロバイダー/アカウント |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic または Google Antigravity OAuth プール ポリシーの読み取りまたは更新 | 400 未対応プロバイダーまたは無効なポリシー |
+| `POST /api/oauth/accounts/clear-cooldown` | 1 つの OAuth アカウントのランタイム クールダウンを解除する | 400 無効なプロバイダーまたは不明なアカウント。既知のアカウントにクールダウンがなければ 200 と `{ ok: true, cleared: false }` |
 | `PUT /api/oauth/accounts/alias` | OAuth アカウント エイリアスを設定またはクリアする | 400 無効なプロバイダー/アカウント/エイリアス |
 | `GET, POST, DELETE /api/providers/keys` |マスクされたプロバイダー キーを一覧表示し、1 つを追加/アクティブ化するか、1 つを削除します。 400 無効な入力。 404 プロバイダー/キーがありません |
 | `PUT /api/providers/keys/active` |プロバイダーのアクティブなキーを選択します | 400 無効な入力。 404 プロバイダー/キーがありません |
 | `PUT /api/providers/keys/alias` |プロバイダー キー エイリアスを設定またはクリアする | 400 無効な入力。 404 プロバイダー/キーがありません |
 | `GET, POST, PATCH, DELETE /api/keys` |データ プレーン アドミッション キーの一覧表示、作成、編集、または削除 | 400 無効な本文/ID。 404 キーがありません |
+
+#### プロバイダー単位の OAuth プール契約
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity` には `provider` クエリパラメーターが
+必要です。レスポンスのトップレベルには `provider`、`enabled`、`autoSwitchThreshold`（既定値 `80`）、
+`strategy`（`quota`、`round-robin`、`fill-first` のいずれかに正規化）、`stickyLimit`（1～100 の整数に
+正規化）、`experimental: true` が含まれます。
+
+`PUT` / `PATCH /api/oauth/accounts/pool` には `provider` を含む JSON オブジェクトが必要で、任意で
+`enabled`（boolean）、`autoSwitchThreshold`（0～100 の整数）、`strategy`（`quota`、`round-robin`、
+`fill-first`）、`stickyLimit`（1～100 の整数）を指定できます。省略したフィールドは現在値または既定値を
+保持します。成功時はトップレベルで `{ ok: true, provider, enabled, autoSwitchThreshold, strategy,
+stickyLimit, experimental: true }` を返し、`config` ラッパーはありません。不正形式またはオブジェクト
+以外の body、未対応の provider、不正なフィールドは、汎用の HTTP 400 エラーレスポンスになります。
+
+`POST /api/oauth/accounts/clear-cooldown` の body は `{ provider, accountId }` です。provider は
+`anthropic` または `google-antigravity` で、その account は同じ provider 内に存在する必要があります。
+不明な account は汎用の HTTP 400 `account not found` エラーになります。既知の account が cooldown
+中でなくても、HTTP 200 と `{ ok: true, cleared: false }` を返す冪等な成功です。これらのレスポンスには
+token、メールアドレス、完全な key は含まれません。
 
 資格情報リストの応答は意図的にマスクされます。 OAuth アクセス トークンと完全なプロバイダー API キーはダッシュボード クライアントに返されません。
 
@@ -210,7 +230,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
-| `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントまたはすべてのアカウントのランタイム クールダウンをクリアする | 400 無効な ID |
+| `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントのランタイム クールダウンを解除する | 400 無効または不明なアカウント ID。既知のアカウントにクールダウンがなければ 200 と `{ ok: true, id, cleared: false }` |
 | `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合 |
 | `PUT /api/codex-auth/auto-switch` |自動アカウント切り替えのクォータしきい値を設定する | 400 無効なしきい値 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex アカウントプールの選択戦略を更新 | 400 無効な戦略/構成 |

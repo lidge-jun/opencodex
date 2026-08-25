@@ -76,19 +76,26 @@ ocx login anthropic
 실행 중인 프록시를 통해 제공자 계정과 API 키 풀을 나열하고 전환합니다. 제공되는 도움말 표면은 다음과 같습니다:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage:
+  ocx account list [provider] [--json] [--all]
+  ocx account current <provider> [--json]
+  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
+  ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account main <doctor|list|register|add|switch|recover> ...
 
-list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
-current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
-refresh <provider>  Force-refresh Codex or provider quota reports.
-auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
-add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
-reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
-Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
+List and switch provider accounts and API-key pools (masked output only).
+'main' selects the Codex App login for the openai account pool.
 ```
 
 모든 하위 명령은 프록시가 실행 중이어야 합니다. CLI는 기록된 런타임 포트를 자동으로 찾습니다. 성공한 작업은 종료 코드 0으로 끝납니다. 잘못된 사용, 알 수 없는 제공자 또는 계정/키 id, 도달할 수 없는 프록시, API 실패는 종료 코드 1로 끝납니다. 자격 증명 필드는 관리 API가 반환한 그대로 표시됩니다(마스킹도 그대로 포함됩니다). 원시 API 키와 OAuth 토큰은 절대 반환하지 않습니다. 표시 편의 기능은 대시보드와 마찬가지로 클라이언트 쪽에서 합성합니다. `main`은 `openai` 계정 풀의 Codex App 로그인에 대한 CLI 별칭이고, 이메일이 없는 OAuth 계정은 `Account N`으로 표시되며, plan/label 열은 plan, 마스킹된 이메일, label, 마스킹된 키 순으로 대체합니다.
@@ -149,10 +156,25 @@ OAuth 및 API 키 제공자에는 제공자의 할당량 보고 엔드포인트�
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-`openai` Codex 계정 풀만 제어합니다. `on`은 80%, `off`는 0%를 설정하고, `status`는 현재 값을 읽으며, `threshold <n>`은 0부터 100까지의 정수를 받습니다. 다른 제공자와 잘못된 값은 종료 코드 1로 끝납니다. `--json`은 다음을 반환합니다:
+`openai` Codex 계정 풀과 지원되는 `anthropic` / `google-antigravity` OAuth 풀을 제어합니다.
+`openai`에서 `on`은 임계값을 80%로, `off`는 0%로 설정합니다. OAuth 풀에서 `on` / `off`는
+기존 임계값을 유지하면서 풀의 활성화 여부를 전환합니다. `threshold <n>`은 0부터 100까지의
+정수를 저장하며, 0이 아니면 풀을 활성화합니다. `status`는 현재 정책을 읽습니다. 지원되지 않는
+제공자와 잘못된 값은 종료 코드 1로 끝납니다. `--json`은 다음을 반환합니다:
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+### `ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]`
+
+기존 Codex 계정, OAuth 계정 또는 API 키에 표시 별칭을 설정합니다. 별칭을 지우려면 `-`를
+전달하세요. 별칭은 인쇄 가능한 문자 80자 이하여야 합니다. 예약된 Codex App 로그인 `main`은
+이름을 바꿀 수 없으므로 `ocx account alias openai main ...`은 종료 코드 1이 됩니다. `--json`은
+다음을 반환합니다.
+
+```text
+{ ok: true, provider, id, alias: string | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -181,7 +203,7 @@ Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이
 
 헤드리스 셸에서 브라우저 기반 또는 수동 코드 계정 인증을 실행합니다. 제공자별 명령 형태는 `ocx account --help`를 보십시오. Codex account login이 저장되었지만 catalog refresh가 보류 중이면 성공으로 종료하고 human output의 stderr에 고정된 `ocx sync` 안내를 표시합니다. `--json`은 안내를 섞지 않고 완료 state의 `catalogRefreshPending: true`를 유지합니다.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <account-or-key-id|main> --yes [--json]`
 
 이 보호된 비대화형 삭제는 `--yes`를 요구합니다. 삭제하기 전에 id가 존재하는지 확인하며, 없는 id는 DELETE를 보내지 않고 종료 코드 1로 끝납니다. Codex App의 main 로그인은 제거할 수 없으므로 `remove openai main --yes`는 거부됩니다. 삭제 후에는 해당 계열을 다시 읽습니다. 고정된 Codex 계정을 제거하면 고정이 풀리고 자동 선택으로 돌아갑니다. OAuth는 남아 있는 첫 번째 계정으로 승격하거나 없다고 보고합니다. API 키 풀은 남아 있는 첫 번째 키로 승격하거나 없다고 보고합니다. `--json`의 성공 및 실패 형식은 다음과 같습니다:
 
@@ -193,6 +215,18 @@ Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이
 `catalogRefreshPending`는 Codex 삭제에만 포함됩니다. `true`여도 삭제는 이미 저장되었으며 human output은
 stderr에 `ocx sync` 안내를 표시하고 종료 코드 0을 유지합니다. OAuth account와 API key 삭제 형식은 바뀌지 않습니다.
 
+### `ocx account clear-cooldown <provider> <account-id|main> [--json]`
+
+`openai` Codex 풀 또는 지원되는 `anthropic` / `google-antigravity` OAuth 풀에서 런타임 쿨다운
+하나를 지웁니다. `main`은 `openai`에서만 허용되며 JSON에서는 `__main__`으로 정규화됩니다.
+잘못된 공급자나 알 수 없는 계정은 API에서 400으로 거부되고 CLI는 종료 코드 1이 됩니다. 실제
+계정에 활성 쿨다운이 없으면 멱등 성공으로 처리되어 API는 200, CLI는 종료 코드 0을 반환하고
+`cleared`는 `false`입니다. `--json`은 정확히 다음을 반환합니다.
+
+```text
+{ ok: true, provider, id, cleared: boolean }
+```
+
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
 API 키 제공자에 키를 추가하고 활성화합니다. 키는 비TTY 파이프/리디렉션 stdin에서만 읽습니다. 대화형 TTY 입력, 빈 입력, OAuth/Codex 제공자, API 실패는 종료 코드 1로 끝납니다. 라벨 안에 들어 있더라도 키는 절대 출력되지 않습니다. 비밀 관리자나 here-string을 쓰는 편이 좋습니다:
@@ -203,6 +237,25 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json`은 `{ ok: true, id: string | null, label?: string }`를 반환하며 키를 절대 포함하지 않습니다.
+
+### `ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`
+
+크기가 제한된 계정 내보내기를 가져옵니다. 버전 1은 `google-antigravity` 공급자와
+`cockpit-tools` 형식만 지원하며, `--file` 또는 `--stdin` 중 정확히 하나를 입력으로 받아들입니다.
+인라인 JSON과 추가 위치 인수는 내용을 검사하기 전에 거부됩니다. 내보내기 파일은 비공개로 유지하고
+사용 후 삭제하거나 안전하게 보관하세요. JSON 출력은 아래의 비밀 없는 요약입니다. 실패하거나
+지원되지 않는 레코드가 있으면 종료 코드 1, 그렇지 않으면 종료 코드 0입니다.
+
+```text
+{
+  totalCount,
+  importedCount,
+  updatedCount,
+  failedCount,
+  unsupportedCount,
+  results: Array<{ index, status, code }>
+}
+```
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 

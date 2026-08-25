@@ -174,13 +174,33 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Read or update Anthropic OAuth pool policy | 400 non-Anthropic provider or invalid policy |
-| `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Read or update Anthropic or Google Antigravity OAuth pool policy | 400 unsupported provider or invalid policy |
+| `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider or unknown account; a known account with no cooldown returns 200 with `{ ok: true, cleared: false }` |
 | `PUT /api/oauth/accounts/alias` | Set or clear an OAuth account alias | 400 invalid provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
+
+#### Provider-scoped OAuth pool contract
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity` requires the `provider` query
+parameter. Its top-level response fields are `provider`, `enabled`, `autoSwitchThreshold` (default
+`80`), `strategy` (normalized to `quota`, `round-robin`, or `fill-first`), `stickyLimit` (normalized
+to the integer range 1–100), and `experimental: true`.
+
+`PUT` and `PATCH /api/oauth/accounts/pool` require a JSON object with `provider` and accept optional
+`enabled` (boolean), `autoSwitchThreshold` (integer 0–100), `strategy` (`quota`, `round-robin`, or
+`fill-first`), and `stickyLimit` (integer 1–100). Omitted fields retain their current or default
+values. Success returns top-level `{ ok: true, provider, enabled, autoSwitchThreshold, strategy,
+stickyLimit, experimental: true }`; there is no `config` wrapper. A malformed or non-object body,
+an unsupported provider, or any invalid field returns a generic HTTP 400 error response.
+
+`POST /api/oauth/accounts/clear-cooldown` takes `{ provider, accountId }`. The provider must be
+`anthropic` or `google-antigravity`, and the account must exist within that provider. An unknown
+account returns a generic HTTP 400 `account not found` error. A known account that is not cooled down
+is an idempotent success: HTTP 200 with `{ ok: true, cleared: false }`. These responses never include
+tokens, email addresses, or complete keys.
 
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
 keys are not returned to dashboard clients.
@@ -245,7 +265,7 @@ manager. Its routes are:
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
-| `POST /api/codex-auth/accounts/clear-cooldown` | Clear runtime cooldown for one account or all accounts | 400 invalid id |
+| `POST /api/codex-auth/accounts/clear-cooldown` | Clear one account's runtime cooldown | 400 invalid or unknown account id; a known account with no cooldown returns 200 with `{ ok: true, id, cleared: false }` |
 | `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused/legacy-row conflict |
 | `PUT /api/codex-auth/auto-switch` | Set the quota threshold for automatic account switching | 400 invalid threshold |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |

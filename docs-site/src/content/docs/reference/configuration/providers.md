@@ -278,6 +278,38 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 `ocx account use anthropic <id>` switching when unsure.
 :::
 
+### `googleAntigravityAccountPool` (experimental)
+
+This opt-in pools Google Antigravity OAuth accounts for the `google-antigravity` Cloud Code Assist
+provider only. It is disabled by default. The pool never supplies credentials to Google AI Studio,
+Vertex AI, another provider entry, or an API-key route.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | Enable process-local session affinity and bounded failover on a final 429 or surfaced 402 response. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | Usage drain threshold from 0–100. `quota` and `fill-first` use the maximum cached usage relevant to the request model's `Gem` or `Cla` family; unknown usage keeps a healthy active account. `0` disables usage-driven switching, not failure recovery. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Strategy for new or otherwise unbound sessions. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | New-session binds retained on one `round-robin` selection. Range 1–100; it does not affect the other strategies. |
+
+The strategies preserve an eligible session affinity once it exists. For a new or unbound session,
+`quota` keeps the healthy active account while its relevant usage is unknown or below the threshold,
+then selects the eligible account with the lowest known usage. `round-robin` distributes binds evenly
+and does not use the threshold for ordinary rotation. `fill-first` keeps filling the active account
+until cooldown, unavailability, or the drain threshold, then advances to the next eligible account.
+
+Each dispatch resolves one generation-bound OAuth snapshot containing both the bearer token and Cloud
+Code Assist `projectId`. A final 429 or surfaced 402 cools the failed account, clears its affinity, and
+rebuilds the request for another eligible snapshot. The default cooldown is 60 seconds when no usable
+`Retry-After` is present; a parsed upstream value is capped at 15 minutes. One request permits at most
+three failovers (four total upstream dispatches). If every eligible account is cooling, the client
+receives 429 with the earliest known `Retry-After`.
+
+:::caution[Operational resilience, not quota bypass]
+Use this pool to recover from transient account failures, not to evade quotas or provider enforcement.
+Multi-account automation can violate provider terms; keep the feature disabled unless you accept that
+risk.
+:::
+
 ### Managed record shapes
 
 `apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings.

@@ -14,6 +14,7 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let fetchMock: ReturnType<typeof mock>;
+let importFetchMock: ReturnType<typeof mock>;
 let retryAccounts: ReturnType<typeof mock>;
 
 const ITEM: WorkspaceItem = {
@@ -35,10 +36,22 @@ beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
-  fetchMock = mock(async () => new Response(JSON.stringify({
+  importFetchMock = mock(async () => new Response(JSON.stringify({
     totalCount: 1, importedCount: 1, updatedCount: 0, failedCount: 0, unsupportedCount: 0,
     results: [{ index: 0, status: "imported", code: "imported" }],
   })));
+  fetchMock = mock(async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url) === "/proxy/api/oauth/accounts/pool?provider=google-antigravity") {
+      return Response.json({
+        provider: "google-antigravity",
+        enabled: false,
+        autoSwitchThreshold: 80,
+        strategy: "quota",
+        stickyLimit: 1,
+      });
+    }
+    return importFetchMock(url, init);
+  });
   retryAccounts = mock(async () => {});
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: win.document }, window: { configurable: true, value: win },
@@ -87,8 +100,8 @@ test("posts only the explicit Cockpit contract, refreshes accounts, and never re
   await mount();
   await select(JSON.stringify([{ email: "person@example.test", refresh_token: CANARY }]));
 
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(importFetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = importFetchMock.mock.calls[0] as [string, RequestInit];
   expect(url).toBe("/proxy/api/oauth/accounts/import");
   expect(JSON.parse(String(init.body))).toEqual({
     provider: "google-antigravity", format: "cockpit-tools",
@@ -103,19 +116,19 @@ test("posts only the explicit Cockpit contract, refreshes accounts, and never re
 test("uses fixed safe statuses for invalid JSON and backend failures", async () => {
   await mount();
   await select(`{ "refresh_token": "${CANARY}"`);
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(importFetchMock).not.toHaveBeenCalled();
   expect(host.textContent).toContain("not a valid JSON export or is too large");
   expect(host.textContent).not.toContain(CANARY);
 
   await select("[]", "not-a-json-export.txt");
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(importFetchMock).not.toHaveBeenCalled();
 
-  fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: CANARY }), { status: 500 }));
+  importFetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: CANARY }), { status: 500 }));
   await select("[]");
   expect(host.textContent).toContain("The account import could not be completed.");
   expect(host.textContent).not.toContain(CANARY);
 
-  fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({
+  importFetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({
     totalCount: 1,
     importedCount: CANARY,
     updatedCount: 0,
@@ -138,7 +151,7 @@ test("rejects an oversized export before reading its contents or calling the API
   await selectFile(file);
 
   expect(read).not.toHaveBeenCalled();
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(importFetchMock).not.toHaveBeenCalled();
   expect(host.textContent).toContain("not a valid JSON export or is too large");
   expect(host.textContent).not.toContain(CANARY);
   expect(input().value).toBe("");
@@ -157,7 +170,7 @@ test("keeps a completed import result when the subsequent account refresh reject
 });
 
 test("handles unsupported result codes without exposing them and resets for repeat selection", async () => {
-  fetchMock.mockImplementation(async () => new Response(JSON.stringify({
+  importFetchMock.mockImplementation(async () => new Response(JSON.stringify({
     totalCount: 1, importedCount: 0, updatedCount: 0, failedCount: 0, unsupportedCount: 1,
     results: [{ index: 0, status: "unsupported", code: "unsupported_provider" }],
   })));
@@ -165,7 +178,7 @@ test("handles unsupported result codes without exposing them and resets for repe
   await select("[]");
   await select("[]");
 
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(importFetchMock).toHaveBeenCalledTimes(2);
   expect(retryAccounts).toHaveBeenCalledTimes(2);
   expect(host.textContent).toContain("1 unsupported.");
   expect(host.textContent).not.toContain("unsupported_provider");
@@ -181,7 +194,7 @@ test("rejects contradictory status/code pairs without exposing backend codes or 
     { status: "failed", code: "imported" },
     { status: "unsupported", code: "invalid_document" },
   ]) {
-    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({
+    importFetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({
       totalCount: 1,
       importedCount: contradictory.status === "imported" ? 1 : 0,
       updatedCount: contradictory.status === "updated" ? 1 : 0,

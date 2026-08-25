@@ -119,6 +119,7 @@ const COOLDOWN_RECOVERY_KINDS = new Set([
   "key-429",
   "oauth-401",
   "anthropic-oauth-429",
+  "google-antigravity-oauth-quota",
 ]);
 
 function percentile(sorted: number[], p: number): number | undefined {

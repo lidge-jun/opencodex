@@ -1,6 +1,6 @@
 /**
- * Opt-in Anthropic OAuth account pool controls (#294).
- * Experimental — shows a strong warning because the feature is not battle-tested.
+ * Shared OAuth account-pool controls for Anthropic and Google Antigravity.
+ * Anthropic remains experimental and keeps its strong warning; Google does not.
  */
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
@@ -21,14 +21,17 @@ type PoolState = {
   stickyLimit: number;
 };
 
-export default function AnthropicAccountPoolSettings({
+export default function AccountPoolSettings({
   apiBase,
   accountCount,
+  provider = "anthropic",
 }: {
   apiBase: string;
   accountCount: number;
+  provider?: "anthropic" | "google-antigravity";
 }) {
   const t = useT();
+  const isGoogleAntigravity = provider === "google-antigravity";
   const [state, setState] = useState<PoolState | null>(null);
   const [draft, setDraft] = useState("80");
   const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
@@ -48,7 +51,7 @@ export default function AnthropicAccountPoolSettings({
     // mount-then-unmount dropped the request entirely. The abort controller already covers
     // in-flight cancellation, which is the part that actually needs to be cancellable.
     void Promise.resolve()
-      .then(() => fetch(`${apiBase}/api/oauth/accounts/pool?provider=anthropic`, { signal: ac.signal }))
+      .then(() => fetch(`${apiBase}/api/oauth/accounts/pool?provider=${provider}`, { signal: ac.signal }))
       .then(res => {
         if (!res.ok) throw new Error("load");
         return res.json() as Promise<{
@@ -80,7 +83,7 @@ export default function AnthropicAccountPoolSettings({
       cancelled = true;
       ac.abort();
     };
-  }, [apiBase]);
+  }, [apiBase, provider]);
 
   const save = useCallback(async (next: {
     enabled: boolean;
@@ -102,7 +105,7 @@ export default function AnthropicAccountPoolSettings({
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          provider: "anthropic",
+          provider,
           enabled: next.enabled,
           autoSwitchThreshold: next.threshold,
           strategy: next.strategy,
@@ -125,7 +128,7 @@ export default function AnthropicAccountPoolSettings({
       setDraft(String(next.threshold));
       setStickyDraft(String(savedSticky));
     } catch {
-      setError(t("anthropicPool.saveFailed"));
+      setError(t(isGoogleAntigravity ? "googleAntigravityPool.saveFailed" : "anthropicPool.saveFailed"));
       if (previousState) {
         setState(previousState);
         setDraft(String(previousState.threshold));
@@ -134,7 +137,7 @@ export default function AnthropicAccountPoolSettings({
     } finally {
       setSaving(false);
     }
-  }, [apiBase, state, t]);
+  }, [apiBase, isGoogleAntigravity, provider, state, t]);
 
   const enabled = state?.enabled === true;
   const threshold = state?.threshold ?? 80;
@@ -148,15 +151,15 @@ export default function AnthropicAccountPoolSettings({
     <div className="card" style={{ marginTop: 12 }} aria-busy={loading || saving}>
       <div className="card-row" style={{ alignItems: "flex-start", gap: 12 }}>
         <div style={{ flex: 1 }}>
-          <strong>{t("anthropicPool.title")}</strong>
+          <strong>{t(isGoogleAntigravity ? "googleAntigravityPool.title" : "anthropicPool.title")}</strong>
           <div className="card-sub" style={{ marginTop: 4 }}>
             {loadError
-              ? t("anthropicPool.loadFailed")
+              ? t(isGoogleAntigravity ? "googleAntigravityPool.loadFailed" : "anthropicPool.loadFailed")
               : loading
                 ? t("common.loading")
                 : enabled
-                  ? t("anthropicPool.enabledDesc", { threshold })
-                  : t("anthropicPool.disabledDesc")}
+                  ? t(isGoogleAntigravity ? "googleAntigravityPool.enabledDesc" : "anthropicPool.enabledDesc", { threshold })
+                  : t(isGoogleAntigravity ? "googleAntigravityPool.disabledDesc" : "anthropicPool.disabledDesc")}
           </div>
         </div>
         <button
@@ -164,8 +167,10 @@ export default function AnthropicAccountPoolSettings({
           className={`toggle ${enabled ? "on" : ""}`}
           disabled={toggleDisabled}
           aria-pressed={enabled}
-          aria-label={t("anthropicPool.title")}
-          title={enabled ? t("anthropicPool.on") : t("anthropicPool.off")}
+          aria-label={t(isGoogleAntigravity ? "googleAntigravityPool.title" : "anthropicPool.title")}
+          title={enabled
+            ? t(isGoogleAntigravity ? "googleAntigravityPool.on" : "anthropicPool.on")
+            : t(isGoogleAntigravity ? "googleAntigravityPool.off" : "anthropicPool.off")}
           onClick={() => {
             void save({
               enabled: !enabled,
@@ -179,28 +184,34 @@ export default function AnthropicAccountPoolSettings({
         </button>
       </div>
 
-      <div
-        role="alert"
-        className="card-sub"
-        style={{
-          marginTop: 10,
-          padding: "10px 16px",
-          border: "1px solid var(--border, #c9a227)",
-          borderRadius: 6,
-          background: "color-mix(in srgb, var(--warn, #c9a227) 12%, transparent)",
-        }}
-      >
-        {t("anthropicPool.experimentalWarning")}
-      </div>
+      {!isGoogleAntigravity && (
+        <div
+          role="alert"
+          className="card-sub"
+          style={{
+            marginTop: 10,
+            padding: "10px 16px",
+            border: "1px solid var(--border, #c9a227)",
+            borderRadius: 6,
+            background: "color-mix(in srgb, var(--warn, #c9a227) 12%, transparent)",
+          }}
+        >
+          {t("anthropicPool.experimentalWarning")}
+        </div>
+      )}
 
       {accountCount < 2 && (
-        <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
+        <div className="card-sub" style={{ marginTop: 8 }}>
+          {t(isGoogleAntigravity ? "googleAntigravityPool.needTwoAccounts" : "anthropicPool.needTwoAccounts")}
+        </div>
       )}
 
       {enabled && state && (
         <>
           <label className="field" style={{ display: "block", marginTop: 12 }}>
-            <span className="field-label">{t("anthropicPool.threshold")}</span>
+            <span className="field-label">
+              {t(isGoogleAntigravity ? "googleAntigravityPool.threshold" : "anthropicPool.threshold")}
+            </span>
             <input
               className="input mono"
               type="number"
@@ -209,13 +220,16 @@ export default function AnthropicAccountPoolSettings({
               step={1}
               value={draft}
               disabled={saving}
-              aria-label={t("anthropicPool.thresholdAria")}
+              aria-label={t(isGoogleAntigravity ? "googleAntigravityPool.thresholdAria" : "anthropicPool.thresholdAria")}
               onChange={(event) => setDraft(event.target.value)}
               onBlur={() => {
-                const parsed = Number(draft);
-                if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+                const normalizedDraft = draft.trim();
+                const parsed = Number(normalizedDraft);
+                if (normalizedDraft.length === 0 || !Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
                   setDraft(String(threshold));
-                  setError(t("anthropicPool.thresholdInvalid"));
+                  setError(t(isGoogleAntigravity
+                    ? "googleAntigravityPool.thresholdInvalid"
+                    : "anthropicPool.thresholdInvalid"));
                   return;
                 }
                 if (parsed !== threshold) {
@@ -228,15 +242,17 @@ export default function AnthropicAccountPoolSettings({
                 }
               }}
             />
-            <div className="card-sub" style={{ marginTop: 4 }}>{t("anthropicPool.thresholdHelp")}</div>
+            <div className="card-sub" style={{ marginTop: 4 }}>
+              {t(isGoogleAntigravity ? "googleAntigravityPool.thresholdHelp" : "anthropicPool.thresholdHelp")}
+            </div>
           </label>
 
           <AccountPoolStrategyControls
             strategy={strategy}
             stickyDraft={stickyDraft}
             disabled={saving}
-            strategySelectId="anthropic-pool-strategy"
-            stickyInputId="anthropic-pool-sticky-limit"
+            strategySelectId={isGoogleAntigravity ? "google-antigravity-pool-strategy" : "anthropic-pool-strategy"}
+            stickyInputId={isGoogleAntigravity ? "google-antigravity-pool-sticky-limit" : "anthropic-pool-sticky-limit"}
             onStrategyChange={(next) => {
               if (next === strategy) return;
               void save({

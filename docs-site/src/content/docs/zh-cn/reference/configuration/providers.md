@@ -166,6 +166,34 @@ affinity。这些策略不能规避 provider enforcement。
 除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ocx account use anthropic <id>` 切换。
 :::
 
+### `googleAntigravityAccountPool`（实验性）
+
+此可选功能仅为 `google-antigravity` Cloud Code Assist 提供方池化 Google Antigravity OAuth
+账户，默认关闭。该池绝不会把凭据用于 Google AI Studio、Vertex AI、其他提供方条目或 API 密钥路由。
+
+| 键 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 启用进程本地会话亲和性，以及最终 429 或透传到此处的 402 响应触发的有界故障转移。 |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 的使用率耗尽阈值。`quota` 和 `fill-first` 使用与请求模型 `Gem` 或 `Cla` 系列相关的最大缓存使用率；使用率未知时保留健康的活跃账户。`0` 只关闭按使用率切换，不关闭故障恢复。 |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话或未绑定会话的策略。 |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | 一次 `round-robin` 选择所保留的新会话绑定数。范围 1–100；不影响其他策略。 |
+
+只要账户仍然合格，所有策略都会保留已有的会话亲和性。对于新会话或未绑定会话，`quota` 会在
+相关使用率未知或低于阈值时保留健康的活跃账户，之后选择已知使用率最低的合格账户。
+`round-robin` 均匀分配绑定，普通轮换不使用该阈值。`fill-first` 会持续使用活跃账户，直到账户
+进入冷却、不可用或达到耗尽阈值，再前进到下一个合格账户。
+
+每次派发都会解析一个绑定到该代请求的 OAuth 快照，其中同时包含 bearer token 和 Cloud Code
+Assist `projectId`。最终 429 或透传到此处的 402 会让失败账户进入冷却、清除其亲和性，并用另一个
+合格快照重建请求。如果没有可用的 `Retry-After`，默认冷却 60 秒；成功解析的上游值最高限制为
+15 分钟。单个请求最多允许 3 次故障转移，即总计 4 次上游派发。如果所有合格账户都在冷却，
+客户端会收到 429，并带上已知的最早 `Retry-After`。
+
+:::caution[用于运行韧性，而不是绕过配额]
+请只用该池从暂时性账户故障中恢复，不要用它规避配额或提供方管控。多账户自动化可能违反提供方
+条款；如果不接受这一风险，请保持关闭。
+:::
+
 ### 托管记录形状
 
 `apiKeys[]` 条目包含 `id`、`name`、生成的 `key` 以及 ISO 格式的 `createdAt` 字符串。`codexAccounts[]` 条目要求有 `id`、`email` 和 `isMain`，并可选 `plan`、`chatgptAccountId` 和具备隐私安全性的 `logLabel`。这些记录通常由仪表板管理。

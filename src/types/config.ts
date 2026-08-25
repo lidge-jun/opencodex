@@ -570,6 +570,20 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /**
+   * Opt-in Google Antigravity OAuth account pool. Default OFF.
+   * Keeps Cloud Code Assist account selection provider-owned and does not affect
+   * Google AI Studio or Vertex providers.
+   */
+  googleAntigravityAccountPool?: {
+    enabled?: boolean;
+    /** Usage % threshold for new-session auto-pick. Default 80. */
+    autoSwitchThreshold?: number;
+    /** New-session rotation strategy. Default quota. */
+    strategy?: OcxAccountPoolRotationStrategy;
+    /** Successful new-session binds retained by round-robin. Default 1; range 1..100. */
+    stickyLimit?: number;
+  };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**

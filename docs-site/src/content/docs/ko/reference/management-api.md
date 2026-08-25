@@ -150,13 +150,33 @@ Authorization: Bearer <admin-token>
 | `POST /api/oauth/logout` | 선택된 provider 자격 증명을 제거합니다 | 400 알 수 없는 provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | 마스킹된 계정을 나열하거나 계정 하나를 제거합니다 | 400 잘못된 provider/id; 404 계정 없음; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | 활성 OAuth 계정을 선택합니다 | 400 잘못된 provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth pool policy를 읽거나 업데이트합니다 | 400 Anthropic이 아닌 provider 또는 잘못된 policy |
-| `POST /api/oauth/accounts/clear-cooldown` | OAuth 계정 하나의 런타임 cooldown을 지웁니다 | 400 잘못된 provider/account |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic 또는 Google Antigravity OAuth pool policy를 읽거나 업데이트합니다 | 400 지원하지 않는 provider 또는 잘못된 policy |
+| `POST /api/oauth/accounts/clear-cooldown` | OAuth 계정 하나의 런타임 cooldown을 지웁니다 | 400 잘못된 provider 또는 알 수 없는 account; 알려진 account에 cooldown이 없으면 200과 `{ ok: true, cleared: false }` 반환 |
 | `PUT /api/oauth/accounts/alias` | OAuth 계정 alias를 설정하거나 지웁니다 | 400 잘못된 provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | 마스킹된 provider key를 나열, 추가/활성화, 또는 제거합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/active` | provider의 활성 key를 선택합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/alias` | provider-key alias를 설정하거나 지웁니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `GET, POST, PATCH, DELETE /api/keys` | 데이터 평면 admission key를 나열, 생성, 수정, 또는 삭제합니다 | 400 잘못된 본문/id; 404 key 없음 |
+
+#### 제공자 범위 OAuth 풀 계약
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity`에는 `provider` 쿼리 매개변수가
+필수입니다. 응답의 최상위 필드는 `provider`, `enabled`, `autoSwitchThreshold`(기본값 `80`),
+`strategy`(`quota`, `round-robin`, `fill-first` 중 하나로 정규화), `stickyLimit`(1~100 정수로
+정규화), `experimental: true`입니다.
+
+`PUT` / `PATCH /api/oauth/accounts/pool`에는 `provider`가 포함된 JSON 객체가 필요하며, 선택적으로
+`enabled`(boolean), `autoSwitchThreshold`(0~100 정수), `strategy`(`quota`, `round-robin`,
+`fill-first`), `stickyLimit`(1~100 정수)을 받을 수 있습니다. 생략된 필드는 현재값 또는 기본값을
+유지합니다. 성공 응답은 최상위에 `{ ok: true, provider, enabled, autoSwitchThreshold, strategy,
+stickyLimit, experimental: true }`를 반환하며 `config` 래퍼는 없습니다. 잘못된 형식이나 객체가 아닌
+본문, 지원되지 않는 provider, 잘못된 필드는 일반 HTTP 400 오류 응답을 반환합니다.
+
+`POST /api/oauth/accounts/clear-cooldown`의 본문은 `{ provider, accountId }`입니다. provider는
+`anthropic` 또는 `google-antigravity`여야 하며 account는 해당 provider 안에 존재해야 합니다. 알 수
+없는 account는 일반 HTTP 400 `account not found` 오류를 반환합니다. 알려진 account가 cooldown 상태가
+아니어도 HTTP 200과 `{ ok: true, cleared: false }`를 반환하는 멱등 성공입니다. 이 응답에는 token,
+이메일 주소 또는 전체 key가 포함되지 않습니다.
 
 자격 증명 목록 응답은 의도적으로 마스킹됩니다. OAuth access token과 완전한 provider API key는 대시보드 클라이언트에 반환되지 않습니다.
 
@@ -210,7 +230,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
 | `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
-| `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
+| `POST /api/codex-auth/accounts/clear-cooldown` | account 하나의 runtime cooldown을 지웁니다 | 400 잘못되거나 알 수 없는 account id; 알려진 account에 cooldown이 없으면 200과 `{ ok: true, id, cleared: false }` 반환 |
 | `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |
 | `PUT /api/codex-auth/auto-switch` | 자동 account 전환을 위한 quota threshold를 설정합니다 | 400 잘못된 threshold |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex account-pool 선택 전략을 업데이트합니다 | 400 잘못된 전략/구성 |

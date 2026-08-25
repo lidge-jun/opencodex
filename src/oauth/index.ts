@@ -490,6 +490,17 @@ export async function getValidAccessTokenForAccount(provider: string, accountId:
   return (await resolveAccessSnapshotForAccount(provider, accountId)).accessToken;
 }
 
+/**
+ * Account-scoped credential snapshot. Token generation and provider routing
+ * metadata are read from the same persisted credential after any refresh.
+ */
+export async function getValidAccessTokenSnapshotForAccount(
+  provider: string,
+  accountId: string,
+): Promise<OAuthAccessSnapshot> {
+  return resolveAccessSnapshotForAccount(provider, accountId);
+}
+
 /** Terminal refresh failures (revoked/rotated-away grants) — retrying cannot succeed. */
 function isTerminalRefreshError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();

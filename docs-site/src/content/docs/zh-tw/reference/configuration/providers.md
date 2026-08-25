@@ -135,6 +135,34 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 除非你了解 Anthropic 帳號政策風險，否則保持停用。不確定時偏好手動 `ocx account use anthropic <id>` 切換。
 :::
 
+### `googleAntigravityAccountPool`（實驗性）
+
+此選用功能只為 `google-antigravity` Cloud Code Assist 供應商池化 Google Antigravity OAuth
+帳號，預設停用。此池絕不會把憑證用於 Google AI Studio、Vertex AI、其他供應商項目或 API-key 路由。
+
+| Key | 型別 | 預設值 | 說明 |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 啟用行程本地的 session 親和性，以及最終 429 或傳到此處的 402 回應所觸發的有界容錯移轉。 |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 的用量耗盡閾值。`quota` 與 `fill-first` 使用和請求模型 `Gem` 或 `Cla` 家族相關的最高快取用量；用量未知時保留健康的現用帳號。`0` 只停用依用量切換，不停用故障復原。 |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新 session 或未綁定 session 的策略。 |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | 一次 `round-robin` 選擇所保留的新 session 綁定數。範圍 1–100；不影響其他策略。 |
+
+只要帳號仍合格，所有策略都會保留既有 session 親和性。對於新 session 或未綁定 session，
+`quota` 會在相關用量未知或低於閾值時保留健康的現用帳號，之後選擇已知用量最低的合格帳號。
+`round-robin` 平均分配綁定，正常輪換不使用該閾值。`fill-first` 會持續使用現用帳號，直到帳號
+進入冷卻、不可用或到達耗盡閾值，再前進到下一個合格帳號。
+
+每次派送都會解析一份綁定到該代請求的 OAuth 快照，其中同時包含 bearer token 與 Cloud Code
+Assist `projectId`。最終 429 或傳到此處的 402 會讓失敗帳號進入冷卻、清除其親和性，並用另一份
+合格快照重建請求。若沒有可用的 `Retry-After`，預設冷卻 60 秒；成功解析的上游值最高限制為
+15 分鐘。單一請求最多允許 3 次容錯移轉，也就是總計 4 次上游派送。若所有合格帳號都在冷卻，
+客戶端會收到 429，並附上已知最早的 `Retry-After`。
+
+:::caution[用於營運韌性，而非繞過配額]
+請只用此池從暫時性帳號故障中復原，不要用來規避配額或供應商管控。多帳號自動化可能違反供應商
+條款；若不接受這項風險，請保持停用。
+:::
+
 ### 受管記錄結構
 
 `apiKeys[]` 項目包含 `id`、`name`、生成的 `key` 與 ISO `createdAt` 字串。

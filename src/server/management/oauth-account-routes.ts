@@ -95,6 +95,24 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown> | nul
   }
 }
 
+type OAuthPoolProvider = "anthropic" | "google-antigravity";
+type OAuthPoolConfig = NonNullable<OcxConfig["anthropicAccountPool"]>;
+
+function oauthPoolProvider(value: string): value is OAuthPoolProvider {
+  return value === "anthropic" || value === "google-antigravity";
+}
+
+function oauthPoolConfig(config: OcxConfig, provider: OAuthPoolProvider): OAuthPoolConfig {
+  return provider === "anthropic"
+    ? config.anthropicAccountPool ?? {}
+    : config.googleAntigravityAccountPool ?? {};
+}
+
+function setOAuthPoolConfig(config: OcxConfig, provider: OAuthPoolProvider, pool: OAuthPoolConfig): void {
+  if (provider === "anthropic") config.anthropicAccountPool = pool;
+  else config.googleAntigravityAccountPool = pool;
+}
+
 /**
  * The single place key-name rules live. The config read schema is deliberately
  * permissive so an existing config can never become unloadable; this is the write
@@ -299,6 +317,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (provider === "anthropic") {
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
+    } else if (provider === "google-antigravity") {
+      const { resetGoogleAntigravityRoutingForManualSelection } = await import("../../oauth/google-antigravity-routing");
+      resetGoogleAntigravityRoutingForManualSelection(body.accountId);
     }
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
@@ -309,11 +330,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
-  // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
+  // Opt-in OAuth account pools: enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
-    const pool = config.anthropicAccountPool ?? {};
+    if (!oauthPoolProvider(provider)) {
+      return jsonResponse({ error: "pool config is only supported for anthropic and google-antigravity" }, 400);
+    }
+    const pool = oauthPoolConfig(config, provider);
     return jsonResponse({
       provider,
       enabled: pool.enabled === true,
@@ -336,13 +359,22 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       stickyLimit?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
-    let enabled = config.anthropicAccountPool?.enabled === true;
+    if (!oauthPoolProvider(provider)) {
+      return jsonResponse({ error: "pool config is only supported for anthropic and google-antigravity" }, 400);
+    }
+    const currentPool = oauthPoolConfig(config, provider);
+    let enabled = currentPool.enabled === true;
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
       enabled = body.enabled;
     }
-    let threshold = config.anthropicAccountPool?.autoSwitchThreshold ?? 80;
+    const currentThreshold = currentPool.autoSwitchThreshold;
+    let threshold = typeof currentThreshold === "number"
+      && Number.isInteger(currentThreshold)
+      && currentThreshold >= 0
+      && currentThreshold <= 100
+      ? currentThreshold
+      : 80;
     if (body.autoSwitchThreshold !== undefined) {
       if (
         typeof body.autoSwitchThreshold !== "number"
@@ -354,7 +386,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       threshold = body.autoSwitchThreshold;
     }
-    let strategy = config.anthropicAccountPool?.strategy;
+    let strategy = currentPool.strategy === undefined
+      ? undefined
+      : parseAccountPoolStrategy(currentPool.strategy) ?? "quota";
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
@@ -362,7 +396,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       strategy = parsed;
     }
-    let stickyLimit = config.anthropicAccountPool?.stickyLimit;
+    let stickyLimit = currentPool.stickyLimit === undefined
+      ? undefined
+      : parseAccountPoolStickyLimit(currentPool.stickyLimit) ?? 1;
     if (body.stickyLimit !== undefined) {
       const parsed = parseAccountPoolStickyLimit(body.stickyLimit);
       if (parsed === null) {
@@ -370,12 +406,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       stickyLimit = parsed;
     }
-    config.anthropicAccountPool = {
+    setOAuthPoolConfig(config, provider, {
       enabled,
       autoSwitchThreshold: threshold,
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
-    };
+    });
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     return jsonResponse({
@@ -392,10 +428,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "clear-cooldown is only supported for anthropic" }, 400);
+    if (!oauthPoolProvider(provider)) {
+      return jsonResponse({ error: "clear-cooldown is only supported for anthropic and google-antigravity" }, 400);
+    }
     if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
-    const { clearAnthropicAccountCooldown } = await import("../../oauth/anthropic-routing");
-    const cleared = clearAnthropicAccountCooldown(accountId);
+    const { getAccountSet } = await import("../../oauth/store");
+    if (!getAccountSet(provider)?.accounts.some(account => account.id === accountId)) {
+      return jsonResponse({ error: "account not found" }, 400);
+    }
+    const cleared = provider === "anthropic"
+      ? (await import("../../oauth/anthropic-routing")).clearAnthropicAccountCooldown(accountId)
+      : (await import("../../oauth/google-antigravity-routing")).clearGoogleAntigravityAccountCooldown(accountId);
     return jsonResponse({ ok: true, cleared });
   }
 
@@ -474,6 +517,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
       clearAnthropicAccountCooldown(id);
       clearAnthropicSessionAffinityForAccount(id);
+    } else if (provider === "google-antigravity") {
+      const { clearGoogleAntigravityRoutingStateForAccount } = await import("../../oauth/google-antigravity-routing");
+      clearGoogleAntigravityRoutingStateForAccount(id);
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");

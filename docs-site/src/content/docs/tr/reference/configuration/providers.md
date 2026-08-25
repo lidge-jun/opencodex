@@ -233,6 +233,38 @@ Anthropic hesap politikası riskini anlamadığınız sürece bunu devre dışı
 Emin olmadığınızda manuel `ocx account use anthropic <id>` geçişini tercih edin.
 :::
 
+### `googleAntigravityAccountPool` (deneysel)
+
+Bu isteğe bağlı özellik Google Antigravity OAuth hesaplarını yalnızca `google-antigravity` Cloud Code
+Assist sağlayıcısı için havuzlar. Varsayılan olarak devre dışıdır. Havuz, kimlik bilgilerini hiçbir
+zaman Google AI Studio, Vertex AI, başka bir sağlayıcı kaydı veya API anahtarı rotasına vermez.
+
+| Anahtar | Tip | Varsayılan | Açıklama |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | İşleme özgü oturum bağlılığını ve son 429 ya da yüzeye çıkan 402 yanıtında sınırlı yük devretmeyi etkinleştirir. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 kullanım tüketme eşiği. `quota` ve `fill-first`, istek modelinin `Gem` veya `Cla` ailesiyle ilgili önbelleğe alınmış en yüksek kullanımı kullanır; kullanım bilinmiyorsa sağlıklı etkin hesap korunur. `0` yalnızca kullanıma dayalı geçişi kapatır, hata kurtarmayı kapatmaz. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni veya henüz bağlanmamış oturumların stratejisi. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | Bir `round-robin` seçiminde tutulan yeni oturum bağlama sayısı. Aralık 1–100'dür; diğer stratejileri etkilemez. |
+
+Tüm stratejiler, hesap uygun kaldığı sürece mevcut oturum bağlılığını korur. Yeni veya bağlanmamış bir
+oturumda `quota`, ilgili kullanım bilinmiyorsa ya da eşik altındaysa sağlıklı etkin hesabı korur; ardından
+bilinen kullanımı en düşük uygun hesabı seçer. `round-robin` bağlamaları eşit dağıtır ve normal rotasyonda
+eşiği kullanmaz. `fill-first`, etkin hesabı soğuma, kullanılamazlık veya tüketme eşiğine kadar doldurur,
+sonra sıradaki uygun hesaba geçer.
+
+Her gönderim bearer token ile Cloud Code Assist `projectId` değerini birlikte içeren, üretime bağlı tek
+bir OAuth anlık görüntüsü çözümler. Son 429 veya yüzeye çıkan 402, başarısız hesabı soğumaya alır,
+bağlılığını temizler ve isteği başka bir uygun anlık görüntü için yeniden kurar. Kullanılabilir bir
+`Retry-After` yoksa varsayılan soğuma 60 saniyedir; ayrıştırılmış upstream değeri en fazla 15 dakikadır.
+Bir istek en fazla üç yük devretmeye, yani toplam dört upstream gönderime izin verir. Uygun hesapların
+tamamı soğuyorsa istemci en erken bilinen `Retry-After` ile 429 alır.
+
+:::caution[Operasyonel dayanıklılık; kota aşma yöntemi değildir]
+Bu havuzu geçici hesap hatalarından kurtulmak için kullanın; kota veya sağlayıcı yaptırımını aşmak için
+kullanmayın. Çoklu hesap otomasyonu sağlayıcı koşullarını ihlal edebilir; bu riski kabul etmiyorsanız
+özelliği devre dışı bırakın.
+:::
+
 ### Yönetilen kayıt biçimleri
 
 `apiKeys[]` girdileri `id`, `name`, oluşturulan `key` ve ISO `createdAt`
