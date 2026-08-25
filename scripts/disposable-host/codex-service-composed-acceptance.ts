@@ -204,7 +204,12 @@ class Fixture {
 
   async cli(args: string[]): Promise<ChildResult> {
     const result = await spawnResult([process.execPath, cliPath, ...args], { cwd: this.root, env: this.env() });
-    if (result.exitCode !== 0) fail(`${this.row}: ocx ${args.join(" ")} failed (${result.exitCode})\n${result.stderr}\n${result.stdout}`);
+    if (result.exitCode !== 0) {
+      // Both streams, always, and never an empty message: a row that fails with a blank error
+      // tells the operator nothing, and this runner only ever runs where reproducing is costly.
+      const detail = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n") || "(no output on either stream)";
+      fail(`${this.row}: ocx ${args.join(" ")} failed (exit ${result.exitCode})\n${detail}`);
+    }
     return result;
   }
 
