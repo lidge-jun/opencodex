@@ -202,6 +202,10 @@ import {
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../lib/local-provider-reload-contract";
 import { createReadinessGate, type ReadinessGate } from "./readiness";
+import {
+  createPackageTreeIntegrityGuard,
+  type PackageTreeIntegrityGuard,
+} from "../lib/package-tree-integrity";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -454,6 +458,8 @@ export interface StartServerDeps {
   localAttestationSecret?: string;
   /** Optional readiness gate; a fresh pending gate is created when omitted. */
   readinessGate?: ReadinessGate;
+  /** Test-only package-tree observation; production captures package.json identity at boot. */
+  packageTreeIntegrity?: PackageTreeIntegrityGuard;
 }
 
 function inspectStartupOwnership(
@@ -698,6 +704,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }), req, policy);
   }
 
+  function packageTreeChangedResponse(req: Request, policy: RequestPolicyView, message: string): Response {
+    return withCors(new Response(JSON.stringify({
+      error: { type: "server_error", code: "package_tree_changed", message },
+    }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    }), req, policy);
+  }
+
   async function runAdmittedHttpTurn(
     req: Request,
     policy: RequestPolicyView,
@@ -724,6 +739,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // passes it in, and transitions it after the post-startup sync settles. When
   // no gate is supplied (tests, ad-hoc starts) a fresh pending gate is created.
   const readinessGate = deps.readinessGate ?? createReadinessGate();
+  const packageTreeIntegrity = deps.packageTreeIntegrity ?? createPackageTreeIntegrityGuard();
   // Actual bound port, filled in after Bun.serve binds so /readyz reports the
   // real ephemeral port for startServer(0). /healthz keeps its existing port
   // field (the requested listenPort) byte-for-byte.
@@ -849,6 +865,29 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const decoded = decodeURIComponent(url.pathname);
         if (decoded === "/readyz" || decoded === "/readyz/") readyzPath = decoded;
       } catch { /* malformed encoding — not a readiness path */ }
+
+      const packageTreeStatus = packageTreeIntegrity.status();
+      if (!packageTreeStatus.ok && (
+        url.pathname === "/healthz"
+        || readyzPath !== undefined
+        || url.pathname.startsWith("/v1/")
+      )) {
+        const message = "OpenCodex package files changed while this proxy was running; restart OpenCodex before retrying.";
+        const response = url.pathname === "/healthz" || readyzPath !== undefined
+          ? jsonResponse({
+              status: "restart_required",
+              service: "opencodex",
+              version: VERSION,
+              uptime: process.uptime(),
+              pid: process.pid,
+              port: boundPort ?? requestServer.port ?? listenPort,
+              error: { code: "package_tree_changed", message },
+            }, 503, req, policy)
+          : packageTreeChangedResponse(req, policy, message);
+        const headers = new Headers(response.headers);
+        headers.set("Retry-After", "5");
+        return new Response(response.body, { status: 503, headers });
+      }
 
       if (req.method === "OPTIONS") {
         // /readyz is exact-GET only; OPTIONS (like POST and the trailing-slash
