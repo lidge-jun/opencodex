@@ -1175,6 +1175,7 @@ const CCA_CREDENTIAL = {
 test("CCA image generation uses the opted-in profiled executor", async () => {
   let nativeCalls = 0;
   let bunCalls = 0;
+  let project: string | undefined;
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
     bunCalls += 1;
@@ -1183,8 +1184,9 @@ test("CCA image generation uses the opted-in profiled executor", async () => {
   setProviderTlsRuntimeForTest({
     importWreq: async () => ({
       createTransport: async () => ({ close: async () => undefined }),
-      fetch: async () => {
+      fetch: async (_input, init) => {
         nativeCalls += 1;
+        project = (JSON.parse(String(init?.body)) as { project?: string }).project;
         return Response.json({
           response: {
             candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] } }],
@@ -1202,6 +1204,7 @@ test("CCA image generation uses the opted-in profiled executor", async () => {
         baseUrl: "https://daily-cloudcode-pa.googleapis.com",
         authMode: "oauth",
         googleMode: "cloud-code-assist",
+        project: "configured-stale-project",
         tlsProfile: "antigravity-browser",
       },
     },
@@ -1222,6 +1225,7 @@ test("CCA image generation uses the opted-in profiled executor", async () => {
     expect(response.status).toBe(200);
     expect(nativeCalls).toBe(1);
     expect(bunCalls).toBe(0);
+    expect(project).toBe("cca-project-123");
   } finally {
     globalThis.fetch = realFetch;
   }

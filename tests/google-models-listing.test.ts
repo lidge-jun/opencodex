@@ -124,7 +124,7 @@ describe("Antigravity live model discovery", () => {
       expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
       expect(seen[0]?.init?.method).toBe("POST");
       expect((seen[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer access-token");
-      expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
+      expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "project-id" });
       expect(live.map(model => model.id).sort()).toEqual([
         "future-agent-model",
         "future-flash-high",
@@ -236,7 +236,7 @@ describe("Antigravity live model discovery", () => {
     let markFetchStarted!: () => void;
     const responseGate = new Promise<void>(resolve => { releaseResponse = resolve; });
     const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
-    const baseUrl = "https://cca-stale-discovery.example";
+    const baseUrl = "https://daily-cloudcode-pa.googleapis.com";
     const priorGeneration = captureModelCacheGeneration("google-antigravity");
     registerAntigravityDiscoveredWireModels(baseUrl, [{ id: "stale-model", wireModelId: "old-wire-model" }], {
       provider: "google-antigravity",

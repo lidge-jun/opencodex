@@ -237,6 +237,22 @@ describe("Antigravity Responses integration", () => {
     expect(calls).toBe(2);
   }, 15_000);
 
+  test("fails closed when the selected OAuth snapshot has no project", async () => {
+    await saveCredential("google-antigravity", {
+      access: "access-without-project",
+      refresh: "refresh-without-project",
+      expires: Date.now() + 3600_000,
+    });
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return completed();
+    }) as typeof fetch;
+    const response = await handleResponses(request(), config(), { model: "", provider: "" }, {});
+    expect(response.status).toBe(400);
+    expect(calls).toBe(0);
+  });
+
   test("replays one 401 with the selected account generation", async () => {
     await saveCredential("google-antigravity", {
       access: "access-b",
@@ -248,6 +264,7 @@ describe("Antigravity Responses integration", () => {
     });
     let inferenceCalls = 0;
     const bearers: string[] = [];
+    const projects: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "https://oauth2.googleapis.com/token") {
@@ -255,12 +272,14 @@ describe("Antigravity Responses integration", () => {
       }
       inferenceCalls += 1;
       bearers.push(new Headers(init?.headers).get("authorization") ?? "");
+      projects.push((JSON.parse(String(init?.body)) as { project?: string }).project ?? "");
       return inferenceCalls === 1 ? new Response("expired", { status: 401 }) : completed();
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponses(request(), config(), logCtx, {});
     expect(response.status).toBe(200);
     expect(bearers).toEqual(["Bearer access-b", "Bearer fresh-b"]);
+    expect(projects).toEqual(["project-b", "project-b"]);
     expect(inferenceCalls).toBe(2);
   }, 15_000);
 

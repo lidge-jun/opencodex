@@ -33,7 +33,7 @@ import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
-import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
+import { getValidAccessTokenSnapshot, type OAuthAccessSnapshot } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { redactErrorMessage } from "../lib/redact";
@@ -42,6 +42,7 @@ import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../imag
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { providerFetch } from "./responses/fetch-helpers";
+import { antigravityOAuthDestinationConfigError } from "../lib/provider-tls-profile";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -150,6 +151,11 @@ async function tryCcaImageGeneration(
   if (endpoint !== "generations") return undefined;
   const provider = config.providers?.["google-antigravity"];
   if (!provider || provider.disabled) return undefined;
+  if (antigravityOAuthDestinationConfigError("google-antigravity", provider)) return formatErrorResponse(
+    400,
+    "invalid_request_error",
+    "Antigravity requires a canonical HTTPS destination for OAuth.",
+  );
 
   const prompt = (body as { prompt?: unknown })?.prompt;
   if (typeof prompt !== "string" || !prompt.trim()) {
@@ -168,7 +174,7 @@ async function tryCcaImageGeneration(
   // OAuth token refresh and project discovery, not just the upstream fetch.
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
-  let token: string;
+  let snapshot: OAuthAccessSnapshot;
   try {
     // Race the OAuth refresh against the deadline signal. getValidAccessToken
     // chains through 4 layers (resolveAccessSnapshotForAccount →
@@ -177,7 +183,7 @@ async function tryCcaImageGeneration(
     // threading signal through the entire chain, race the whole call against
     // linkedSignal: when the signal aborts we stop awaiting and surface the
     // cancellation immediately instead of hanging on the refresh HTTP call.
-    token = await abortableRace(getValidAccessToken("google-antigravity"), linkedSignal.signal);
+    snapshot = await abortableRace(getValidAccessTokenSnapshot("google-antigravity"), linkedSignal.signal);
   } catch (err) {
     linkedSignal.cleanup();
     // abortableRace rejects immediately when the signal fires, so client
@@ -197,7 +203,8 @@ async function tryCcaImageGeneration(
     }
     return formatErrorResponse(502, "upstream_error", "CCA image generation failed: OAuth token refresh failed");
   }
-  const project = getOAuthCredentialProjectId("google-antigravity");
+  const token = snapshot.accessToken;
+  const project = snapshot.projectId;
   if (!project) {
     linkedSignal.cleanup();
     return formatErrorResponse(

@@ -26,6 +26,7 @@ import {
   observeActiveOAuthAccessToken,
   resolveModelsAuthToken,
   type OAuthActiveTokenObservation,
+  type OAuthAccessSnapshot,
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
@@ -129,7 +130,7 @@ interface ModelsAuthResolution {
   readonly apiKey: string | undefined;
   readonly observed: boolean;
   readonly oauthApiBaseUrl?: string;
-  readonly oauthProjectId?: string;
+  readonly oauthSnapshot?: OAuthAccessSnapshot;
 }
 
 type ModelsAuthResolver =
@@ -1111,8 +1112,8 @@ function observedModelsAuthResolver(
       return {
         apiKey: observation.snapshot.accessToken,
         observed: true,
+        oauthSnapshot: observation.snapshot,
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
-        ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
       };
     },
   };
@@ -1180,7 +1181,7 @@ async function fetchProviderModelsWithAuth(
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,
-          ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
+          oauthSnapshot: snapshot,
         }))
         .catch(() => ({ apiKey: undefined, observed: false }))
       : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
@@ -1266,7 +1267,8 @@ async function fetchProviderModelsWithAuth(
     return observed(configured, "degraded");
   }
   const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
-  const project = prov.project ?? auth.oauthProjectId;
+  const antigravityOAuth = name === "google-antigravity" && prov.authMode === "oauth";
+  const project = antigravityOAuth ? auth.oauthSnapshot?.projectId : prov.project ?? auth.oauthSnapshot?.projectId;
   if (cloudCodeAssist && !project) return observed(configured, "degraded");
   const fresh = getFreshCached(name, ttlMs);
   if (fresh) {

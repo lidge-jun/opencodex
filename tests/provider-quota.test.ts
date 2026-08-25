@@ -110,6 +110,7 @@ describe("fetchProviderQuotaReports", () => {
     });
     let nativeCalls = 0;
     let bunCalls = 0;
+    let project: string | undefined;
     globalThis.fetch = (async () => {
       bunCalls += 1;
       return new Response(null, { status: 500 });
@@ -117,8 +118,9 @@ describe("fetchProviderQuotaReports", () => {
     setProviderTlsRuntimeForTest({
       importWreq: async () => ({
         createTransport: async () => ({ close: async () => undefined }),
-        fetch: async () => {
+        fetch: async (_input, init) => {
           nativeCalls += 1;
+          project = (JSON.parse(String(init?.body)) as { project?: string }).project;
           return new Response(JSON.stringify({
             models: {
               "gemini-3.6-flash-medium": {
@@ -138,12 +140,14 @@ describe("fetchProviderQuotaReports", () => {
           authMode: "oauth",
           googleMode: "cloud-code-assist",
           baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          project: "configured-stale-project",
           tlsProfile: "antigravity-browser",
         },
       },
     } as OcxConfig;
     const result = await fetchProviderQuotaReports(config, true);
     expect(result.reports[0]?.provider).toBe("google-antigravity");
+    expect(project).toBe("agy-project-secret");
     expect(nativeCalls).toBe(1);
     expect(bunCalls).toBe(0);
   });

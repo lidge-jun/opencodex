@@ -207,7 +207,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
     expect(seen[0]?.init?.method).toBe("POST");
     expect((seen[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer test-access-token");
-    expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
+    expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "test-project-id" });
   });
 
   test("a fake key gets the upstream rejection, not a catalog-presence pass", async () => {

@@ -2730,12 +2730,13 @@ async function handleResponsesInner(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
-        // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-        // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
-        // a fresh token with project metadata re-read from a different credential generation.
-        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-          const projectId = resolved.projectId;
-          if (projectId) route.provider = { ...route.provider, project: projectId };
+        // Antigravity (cloud-code-assist) must use the project paired with this exact token
+        // snapshot. A configured project may belong to another account and is never a fallback.
+        if (isAntigravityOAuth) {
+          if (!resolved.projectId) {
+            return formatErrorResponse(400, "invalid_request_error", "Antigravity project unavailable — re-run `ocx login google-antigravity`");
+          }
+          route.provider = { ...route.provider, project: resolved.projectId };
         }
       }
     } catch (err) {
@@ -3355,6 +3356,10 @@ async function handleResponsesInner(
         upstream.abort();
         return formatErrorResponse(401, "authentication_error", "Antigravity OAuth account changed during refresh");
       }
+      if (isAntigravityOAuth && !refreshed.projectId) {
+        upstream.abort();
+        return formatErrorResponse(400, "invalid_request_error", "Antigravity project unavailable — re-run `ocx login google-antigravity`");
+      }
       sentOAuthSnapshot = refreshed;
       replayOAuthCredentialSnapshot = {
         accountId: refreshed.accountId,
@@ -3363,7 +3368,7 @@ async function handleResponsesInner(
       if (route.providerName === "kiro") {
         parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
       }
-      if (isAntigravityOAuth && refreshed.projectId && !route.provider.project) {
+      if (isAntigravityOAuth) {
         route.provider = { ...route.provider, project: refreshed.projectId };
       }
       const refreshedProvider = resolveProviderTransport(
@@ -4797,6 +4802,10 @@ async function handleResponsesInner(
           cleanupUpstreamAbort();
           return formatErrorResponse(401, "authentication_error", "Antigravity OAuth account changed during refresh");
         }
+        if (isAntigravityOAuth && !refreshed.projectId) {
+          cleanupUpstreamAbort();
+          return formatErrorResponse(400, "invalid_request_error", "Antigravity project unavailable — re-run `ocx login google-antigravity`");
+        }
         sentOAuthSnapshot = refreshed;
         replayOAuthCredentialSnapshot = {
           accountId: refreshed.accountId,
@@ -4805,7 +4814,7 @@ async function handleResponsesInner(
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
         }
-        if (isAntigravityOAuth && refreshed.projectId && !route.provider.project) {
+        if (isAntigravityOAuth) {
           route.provider = { ...route.provider, project: refreshed.projectId };
         }
         const refreshedProvider = resolveProviderTransport(

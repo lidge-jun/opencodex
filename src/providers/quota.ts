@@ -8,13 +8,14 @@ import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { codexPlanKey } from "../codex/plan";
 import { resolveEnvValue } from "../config";
-import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
+import { getValidAccessToken, getValidAccessTokenForAccount, getValidAccessTokenSnapshot } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { providerFetch } from "../server/responses/fetch-helpers";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode, registryEntryForProviderDestination } from "./registry";
+import { antigravityOAuthDestinationConfigError } from "../lib/provider-tls-profile";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
 import {
@@ -2073,14 +2074,15 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
 }
 
 async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  const credential = getCredential("google-antigravity");
-  if (!credential?.projectId) return null;
-  let accessToken: string;
+  if (antigravityOAuthDestinationConfigError(provider, config)) return null;
+  let snapshot: Awaited<ReturnType<typeof getValidAccessTokenSnapshot>>;
   try {
-    accessToken = await getValidAccessToken("google-antigravity");
+    snapshot = await getValidAccessTokenSnapshot("google-antigravity");
   } catch {
     return null;
   }
+  if (!snapshot.projectId) return null;
+  const { accessToken, projectId } = snapshot;
   const baseUrl = (config.baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
   const executor = providerFetch(config, undefined, { providerName: "google-antigravity" });
   const response = await executor(`${baseUrl}/v1internal:fetchAvailableModels`, {
@@ -2091,7 +2093,7 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
       "User-Agent": antigravityUserAgent(),
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ project: credential.projectId }),
+    body: JSON.stringify({ project: projectId }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
