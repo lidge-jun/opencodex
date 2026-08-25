@@ -162,12 +162,16 @@ function isCooled(accountId: string, now: number): boolean {
   return getAnthropicAccountHealthSnapshot(accountId, now) !== null;
 }
 
-function hasKnownUsage(accountId: string): boolean {
+/**
+ * Usage scoring takes `config` so which quota window is read stays a
+ * configuration decision. `five-hour` is the only window scored today.
+ */
+function hasKnownUsage(config: OcxConfig, accountId: string): boolean {
   const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
   return typeof quota?.fiveHourPercent === "number" && Number.isFinite(quota.fiveHourPercent);
 }
 
-function usageScore(accountId: string): number {
+function usageScore(config: OcxConfig, accountId: string): number {
   const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
   if (!quota || typeof quota.fiveHourPercent !== "number" || !Number.isFinite(quota.fiveHourPercent)) {
     return UNKNOWN_USAGE_SCORE;
@@ -211,20 +215,29 @@ export function getAnthropicPoolRetryAfterSeconds(now = Date.now()): number | nu
   return Math.max(1, Math.ceil((earliest - now) / 1000));
 }
 
-function pickLowestUsage(excludeId: string | undefined, now: number): string | null {
+interface ScoredAccount {
+  accountId: string;
+  score: number;
+}
+
+function compareScoredAccounts(a: ScoredAccount, b: ScoredAccount): number {
+  return a.score - b.score;
+}
+
+function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number): string | null {
   const eligible = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
   if (eligible.length === 0) return null;
-  let best = eligible[0]!;
-  let bestScore = usageScore(best);
-  for (let i = 1; i < eligible.length; i++) {
-    const id = eligible[i]!;
-    const score = usageScore(id);
-    if (score < bestScore) {
-      best = id;
-      bestScore = score;
-    }
+  const scored: ScoredAccount[] = eligible.map(accountId => ({
+    accountId,
+    score: usageScore(config, accountId),
+  }));
+  let best = scored[0]!;
+  for (let i = 1; i < scored.length; i++) {
+    const candidate = scored[i]!;
+    // Strict `< 0` keeps the earliest eligible account on an exact tie.
+    if (compareScoredAccounts(candidate, best) < 0) best = candidate;
   }
-  return best;
+  return best.accountId;
 }
 
 /** Next eligible Anthropic account in stable order after `afterId` (wrapping). */
@@ -270,7 +283,7 @@ function pickAlternateAnthropicAccount(
   if (strategy === "fill-first") {
     return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
   }
-  return pickLowestUsage(excludeId, now);
+  return pickLowestUsage(config, excludeId, now);
 }
 
 function pruneExpiredAffinity(now: number): void {
@@ -311,8 +324,8 @@ function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): 
   const threshold = anthropicAutoSwitchThreshold(config);
   if (threshold <= 0) return true;
   // Unknown usage must not force fill-first to abandon the active account.
-  if (!hasKnownUsage(accountId)) return true;
-  return usageScore(accountId) < threshold;
+  if (!hasKnownUsage(config, accountId)) return true;
+  return usageScore(config, accountId) < threshold;
 }
 
 /**
@@ -433,11 +446,11 @@ export function resolveAnthropicAccountForSession(
 
   if (threshold > 0) {
     // Unknown usage must NOT force a switch away from the healthy active account.
-    if (activeOk && (!hasKnownUsage(set.activeAccountId) || usageScore(set.activeAccountId) < threshold)) {
+    if (activeOk && (!hasKnownUsage(config, set.activeAccountId) || usageScore(config, set.activeAccountId) < threshold)) {
       accountId = set.activeAccountId;
       reason = "active";
     } else {
-      const picked = pickLowestUsage(undefined, now);
+      const picked = pickLowestUsage(config, undefined, now);
       if (picked) {
         accountId = picked;
         reason = activeOk && picked === set.activeAccountId ? "active" : "lowest-usage";
@@ -450,7 +463,7 @@ export function resolveAnthropicAccountForSession(
     accountId = set.activeAccountId;
     reason = "active";
   } else {
-    const picked = pickLowestUsage(set.activeAccountId, now);
+    const picked = pickLowestUsage(config, set.activeAccountId, now);
     if (picked) {
       accountId = picked;
       reason = "only-eligible";
