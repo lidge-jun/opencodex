@@ -267,12 +267,12 @@ export function responsesSseToAnthropicSse(
         emit("message_start", { type: "message_start", message: messageSnapshot(model) });
         emit("ping", { type: "ping" });
       };
-      // Once a semantic Anthropic message has started, keepalive pings protect remote
-      // deployments behind LB/NAT idle timeouts. Transport-only Responses prelude frames
-      // must not manufacture a message before a possible initial error.
+      // Keepalive pings protect remote deployments behind LB/NAT idle timeouts even
+      // before semantic output. They are transport-only and must not manufacture a
+      // message before a possible initial error.
       if (pingIntervalMs > 0) {
         pingTimer = setInterval(() => {
-          if (terminated || !started) return;
+          if (terminated || (controller.desiredSize ?? 0) <= 0) return;
           try {
             emit("ping", { type: "ping" });
           } catch { /* controller torn down; the read loop is ending anyway */ }
@@ -352,7 +352,8 @@ export function responsesSseToAnthropicSse(
         const type = upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : undefined;
         if (!started) {
           // An initial upstream failure is an Anthropic error stream, not a partial message.
-          // Do not manufacture message_start/ping before the terminal error.
+          // Do not manufacture message_start before the terminal error. Earlier transport-only
+          // pings remain valid and do not turn the failure into a partial message.
           emit("error", anthropicErrorBody(status, message, type, code));
           return;
         }
@@ -366,7 +367,7 @@ export function responsesSseToAnthropicSse(
             // Transport prelude only. Start Anthropic framing on semantic output or completion.
             break;
           case "response.heartbeat":
-            if (started) emit("ping", { type: "ping" });
+            if ((controller.desiredSize ?? 0) > 0) emit("ping", { type: "ping" });
             break;
           case "response.output_text.delta": {
             if (typeof data.delta !== "string" || data.delta.length === 0) break;

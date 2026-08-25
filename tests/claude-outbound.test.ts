@@ -510,6 +510,18 @@ describe("claude outbound SSE", () => {
     expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "bad gateway" } });
   });
 
+  test("pre-output heartbeat stays transport-only before an initial error", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.heartbeat", {}),
+      sse("response.failed", { response: { status: "failed", error: { status: 502, message: "bad gateway" } } }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m", { pingIntervalMs: 0 }));
+    expect(events.map(event => event.name)).toEqual(["ping", "error"]);
+    expect(events.some(event => event.name === "message_start")).toBe(false);
+    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "bad gateway" } });
+  });
+
   test("failed with NO status (relaySseWithFailedTail synthetic tail) -> default 500 -> overloaded_error", async () => {
     const upstream = [
       sse("response.created", { response: {} }),
@@ -615,6 +627,53 @@ describe("claude outbound SSE", () => {
     const pings = events.filter(e => e.name === "ping").length;
     expect(pings).toBeGreaterThanOrEqual(3); // startup ping + >=2 idle pings after semantic start
     expect(events.at(-1)!.name).toBe("message_stop");
+  });
+
+  test("idle keepalive pings flow before the first semantic output", async () => {
+    const PING_INTERVAL_MS = 25;
+    const SILENCE_MS = 300;
+    const encoder = new TextEncoder();
+    const upstream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(sse("response.created", { response: {} })));
+        await new Promise(r => setTimeout(r, SILENCE_MS));
+        controller.enqueue(encoder.encode(sse("response.output_text.delta", { delta: "x" })));
+        controller.enqueue(encoder.encode(sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })));
+        controller.close();
+      },
+    });
+    const events = await collectEvents(responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: PING_INTERVAL_MS }));
+    const messageStartIndex = events.findIndex(event => event.name === "message_start");
+    expect(messageStartIndex).toBeGreaterThanOrEqual(2);
+    expect(events.slice(0, messageStartIndex).every(event => event.name === "ping")).toBe(true);
+    expect(events.at(-1)!.name).toBe("message_stop");
+  });
+
+  test("unread pre-output keepalives preserve budget for semantic output", async () => {
+    const encoder = new TextEncoder();
+    const upstream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(sse("response.created", { response: {} })));
+        for (let index = 0; index < 100; index++) {
+          controller.enqueue(encoder.encode(sse("response.heartbeat", {})));
+        }
+        await new Promise(r => setTimeout(r, 75));
+        controller.enqueue(encoder.encode(sse("response.output_text.delta", { delta: "x" })));
+        controller.enqueue(encoder.encode(sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })));
+        controller.close();
+      },
+    });
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 2 * 1024 });
+    const output = responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: 5, translatorBudget: budget });
+    await new Promise(r => setTimeout(r, 100));
+
+    const events = await collectEvents(output);
+    expect(events.filter(event => event.name === "ping")).toHaveLength(2);
+    expect(events.some(event => event.name === "error")).toBe(false);
+    expect(events.at(-1)!.name).toBe("message_stop");
+    const snapshot = budget.snapshot();
+    expect(snapshot.overflows).toBe(0);
+    expect(snapshot.highWaterBytes).toBeLessThan(2 * 1024);
   });
 
   test("no-output completed still emits a valid empty message", async () => {
