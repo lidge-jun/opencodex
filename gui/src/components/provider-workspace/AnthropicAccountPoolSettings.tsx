@@ -288,7 +288,7 @@ export default function AnthropicAccountPoolSettings({
             }}
           />
 
-          <label className="field anthropic-pool-card__field" htmlFor="anthropic-pool-quota-window">
+          <div className="field anthropic-pool-card__field anthropic-pool-card__field--quota-window">
             <span className="field-label">{t("accountPool.quotaWindow")}</span>
             <Select
               id="anthropic-pool-quota-window"
@@ -315,7 +315,7 @@ export default function AnthropicAccountPoolSettings({
             <div className="card-sub" style={{ marginTop: 4 }}>
               {quotaWindowInert ? t("accountPool.quotaWindowInert") : t("accountPool.quotaWindowHint")}
             </div>
-          </label>
+          </div>
         </>
       )}
 

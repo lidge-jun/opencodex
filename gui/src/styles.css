@@ -1810,6 +1810,7 @@ dialog.modal-overlay::backdrop {
   margin-top: 12px;
   padding: 0 16px;
 }
+.anthropic-pool-card__field--quota-window { padding-bottom: 16px; }
 .api-active-keys-skeleton {
   min-height: 96px;
   border: 1px solid var(--border-soft);

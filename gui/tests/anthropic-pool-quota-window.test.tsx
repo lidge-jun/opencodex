@@ -176,6 +176,27 @@ describe("Anthropic account pool quota window", () => {
     expect(drainedHost.textContent).toContain("scores a usage bar");
   });
 
+  test("quota window help text does not open the selector", async () => {
+    stubPool({
+      enabled: true,
+      autoSwitchThreshold: 80,
+      strategy: "quota",
+      stickyLimit: 1,
+      quotaWindow: "five-hour",
+    });
+    const host = await mountPool();
+    const field = windowTrigger(host).closest(".anthropic-pool-card__field");
+    const help = field?.querySelector<HTMLElement>(".card-sub");
+    if (!help) throw new Error("quota window help missing");
+
+    await act(async () => {
+      help.click();
+      await flush();
+    });
+
+    expect(testWindow.document.querySelector('[role="listbox"]')).toBeNull();
+  });
+
   test("save sends quotaWindow in the PUT body", async () => {
     const puts = stubPool({
       enabled: true,
