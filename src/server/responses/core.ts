@@ -203,6 +203,7 @@ import {
   applySubagentModelFallback,
   maybePrimeSubagentQuota,
   recordSubagentQuotaFailureForThreadSpawn,
+  type SubagentPoolAccountPreview,
 } from "../../codex/subagent-model-fallback";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
@@ -2389,13 +2390,15 @@ async function handleResponsesInner(
     // so the preview must read the same scope slot — an undefined scope would map to the
     // "legacy" affinity bucket and never find a binding made under "shared" or a native
     // model scope, making the preview diverge from the account that actually authenticates.
-    const previewAccountId = previewCodexAccountForRequest(
+    const fallbackNow = Date.now();
+    const subagentFallbackAccountPreview: SubagentPoolAccountPreview = (modelId, previewNow) => previewCodexAccountForRequest(
       poolAffinityKey,
       config,
-      Date.now(),
-      codexQuotaScopeForModel(route.modelId),
+      previewNow,
+      codexQuotaScopeForModel(modelId),
       previewSelectionOptions,
     );
+    const previewAccountId = subagentFallbackAccountPreview(route.modelId, fallbackNow);
     subagentFallbackPreviewAccountId = previewAccountId;
     subagentFallbackAccountId = previewAccountId ?? config.activeCodexAccountId ?? null;
     const fallback = applySubagentModelFallback(
@@ -2403,9 +2406,10 @@ async function handleResponsesInner(
       req.headers,
       config,
       previewAccountId,
-      Date.now(),
+      fallbackNow,
       unreadableEncryptedAgentTask,
       previewSelectionOptions,
+      subagentFallbackAccountPreview,
     );
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;

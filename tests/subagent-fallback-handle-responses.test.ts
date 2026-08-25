@@ -775,6 +775,73 @@ describe("native fallback account preview", () => {
     expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-a" });
   });
 
+  test("fallback previews the Pool account separately for each candidate quota scope", async () => {
+    const cooldownAt = 1_800_000_000_000;
+    const now = cooldownAt + CODEX_QUOTA_PROBE_INTERVAL_MS + 1;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      subagentModelFallback: ["gpt-5.3-codex-spark", "xai/grok-4.5"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const desktopHeaders = {
+      "session-id": "candidate-scope-session-private",
+      "thread-id": "candidate-scope-thread-private",
+    };
+    const bound = await resolveCodexAuthContext(new Headers(desktopHeaders), cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (bound.kind !== "pool") throw new Error("expected pool context");
+    cfg.activeCodexAccountId = "pool-b";
+
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+      modelId: "gpt-5.3-codex-spark",
+      now,
+      resetAt: Math.floor((now + 60 * 60_000) / 1_000),
+    });
+    recordCodexUpstreamOutcome(cfg, "pool-b", 429, {
+      modelId: "gpt-5.3-codex-spark",
+      now: cooldownAt,
+      resetAt: Math.floor((cooldownAt + 60 * 60_000) / 1_000),
+    });
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("gpt-5.6-sol", "429", cfg, "pool-a", now);
+
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "shared")).toBe("pool-a");
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "spark")).toBe("pool-b");
+
+    let finalAuth: CodexAuthContext | undefined;
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      { onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; } },
+      { model: "", provider: "" },
+      desktopHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    expect(finalAuth).toMatchObject({
+      kind: "pool",
+      accountId: "pool-b",
+      probeQuotaScope: "spark",
+    });
+    expect((finalAuth as { probeLeaseId?: string }).probeLeaseId).toBeTruthy();
+    expect(capture.urls.some((url) => url.includes("chatgpt.com/backend-api/codex"))).toBe(true);
+    expect(capture.auths.some((auth) => auth?.includes("pool-b_token"))).toBe(true);
+    expect(capture.bodies.some((body) => body.includes('"model":"gpt-5.3-codex-spark"'))).toBe(true);
+  });
+
   test("uses healthier pool account B when active A is above threshold", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;
