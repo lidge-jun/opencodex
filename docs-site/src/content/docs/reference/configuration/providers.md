@@ -133,6 +133,21 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+## Codex catalog and root `config.toml` settings
+
+These settings belong in the root of `$CODEX_HOME/config.toml`, alongside
+`approvals_reviewer`; they are not provider fields.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `auto_review_model` | `string` | Public catalog selector in `provider/model` form, for example `opencode-go/deepseek-v4-flash`. After each catalog merge, OpenCodex resolves it against the final catalog and stamps the trimmed value as `auto_review_model_override` on catalog entries. Boundary whitespace is removed; the selector's slash-delimited components are otherwise unchanged. If the value is absent or blank, existing routed overrides are cleared and normal upstream auto-review selection is preserved. If it is syntactically invalid or absent from the final catalog (including after provider/model removal), OpenCodex fails closed for the override only: it clears the dead override, preserves normal upstream behavior, and emits a diagnostic. Re-adding the provider/model on a later sync allows the configured selector to be stamped again. |
+
+The setting is evaluated after provider discovery, model filtering, native/account-row
+projection, and merge precedence, so only a selector present in the catalog produced by
+that sync can become an override. Native upstream values are preserved when the setting is
+cleared or unresolved. The persisted catalog field is read by Codex for the current turn's
+model, which is why a valid configured selector is copied to each applicable entry.
+
 ### FastWire B1 capability migration
 
 Fast capability and arbitrary Chat caller-tier forwarding are independent after FastWire B1. The

@@ -179,6 +179,34 @@ function config(pickerEnabled: boolean, disabledModels: string[] = []): OcxConfi
   };
 }
 
+function autoReviewConfig(models: string[]): OcxConfig {
+  const nextConfig = config(false);
+  nextConfig.providers.static = {
+    adapter: "openai-chat",
+    baseUrl: "https://static.example.test/v1",
+    liveModels: false,
+    models,
+  };
+  return nextConfig;
+}
+
+function writeAutoReviewModel(value?: string): void {
+  writeFileSync(
+    join(codexHome, "config.toml"),
+    value === undefined ? "" : `auto_review_model = ${JSON.stringify(value)}\n`,
+  );
+}
+
+function autoReviewSeed(routeOverride: string | null = "stale-override"): RawEntry[] {
+  return [
+    { ...nativeEntry(), slug: "gpt-5.4", auto_review_model_override: "native-upstream" },
+    {
+      ...generatedRoutedEntry("static/deepseek-v4-flash"),
+      auto_review_model_override: routeOverride,
+    },
+  ];
+}
+
 function writeCatalog(models: RawEntry[]): void {
   writeFileSync(catalogPath, `${JSON.stringify({ models }, null, 2)}\n`);
 }
@@ -606,6 +634,75 @@ test("retained sync removes a deleted pre-marker custom row while discovery is d
   );
   expect(models.some(entry => entry.slug === "offline/my-model")).toBe(false);
   expect(models.some(entry => entry.slug === "offline/discovered-sibling")).toBe(true);
+});
+
+test("retained and convergence writers resolve, clear, reject, and recover auto-review selectors", async () => {
+  primeCodexRuntimeFixture();
+
+  for (const writer of ["retained", "convergence"] as const) {
+    const write = async (nextConfig: OcxConfig): Promise<RawCatalog> => {
+      if (writer === "retained") {
+        const result = await syncCatalogModels(nextConfig);
+        expect(result.catalogWritten).toBe(true);
+      } else {
+        const disposition = await convergeCatalogDisposition(nextConfig);
+        expect(disposition).toMatchObject({ status: "committed" });
+      }
+      return JSON.parse(readFileSync(catalogPath, "utf8")) as RawCatalog;
+    };
+
+    // A configured selector is resolved against the final catalog and trimmed before stamping.
+    writeAutoReviewModel("  static/deepseek-v4-flash  ");
+    writeCatalog(autoReviewSeed());
+    let catalog = await write(autoReviewConfig(["deepseek-v4-flash"]));
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-flash");
+
+    // Clearing the root key removes stale routed state while preserving an upstream native value.
+    writeAutoReviewModel();
+    writeCatalog(autoReviewSeed());
+    catalog = await write(autoReviewConfig(["deepseek-v4-flash"]));
+    expect(catalog.models?.find(entry => entry.slug === "gpt-5.4"))
+      .toHaveProperty("auto_review_model_override", "native-upstream");
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
+      .toHaveProperty("auto_review_model_override", null);
+
+    // A syntactically valid but missing selector is diagnosed and cannot persist a dead override.
+    writeAutoReviewModel("static/missing-model");
+    writeCatalog(autoReviewSeed());
+    const unresolvedWarning = spyOn(console, "warn").mockImplementation(() => {});
+    let unresolvedWarningCalls: unknown[][] = [];
+    try {
+      catalog = await write(autoReviewConfig(["deepseek-v4-flash"]));
+      unresolvedWarningCalls = unresolvedWarning.mock.calls;
+    } finally {
+      unresolvedWarning.mockRestore();
+    }
+    expect(unresolvedWarningCalls.some(call => String(call[0]).includes("not found in the final catalog"))).toBe(true);
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
+      .toHaveProperty("auto_review_model_override", null);
+
+    // Removing the configured model from the provider makes the target unresolved; recovery
+    // must stamp it again once the model is advertised by the next catalog.
+    writeAutoReviewModel("static/deepseek-v4-flash");
+    writeCatalog(autoReviewSeed());
+    const removedWarning = spyOn(console, "warn").mockImplementation(() => {});
+    let removedWarningCalls: unknown[][] = [];
+    try {
+      catalog = await write(autoReviewConfig([]));
+      removedWarningCalls = removedWarning.mock.calls;
+    } finally {
+      removedWarning.mockRestore();
+    }
+    expect(removedWarningCalls.some(call => String(call[0]).includes("not found in the final catalog"))).toBe(true);
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash")).toBeUndefined();
+
+    writeAutoReviewModel("static/deepseek-v4-flash");
+    writeCatalog(autoReviewSeed(null));
+    catalog = await write(autoReviewConfig(["deepseek-v4-flash"]));
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-flash");
+  }
 });
 
 test("degraded preservation still honors explicit routed visibility policy", async () => {
