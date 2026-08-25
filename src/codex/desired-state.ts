@@ -20,7 +20,7 @@
  *
  * Design record: devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md.
  */
-import { loadConfig, mutatePersistedConfig } from "../config";
+import { deleteConfigTopLevelKey, loadConfig, mutatePersistedConfig } from "../config";
 import type { OcxClientIntegrationsConfig, OcxConfig } from "../types";
 import { runStartupReadinessSync, type ReadinessGate, type SyncOutcomeLike } from "../server/readiness";
 
@@ -114,7 +114,7 @@ export function setIntegrationEnabled(
     }
     // Drop the key entirely once nothing is left in it, so enabling twice does
     // not leave `"clientIntegrations": {}` behind in the user's file.
-    if (Object.keys(integrations).length === 0) delete config.clientIntegrations;
+    if (Object.keys(integrations).length === 0) deleteConfigTopLevelKey(config, "clientIntegrations");
     else config.clientIntegrations = integrations;
     return { changed: true, value: enabled };
   });

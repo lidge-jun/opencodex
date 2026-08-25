@@ -1,6 +1,7 @@
 import { isValidCodexAccountId, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "./pool-rotation";
 import type { OcxConfig } from "../types";
+import { deleteConfigTopLevelKey } from "../config/rebase-provenance";
 
 /**
  * Which ids may carry a selection order: any pool account, plus the synthetic
@@ -34,7 +35,7 @@ export function setCodexAccountPriority(config: OcxConfig, accountId: string, pr
   else entries.set(accountId, priority);
 
   if (entries.size > 0) config.codexAccountPriorities = Object.fromEntries(entries);
-  else delete config.codexAccountPriorities;
+  else deleteConfigTopLevelKey(config, "codexAccountPriorities");
 }
 
 export function forgetCodexAccountPriority(config: OcxConfig, accountId: string): void {
@@ -78,6 +79,6 @@ export function setCodexAccountPin(config: OcxConfig, accountId: string): void {
 /** Release the pin. With `accountId` given, only when it is the pinned account. */
 export function clearCodexAccountPin(config: OcxConfig, accountId?: string): void {
   if (accountId === undefined || config.activeCodexAccountPinned === accountId) {
-    delete config.activeCodexAccountPinned;
+    deleteConfigTopLevelKey(config, "activeCodexAccountPinned");
   }
 }

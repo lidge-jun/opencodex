@@ -142,6 +142,15 @@ export {
   writeRuntimePort,
   type RuntimePortState,
 } from "./config/process-state";
+import {
+  clearPendingConfigTopLevelDeletions,
+  configHasRebaseProvenance,
+  configRebaseDeletionKeys,
+  CONFIG_REBASE_PROVENANCE_KEY,
+  deleteConfigTopLevelKey,
+  projectConfigRebaseProvenance,
+} from "./config/rebase-provenance";
+export { deleteConfigTopLevelKey } from "./config/rebase-provenance";
 
 export class OpenAiTierBackupCleanupError extends Error {
   constructor() { super("OpenAI tier backup temporary cleanup failed"); this.name = "OpenAiTierBackupCleanupError"; }
@@ -870,6 +879,9 @@ const configSchema = z.object({
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
+  // Future versions remain opaque through passthrough-compatible whole-config saves.
+  // Only version 1 grants deletion authority in the rebase path.
+  configRebaseProvenance: z.unknown().optional(),
   // A retry can be billable, so absence and malformed hand edits both stay off.
   emptyCompletionRetry: z.boolean().optional().catch(false),
   // A malformed hand edit must not silently stop opening the browser: fall back
@@ -2499,7 +2511,12 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   // External editors can add provider rows the live config deliberately does
   // not route with yet; merge them at the serialization boundary so an
   // unrelated in-process save cannot erase the provider or its overlay.
+  // Provider preservation reads symbol-keyed live-owner state, which structuredClone
+  // intentionally drops. Resolve that ownership before projecting JSON provenance.
+  const provenanceProjection = projectConfigRebaseProvenance(config);
   const persisted = withPreservedDiskOnlyProviders(config);
+  if (provenanceProjection.configRebaseProvenance === undefined) delete persisted.configRebaseProvenance;
+  else persisted.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
   const bytes = JSON.stringify(persisted, null, 2) + "\n";
   let unchanged = false;
   try {
@@ -2527,9 +2544,15 @@ export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
-    const projected = projectCustomModelCatalogMigration(readRawConfigJson(), config);
-    if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
-    adoptCustomModelCatalogMigration(config, projected);
+    const withProvenance = projectCustomModelCatalogMigration(
+      readRawConfigJson(),
+      projectConfigRebaseProvenance(config),
+    );
+    if (persistConfigUnlocked(withProvenance)) bumpGenerationForCooperatingConfigWrite();
+    adoptCustomModelCatalogMigration(config, withProvenance);
+    if (withProvenance.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
+    else config.configRebaseProvenance = structuredClone(withProvenance.configRebaseProvenance);
+    clearPendingConfigTopLevelDeletions(config);
   });
 }
 
@@ -2648,7 +2671,6 @@ const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
  * reconciliation paths below.
  */
 const liveConfigBaseline = new WeakMap<OcxConfig, OcxConfig>();
-
 /**
  * The live config retains the address of the socket Bun actually opened, while
  * this map retains the operator's desired address for the next process start.
@@ -2952,6 +2974,8 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     if (baseline && onDisk !== undefined) {
       const persistedDiagnostics = configDiagnosticsFromRaw(JSON.stringify(onDisk));
       if (persistedDiagnostics.source === "file") {
+        const deletedKeys = configRebaseDeletionKeys(config);
+        const provenanceExists = configHasRebaseProvenance(config);
         // Only keys this live config is actually known to have diverged on may be
         // rebased. The baseline is captured once when the server arms it, so any key
         // that appeared on disk afterwards — through saveConfig(), a hand edit, or
@@ -2965,8 +2989,11 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         const rebaseableKeys = new Set([
           ...Object.keys(baseline as unknown as Record<string, unknown>),
           ...Object.keys(config as unknown as Record<string, unknown>),
+          ...(provenanceExists
+            ? Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)
+            : []),
         ]);
-        const skipped = new Set(["hostname", "port", "claudeCode"]);
+        const skipped = new Set(["hostname", "port", "claudeCode", CONFIG_REBASE_PROVENANCE_KEY]);
         for (const key of Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)) {
           if (!rebaseableKeys.has(key)) skipped.add(key);
         }
@@ -2976,6 +3003,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
           persistedDiagnostics.config as unknown as Record<string, unknown>,
           skipped,
         );
+        for (const key of deletedKeys) delete (config as unknown as Record<string, unknown>)[key];
       }
     }
     if (claudeCodeBaseline.has(config)) {
@@ -2989,10 +3017,13 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         }
       }
     }
+    const provenanceProjection = projectConfigRebaseProvenance(config);
     const projectedConfig = projectCustomModelCatalogMigration(
       onDisk,
       config,
     );
+    if (provenanceProjection.configRebaseProvenance === undefined) delete projectedConfig.configRebaseProvenance;
+    else projectedConfig.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
     const persistedBinding = bindingBaseline && onDisk
       ? readPersistedServerBinding(onDisk, bindingBaseline)
       : bindingBaseline;
@@ -3010,8 +3041,11 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
     }
     if (liveConfigBaseline.has(config)) {
-      liveConfigBaseline.set(config, structuredClone(config));
+      if (projectedConfig.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
+      else config.configRebaseProvenance = structuredClone(projectedConfig.configRebaseProvenance);
+      liveConfigBaseline.set(config, structuredClone(projectedConfig));
     }
+    clearPendingConfigTopLevelDeletions(config);
   });
 }
 

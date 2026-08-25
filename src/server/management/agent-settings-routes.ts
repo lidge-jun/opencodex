@@ -5,6 +5,7 @@ import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nati
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
+  deleteConfigTopLevelKey,
   hasOwnProvider,
   isValidProviderName,
   loadConfig,
@@ -95,7 +96,7 @@ function mirrorDesiredEnabledOntoSnapshot(config: OcxConfig, client: "claude-des
   const integrations = { ...(config.clientIntegrations ?? {}) };
   if (enabled) delete integrations[client];
   else integrations[client] = false;
-  if (Object.keys(integrations).length === 0) delete config.clientIntegrations;
+  if (Object.keys(integrations).length === 0) deleteConfigTopLevelKey(config, "clientIntegrations");
   else config.clientIntegrations = integrations;
 }
 
@@ -341,14 +342,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (result.changed && result.threadLimit !== null) warnings.push(`Thread limit ${result.threadLimit} preserved for ${targetFlag ? "v2" : "v1"}.`);
     }
     if (wantsMode) {
-      if (mode === "default") delete config.multiAgentMode;
+      if (mode === "default") deleteConfigTopLevelKey(config, "multiAgentMode");
       else config.multiAgentMode = mode;
       saveConfigPreservingClaudeCode(config);
       warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
     }
     if (wantsKeepNative) {
       if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
-      else delete config.keepNativeChatGptOnV1;
+      else deleteConfigTopLevelKey(config, "keepNativeChatGptOnV1");
       saveConfigPreservingClaudeCode(config);
       const effectiveMode = mode ?? config.multiAgentMode ?? "default";
       warnings.push(body.keepNativeChatGptOnV1 === true
@@ -559,13 +560,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
 
     config.multiAgentGuidanceEnabled = nextEnabled;
     if (nextSyncCodexSubagentDefaults) config.syncCodexSubagentDefaults = true;
-    else delete config.syncCodexSubagentDefaults;
+    else deleteConfigTopLevelKey(config, "syncCodexSubagentDefaults");
     if (nextModel) config.injectionModel = nextModel;
-    else delete config.injectionModel;
+    else deleteConfigTopLevelKey(config, "injectionModel");
     if (nextEffort) config.injectionEffort = nextEffort;
-    else delete config.injectionEffort;
+    else deleteConfigTopLevelKey(config, "injectionEffort");
     if (nextPrompt) config.injectionPrompt = nextPrompt;
-    else delete config.injectionPrompt;
+    else deleteConfigTopLevelKey(config, "injectionPrompt");
 
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({
@@ -596,7 +597,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     for (const key of ["effortCap", "subagentEffortCap"] as const) {
       if (!(key in body)) continue;
       const value = body[key];
-      if (value === null || value === "") { delete config[key]; continue; }
+      if (value === null || value === "") { deleteConfigTopLevelKey(config, key); continue; }
       if (typeof value !== "string" || !isCodexReasoningEffort(value)) {
         return jsonResponse({ error: `unknown reasoning effort "${String(value)}"` }, 400);
       }
@@ -715,9 +716,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
     }
     if (nextModels !== undefined) config.subagentModelFallback = nextModels;
-    else delete config.subagentModelFallback;
+    else deleteConfigTopLevelKey(config, "subagentModelFallback");
     if (nextPollMs !== undefined) config.subagentModelFallbackPollMs = nextPollMs;
-    else delete config.subagentModelFallbackPollMs;
+    else deleteConfigTopLevelKey(config, "subagentModelFallbackPollMs");
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({
       ok: true,
@@ -758,7 +759,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // cannot grow config.json without bound.
     const excluded = [...new Set(raw as string[])].sort();
     if (excluded.length > 2000) return jsonResponse({ error: "excluded list is too large" }, 400);
-    if (excluded.length === 0) delete config.grokExcludedModels;
+    if (excluded.length === 0) deleteConfigTopLevelKey(config, "grokExcludedModels");
     else config.grokExcludedModels = excluded;
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({ ok: true, excluded });

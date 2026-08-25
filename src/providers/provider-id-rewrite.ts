@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types";
+import { deleteConfigTopLevelKey } from "../config/rebase-provenance";
 
 export interface ProviderRewriteResult {
   /** Number of references re-pointed. */
@@ -174,6 +175,6 @@ export function dropProviderCustomModels(config: OcxConfig, provider: string): n
   // `[]`, so the `customModels` field is absent either way. Only that field —
   // the `customModelCatalogMigration` marker is deliberately left in place.
   if (kept.length > 0) config.customModels = kept;
-  else delete config.customModels;
+  else deleteConfigTopLevelKey(config, "customModels");
   return existing.length - kept.length;
 }
