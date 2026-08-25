@@ -40,6 +40,10 @@ export interface CodexModelEntitlementResolveOptions {
   readonly now?: number;
   /** Test-only credential seam; production callers enumerate local main + Pool credentials. */
   readonly credentials?: readonly CodexModelEntitlementCredentialSnapshot[];
+  /** Test-only seam for proving lifecycle exclusions happen before credential reads. */
+  readonly credentialSnapshot?: typeof accountCredentialSnapshot;
+  /** Accounts whose credentials must not be read while another lifecycle owns them. */
+  readonly excludeAccountIds?: ReadonlySet<string>;
 }
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
@@ -252,9 +256,12 @@ export async function resolveCodexModelEntitlements(
 ): Promise<CodexModelEntitlementSnapshot> {
   const now = options.now ?? Date.now();
   const fetcher = options.fetcher ?? fetch;
+  const allowedAccountIds = candidateAccountIds(config)
+    .filter(accountId => !options.excludeAccountIds?.has(accountId));
+  const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
   const credentials = options.credentials
-    ? [...options.credentials]
-    : (await Promise.all(candidateAccountIds(config).map(accountCredentialSnapshot)))
+    ? [...options.credentials].filter(credential => !options.excludeAccountIds?.has(credential.accountId))
+    : (await Promise.all(allowedAccountIds.map(credentialSnapshot)))
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
   const results = await Promise.all(credentials.map(async credential => ({
     credential,

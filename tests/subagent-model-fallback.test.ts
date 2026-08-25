@@ -216,7 +216,7 @@ describe("subagent model fallback chain", () => {
     });
   });
 
-  test("fixed account candidates do not call the Pool preview", () => {
+  test("fixed account candidates preserve selectors and enforce per-model entitlements", () => {
     updateAccountQuota("account-a", 10, undefined, 20);
     const config = cfg({ codexAccountNamespaces: { team: "account-a" } });
     const throwingPreview = () => {
@@ -228,9 +228,72 @@ describe("subagent model fallback chain", () => {
       config,
       "pool-a",
       Date.now(),
+      { modelEligibleAccountIds: new Set(["account-a"]) },
+      throwingPreview,
+      () => undefined,
+    )).toBe(false);
+    expect(isSubagentModelUnavailable(
+      "team/gpt-daybreak-blue-latest",
+      config,
+      "pool-a",
+      Date.now(),
       undefined,
       throwingPreview,
+      () => new Set(["account-b"]),
+    )).toBe(true);
+    expect(isSubagentModelUnavailable(
+      "team/gpt-daybreak-blue-latest",
+      config,
+      "pool-a",
+      Date.now(),
+      undefined,
+      throwingPreview,
+      () => new Set(["account-a"]),
     )).toBe(false);
+  });
+
+  test("unqualified gated candidates pass their entitlement set into Pool preview", () => {
+    const now = 1_800_000_000_000;
+    const config = cfg({
+      autoSwitchThreshold: 0,
+      codexAccountNamespaces: { team: "account-a" },
+      subagentModelFallback: ["gpt-daybreak-blue-latest", "xai/grok-4.5"],
+    });
+    updateAccountQuota("account-a", 10, undefined, 20);
+    updateAccountQuota("account-b", 10, undefined, 20);
+    noteSubagentModelFailure("team/gpt-5.6-sol", "429", config, "account-a", now);
+
+    const previews: Array<{ modelId: string | undefined; eligible: string[] | undefined }> = [];
+    const selected = selectAvailableSubagentModel(
+      "team/gpt-5.6-sol",
+      config,
+      [],
+      "account-a",
+      now,
+      false,
+      undefined,
+      [],
+      (modelId, _previewNow, eligibleAccountIds) => {
+        previews.push({
+          modelId,
+          eligible: eligibleAccountIds ? [...eligibleAccountIds] : undefined,
+        });
+        return eligibleAccountIds?.has("account-b") ? "account-b" : "account-a";
+      },
+      modelId => modelId === "gpt-daybreak-blue-latest"
+        ? new Set(["account-b"])
+        : undefined,
+    );
+
+    expect(selected).toEqual({
+      model: "gpt-daybreak-blue-latest",
+      rewritten: true,
+      skipped: ["team/gpt-5.6-sol"],
+    });
+    expect(previews).toEqual([{
+      modelId: "gpt-daybreak-blue-latest",
+      eligible: ["account-b"],
+    }]);
   });
 
   test("a null candidate account preview does not fall back to the active Pool account", () => {

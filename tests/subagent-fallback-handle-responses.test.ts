@@ -723,6 +723,234 @@ describe("subagent fallback final-route normalization", () => {
 });
 
 describe("native fallback account preview", () => {
+  test("fallback preview and final auth use their own entitlement snapshots", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      codexAccountNamespaces: { team: "pool-a" },
+      subagentModelFallback: ["gpt-daybreak-blue-latest", "xai/grok-4.5"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("team/gpt-5.6-sol", "429", cfg, "pool-a", now);
+    // Make a stale account choice observable at the fallback boundary: preview must
+    // apply the first snapshot and move to pool-b before checking model health.
+    noteSubagentModelFailure("gpt-daybreak-blue-latest", "429", cfg, "pool-a", now);
+    const previewSnapshot = {
+      modelsByAccount: new Map([
+        ["pool-a", new Set(["gpt-5.6-sol"])],
+        ["pool-b", new Set(["gpt-5.6-sol", "gpt-daybreak-blue-latest"])],
+      ]),
+      confirmedAccountIds: new Set(["pool-a", "pool-b"]),
+      credentialIdentities: new Map<string, string>(),
+    };
+    const finalSnapshot = {
+      modelsByAccount: new Map([
+        ["pool-a", new Set(["gpt-5.6-sol", "gpt-daybreak-blue-latest"])],
+        ["pool-b", new Set(["gpt-5.6-sol"])],
+      ]),
+      confirmedAccountIds: new Set(["pool-a", "pool-b"]),
+      credentialIdentities: new Map<string, string>(),
+    };
+    let entitlementCalls = 0;
+    let finalAuth: CodexAuthContext | undefined;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      {
+        onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; },
+        resolveCodexModelEntitlements: async () => {
+          entitlementCalls += 1;
+          return entitlementCalls === 1 ? previewSnapshot : finalSnapshot;
+        },
+      },
+      logCtx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(entitlementCalls).toBe(2);
+    // Final auth is authoritative and sees the second snapshot, not the preview snapshot.
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo)
+      .toBe("gpt-daybreak-blue-latest");
+    expect(capture.auths[0]).toContain("pool-a_token");
+  });
+
+  test("entitlement discovery holds and releases preview admission on rejection", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      codexAccountNamespaces: { team: "pool-a" },
+      subagentModelFallback: ["gpt-daybreak-blue-latest"],
+    });
+    let beginCount = 0;
+    let releaseCount = 0;
+    let resolverCalls = 0;
+    let rejectDiscovery!: (reason: Error) => void;
+    const discovery = new Promise<never>((_resolve, reject) => { rejectDiscovery = reject; });
+    const turnAdmissionLease = {
+      release() {},
+      beginCodexAccountSelection() {
+        beginCount += 1;
+        return {
+          mainProfileDraining: false,
+          claimMainProfile: () => true,
+          release: () => { releaseCount += 1; },
+        };
+      },
+    } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("must not dispatch");
+    }) as typeof fetch;
+
+    const pending = postSpawn(
+      cfg,
+      { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      {
+        turnAdmissionLease,
+        resolveCodexModelEntitlements: async () => {
+          resolverCalls += 1;
+          return discovery;
+        },
+      },
+    );
+    for (let i = 0; i < 20 && resolverCalls === 0; i += 1) await Promise.resolve();
+
+    expect(resolverCalls).toBe(1);
+    expect(beginCount).toBe(1);
+    expect(releaseCount).toBe(0);
+    expect(fetchCalls).toBe(0);
+
+    rejectDiscovery(new Error("entitlement discovery unavailable"));
+    await expect(pending).rejects.toThrow("entitlement discovery unavailable");
+    expect(releaseCount).toBe(1);
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("unentitled fixed gated primary falls through to a routed fallback", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      codexAccountNamespaces: { restricted: "pool-b" },
+      subagentModelFallback: ["xai/grok-4.5"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const entitlementSnapshot = {
+      modelsByAccount: new Map([
+        ["pool-a", new Set(["gpt-5.6-sol", "gpt-daybreak-blue-latest"])],
+        ["pool-b", new Set(["gpt-5.6-sol"])],
+      ]),
+      confirmedAccountIds: new Set(["pool-a", "pool-b"]),
+      credentialIdentities: new Map<string, string>(),
+    };
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "restricted/gpt-daybreak-blue-latest", input: readableAgentInput(), stream: false },
+      { resolveCodexModelEntitlements: async () => entitlementSnapshot },
+      logCtx,
+    );
+
+    expect(response.status).toBe(200);
+    expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBe("xai/grok-4.5");
+    expect(capture.urls).toHaveLength(1);
+    expect(capture.urls[0]).toContain("api.x.ai");
+    expect(capture.bodies[0]).not.toContain("gpt-daybreak-blue-latest");
+  });
+
+  test("account-qualified fallback excludes native main entitlement reads during profile drain", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      codexAccountNamespaces: { team: "pool-a" },
+      subagentModelFallback: ["gpt-daybreak-blue-latest", "xai/grok-4.5"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+      fixedAccount: true,
+      modelId: "gpt-5.6-sol",
+      now,
+      resetAt: Math.floor((now + 60 * 60_000) / 1_000),
+    });
+    const entitlementSnapshot = {
+      modelsByAccount: new Map([
+        ["__main__", new Set(["gpt-daybreak-blue-latest"])],
+        ["pool-b", new Set(["gpt-daybreak-blue-latest"])],
+      ]),
+      confirmedAccountIds: new Set(["__main__", "pool-b"]),
+      credentialIdentities: new Map<string, string>(),
+    };
+    const mainExclusions: boolean[] = [];
+    let selectionReleases = 0;
+    const turnAdmissionLease = {
+      release() {},
+      beginCodexAccountSelection() {
+        return {
+          mainProfileDraining: true,
+          claimMainProfile: () => false,
+          release: () => { selectionReleases += 1; },
+        };
+      },
+    } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
+    let finalAuth: CodexAuthContext | undefined;
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      {
+        turnAdmissionLease,
+        onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; },
+        resolveCodexModelEntitlements: async (_config, resolveOptions) => {
+          mainExclusions.push(resolveOptions?.excludeAccountIds?.has("__main__") === true);
+          return entitlementSnapshot;
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mainExclusions).toEqual([true, true]);
+    expect(selectionReleases).toBe(2);
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(capture.auths[0]).toContain("pool-b_token");
+  });
+
   test("Desktop fallback affinity drives the subagent preview and final native account", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;

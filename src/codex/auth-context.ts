@@ -29,7 +29,6 @@ import {
   entitledCodexAccountIdsForModel,
   isDirectCallerEntitledToCodexModel,
   resolveCodexModelEntitlements,
-  type CodexModelEntitlementSnapshot,
 } from "./model-entitlements";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
@@ -334,9 +333,7 @@ export interface ResolveCodexAuthContextOptions {
   getMainAccountToken?: typeof getMainAccountToken;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
   /** Test seam for account-gated native model discovery. */
-  resolveCodexModelEntitlements?: (
-    config: Pick<OcxConfig, "codexAccounts">,
-  ) => Promise<CodexModelEntitlementSnapshot>;
+  resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
   /** Direct requests admitted with a proxy bearer substitute the stored native-main credential. */
   substituteMainCredentialForDirect?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
@@ -381,28 +378,34 @@ export async function resolveCodexAuthContext(
     return { kind: "main", accountId: null };
   }
   const affinityKey = fixedAccountId === undefined ? codexPoolAffinityKey(headers) : undefined;
-  const entitlementSnapshot = options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
-    ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config)
-    : undefined;
-  const modelEligibleAccountIds = entitlementSnapshot
-    ? entitledCodexAccountIdsForModel(entitlementSnapshot, options.modelId)
-    : undefined;
   // Retained startup recovery makes the physical main identity ineligible. Routing
   // can still preserve service by selecting a healthy configured pool account.
   const nativeMainTrafficBlocked = isNativeMainTrafficBlocked();
   const selectionAdmission = options.beginCodexAccountSelection?.();
   const nativeMainReadsForbidden = nativeMainTrafficBlocked || selectionAdmission?.mainProfileDraining === true;
-  const selectionOptions = {
-    // Temporary switch drain keeps the candidate until the atomic claim rejects
-    // it. Retained recovery makes main wholly ineligible so pool routing continues.
-    nativeMainSelectionOnly: !nativeMainTrafficBlocked
-      && selectionAdmission?.mainProfileDraining === true,
-    isMainAccountTokenLive: options.isMainAccountTokenLive,
-    modelEligibleAccountIds,
-  };
   let accountId: string;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
   try {
+    const excludeAccountIds = nativeMainReadsForbidden
+      ? new Set([MAIN_CODEX_ACCOUNT_ID])
+      : undefined;
+    const entitlementSnapshot = options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
+      ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config, { excludeAccountIds })
+      : undefined;
+    const entitledAccountIds = entitlementSnapshot
+      ? entitledCodexAccountIdsForModel(entitlementSnapshot, options.modelId)
+      : undefined;
+    const modelEligibleAccountIds = entitledAccountIds
+      ? new Set([...entitledAccountIds].filter(candidate => !excludeAccountIds?.has(candidate)))
+      : undefined;
+    const selectionOptions = {
+      // Temporary switch drain keeps the candidate until the atomic claim rejects
+      // it. Retained recovery makes main wholly ineligible so pool routing continues.
+      nativeMainSelectionOnly: !nativeMainTrafficBlocked
+        && selectionAdmission?.mainProfileDraining === true,
+      isMainAccountTokenLive: options.isMainAccountTokenLive,
+      modelEligibleAccountIds,
+    };
     // A pre-drain selector reserves the native identity while reconciliation and
     // routing inspect it. Selectors arriving after the fence skip reconciliation
     // and may still route to non-main pool accounts without touching switch state.
