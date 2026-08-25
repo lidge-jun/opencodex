@@ -48,14 +48,30 @@ const GOOGLE_BREVITY_INSTRUCTION = [
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
 ].join("\n");
 
-export function maxOutputTokensForGoogleModel(modelId: string): number {
-  const lower = modelId.toLowerCase();
-  if (lower.includes("flash")) return 65536;
-  if (lower.includes("pro")) return 65535;
-  if (lower.includes("claude")) return 64000;
-  if (lower.includes("gpt-oss") || lower.includes("oss")) return 32768;
-  if (lower.startsWith("gemini")) return 65536;
-  return 16384;
+/**
+ * Documented output ceiling for a Google-surface model, or `undefined` when the id is not
+ * recognized.
+ *
+ * Unknown ids return `undefined` deliberately. An earlier revision returned a 16,384 floor for
+ * anything unmatched, which silently truncated aliases, gateway ids, and any model added after
+ * this table was written — the operator asked for N tokens and got 16,384 with no signal. A cap
+ * we cannot justify is worse than no cap: `structure/02_config-and-codex-home.md` is explicit
+ * that an explicit request value wins, so an unrecognized model passes through untouched and the
+ * upstream remains the authority on its own limit.
+ *
+ * Matching is prefix/family based rather than substring based for the same reason: `includes("pro")`
+ * matched any id containing "pro" (`my-prototype-model`), and `includes("oss")` matched any id
+ * containing "oss" (`crossover-v2`).
+ */
+export function maxOutputTokensForGoogleModel(modelId: string): number | undefined {
+  const lower = modelId.toLowerCase().trim();
+  if (lower.startsWith("gemini")) {
+    // Pro tops out one token below the flash/other Gemini ceiling; both are documented values.
+    return /(^|[-.])pro([-.]|$)/.test(lower) ? 65535 : 65536;
+  }
+  if (lower.startsWith("claude")) return 64000;
+  if (lower.startsWith("gpt-oss")) return 32768;
+  return undefined;
 }
 
 export function clampGoogleMaxOutputTokens(
@@ -64,6 +80,8 @@ export function clampGoogleMaxOutputTokens(
 ): number | undefined {
   if (requestedTokens === undefined || requestedTokens <= 0) return undefined;
   const modelMax = maxOutputTokensForGoogleModel(modelId);
+  // Unknown model: honour the request as-is rather than inventing a ceiling for it.
+  if (modelMax === undefined) return requestedTokens;
   return Math.min(requestedTokens, modelMax);
 }
 

@@ -9,7 +9,22 @@ describe("google maxOutputTokens clamp", () => {
     expect(maxOutputTokensForGoogleModel("claude-3-7-sonnet")).toBe(64000);
     expect(maxOutputTokensForGoogleModel("claude-3-5-sonnet@20241022")).toBe(64000);
     expect(maxOutputTokensForGoogleModel("gpt-oss-120b")).toBe(32768);
-    expect(maxOutputTokensForGoogleModel("custom-unknown-model")).toBe(16384);
+  });
+
+  test("an unrecognized model has no invented ceiling", () => {
+    // A cap we cannot justify silently truncates the operator's explicit request. Aliases,
+    // gateway ids, and models newer than this table must pass through untouched.
+    expect(maxOutputTokensForGoogleModel("custom-unknown-model")).toBeUndefined();
+    expect(clampGoogleMaxOutputTokens("custom-unknown-model", 128000)).toBe(128000);
+    expect(maxOutputTokensForGoogleModel("some-gateway/gemini-3-pro")).toBeUndefined();
+  });
+
+  test("family matching does not fire on incidental substrings", () => {
+    // "includes(pro)" matched my-prototype-model; "includes(oss)" matched crossover-v2.
+    expect(maxOutputTokensForGoogleModel("my-prototype-model")).toBeUndefined();
+    expect(maxOutputTokensForGoogleModel("crossover-v2")).toBeUndefined();
+    expect(maxOutputTokensForGoogleModel("gemini-3-pro-preview")).toBe(65535);
+    expect(maxOutputTokensForGoogleModel("gemini-3.5-flash")).toBe(65536);
   });
 
   test("downward clamps excessive requested tokens to model max", () => {
