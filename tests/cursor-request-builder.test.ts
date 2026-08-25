@@ -1432,46 +1432,49 @@ describe("Cursor request builder", () => {
       schedule: (() => 0 as unknown as ReturnType<typeof setTimeout>),
       clear: () => {},
     });
-    const common = {
-      ...base,
-      modelId: "cursor/gpt-5.6-sol",
-      _cursorIdentityScope: "acct-1",
-      context: { messages: [{ role: "user" as const, content: "ttl shared prefix", timestamp: 1 }] },
-    };
-    const parsedA = { ...common, _clientThreadId: "thread-ttl-a" };
-    const parsedB = { ...common, _clientThreadId: "thread-ttl-b" };
-    const builtA = createCursorRequest(parsedA);
-    const builtB = createCursorRequest(parsedB);
-    const commit = (parsed: typeof parsedA, conversationId: string, marker: string) => commitCursorCheckpoint({
-      conversationId,
-      identityScope: "acct-1",
-      modelId: cursorCheckpointModelAffinityId(builtA.modelId),
-      checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
-        pendingToolCalls: [marker],
-      })),
-      coveredMessageCount: 1,
-      prefixDigest: cursorCoveredPrefixDigest(parsed, 1),
-      systemDigest: cursorInstructionDigest(parsed),
-    });
-    expect(commit(parsedA, builtA.conversationId, "ttl-a")).toBeDefined();
-    const refB = commit(parsedB, builtB.conversationId, "ttl-b");
-    expect(refB).toBeDefined();
+    try {
+      const common = {
+        ...base,
+        modelId: "cursor/gpt-5.6-sol",
+        _cursorIdentityScope: "acct-1",
+        context: { messages: [{ role: "user" as const, content: "ttl shared prefix", timestamp: 1 }] },
+      };
+      const parsedA = { ...common, _clientThreadId: "thread-ttl-a" };
+      const parsedB = { ...common, _clientThreadId: "thread-ttl-b" };
+      const builtA = createCursorRequest(parsedA);
+      const builtB = createCursorRequest(parsedB);
+      const commit = (parsed: typeof parsedA, conversationId: string, marker: string) => commitCursorCheckpoint({
+        conversationId,
+        identityScope: "acct-1",
+        modelId: cursorCheckpointModelAffinityId(builtA.modelId),
+        checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+          pendingToolCalls: [marker],
+        })),
+        coveredMessageCount: 1,
+        prefixDigest: cursorCoveredPrefixDigest(parsed, 1),
+        systemDigest: cursorInstructionDigest(parsed),
+      });
+      expect(commit(parsedA, builtA.conversationId, "ttl-a")).toBeDefined();
+      const refB = commit(parsedB, builtB.conversationId, "ttl-b");
+      expect(refB).toBeDefined();
 
-    now += CURSOR_CHECKPOINT_TTL_MS - 1;
-    const followA = createCursorRequest({
-      ...parsedA,
-      context: {
-        messages: [
-          ...common.context.messages,
-          { role: "assistant" as const, content: [{ type: "text" as const, text: "reply" }], timestamp: 2 },
-          { role: "user" as const, content: "continue", timestamp: 3 },
-        ],
-      },
-    });
-    expect(followA.continuationMode).toBe("checkpoint");
+      now += CURSOR_CHECKPOINT_TTL_MS - 1;
+      const followA = createCursorRequest({
+        ...parsedA,
+        context: {
+          messages: [
+            ...common.context.messages,
+            { role: "assistant" as const, content: [{ type: "text" as const, text: "reply" }], timestamp: 2 },
+            { role: "user" as const, content: "continue", timestamp: 3 },
+          ],
+        },
+      });
+      expect(followA.continuationMode).toBe("checkpoint");
 
-    now += 2;
-    expect(getCursorCheckpoint(refB)).toBeUndefined();
-    clearCursorCheckpointsForTests();
+      now += 2;
+      expect(getCursorCheckpoint(refB)).toBeUndefined();
+    } finally {
+      clearCursorCheckpointsForTests();
+    }
   });
 });

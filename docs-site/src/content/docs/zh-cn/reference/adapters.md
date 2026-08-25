@@ -139,6 +139,10 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
   Connect message。
 - 经 content-addressed blob 重放对话状态，把 server tool call 映射回 Codex，用 protobuf
   `GetUsableModels` RPC 发现实时 Cursor 模型，并且只在 run request 尚未 commit 到 wire 前重试。
+- 对不含工具且正常完成的 turn，会在进程本地保存返回的 ConversationStateStructure，并在经过验证的
+  线性 continuation 中复用 checkpoint。无 ref 的 prefix lookup 仅在存在已记忆的 Cursor conversation
+  或稳定 client thread（包括受限的 Desktop session/thread fallback），且唯一匹配的 checkpoint 由同一
+  provider conversation 所有时才允许；否则执行 full replay。
 - 模型实时发现和推理都会遵守 `upstreamHttpVersion`。`auto`、`http2` 与 `h2` 保持原有 HTTP/2
   transport；只有 `http1.1` 与 `h1` 会选择兼容模式。
 - 保留 `cursor/grok-4.5-fast` 作为可选模型，但向 Cursor 发送规范的 `grok-4.5` 模型，并将独立的

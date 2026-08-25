@@ -128,6 +128,7 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 
 - 通常の fetch/parse 経路の代わりに `runTurn` を使います。リクエスト、サーバーイベント、ツール引数、使用量 checkpoint、クライアントレスポンスは `cursor/gen/agent_pb.ts` の `@bufbuild/protobuf` スキーマでエンコードしたのち Connect メッセージとして framing します。
 - content-addressed blob で対話状態を再生し、サーバーツール呼び出しを Codex に再マッピングします。protobuf の `GetUsableModels` RPC でリアルタイム Cursor モデルを探し、run リクエストが wire に commit される前だけリトライします。
+- ツールなしで正常終了したターンでは、返された ConversationStateStructure をプロセスローカルに保持し、検証済みの線形継続で checkpoint を再利用します。ref のない prefix lookup は、記憶済みの Cursor conversation または安定した client thread（制限付きの Desktop session/thread fallback を含む）があり、同じ provider conversation が所有する checkpoint が一意に一致する場合だけ許可します。それ以外は full replay に戻ります。
 - `cursor/grok-4.5-fast` は選択可能なモデルとして維持しつつ、Cursor には正規の `grok-4.5`
   モデルを送信し、個別の `effort` および `fast=true` 値は `requested_model.parameters` に格納します。
 - Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`unsafeAllowNativeLocalExec` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。
