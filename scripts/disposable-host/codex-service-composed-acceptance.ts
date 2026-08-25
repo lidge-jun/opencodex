@@ -78,10 +78,15 @@ async function requireCommand(argv: string[], label: string): Promise<ChildResul
 
 async function emptyRegistrationGate(extraArtifact?: string): Promise<void> {
   if (eventLedger[0] !== "sentinel:verified") fail("service query attempted before sentinel verification");
-  const units = await requireCommand(
-    ["systemctl", "--user", "list-unit-files", UNIT, "--no-legend", "--no-pager"],
-    "systemctl list-unit-files",
-  );
+  // Ubuntu's systemctl returns 1 (with no output) when a name filter matches no
+  // unit. Prove the bus independently so that result cannot hide a permission or
+  // connectivity failure, then accept only the measured empty 0/1 result.
+  await requireCommand(["systemctl", "--user", "show-environment"], "systemctl user bus");
+  const units = await spawnResult(["systemctl", "--user", "list-unit-files", UNIT, "--no-legend", "--no-pager"]);
+  eventLedger.push("query:systemctl list-unit-files");
+  if ((units.exitCode !== 0 && units.exitCode !== 1) || units.stderr.trim()) {
+    fail(`systemctl list-unit-files unavailable (exit ${units.exitCode}): ${units.stderr || units.stdout}`);
+  }
   if (units.stdout.trim()) fail(`service registration is nonempty: ${units.stdout.trim()}`);
 
   const status = await spawnResult(["systemctl", "--user", "status", UNIT, "--no-pager"]);
