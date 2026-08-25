@@ -210,6 +210,33 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "test-project-id" });
   });
 
+  test("Google Antigravity rejects an explicit ai-studio mode before probing", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return Response.json({ models: {} });
+    }) as typeof fetch;
+    await saveCredential("google-antigravity", {
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: Date.now() + 3_600_000,
+    });
+    const config = baseConfig({
+      "google-antigravity": {
+        ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+        googleMode: "ai-studio",
+        project: "stale-configured-project",
+      },
+    });
+
+    const { status, body } = await probe(config, "google-antigravity");
+
+    expect(status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(String(body.error)).toContain("Cloud Code Assist");
+    expect(fetches).toBe(0);
+  });
+
   test("a fake key gets the upstream rejection, not a catalog-presence pass", async () => {
     globalThis.fetch = (async () => new Response("unauthorized", { status: 401 })) as typeof fetch;
     const config = baseConfig({

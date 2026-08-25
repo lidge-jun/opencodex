@@ -37,7 +37,7 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
-import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
+import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
   extractProviderModelItems,
@@ -48,7 +48,7 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
-import { antigravityOAuthDestinationConfigError, clearProviderTlsProfileStatus, getProviderTlsProfileStatus } from "../../lib/provider-tls-profile";
+import { antigravityOAuthDestinationConfigError, clearProviderTlsProfileStatus, getProviderTlsProfileStatus, isAntigravityOAuthProvider } from "../../lib/provider-tls-profile";
 import { redactErrorMessage } from "../../lib/redact";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
@@ -767,7 +767,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
     const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
-    const antigravity = name === "google-antigravity" && effectiveGoogleMode(name, prov) === "cloud-code-assist";
+    const antigravity = isAntigravityOAuthProvider(name, prov);
     const snapshot = antigravity
       ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
       : undefined;

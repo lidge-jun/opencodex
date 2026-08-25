@@ -73,6 +73,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
+import { antigravityOAuthDestinationConfigError, isAntigravityOAuthProvider } from "../../lib/provider-tls-profile";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
 import type {
@@ -2643,9 +2644,13 @@ async function handleResponsesInner(
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
-  const isAntigravityOAuth = route.providerName === "google-antigravity"
-    && route.provider.authMode === "oauth"
-    && route.provider.googleMode === "cloud-code-assist";
+  const isAntigravityOAuth = isAntigravityOAuthProvider(route.providerName, route.provider);
+  if (route.providerName === "google-antigravity") {
+    const antigravityConfigError = antigravityOAuthDestinationConfigError(route.providerName, route.provider);
+    if (antigravityConfigError) {
+      return formatErrorResponse(400, "invalid_request_error", antigravityConfigError);
+    }
+  }
   const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro" || isAntigravityOAuth)
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;

@@ -253,6 +253,20 @@ describe("Antigravity Responses integration", () => {
     expect(calls).toBe(0);
   });
 
+  test("rejects an explicit ai-studio mode before using stale Antigravity project config", async () => {
+    const testConfig = config();
+    testConfig.providers["google-antigravity"]!.googleMode = "ai-studio";
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return completed();
+    }) as typeof fetch;
+
+    const response = await handleResponses(request(), testConfig, { model: "", provider: "" }, {});
+    expect(response.status).toBe(400);
+    expect(calls).toBe(0);
+  });
+
   test("replays one 401 with the selected account generation", async () => {
     await saveCredential("google-antigravity", {
       access: "access-b",

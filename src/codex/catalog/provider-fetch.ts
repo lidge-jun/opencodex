@@ -61,6 +61,7 @@ import {
   providerOutboundPost,
   providerRedirectError,
 } from "../../lib/provider-outbound";
+import { isAntigravityOAuthProvider } from "../../lib/provider-tls-profile";
 import { redactSecretString } from "../../lib/redact";
 import {
   extractProviderModelItems,
@@ -1267,7 +1268,8 @@ async function fetchProviderModelsWithAuth(
     return observed(configured, "degraded");
   }
   const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
-  const antigravityOAuth = name === "google-antigravity" && prov.authMode === "oauth";
+  const antigravityOAuth = isAntigravityOAuthProvider(name, prov);
+  if (antigravityOAuth && !cloudCodeAssist) return observed(configured, "degraded");
   const project = antigravityOAuth ? auth.oauthSnapshot?.projectId : prov.project ?? auth.oauthSnapshot?.projectId;
   if (cloudCodeAssist && !project) return observed(configured, "degraded");
   const fresh = getFreshCached(name, ttlMs);

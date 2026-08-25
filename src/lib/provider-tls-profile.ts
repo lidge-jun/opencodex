@@ -32,7 +32,7 @@ interface InitializedTransport {
 
 type ProviderTlsContract = Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode" | "baseUrl" | "tlsProfile">;
 
-type AntigravityOAuthDestinationContract = Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>;
+type AntigravityOAuthDestinationContract = Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode">>;
 
 export interface ProviderTlsRuntimeForTest {
   importWreq: () => Promise<WreqModule>;
@@ -145,12 +145,22 @@ export function isCanonicalAntigravityUrl(input: string | URL): boolean {
   }
 }
 
+export function isAntigravityOAuthProvider(
+  providerName: string,
+  provider: Pick<OcxProviderConfig, "authMode">,
+): boolean {
+  return providerName === "google-antigravity" && provider.authMode === "oauth";
+}
+
 /** Same-name Antigravity rows are OAuth destinations even when legacy config omitted authMode. */
 export function antigravityOAuthDestinationConfigError(
   providerName: string,
   provider: AntigravityOAuthDestinationContract,
 ): string | null {
   if (providerName !== "google-antigravity") return null;
+  if (provider.googleMode !== undefined && provider.googleMode !== "cloud-code-assist") {
+    return "requires Google Cloud Code Assist mode for OAuth";
+  }
   if (!isCanonicalAntigravityUrl(provider.baseUrl)) {
     return "requires a canonical Antigravity HTTPS destination for OAuth";
   }
