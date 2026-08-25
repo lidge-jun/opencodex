@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -113,3 +113,59 @@ describe("#2568 generic OAuth account failover", () => {
   });
 });
 
+/**
+ * The sidecar wiring (#2568).
+ *
+ * The rotator above is a pure module and the two sidecar loops are covered by their own await
+ * tests, but neither reaches the part that actually closes the gap: the `on429` hook `core.ts`
+ * injects into the image and web-search loops. That hook is a closure over request-local state
+ * (`route`, `genericFailoverAccountId`, `genericFailovers`), so it is not importable, and
+ * driving it end to end means standing up a full sidecar request against a stubbed provider.
+ *
+ * These are structural assertions on the source, in the same spirit as the route-inventory
+ * contract in `codex-convergence-contract.test.ts`: they cannot prove the rotation works, and
+ * they are not a substitute for the loop tests — but they DO catch the regression that actually
+ * threatens this feature, which is one sidecar silently keeping a key-pool-only hook while the
+ * other gets the OAuth-aware one. That divergence is exactly how the gap was introduced in the
+ * first place: the main response path grew generic rotation and the two sidecars did not.
+ */
+describe("sidecar on429 wiring", () => {
+  const coreSource = readFileSync(
+    join(import.meta.dir, "..", "src", "server", "responses", "core.ts"),
+    "utf8",
+  );
+
+  test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
+    const hooks = coreSource.match(/^\s*on429: (\w+),$/gm)?.map(line => line.trim()) ?? [];
+    // Two injection sites — the image bridge and the web-search loop — and one shared hook.
+    expect(hooks).toHaveLength(2);
+    expect(new Set(hooks).size).toBe(1);
+    expect(hooks[0]).toBe("on429: rotateSidecarProviderOn429,");
+  });
+
+  test("the shared hook tries the key pool first and only then the OAuth roster", () => {
+    const start = coreSource.indexOf("const rotateSidecarProviderOn429 =");
+    expect(start).toBeGreaterThan(-1);
+    const body = coreSource.slice(start, coreSource.indexOf("\n  };", start));
+
+    // Key-pool rotation stays first and unconditional: an API-key provider must behave exactly
+    // as it did before this hook existed.
+    const keyPool = body.indexOf("rotateProviderTransportOn429(");
+    const oauth = body.indexOf("rotateGenericOAuthAccountOn429(");
+    expect(keyPool).toBeGreaterThan(-1);
+    expect(oauth).toBeGreaterThan(keyPool);
+
+    // The OAuth branch is gated on all three of: an account this request actually used, the
+    // per-request bound, and the knob. Dropping any one of them turns an opt-in feature into a
+    // default-on one, or lets a short Retry-After spin.
+    expect(body).toContain("!genericFailoverAccountId");
+    expect(body).toContain("genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(body).toContain("!isGenericOAuthFailoverEnabled(config, route.providerName)");
+
+    // The FULL snapshot, not a bare bearer: Kiro carries routing metadata and Antigravity pairs
+    // an account-matched projectId with its token, so a token-only swap mixes two accounts.
+    expect(body).toContain("failoverAccountSnapshot(");
+    expect(body).toContain("_kiroAuthContext");
+    expect(body).toContain("snapshot.projectId");
+  });
+});
