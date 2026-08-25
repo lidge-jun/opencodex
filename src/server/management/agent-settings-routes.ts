@@ -611,11 +611,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const routedModels = uniqueCatalogModelsForPublicList(models)
       .map(m => {
         const namespaced = catalogModelSlug(m);
+        const canonical = !v2NativeParentOverrideTargetIsNoncanonical(config, namespaced);
         return {
           provider: m.provider,
           model: m.id,
           namespaced,
-          canonical: !v2NativeParentOverrideTargetIsNoncanonical(config, namespaced),
+          ...(canonical ? { canonical: true } : {}),
         };
       })
       .filter(m => ![...disabled].some(stored => (
