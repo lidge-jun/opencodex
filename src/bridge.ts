@@ -28,6 +28,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "./lib/translator-budget";
+import { debugFingerprint, debugStreamDiagnostic, type DebugStreamDiagnosticContext } from "./lib/debug";
 
 function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -166,6 +167,67 @@ interface OutputItem {
 
 export type ResponsesTerminalStatus = "completed" | "failed" | "incomplete";
 
+export type BridgeDiagnosticContext = DebugStreamDiagnosticContext;
+
+export function adapterEventDiagnosticDetails(event: AdapterEvent): Record<string, unknown> {
+  switch (event.type) {
+    case "text_delta":
+      return { byteLength: Buffer.byteLength(event.text), fingerprint: debugFingerprint(event.text) };
+    case "thinking_delta":
+      return { byteLength: Buffer.byteLength(event.thinking), fingerprint: debugFingerprint(event.thinking) };
+    case "reasoning_raw_delta":
+      return { byteLength: Buffer.byteLength(event.text), fingerprint: debugFingerprint(event.text) };
+    case "thinking_signature":
+    case "redacted_thinking":
+    case "kiro_redacted_reasoning": {
+      const content = event.type === "thinking_signature" ? event.signature : event.data;
+      return { byteLength: Buffer.byteLength(content), fingerprint: debugFingerprint(content) };
+    }
+    case "tool_call_delta":
+      return { byteLength: Buffer.byteLength(event.arguments), fingerprint: debugFingerprint(event.arguments) };
+    case "tool_call_start":
+      return {
+        idByteLength: Buffer.byteLength(event.id),
+        idFingerprint: debugFingerprint(event.id),
+        nameByteLength: Buffer.byteLength(event.name),
+        nameFingerprint: debugFingerprint(event.name),
+      };
+    case "web_search_call_begin":
+      return { idByteLength: Buffer.byteLength(event.id), idFingerprint: debugFingerprint(event.id) };
+    case "web_search_call_end": {
+      const queries = JSON.stringify(event.queries);
+      return {
+        idByteLength: Buffer.byteLength(event.id),
+        idFingerprint: debugFingerprint(event.id),
+        byteLength: Buffer.byteLength(queries),
+        fingerprint: debugFingerprint(queries),
+        status: event.status,
+      };
+    }
+    case "error":
+      return {
+        byteLength: Buffer.byteLength(event.message),
+        fingerprint: debugFingerprint(event.message),
+        ...(event.status !== undefined ? { status: event.status } : {}),
+        ...(event.code !== undefined ? { code: event.code } : {}),
+        ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
+      };
+    case "incomplete":
+      return {
+        ...(event.message !== undefined ? { byteLength: Buffer.byteLength(event.message), fingerprint: debugFingerprint(event.message) } : {}),
+        reason: event.reason,
+        ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
+      };
+    case "done":
+      return {
+        ...(event.stopReason !== undefined ? { stopReason: event.stopReason } : {}),
+        ...(event.endTurn !== undefined ? { endTurn: event.endTurn } : {}),
+      };
+    default:
+      return {};
+  }
+}
+
 export function bridgeToResponsesSSE(
   events: AsyncIterable<AdapterEvent>,
   modelId: string,
@@ -226,6 +288,8 @@ export function bridgeToResponsesSSE(
       setInterval: (handler: () => void, ms: number) => unknown;
       clearInterval: (id: unknown) => void;
     };
+    /** Internal, opt-in structural stream diagnostics. */
+    diagnostic?: BridgeDiagnosticContext;
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope;
@@ -326,6 +390,7 @@ export function bridgeToResponsesSSE(
   };
   const responseId = options?.responseId ?? `resp_${uuid()}`;
   let seq = 0;
+  let diagnosticSequence = 0;
   // Set once the client is gone (cancel) or an enqueue throws on a torn-down controller, so we
   // never enqueue again and never throw a second time inside start() — the RC2 double-throw that
   // otherwise surfaced as proxy-side stream noise on every client disconnect.
@@ -858,6 +923,15 @@ export function bridgeToResponsesSSE(
           }
           if (next.done) { upstreamDone = true; break; }
           const event = next.value;
+          if (options?.diagnostic) {
+            debugStreamDiagnostic(
+              options.diagnostic,
+              "bridge",
+              ++diagnosticSequence,
+              event.type,
+              adapterEventDiagnosticDetails(event),
+            );
+          }
           let terminalEvent = false;
           // Invisible adapter heartbeats (and buffered web-search progress) count as upstream
           // liveness only — they must not suppress wire keepalives that re-arm Codex idle timers.

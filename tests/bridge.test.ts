@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON, setOwnedBudgetAbandonedMsForTests } from "../src/bridge";
 import {
   createTranslatorBudget,
@@ -7,6 +7,8 @@ import {
   translatorAggregateCurrentBytesForTests,
   translatorLiveBudgetCountForTests,
 } from "../src/lib/translator-budget";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 import type { AdapterEvent } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -33,7 +35,44 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
     });
 }
 
+const initialDebugEnv = process.env.OCX_DEBUG;
+
 describe("Responses bridge reasoning and usage parity", () => {
+  afterEach(() => {
+    resetDebugSettingsForTests();
+    resetDebugLogBufferForTests();
+    if (initialDebugEnv === undefined) delete process.env.OCX_DEBUG;
+    else process.env.OCX_DEBUG = initialDebugEnv;
+  });
+
+  test("bridge diagnostics classify each adapter event once without changing the wire", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const events: AdapterEvent[] = [
+        { type: "assistant_boundary" },
+        { type: "text_delta", text: "fixture reasoning and secret" },
+        { type: "tool_call_start", id: "call-1", name: "secret_tool" },
+        { type: "tool_call_delta", arguments: '{"secret":"argument"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ];
+      const frames = await collectSse(bridgeToResponsesSSE(replay(events), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+        diagnostic: { requestId: "req-1", adapterName: "openai-chat", attempt: 2, recovery: "empty-completion" },
+      }));
+      const lines = getDebugLogEntries().map(entry => entry.line).filter(line => line.includes("\"stage\":\"bridge\""));
+      expect(lines).toHaveLength(events.length);
+      expect(lines.filter(line => line.includes('"eventType":"assistant_boundary"'))).toHaveLength(1);
+      expect(lines.filter(line => line.includes('"eventType":"tool_call_start"'))).toHaveLength(1);
+      expect(lines.filter(line => line.includes('"eventType":"tool_call_delta"'))).toHaveLength(1);
+      expect(lines.every(line => !line.includes("fixture reasoning and secret") && !line.includes("secret_tool") && !line.includes("secret"))).toBe(true);
+      expect(frames.filter(frame => frame.event === "response.completed")).toHaveLength(1);
+      expect(frames.find(frame => frame.event === "response.output_text.delta")?.data).toMatchObject({ delta: "fixture reasoning and secret" });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("first-output callback fires once on first non-empty delta (heartbeat/empty skipped)", async () => {
     let firstOutputs = 0;
     await collectSse(bridgeToResponsesSSE(replay([

@@ -1,6 +1,9 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { appendDebugLogLine } from "./debug-log-buffer";
 import { isDebugEnabled } from "./debug-settings";
 import { redactSecrets } from "./redact";
+
+const debugFingerprintKey = randomBytes(32);
 
 function emitDebugLine(line: string): void {
   if (!isDebugEnabled()) return;
@@ -28,4 +31,42 @@ export function debugProviderDiagnostic(adapter: string, event: string, details:
   } catch {
     /* diagnostics must never affect request handling */
   }
+}
+
+/** Process-local, content-free correlation aid for opt-in provider diagnostics. */
+export function debugFingerprint(value: string | Uint8Array): string | undefined {
+  if (!isDebugEnabled()) return undefined;
+  try {
+    return createHmac("sha256", debugFingerprintKey).update(value).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+export interface DebugStreamDiagnosticContext {
+  requestId: string;
+  adapterName: string;
+  attempt?: number;
+  recovery?: string;
+}
+
+export type DebugStreamDiagnosticStage = "adapter" | "bridge";
+
+/** Emit one structural line for an adapter/bridge event without retaining its content. */
+export function debugStreamDiagnostic(
+  context: DebugStreamDiagnosticContext,
+  stage: DebugStreamDiagnosticStage,
+  sequence: number,
+  eventType: string,
+  details?: Record<string, unknown>,
+): void {
+  debugProviderDiagnostic(context.adapterName, "stream", {
+    stage,
+    sequence,
+    eventType,
+    ...(context.requestId !== undefined ? { requestId: context.requestId } : {}),
+    ...(context.attempt !== undefined ? { attempt: context.attempt } : {}),
+    ...(context.recovery !== undefined ? { recovery: context.recovery } : {}),
+    ...details,
+  });
 }

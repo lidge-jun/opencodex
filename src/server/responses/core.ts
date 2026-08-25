@@ -1,6 +1,6 @@
 import type { Server } from "bun";
 import { randomUUID } from "node:crypto";
-import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
+import { adapterEventDiagnosticDetails, bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type BridgeDiagnosticContext, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import {
   createResponsesFieldBackfillBlockRewrite,
@@ -70,7 +70,8 @@ import {
   pickComboTarget,
   targetKey,
 } from "../../combos";
-import { isInjectionDebugEnabled } from "../../lib/debug-settings";
+import { isDebugEnabled, isInjectionDebugEnabled } from "../../lib/debug-settings";
+import { debugStreamDiagnostic } from "../../lib/debug";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
@@ -348,6 +349,36 @@ import { preflightComboStreamResponse } from "./combo-stream-preflight";
 // bridging. A second byte-stream reader would reinterpret that transport's
 // already-committed event boundary and can replay custom adapter work.
 const runTurnAdapterSseResponses = new WeakSet<Response>();
+
+interface AdapterDiagnosticState { sequence: number }
+
+function diagnoseAdapterEvents(
+  events: AsyncIterable<AdapterEvent>,
+  adapterName: string,
+  requestId: string | undefined,
+  logCtx: RequestLogContext,
+  state: AdapterDiagnosticState,
+): AsyncIterable<AdapterEvent> {
+  if (!requestId) return events;
+  return (async function* () {
+    for await (const event of events) {
+      const attempt = logCtx.activeAttempt;
+      debugStreamDiagnostic(
+        {
+          requestId,
+          adapterName,
+          ...(attempt?.ordinal !== undefined ? { attempt: attempt.ordinal } : {}),
+          ...(attempt?.recoveryKinds.at(-1) !== undefined ? { recovery: attempt.recoveryKinds.at(-1) } : {}),
+        },
+        "adapter",
+        ++state.sequence,
+        event.type,
+        adapterEventDiagnosticDetails(event),
+      );
+      yield event;
+    }
+  })();
+}
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -2903,6 +2934,11 @@ async function handleResponsesInner(
     );
     if (passiveSubjectId) logCtx.activeAttempt.labRouteSubjectId = passiveSubjectId;
   }
+  const diagnosticRequestId = isDebugEnabled() ? randomUUID() : undefined;
+  const adapterDiagnosticState: AdapterDiagnosticState = { sequence: 0 };
+  const diagnosticContext: BridgeDiagnosticContext | undefined = diagnosticRequestId
+    ? { requestId: diagnosticRequestId, adapterName: adapter.name }
+    : undefined;
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
@@ -4467,6 +4503,10 @@ async function handleResponsesInner(
       pacingSlotAcquired = false,
     ): Promise<void> => {
       try {
+        if (diagnosticContext) {
+          diagnosticContext.recovery = recovery;
+          diagnosticContext.attempt = logCtx.activeAttempt?.ordinal;
+        }
         if (!pacingSlotAcquired) {
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
@@ -4524,13 +4564,15 @@ async function handleResponsesInner(
         onBacklogExceeded: () => runTurnAbort.abort(),
       });
       void runTurnAttempt(retryQueue, "empty-completion");
-      return retryQueue.stream();
+      return diagnoseAdapterEvents(retryQueue.stream(), adapter.name, diagnosticRequestId, logCtx, adapterDiagnosticState);
     };
 
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     if (parsed.stream) {
       void runTurn();
-      let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
+      let eventSource: AsyncIterable<AdapterEvent> = diagnoseAdapterEvents(
+        queue.stream(), adapter.name, diagnosticRequestId, logCtx, adapterDiagnosticState,
+      );
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(eventSource);
         if (preflight.error || preflight.empty) {
@@ -4568,6 +4610,7 @@ async function handleResponsesInner(
           // grok-build's strict decoder dies on the typed response.heartbeat frame; its
           // eventsource layer tolerates comment keep-alives. Codex needs the opposite.
           ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
+          ...(diagnosticContext ? { diagnostic: diagnosticContext } : {}),
           onUsage: usage => {
             // Raw adapter usage, pre wire-normalization: the bridged SSE now always carries
             // zero-default detail objects, so provenance must come from here (cache_detail_missing).
@@ -5344,6 +5387,11 @@ async function handleResponsesInner(
       // Optional recovery label for same-target / failover continuation sends.
       const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
       try {
+        if (diagnosticContext) {
+          diagnosticContext.recovery = replayKind;
+          diagnosticContext.attempt = logCtx.activeAttempt?.ordinal;
+          diagnosticContext.adapterName = activeAdapter.name;
+        }
         if (activeAdapter.fetchResponse) {
           noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
@@ -5653,7 +5701,13 @@ async function handleResponsesInner(
       const detachContinuationBodyGuard = cancelBodyOnAbort(response.body, upstream.signal);
       try {
         if (nextParsed.stream) {
-          yield* activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata);
+          yield* diagnoseAdapterEvents(
+            activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
+            activeAdapter.name,
+            diagnosticRequestId,
+            logCtx,
+            adapterDiagnosticState,
+          );
         } else if (activeAdapter.parseResponse) {
           yield* await activeAdapter.parseResponse(response, translatorBudget, logCtx.activeTierMetadata);
         } else {
@@ -5685,11 +5739,18 @@ async function handleResponsesInner(
   };
 
   if (parsed.stream) {
-    const initialEventStream = activeAdapter.parseStream(
-      upstreamResponse,
-      translatorBudget,
-      logCtx.activeTierMetadata,
+    const initialEventStream = diagnoseAdapterEvents(
+      activeAdapter.parseStream(upstreamResponse, translatorBudget, logCtx.activeTierMetadata),
+      activeAdapter.name,
+      diagnosticRequestId,
+      logCtx,
+      adapterDiagnosticState,
     );
+    if (diagnosticContext) {
+      diagnosticContext.adapterName = activeAdapter.name;
+      diagnosticContext.attempt = logCtx.activeAttempt?.ordinal;
+      diagnosticContext.recovery = logCtx.activeAttempt?.recoveryKinds.at(-1);
+    }
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
@@ -5725,6 +5786,7 @@ async function handleResponsesInner(
         ...(routedCompaction ? { compaction: true } : {}),
         // Same grok-surface split as the runTurn branch above.
         ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
+        ...(diagnosticContext ? { diagnostic: diagnosticContext } : {}),
         onUsage: usage => {
           // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
           logCtx.usageFromBridge = true;
