@@ -74,15 +74,18 @@ that terminal are dropped rather than replacing the completed turn with a transp
 
 :::note
 For native passthrough, a Responses terminal event is authoritative. A premature `data: [DONE]` is
-held until that event; if upstream reaches EOF first, the proxy emits one `response.incomplete` with
-`incomplete_details.reason: "adapter_eof"`, followed by one `data: [DONE]`. Syntactically valid
-delimiter-less terminal JSON at EOF is accepted exactly once; malformed or truncated terminal-shaped
-JSON remains incomplete, and model-scoped terminal repair remains fail-closed for unframed
-terminal-like suffixes. High-confidence `cyber_policy` terminal shapes normalize to
-`response.failed` with `error.code: "cyber_policy"` for semantic logging/accounting (status 400),
-while an already-started streamed HTTP response remains 200. This boundary does not retry or replay
-the committed request and does not resolve [#2423](https://github.com/lidge-jun/opencodex/issues/2423)
-or [#2486](https://github.com/lidge-jun/opencodex/issues/2486).
+held until that event. On the ordinary native path, a clean HTTP 200 EOF without a parsed terminal
+emits one `response.incomplete` with `incomplete_details.reason: "adapter_eof"`, followed by one
+`data: [DONE]`; syntactically valid delimiter-less terminal JSON is accepted exactly once, while
+malformed or truncated JSON remains incomplete. For providers opted into model-scoped terminal
+repair, unframed terminal-like suffixes and a premature `data: [DONE]` at EOF fail closed with
+`missing_terminal_event` when no complete lifecycle candidate can be promoted; a complete candidate
+is promoted to `response.completed`. High-confidence `cyber_policy`
+terminal shapes normalize to `response.failed` with `error.code: "cyber_policy"` for semantic
+logging/accounting (status 400), while an already-started streamed HTTP response remains 200. This
+committed-request boundary does not retry or replay and does not resolve
+[#2423](https://github.com/lidge-jun/opencodex/issues/2423) or
+[#2486](https://github.com/lidge-jun/opencodex/issues/2486).
 :::
 
 For canonical ChatGPT forward streaming, stable Bun 1.4.0 or newer may transparently use

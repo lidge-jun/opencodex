@@ -55,6 +55,10 @@ provider events → internal adapter events → client dialect
 
 クライアント向け Responses SSE フレームは、SSE ブロック区切りの前の生バイトで測って 1 フレームあたり 4 MiB に制限されます。HTTP では、区切りなしでこの上限を超えたアップストリーム フレームは、合成 `response.failed` イベントと続く `data: [DONE]` でフェイルクローズします。Responses WebSocket ブリッジでは、同じ条件で 502 `websocket_protocol_error` を送信し、アップストリーム リーダーをキャンセルします。完全な Responses 終端フレームがすでに到着している場合はそれが優先され、その後のサイズ超過または不正なバイトは、完了したターンをトランスポート障害に置き換えず破棄されます。
 
+:::note
+ネイティブ パススルーでは、Responses の終端イベントが優先されます。早すぎる `data: [DONE]` は、そのイベントが届くまで保留されます。通常のネイティブ パスで、解析済みの終端がないまま正常な HTTP 200 EOF に達した場合、プロキシは `incomplete_details.reason: "adapter_eof"` を持つ `response.incomplete` を 1 件、その後に `data: [DONE]` を 1 件送信します。区切りのない終端 JSON が構文的に有効なら 1 回だけ受け入れられ、不正または切り詰められた JSON は incomplete のままです。モデル単位の終端修復を有効にしたプロバイダーでは、フレーム化されていない終端らしい接尾部と EOF 時の早すぎる `data: [DONE]` は、昇格可能な完全なライフサイクル候補がなければ `missing_terminal_event` としてフェイルクローズし、候補が完全なら `response.completed` に昇格します。高信頼度の `cyber_policy` 終端は、セマンティックなログおよび課金集計上は `error.code: "cyber_policy"` を持つ `response.failed`（status 400）に正規化されますが、すでに開始済みのストリーミング HTTP 応答は 200 のままです。このコミット済みリクエストの境界では、再試行も再送も行いません。
+:::
+
 すべての端末応答使用状況オブジェクトには、プロバイダーが詳細を報告しなかった場合でも、両方の詳細オブジェクトが含まれます。
 
 ```json

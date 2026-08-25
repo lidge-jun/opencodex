@@ -728,61 +728,66 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     expect(upstreamAc.signal.aborted).toBe(true);
   });
 
-  test("eager preserves an unframed terminal before a reader error", async () => {
-    const cases = [
-      {
+  const unframedReadErrorCases = [
+    {
+      label: "completed",
+      type: "response.completed",
+      event: "response.completed",
+      status: "completed",
+      payload: {
         type: "response.completed",
-        event: "response.completed",
-        status: "completed",
-        payload: {
-          type: "response.completed",
-          sequence_number: 61,
-          response: { id: "resp-eager-read-error-completed", status: "completed", output: [] },
-        },
+        sequence_number: 61,
+        response: { id: "resp-eager-read-error-completed", status: "completed", output: [] },
       },
-      {
+    },
+    {
+      label: "failed",
+      type: "response.failed",
+      event: "response.failed",
+      status: "failed",
+      payload: {
         type: "response.failed",
-        event: "response.failed",
-        status: "failed",
-        payload: {
-          type: "response.failed",
-          sequence_number: 62,
-          response: { id: "resp-eager-read-error-failed", status: "failed", output: [] },
-        },
+        sequence_number: 62,
+        response: { id: "resp-eager-read-error-failed", status: "failed", output: [] },
       },
-      {
+    },
+    {
+      label: "incomplete",
+      type: "response.incomplete",
+      event: "response.incomplete",
+      status: "incomplete",
+      payload: {
         type: "response.incomplete",
-        event: "response.incomplete",
-        status: "incomplete",
-        payload: {
-          type: "response.incomplete",
-          sequence_number: 63,
-          response: { id: "resp-eager-read-error-incomplete", status: "incomplete", output: [] },
-        },
+        sequence_number: 63,
+        response: { id: "resp-eager-read-error-incomplete", status: "incomplete", output: [] },
       },
-      {
+    },
+    {
+      label: "policy error",
+      type: "error",
+      event: "response.failed",
+      status: "failed",
+      payload: {
         type: "error",
-        event: "response.failed",
-        status: "failed",
-        payload: {
-          type: "error",
-          sequence_number: 64,
-          response: {
-            id: "resp-eager-read-error-policy",
-            output: [{ type: "message", id: "item-eager-read-error-policy" }],
-            status: "failed",
-          },
-          error: {
-            type: "invalid_request_error",
-            code: "cyber_policy",
-            message: "blocked by upstream policy",
-          },
+        sequence_number: 64,
+        response: {
+          id: "resp-eager-read-error-policy",
+          output: [{ type: "message", id: "item-eager-read-error-policy" }],
+          status: "failed",
         },
-        httpStatus: 400,
+        error: {
+          type: "invalid_request_error",
+          code: "cyber_policy",
+          message: "blocked by upstream policy",
+        },
       },
-    ] as const;
+      httpStatus: 400,
+    },
+  ] as const;
 
-    for (const fixture of cases) {
+  test.each(unframedReadErrorCases)(
+    "eager preserves an unframed $label terminal before a reader error",
+    async (fixture) => {
       const { hooks, rec } = makeHooks();
       const up = controlledUpstream();
       const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
@@ -802,8 +807,8 @@ describe("relaySseEagerBounded — side-effect parity", () => {
         expect(text).toContain('"id":"resp-eager-read-error-policy"');
         expect(text).toContain('"output":[{"type":"message","id":"item-eager-read-error-policy"}]');
       }
-    }
-  });
+    },
+  );
 
   test("eager keeps an ordinary top-level error fail-closed on reader error", async () => {
     const { hooks, rec } = makeHooks();

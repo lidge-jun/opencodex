@@ -64,6 +64,10 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 面向客户端的 Responses SSE 帧按 SSE 块分隔符之前的原始字节计算，每帧限制为 4 MiB。对于 HTTP，未终止的上游帧一旦超过该限制，会以合成的 `response.failed` 事件并随后发送 `data: [DONE]` 的方式 fail closed。对于 Responses WebSocket 桥，相同情况会发送 502 `websocket_protocol_error` 并取消上游 reader。已经完整到达的 Responses 终止帧具有优先权；其后的超大或格式错误字节会被丢弃，而不会把已经完成的轮次替换为传输失败。
 
+:::note
+对于原生透传，Responses 终止事件具有最高优先级；过早出现的 `data: [DONE]` 会被保留，直到该事件到达。普通原生路径在没有已解析终止事件的情况下正常到达 HTTP 200 EOF 时，代理会发送一个带有 `incomplete_details.reason: "adapter_eof"` 的 `response.incomplete`，随后发送一个 `data: [DONE]`。语法有效但缺少分隔符的终止 JSON 只会被接受一次；格式错误或被截断的 JSON 仍保持 incomplete。对于启用了按模型终止修复的提供方，未成帧但形似终止事件的后缀和 EOF 处过早出现的 `data: [DONE]`，会在没有可提升的完整生命周期候选时以 `missing_terminal_event` 的形式 fail closed；完整候选则会被提升为 `response.completed`。高置信度的 `cyber_policy` 终止形态会在语义日志和计量中规范化为带有 `error.code: "cyber_policy"` 的 `response.failed`（status 400），但已经开始的流式 HTTP 响应仍保持 200。这个已提交请求的边界不会重试或重放请求。
+:::
+
 每个终止的 Responses usage 对象都包含两个 detail 对象，即使提供方没有报告这些细节：
 
 ```json

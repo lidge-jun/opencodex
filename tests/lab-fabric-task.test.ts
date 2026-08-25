@@ -58,6 +58,7 @@ import { setFabricProducerIsolationLimitsForTests } from "../src/lab/fabric/prod
 import { taskSubjectApplicableToRequirements } from "../src/lab/projection/verification";
 import { createHostIssuedFabricPatchExecutor } from "../src/lib/fabric-task-host";
 import type { TrustedFabricPatchExecutor } from "../src/lab/fabric/types";
+import { watchdogMs } from "./helpers/ci-watchdog";
 import {
   fabricCorrectPatchExecutor,
   fabricMockRoute,
@@ -67,6 +68,23 @@ import {
 } from "./helpers/fabric-task-test";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const CHILD_REAP_GRACE_MS = 2_000;
+
+async function awaitChildExitWithin(child: Bun.Subprocess, timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    child.exited.then(() => true, () => true),
+    Bun.sleep(timeoutMs).then(() => false),
+  ]);
+}
+
+async function terminateChildWithin(child: Bun.Subprocess): Promise<boolean> {
+  if (child.exitCode !== null) return true;
+  try { child.kill(); } catch { /* already exited */ }
+  if (await awaitChildExitWithin(child, CHILD_REAP_GRACE_MS)) return true;
+  try { child.kill("SIGKILL"); } catch { /* already exited */ }
+  return await awaitChildExitWithin(child, CHILD_REAP_GRACE_MS);
+}
+
 const CREDENTIAL_CANARY = "credential-canary-abcdefghijklmnopqrstuvwxyz1234567890";
 const FAST_FABRIC_ISOLATION = Object.freeze({
   totalTimeoutMs: 2_000,
@@ -331,6 +349,91 @@ describe("CL-07 task effectiveness producer", () => {
     expect(result.executionAuthority).toBe("harness");
     expect(result.outcome.outcome).toBe("pass");
   });
+
+  test("producer child awaits an async executor before result and clean exit", async () => {
+    const childWatchdogMs = watchdogMs(5_000);
+    const home = tempHome();
+    const childEntry = join(REPO_ROOT, "src", "lab", "fabric", "producer-child.ts");
+    const executorModulePath = join(home, "async-producer-executor.mjs");
+    const settledMarker = join(home, "async-producer-settled");
+    writeFileSync(executorModulePath, `
+import { writeFileSync } from "node:fs";
+
+export async function execute() {
+  await Bun.sleep(75);
+  writeFileSync(${JSON.stringify(settledMarker)}, "settled", "utf8");
+  return {
+    schemaVersion: 1,
+    operations: [{
+      op: "replace",
+      path: ${JSON.stringify(SYNTHETIC_VALUE_PATH)},
+      contentUtf8: ${JSON.stringify(SYNTHETIC_AFTER_UTF8)},
+    }],
+  };
+}
+`);
+
+    expect(readFileSync(childEntry, "utf8")).toMatch(/\bawait\s+main\(\)\.catch\(/);
+
+    const child = Bun.spawn([process.execPath, "run", childEntry], {
+      cwd: REPO_ROOT,
+      env: {
+        TZ: "UTC",
+        NO_COLOR: "1",
+        OCX_FABRIC_SCRATCH_ROOT: home,
+      },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdoutPromise = new Response(child.stdout).text();
+    const stderrPromise = new Response(child.stderr).text();
+    try {
+      child.stdin.write(JSON.stringify({
+        executorModulePath,
+        executorInput: {},
+        scratchRoot: home,
+        totalTimeoutMs: 5_000,
+        inactivityTimeoutMs: 2_000,
+      }));
+      child.stdin.end();
+    } catch (error) {
+      await terminateChildWithin(child);
+      void stdoutPromise.catch(() => {});
+      void stderrPromise.catch(() => {});
+      throw error;
+    }
+
+    const completed = await Promise.race([
+      child.exited.then((exitCode) => ({ exitCode })),
+      Bun.sleep(childWatchdogMs).then(() => null),
+    ]);
+    if (!completed) {
+      const reaped = await terminateChildWithin(child);
+      void stdoutPromise.catch(() => {});
+      const stderr = await Promise.race([
+        stderrPromise.catch(() => "<unavailable>"),
+        Bun.sleep(CHILD_REAP_GRACE_MS).then(() => "<unavailable>"),
+      ]);
+      throw new Error(`timed out waiting for producer child (reaped=${reaped}): ${stderr}`);
+    }
+
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    expect(completed.exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(existsSync(settledMarker)).toBe(true);
+    expect(stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line))).toEqual([{
+      type: "result",
+      patch: {
+        schemaVersion: 1,
+        operations: [{
+          op: "replace",
+          path: SYNTHETIC_VALUE_PATH,
+          contentUtf8: SYNTHETIC_AFTER_UTF8,
+        }],
+      },
+    }]);
+  }, { timeout: watchdogMs(5_000) + (3 * CHILD_REAP_GRACE_MS) + 1_000 });
 
   test("harness execution cannot be persisted as production evidence", async () => {
     const home = tempHome();

@@ -65,6 +65,10 @@ deltas, 그리고 정확히 하나의 종료 `response.completed`, `response.fai
 
 클라이언트로 전달되는 Responses SSE 프레임은 SSE 블록 구분자 앞의 원시 바이트 기준으로 프레임당 4 MiB로 제한됩니다. HTTP에서는 구분자 없이 이 한도를 초과한 업스트림 프레임을 합성 `response.failed` 이벤트와 이어지는 `data: [DONE]`으로 fail closed 처리합니다. Responses WebSocket 브리지에서는 같은 조건에서 502 `websocket_protocol_error`를 보내고 업스트림 reader를 취소합니다. 완전한 Responses 종료 프레임이 이미 수신된 경우에는 그 종료가 우선하며, 이후의 과도한 크기 또는 잘못된 바이트는 완료된 턴을 전송 오류로 바꾸지 않고 버립니다.
 
+:::note
+네이티브 passthrough에서는 Responses 종료 이벤트가 우선합니다. 너무 이른 `data: [DONE]`은 해당 이벤트가 도착할 때까지 보류됩니다. 일반 네이티브 경로가 파싱된 종료 이벤트 없이 정상 HTTP 200 EOF에 도달하면, 프록시는 `incomplete_details.reason: "adapter_eof"`가 있는 `response.incomplete` 하나와 `data: [DONE]` 하나를 보냅니다. 구분자 없는 종료 JSON이 문법적으로 유효하면 정확히 한 번 받아들이고, 잘못되었거나 잘린 JSON은 incomplete로 남습니다. 모델별 종료 복구를 사용하도록 설정된 공급자에서는 프레임이 없는 종료 유사 suffix와 EOF의 너무 이른 `data: [DONE]`을, 승격할 수 있는 완전한 lifecycle 후보가 없을 때 `missing_terminal_event`로 fail closed 처리하며, 완전한 후보가 있으면 `response.completed`로 승격합니다. 신뢰도가 높은 `cyber_policy` 종료 형식은 의미론적 로깅 및 집계에서 `error.code: "cyber_policy"`가 있는 `response.failed`(status 400)로 정규화되지만, 이미 시작된 스트리밍 HTTP 응답은 200을 유지합니다. 이 커밋된 요청 경계에서는 재시도하거나 재전송하지 않습니다.
+:::
+
 canonical ChatGPT forward streaming은 stable Bun 1.4.0 이상에서 Codex 업스트림 WebSocket을
 투명하게 사용할 수 있습니다. 번들 Bun 1.3.14, prerelease, 또는 검증 불가능한 런타임 identity는
 HTTP/SSE를 사용합니다. 업스트림 WS adapter는 같은 downstream SSE 계약을 유지하며, 원시 JSON
