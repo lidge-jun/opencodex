@@ -1622,6 +1622,9 @@ export async function fetchProviderModels(
 
 export function shouldExposeProviderModel(providerName: string, modelId: string): boolean {
   if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
+  // xAI /models advertises both the dated deployment and this floating alias.
+  // Keep only grok-4.20-multi-agent-0309; the alias is the same server-side id.
+  if (providerName === "xai" && modelId === "grok-4.20-multi-agent-beta-latest") return false;
   return true;
 }
 

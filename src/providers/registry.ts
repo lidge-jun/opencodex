@@ -1156,13 +1156,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
     // Measured only on grok-4.6 against cli-chat-proxy.grok.com: even an invalid
-    //  value is accepted and low/high/omitted output length is non-monotonic.
-    // Apply the resulting opt-out to the whole xAI lineup because  is an OpenAI
+    // `text.verbosity` value is accepted and low/high/omitted output length is non-monotonic.
+    // Apply the resulting opt-out to the whole xAI lineup because `text.verbosity` is an OpenAI
     // Responses parameter absent from xAI's documented API, not because every model was probed.
     // Keep this separate from reasoning-summary support: that bit gates Codex's
     // entire Responses reasoning object, including reasoning.effort.
     modelSupportsVerbosity: Object.fromEntries(XAI_MODELS.map(id => [id, false])),
-    // Provider-wide, not merely per-model:  is an OpenAI Responses parameter
+    // Provider-wide, not merely per-model: `text.verbosity` is an OpenAI Responses parameter
     // absent from xAI's documented API, so a model discovered later has no more support for it
     // than the seeded ones do.
     supportsVerbosity: false,
@@ -1190,8 +1190,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         // material. Do not encode that as modelSupportsReasoningSummaries:false: through
         // Codex #1100 that suppresses the entire reasoning object, including the effort
         // that controls this model's agent count. An empty summary pane is harmless.
+        // Chat Completions returns 400 for this model, so every inbound uses Responses.
         wire: "openai-responses",
-        inbound: ["responses"],
+        inbound: ["responses", "chat"],
         forwardCallerServiceTier: false,
       },
     },
