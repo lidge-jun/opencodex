@@ -178,6 +178,9 @@ describe("Google provider options", () => {
 
   test("validated safety and cache options reach AI Studio and Vertex wires", async () => {
     for (const googleMode of ["ai-studio", "vertex"] as const) {
+      const cachedContent = googleMode === "vertex"
+        ? "projects/project/locations/global/cachedContents/cache-1"
+        : "cachedContents/cache-1";
       const adapter = createGoogleAdapter({
         adapter: "google",
         googleMode,
@@ -190,14 +193,58 @@ describe("Google provider options", () => {
         stream: false,
         options: { providerOptions: { google: {
           safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" }],
-          cachedContent: "cachedContents/cache-1",
+          cachedContent,
         } } },
         context: { messages: [{ role: "user", content: "hello" }] },
       } as OcxParsedRequest);
       const body = JSON.parse(request.body);
       expect(body.safetySettings).toEqual([{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" }]);
-      expect(body.cachedContent).toBe("cachedContents/cache-1");
+      expect(body.cachedContent).toBe(cachedContent);
     }
+  });
+
+  test("accepts each syntactically valid cache resource on its matching Google route", () => {
+    expect(googleProviderOptionsRouteError(parseRequest({
+      ...base,
+      provider_options: { google: { cached_content: "cachedContents/cache-1" } },
+    }), {
+      providerName: "google",
+      provider: { adapter: "google", googleMode: "ai-studio" },
+      adapterName: "google",
+    })).toBeUndefined();
+
+    expect(googleProviderOptionsRouteError(parseRequest({
+      ...base,
+      provider_options: { google: { cached_content: "projects/project/locations/global/cachedContents/cache-1" } },
+    }), {
+      providerName: "google-vertex",
+      provider: { adapter: "google", googleMode: "vertex" },
+      adapterName: "google",
+    })).toBeUndefined();
+  });
+
+  test("rejects a cache resource belonging to the other Google route", () => {
+    const aiRouteError = googleProviderOptionsRouteError(parseRequest({
+      ...base,
+      provider_options: { google: { cached_content: "projects/project/locations/global/cachedContents/cache-1" } },
+    }), {
+      providerName: "google",
+      provider: { adapter: "google", googleMode: "ai-studio" },
+      adapterName: "google",
+    });
+    expect(aiRouteError).toContain("AI Studio");
+    expect(aiRouteError).toContain("cachedContents/{id}");
+
+    const vertexRouteError = googleProviderOptionsRouteError(parseRequest({
+      ...base,
+      provider_options: { google: { cached_content: "cachedContents/cache-1" } },
+    }), {
+      providerName: "google-vertex",
+      provider: { adapter: "google", googleMode: "vertex" },
+      adapterName: "google",
+    });
+    expect(vertexRouteError).toContain("Vertex");
+    expect(vertexRouteError).toContain("projects/{project}/locations/{location}/cachedContents/{id}");
   });
 
   test("accepts only AI Studio and Vertex Google routes", () => {
