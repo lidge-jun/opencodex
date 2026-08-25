@@ -167,7 +167,11 @@ interface OutputItem {
 
 export type ResponsesTerminalStatus = "completed" | "failed" | "incomplete";
 
-export type BridgeDiagnosticContext = DebugStreamDiagnosticContext;
+export interface BridgeDiagnosticSequence { value: number }
+
+export interface BridgeDiagnosticContext extends DebugStreamDiagnosticContext {
+  sequence?: BridgeDiagnosticSequence;
+}
 
 export function adapterEventDiagnosticDetails(event: AdapterEvent): Record<string, unknown> {
   switch (event.type) {
@@ -209,7 +213,9 @@ export function adapterEventDiagnosticDetails(event: AdapterEvent): Record<strin
         byteLength: Buffer.byteLength(event.message),
         fingerprint: debugFingerprint(event.message),
         ...(event.status !== undefined ? { status: event.status } : {}),
-        ...(event.code !== undefined ? { code: event.code } : {}),
+        ...(event.code !== undefined
+          ? { codeByteLength: Buffer.byteLength(event.code), codeFingerprint: debugFingerprint(event.code) }
+          : {}),
         ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
       };
     case "incomplete":
@@ -221,12 +227,26 @@ export function adapterEventDiagnosticDetails(event: AdapterEvent): Record<strin
       };
     case "done":
       return {
-        ...(event.stopReason !== undefined ? { stopReason: event.stopReason } : {}),
+        ...(event.stopReason !== undefined
+          ? { stopReasonByteLength: Buffer.byteLength(event.stopReason), stopReasonFingerprint: debugFingerprint(event.stopReason) }
+          : {}),
         ...(event.endTurn !== undefined ? { endTurn: event.endTurn } : {}),
       };
     default:
       return {};
   }
+}
+
+/** Emit one adapter-stage diagnostic while preserving one sequence across sidecar iterations. */
+export function diagnoseAdapterEvent(context: BridgeDiagnosticContext, event: AdapterEvent): void {
+  const sequence = context.sequence ??= { value: 0 };
+  debugStreamDiagnostic(
+    context,
+    "adapter",
+    ++sequence.value,
+    event.type,
+    adapterEventDiagnosticDetails(event),
+  );
 }
 
 export function bridgeToResponsesSSE(
@@ -928,7 +948,9 @@ export function bridgeToResponsesSSE(
             debugStreamDiagnostic(
               options.diagnostic,
               "bridge",
-              ++diagnosticSequence,
+              options.diagnostic.sequence
+                ? ++options.diagnostic.sequence.value
+                : ++diagnosticSequence,
               event.type,
               adapterEventDiagnosticDetails(event),
             );

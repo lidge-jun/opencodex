@@ -92,6 +92,37 @@ describe("Responses bridge reasoning and usage parity", () => {
     }
   });
 
+  test("diagnostics fingerprint arbitrary upstream error codes and stop reasons", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const code = "Bearer upstream-code-secret@example.test";
+    const stopReason = "provider-stop-secret-account-123";
+    try {
+      await collectSse(bridgeToResponsesSSE(replay([
+        { type: "error", message: "failed", code },
+      ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+        diagnostic: { requestId: "req-upstream-fields", adapterName: "openai-chat" },
+      }));
+      const errorLine = getDebugLogEntries().map(entry => entry.line)
+        .find(line => line.includes('"stage":"bridge"') && line.includes('"eventType":"error"')) ?? "";
+      await collectSse(bridgeToResponsesSSE(replay([
+        { type: "done", stopReason },
+      ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+        diagnostic: { requestId: "req-upstream-fields", adapterName: "openai-chat" },
+      }));
+      const doneLine = getDebugLogEntries().map(entry => entry.line)
+        .find(line => line.includes('"stage":"bridge"') && line.includes('"eventType":"done"')) ?? "";
+      expect(errorLine).not.toContain(code);
+      expect(errorLine).toContain(`"codeByteLength":${Buffer.byteLength(code)}`);
+      expect(errorLine).toContain('"codeFingerprint"');
+      expect(doneLine).not.toContain(stopReason);
+      expect(doneLine).toContain(`"stopReasonByteLength":${Buffer.byteLength(stopReason)}`);
+      expect(doneLine).toContain('"stopReasonFingerprint"');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("first-output callback fires once on first non-empty delta (heartbeat/empty skipped)", async () => {
     let firstOutputs = 0;
     await collectSse(bridgeToResponsesSSE(replay([

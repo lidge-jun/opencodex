@@ -3,7 +3,7 @@ import { appendDebugLogLine } from "./debug-log-buffer";
 import { isDebugEnabled } from "./debug-settings";
 import { redactSecrets } from "./redact";
 
-const debugFingerprintKey = randomBytes(32);
+let debugFingerprintKey: Uint8Array | undefined;
 
 function emitDebugLine(line: string): void {
   if (!isDebugEnabled()) return;
@@ -37,6 +37,7 @@ export function debugProviderDiagnostic(adapter: string, event: string, details:
 export function debugFingerprint(value: string | Uint8Array): string | undefined {
   if (!isDebugEnabled()) return undefined;
   try {
+    debugFingerprintKey ??= randomBytes(32);
     return createHmac("sha256", debugFingerprintKey).update(value).digest("hex");
   } catch {
     return undefined;

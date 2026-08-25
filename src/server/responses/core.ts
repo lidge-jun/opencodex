@@ -1,6 +1,6 @@
 import type { Server } from "bun";
 import { randomUUID } from "node:crypto";
-import { adapterEventDiagnosticDetails, bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type BridgeDiagnosticContext, type ResponsesTerminalStatus } from "../../bridge";
+import { adapterEventDiagnosticDetails, bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type BridgeDiagnosticContext, type BridgeDiagnosticSequence, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import {
   createResponsesFieldBackfillBlockRewrite,
@@ -350,14 +350,12 @@ import { preflightComboStreamResponse } from "./combo-stream-preflight";
 // already-committed event boundary and can replay custom adapter work.
 const runTurnAdapterSseResponses = new WeakSet<Response>();
 
-interface AdapterDiagnosticState { sequence: number }
-
 function diagnoseAdapterEvents(
   events: AsyncIterable<AdapterEvent>,
   adapterName: string,
   requestId: string | undefined,
   logCtx: RequestLogContext,
-  state: AdapterDiagnosticState,
+  state: BridgeDiagnosticSequence,
 ): AsyncIterable<AdapterEvent> {
   if (!requestId) return events;
   return (async function* () {
@@ -371,7 +369,7 @@ function diagnoseAdapterEvents(
           ...(attempt?.recoveryKinds.at(-1) !== undefined ? { recovery: attempt.recoveryKinds.at(-1) } : {}),
         },
         "adapter",
-        ++state.sequence,
+        ++state.value,
         event.type,
         adapterEventDiagnosticDetails(event),
       );
@@ -2935,10 +2933,22 @@ async function handleResponsesInner(
     if (passiveSubjectId) logCtx.activeAttempt.labRouteSubjectId = passiveSubjectId;
   }
   const diagnosticRequestId = isDebugEnabled() ? randomUUID() : undefined;
-  const adapterDiagnosticState: AdapterDiagnosticState = { sequence: 0 };
+  const adapterDiagnosticState: BridgeDiagnosticSequence = { value: 0 };
   const diagnosticContext: BridgeDiagnosticContext | undefined = diagnosticRequestId
-    ? { requestId: diagnosticRequestId, adapterName: adapter.name }
+    ? { requestId: diagnosticRequestId, adapterName: adapter.name, sequence: adapterDiagnosticState }
     : undefined;
+  const noteDiagnosticAttempt = (
+    attempt: RequestLogContext["activeAttempt"],
+    inputEstimate: number | undefined,
+    recovery?: AttemptRecoveryKind,
+    adapterName?: string,
+  ): void => {
+    noteAttemptSend(attempt, inputEstimate, recovery);
+    if (!diagnosticContext) return;
+    diagnosticContext.attempt = attempt?.ordinal;
+    diagnosticContext.recovery = recovery;
+    if (adapterName) diagnosticContext.adapterName = adapterName;
+  };
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
@@ -3348,7 +3358,7 @@ async function handleResponsesInner(
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
-          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
+          noteDiagnosticAttempt(logCtx.activeAttempt, passthroughEstimate, recovery, route.provider.adapter);
           return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
             method: request.method,
             headers: request.headers,
@@ -3418,7 +3428,7 @@ async function handleResponsesInner(
       try {
         return await fetchWithTransientRetry(
           innerRecovery => {
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);
+            noteDiagnosticAttempt(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery, retryAdapter.name);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
@@ -3521,7 +3531,7 @@ async function handleResponsesInner(
       try {
         upstreamResponse = await fetchWithTransientRetry(
           recovery => {
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "oauth-401");
+            noteDiagnosticAttempt(logCtx.activeAttempt, passthroughEstimate, recovery ?? "oauth-401", refreshedAdapter.name);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
@@ -3583,7 +3593,7 @@ async function handleResponsesInner(
           recovery => {
             // The first send of every replay is itself a rate-limit retry; inner transient-5xx
             // recoveries keep their own label (recovery is provided for those).
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "rate-limit-429");
+            noteDiagnosticAttempt(logCtx.activeAttempt, passthroughEstimate, recovery ?? "rate-limit-429", route.provider.adapter);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
@@ -4309,7 +4319,8 @@ async function handleResponsesInner(
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
       onAttemptSend: (recovery?: AttemptRecoveryKind) =>
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery),
+        noteDiagnosticAttempt(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery, adapter.name),
+      ...(diagnosticContext ? { diagnostic: diagnosticContext } : {}),
       abortSignal: options.abortSignal,
       maxRounds: imgPlan && vidPlan
         ? clampImageMaxRounds(Math.min(config.images?.maxRounds ?? 3, config.images?.videoMaxRounds ?? 2))
@@ -4414,7 +4425,8 @@ async function handleResponsesInner(
         recordAdapterTier(logCtx, request);
       },
       onAttemptSend: (recovery?: AttemptRecoveryKind) =>
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery),
+        noteDiagnosticAttempt(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery, adapter.name),
+      ...(diagnosticContext ? { diagnostic: diagnosticContext } : {}),
       onUsage: usage => {
         logCtx.usageFromBridge = true;
         if (usage) {
@@ -4510,7 +4522,7 @@ async function handleResponsesInner(
         if (!pacingSlotAcquired) {
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery);
+        noteDiagnosticAttempt(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery, adapter.name);
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -4756,7 +4768,7 @@ async function handleResponsesInner(
   let upstreamResponse: Response;
   try {
     if (activeAdapter.fetchResponse) {
-      noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate);
+      noteDiagnosticAttempt(logCtx.activeAttempt, inputTokenEstimate, undefined, activeAdapter.name);
       await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
       upstreamResponse = await activeAdapter.fetchResponse(builtInitialRequest, {
         abortSignal: upstream.signal,
@@ -4776,7 +4788,7 @@ async function handleResponsesInner(
       const fetchWithRetryPolicy = route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
       upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
-          noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
+          noteDiagnosticAttempt(logCtx.activeAttempt, inputTokenEstimate, recovery, activeAdapter.name);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
@@ -4861,7 +4873,7 @@ async function handleResponsesInner(
       if (retryEstimate !== undefined) logCtx.usageLogInputTokens = retryEstimate;
       logCtx.providerAdapter = activeAdapter.name;
       sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
-      noteAttemptSend(logCtx.activeAttempt, retryEstimate, recovery);
+      noteDiagnosticAttempt(logCtx.activeAttempt, retryEstimate, recovery, activeAdapter.name);
       try {
         try {
           if (activeAdapter.fetchResponse) {
@@ -5393,7 +5405,7 @@ async function handleResponsesInner(
           diagnosticContext.adapterName = activeAdapter.name;
         }
         if (activeAdapter.fetchResponse) {
-          noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
+          noteDiagnosticAttempt(logCtx.activeAttempt, continuationEstimate, replayKind, activeAdapter.name);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
           return await activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
@@ -5411,7 +5423,7 @@ async function handleResponsesInner(
         const fetchContinuationWithRetryPolicy = route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
-            noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
+            noteDiagnosticAttempt(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind, activeAdapter.name);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
               applyUpstreamRecoveryInit({
