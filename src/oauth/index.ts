@@ -490,6 +490,22 @@ export async function getValidAccessTokenForAccount(provider: string, accountId:
   return (await resolveAccessSnapshotForAccount(provider, accountId)).accessToken;
 }
 
+/**
+ * Account-scoped resolver returning the FULL snapshot, not just the bearer.
+ *
+ * A rotator that swaps only the token silently mixes credential generations: Antigravity pairs
+ * an account-matched `projectId` with its token (see the pairing comment in
+ * server/responses/core.ts), Kiro carries routing metadata, and Copilot's observed snapshot
+ * carries an account-specific API origin. Reading those back from "whichever account is active"
+ * after a rotation is exactly the mixing this returns in one piece to prevent (#2568).
+ */
+export async function getValidAccessSnapshotForAccount(
+  provider: string,
+  accountId: string,
+): Promise<OAuthAccessSnapshot> {
+  return resolveAccessSnapshotForAccount(provider, accountId);
+}
+
 /** Terminal refresh failures (revoked/rotated-away grants) — retrying cannot succeed. */
 function isTerminalRefreshError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();

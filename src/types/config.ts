@@ -583,6 +583,21 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /**
+   * Opt-in generic OAuth multi-account 429 failover (#2568). Default OFF.
+   *
+   * Rotates to another logged-in account of the SAME provider when one is rate-limited, for
+   * OAuth providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot,
+   * Antigravity, Nous. The Codex pool and the Anthropic pool own their own rotation and are
+   * excluded; enabling this changes neither.
+   *
+   * Default OFF is a recorded escalation, not a settled preference: the issue asks for
+   * presence-driven activation (2+ accounts implies consent, mirroring API-key pools), but
+   * rotating spends a second subscription account's quota, so the default is left to the owner.
+   */
+  oauthAccountFailover?: {
+    enabled?: boolean;
+  };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**

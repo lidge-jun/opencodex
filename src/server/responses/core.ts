@@ -113,6 +113,13 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
+import {
+  failoverAccountSnapshot,
+  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  isGenericFailoverProvider,
+  isGenericOAuthFailoverEnabled,
+  rotateGenericOAuthAccountOn429,
+} from "../../oauth/generic-account-failover";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -2733,6 +2740,10 @@ async function handleResponsesInner(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  // Generic OAuth rotation (#2568) for providers with no pool of their own. Bound to the account
+  // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
+  let genericFailoverAccountId: string | null = null;
+  let genericFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -2772,6 +2783,11 @@ async function handleResponsesInner(
         };
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        // Remember which account actually served this request so a 429 cools THAT one, not
+        // whichever account is active by the time the response comes back (#2568).
+        if (isGenericFailoverProvider(route.providerName, route.provider)) {
+          genericFailoverAccountId = resolved.accountId;
+        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
@@ -4963,6 +4979,49 @@ async function handleResponsesInner(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
           const result = await rebuildAndRefetch("anthropic-oauth-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
+      // Generic OAuth account failover (#2568) for providers with no pool of their own. Opt-in
+      // and a strict no-op otherwise, so a single-account install and every existing config are
+      // unchanged. Codex and Anthropic are excluded by isGenericFailoverProvider — their pools
+      // own quota scopes, probe leases and affinity that this must not reimplement.
+      while (
+        upstreamResponse.status === 429
+        && genericFailoverAccountId
+        && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        && isGenericOAuthFailoverEnabled(config, route.providerName)
+      ) {
+        const nextAccountId = rotateGenericOAuthAccountOn429(
+          config,
+          route.providerName,
+          genericFailoverAccountId,
+          upstreamResponse.headers.get("retry-after"),
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          // The FULL snapshot, not just the bearer: Antigravity pairs an account-matched
+          // projectId with its token and Kiro carries routing metadata, so a token-only swap
+          // would mix one account's credential with another's routing data.
+          const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+          genericFailoverAccountId = nextAccountId;
+          genericFailovers += 1;
+          route.provider = { ...route.provider, apiKey: snapshot.accessToken };
+          if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
+          if (route.provider.googleMode === "cloud-code-assist" && snapshot.projectId) {
+            route.provider = { ...route.provider, project: snapshot.projectId };
+          }
+          invalidateSameTargetRequest();
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+          const result = await rebuildAndRefetch("oauth-account-429");
           if ("failed" in result) return result.failed;
           upstreamResponse = result;
         } catch {
