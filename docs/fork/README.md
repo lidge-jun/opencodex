@@ -100,6 +100,9 @@ Classification of the 2026-08-21 mixed snapshot: [`MIXED-SPLIT.md`](./MIXED-SPLI
 
 Historical design (the `overlay` git branch is retired): [`2026-08-21-fork-daily-main-pin-design.md`](../superpowers/specs/2026-08-21-fork-daily-main-pin-design.md), [`2026-08-21-fork-sync-design.md`](../superpowers/specs/2026-08-21-fork-sync-design.md).
 
+Fork-owned Jules dispatch, exact-head Cursor Bugbot review, and the staged
+maintenance rollout are documented in [`AGENT-MAINTENANCE.md`](./AGENT-MAINTENANCE.md).
+
 ## Automated release sync
 
 `.github/workflows/fork-upstream-sync.yml` is a fork-owned poller. It runs on a

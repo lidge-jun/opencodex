@@ -224,6 +224,11 @@ Rebase pull requests are welcome. Bringing a stale branch onto the current head
 is ordinary maintenance — open it as a normal pull request and name the source
 commits in the description.
 
+The public `yansigit/opencodex` fork has one explicit exception: fork-owned
+maintenance and upstream-sync pull requests target fork `main`, as documented
+in `docs/fork/README.md`. Contributions intended for upstream still target
+`dev`; the fork exception does not change the upstream integration policy.
+
 The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
 empty, thin, or malformed descriptions; PRs whose title or description
@@ -261,8 +266,9 @@ reviewers (Codex, CodeRabbit).
   language. Be detailed and specific: name the file and line, describe the
   concrete failure mode, and suggest a fix. Avoid vague or purely stylistic
   commentary.
-- **Branch targeting:** flag any pull request that does not target `dev`
-  (releases and maintainer promotions are the only exceptions).
+- **Branch targeting:** upstream contributions target `dev`. On the public
+  fork, fork-owned maintenance and upstream-sync pull requests target fork
+  `main`; releases and maintainer promotions remain the other exceptions.
 - **Security boundary (highest priority):** changes touching authentication,
   credential/token handling, OAuth flows, GitHub Actions workflows, release
   automation (`scripts/release.ts`, `.github/workflows/release.yml`), or

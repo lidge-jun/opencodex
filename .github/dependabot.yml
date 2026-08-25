@@ -1,0 +1,53 @@
+# Dependabot configuration for the yansigit/opencodex fork.
+# Fork-owned dependency maintenance targets fork main. Upstream contributions target dev.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      non-major:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /
+    target-branch: main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      non-major:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /gui
+    target-branch: main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      non-major:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /docs-site
+    target-branch: main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      non-major:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /integrations/replit-gateway
+    target-branch: main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      non-major:
+        update-types: [minor, patch]
