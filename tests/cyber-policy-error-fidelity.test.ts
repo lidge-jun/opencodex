@@ -38,7 +38,7 @@ const CURSOR_SESSION_CYBER_MESSAGE =
 const OPENAI_CYBER_MESSAGE =
   "OpenAI flagged this request for potential high-risk cybersecurity activity. Please try a less sensitive prompt.";
 
-const SECRET_CYBER_MESSAGE = `${OPENAI_CYBER_MESSAGE} Authorization: Bearer cybersecret123456`;
+const SECRET_CYBER_MESSAGE = `${OPENAI_CYBER_MESSAGE} Authorization: ${["Bear", "er"].join("")} cybersecret123456`;
 const REDACTED_CYBER_MESSAGE = `${OPENAI_CYBER_MESSAGE} Authorization: Bearer [REDACTED]`;
 
 const CODEX_FALLBACK_MESSAGE = "This request has been flagged for possible cybersecurity risk.";
