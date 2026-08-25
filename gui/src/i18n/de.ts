@@ -2113,4 +2113,6 @@ export const de: Record<TKey, string> = {
   "dash.visionTimeout": "Timeout",
   "dash.visionTimeoutInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Millisekunden ein.",
   "dash.visionAdvancedPopover": "Erweiterte Vision-Einstellungen",
+  "models.newPolicyGlobal": "Neue Modelle zunächst deaktivieren", "models.newPolicyProvider": "Richtlinie für neue Modelle",
+  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
 };

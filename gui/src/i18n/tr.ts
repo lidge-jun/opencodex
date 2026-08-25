@@ -2136,4 +2136,6 @@ export const tr: Record<TKey, string> = {
   "dash.visionTimeout": "Zaman aşımı",
   "dash.visionTimeoutInvalid": "{min} ile {max} milisaniye arasında bir tam sayı girin.",
   "dash.visionAdvancedPopover": "Gelişmiş görsel ayarları",
+  "models.newPolicyGlobal": "Yeni modeller devre dışı başlasın", "models.newPolicyProvider": "Yeni model ilkesi",
+  "models.newPolicy_inherit": "Devral", "models.newPolicy_off": "Kapalı", "models.newPolicy_on": "Açık", "models.newBadge": "YENİ", "models.newCount": "{count} yeni, kapalı",
 };

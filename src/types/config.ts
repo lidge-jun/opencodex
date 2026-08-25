@@ -260,6 +260,18 @@ export interface OcxConfig {
   managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
+  /** Persisted state for newly discovered provider models (#2464). Absent keeps legacy "on" behavior. */
+  modelDiscovery?: {
+    newModelPolicy?: "on" | "off";
+    knownModels?: Record<string, {
+      ids: string[];
+      removed: string[];
+      updatedAt: string;
+      /** Consecutive successful discoveries in which an active id was absent. */
+      missing?: Record<string, number>;
+    }>;
+    recentArrivals?: Record<string, Array<{ id: string; at: string }>>;
+  };
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
   openaiProviderTierVersion?: 1 | 2;
   /** One-time migration marker for Antigravity's static-catalog defaults. */

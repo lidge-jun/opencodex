@@ -275,6 +275,8 @@ export interface OcxProviderConfig {
    * full set so the user can pick). See devlog issue_052_provider-model-allowlist.
    */
   selectedModels?: string[];
+  /** Override for newly discovered models. Absent/"inherit" uses the install policy. */
+  newModelPolicy?: "on" | "off" | "inherit";
   /**
    * Model-preset marker for `selectedModels` (#2465). Absent means "all", exactly today's
    * semantics — an existing provider is never narrowed by an upgrade.

@@ -2101,4 +2101,6 @@ export const fr: Record<TKey, string> = {
   "lab.layer.protocol_conformance": "Conformité du protocole",
   "lab.layer.live_route_compatibility": "Compatibilité des routes en direct",
   "lab.layer.task_effectiveness": "Efficacité des tâches",
+  "models.newPolicyGlobal": "Désactiver les nouveaux modèles par défaut", "models.newPolicyProvider": "Politique des nouveaux modèles",
+  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
 };

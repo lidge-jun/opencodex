@@ -2136,4 +2136,6 @@ export const ru: Record<TKey, string> = {
   "dash.visionTimeout": "Таймаут",
   "dash.visionTimeoutInvalid": "Введите целое число от {min} до {max} миллисекунд.",
   "dash.visionAdvancedPopover": "Дополнительные настройки изображений",
+  "models.newPolicyGlobal": "Добавлять новые модели выключенными", "models.newPolicyProvider": "Политика новых моделей",
+  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
 };

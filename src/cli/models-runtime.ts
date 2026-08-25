@@ -24,6 +24,8 @@ const USAGE = `Usage:
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
   ocx models preset show [--provider <name>] [--json]
   ocx models preset apply <provider> [--all] [--json]
+  ocx models new-policy [on|off] [--provider <name>] [--json]
+  ocx models new-arrivals [--json]
   ocx models context <status|value <tokens> [--set-all]|provider <name> on [--value <tokens>]|provider <name> off|all <on|off>> [--json]
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]`;
 
@@ -226,6 +228,32 @@ async function preset(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [line]);
 }
 
+async function newPolicy(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const state = args[0] && !args[0].startsWith("--") ? args.shift()!.toLowerCase() : undefined;
+  const provider = takeOption(args, "--provider")?.trim();
+  const wantsJson = takeFlag(args, "--json");
+  if (state !== undefined && state !== "on" && state !== "off") throw new CliUsageError("new policy must be on or off", USAGE);
+  rejectArgs(args, USAGE);
+  if (!state) {
+    const result = await runtimeRequest<{ policy: string; providers: Record<string, string> }>("/api/model-discovery", {}, deps);
+    const value = provider ? result.providers[provider] ?? "inherit" : result.policy;
+    printData(provider ? { provider, policy: value } : result, wantsJson, [`${provider ?? "global"}: ${value}`]);
+    return;
+  }
+  const result = await runtimeRequest<{ baselineBootstrapped?: boolean }>("/api/model-discovery", {
+    method: "PUT", body: JSON.stringify({ policy: state, provider: provider ?? null }),
+  }, deps);
+  printData(result, wantsJson, [`${provider ?? "global"}: ${state}${result.baselineBootstrapped ? " (current models recorded as known)" : ""}`]);
+}
+
+async function newArrivals(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv]; const wantsJson = takeFlag(args, "--json"); rejectArgs(args, USAGE);
+  const result = await runtimeRequest<{ recentArrivals: Record<string, Array<{ id: string; at: string; state: string }>> }>("/api/model-discovery", {}, deps);
+  const lines = Object.entries(result.recentArrivals).flatMap(([provider, rows]) => rows.map(row => `${provider}/${row.id}  [${row.state}]  ${row.at}`));
+  printData(result.recentArrivals, wantsJson, lines.length ? lines : ["no recent model arrivals"]);
+}
+
 async function context(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
@@ -301,6 +329,8 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   else if (sub === "provider") action = () => providerVisibility(argv, deps);
   else if (sub === "selected") action = () => selected(argv, deps);
   else if (sub === "preset") action = () => preset(argv, deps);
+  else if (sub === "new-policy") action = () => newPolicy(argv, deps);
+  else if (sub === "new-arrivals") action = () => newArrivals(argv, deps);
   else if (sub === "context") action = () => context(argv, deps);
   else if (sub === "shadow") action = () => shadow(argv, deps);
   if (!action) return null;

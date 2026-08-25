@@ -2143,6 +2143,9 @@ export const en = {
   "lab.layer.live_route_compatibility": "Live route compatibility",
   "lab.layer.task_effectiveness": "Task effectiveness",
 
+  "models.newPolicyGlobal": "New models start disabled", "models.newPolicyProvider": "New model policy",
+  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On",
+  "models.newBadge": "NEW", "models.newCount": "{count} new, off",
 } as const;
 
 export type TKey = keyof typeof en;

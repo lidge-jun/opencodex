@@ -2134,4 +2134,6 @@ export const ja: Record<TKey, string> = {
   "dash.visionTimeout": "タイムアウト",
   "dash.visionTimeoutInvalid": "{min} から {max} ミリ秒の整数を入力してください。",
   "dash.visionAdvancedPopover": "詳細なビジョン設定",
+  "models.newPolicyGlobal": "新しいモデルを無効で追加", "models.newPolicyProvider": "新しいモデルのポリシー",
+  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
 };

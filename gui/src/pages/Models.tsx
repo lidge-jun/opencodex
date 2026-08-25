@@ -113,6 +113,11 @@ interface ModelPresetView {
   totalCount: number;
   fallback?: string;
 }
+interface ModelDiscoveryView {
+  policy: "on" | "off";
+  providers: Record<string, "on" | "off" | "inherit">;
+  recentArrivals: Record<string, Array<{ id: string; at: string; state: string }>>;
+}
 
 export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string; restartEpoch?: number }) {
   // Codex app-server staleness (devlog/_fin/260815_gui_codex_restart). Named
@@ -240,6 +245,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   // #2465: per-provider model-preset state. Keyed by provider so one card's busy state cannot
   // freeze the others.
   const [presets, setPresets] = useState<Record<string, ModelPresetView>>({});
+  const [modelDiscovery, setModelDiscovery] = useState<ModelDiscoveryView | null>(null);
   const [presetBusy, setPresetBusy] = useState<string | null>(null);
   const [v2Loading, setV2Loading] = useState(true);
   const [v2Busy, setV2Busy] = useState(false);
@@ -440,6 +446,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       // Preset previews belong to the same tab. Loaded once rather than polled: the rules are
       // shipped code and the catalog poll above already refreshes the rows they describe.
       void loadPresets();
+      void loadModelDiscovery();
     }, 0);
     // Hidden tab: no timer, no /api/v2 traffic; the make-up tick refreshes on return.
     const stop = startVisibilityPoll(() => {
@@ -881,6 +888,22 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     }
   };
 
+  const loadModelDiscovery = async () => {
+    try {
+      const r = await fetch(`${apiBase}/api/model-discovery`);
+      setModelDiscovery((await readJsonIfOk<ModelDiscoveryView>(r)) ?? null);
+    } catch { setModelDiscovery(null); }
+  };
+
+  const saveModelDiscovery = async (policy: "on" | "off", provider?: string) => {
+    const r = await fetch(`${apiBase}/api/model-discovery`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ policy, provider: provider ?? null }),
+    });
+    await readJsonIfOk(r);
+    await Promise.all([loadModelDiscovery(), load()]);
+  };
+
   const applyPreset = async (provider: string, mode: "preset" | "all") => {
     if (presetBusy) return;
     setPresetBusy(provider);
@@ -1089,6 +1112,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       disabled.has(model.namespaced),
     );
     const activeCount = rows.filter(isVisible).length;
+    const recentForProvider = modelDiscovery?.recentArrivals[provider] ?? [];
+    const recentIds = new Set(recentForProvider.map(row => row.id));
     const capOn = contextCaps[provider] !== undefined;
     const providerCap = contextCaps[provider] ?? contextCapValue;
     // With the cap off, `providerCap` is only the value a future toggle would apply — for the
@@ -1155,6 +1180,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
            </span>
          )}
           <span className="muted mono text-label">{t("models.active", { active: activeCount, total: rows.length })}</span>
+          {recentForProvider.length > 0 && <span className="models-chip mono text-caption">{t("models.newCount", { count: recentForProvider.length })}</span>}
           </button>
            <div className="row models-provider-actions">
              {/* Available on every card, including the native one: the canonical `openai` seed
@@ -1305,6 +1331,21 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         {!isCollapsed && (
           <div className="models-provider-body">
             {nativeProviderGroup && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
+            {!nativeProviderGroup && modelDiscovery && (
+              <div className="row models-provider-hint">
+                <span className="muted text-label">{t("models.newPolicyProvider")}</span>
+                <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.newPolicyProvider")}>
+                  {(["off", "on"] as const).map(mode => (
+                    <button key={mode} type="button" role="radio"
+                      aria-checked={(modelDiscovery.providers[provider] ?? "inherit") === mode}
+                      className={`btn btn-sm${(modelDiscovery.providers[provider] ?? "inherit") === mode ? " btn-primary" : " btn-ghost"}`}
+                      onClick={() => void saveModelDiscovery(mode, provider)}>
+                      {t(`models.newPolicy_${mode}` as TKey)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {rows.length === 0 && (
               <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}
@@ -1339,6 +1380,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                          {t("models.customBadge")}
                        </span>
                      )}
+                     {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
                      {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                    </div>
                    {hoveredModel?.namespaced === m.namespaced && (() => {
@@ -1450,6 +1492,12 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const controlsBlock = (
     <>
       <div className="models-control-top-row">
+        {modelDiscovery && (
+          <div className="models-shadow-row row muted text-control">
+            <span className="models-shadow-label">{t("models.newPolicyGlobal")}</span>
+            <Switch on={modelDiscovery.policy === "off"} onClick={() => void saveModelDiscovery(modelDiscovery.policy === "off" ? "on" : "off")} label={t("models.newPolicyGlobal")} />
+          </div>
+        )}
         <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
           <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>

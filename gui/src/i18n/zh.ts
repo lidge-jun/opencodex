@@ -2134,4 +2134,6 @@ export const zh: Record<TKey, string> = {
   "dash.visionTimeout": "超时",
   "dash.visionTimeoutInvalid": "请输入 {min} 到 {max} 毫秒之间的整数。",
   "dash.visionAdvancedPopover": "高级视觉设置",
+  "models.newPolicyGlobal": "新模型默认停用", "models.newPolicyProvider": "新模型策略",
+  "models.newPolicy_inherit": "继承", "models.newPolicy_off": "关闭", "models.newPolicy_on": "开启", "models.newBadge": "新增", "models.newCount": "{count} 个新增，已关闭",
 };

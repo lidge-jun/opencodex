@@ -2099,4 +2099,6 @@ export const zhTW: Record<TKey, string> = {
   "dash.visionTimeout": "逾時",
   "dash.visionTimeoutInvalid": "請輸入 {min} 到 {max} 毫秒之間的整數。",
   "dash.visionAdvancedPopover": "進階視覺設定",
+  "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
+  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
 };

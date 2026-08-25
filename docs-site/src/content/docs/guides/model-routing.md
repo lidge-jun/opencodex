@@ -82,6 +82,13 @@ Routing and catalog visibility are separate controls:
   for that model.
 - A provider's non-empty `selectedModels` is another catalog allowlist. Live discovery and direct
   routing still work; only catalog and `/v1/models` emission are narrowed.
+- Fresh installs set `modelDiscovery.newModelPolicy` to `"off"`. After the first successful live
+  fetch establishes a baseline, later arrivals are appended to `disabledModels` and carry a **NEW**
+  dashboard badge until enabled or acknowledged. Existing installs remain `"on"` until opted in.
+  Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
+  `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
+  with a non-empty `selectedModels` (including preset mode) are already curated, so this policy is
+  deliberately inert for them.
 - `provider.disabled: true` removes that provider from catalog discovery. Explicit
   `provider/model` requests fail, and `defaultModel` / `models[]` scans skip it.
 - `providerContextCaps` applies per-provider Codex-visible context caps. `contextCapValue` is the

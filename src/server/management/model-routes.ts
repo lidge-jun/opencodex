@@ -177,6 +177,69 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
 
+  if (url.pathname === "/api/model-discovery" && req.method === "GET") {
+    const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [
+      name, provider.newModelPolicy ?? "inherit",
+    ]));
+    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => [
+      name,
+      rows.map(row => ({
+        ...row,
+        state: (config.disabledModels ?? []).some(slug => slugEquals(slug, name, row.id))
+          ? "auto-disabled" : "enabled",
+      })),
+    ]));
+    const baselineCounts = Object.fromEntries(Object.entries(config.modelDiscovery?.knownModels ?? {}).map(([name, baseline]) => [
+      name, baseline.ids.length,
+    ]));
+    return jsonResponse({
+      policy: config.modelDiscovery?.newModelPolicy ?? "on", providers, recentArrivals, baselineCounts,
+    });
+  }
+
+  if (url.pathname === "/api/model-discovery" && req.method === "PUT") {
+    let body: { policy?: unknown; provider?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (body.policy !== "on" && body.policy !== "off") return jsonResponse({ error: "policy must be on or off" }, 400);
+    const provider = typeof body.provider === "string" && body.provider.trim() ? body.provider.trim() : null;
+    let baselineBootstrapped = false;
+    if (provider) {
+      if (!hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "unknown provider" }, 404);
+      config.providers[provider].newModelPolicy = body.policy;
+    } else {
+      const wasAbsent = config.modelDiscovery?.newModelPolicy === undefined;
+      config.modelDiscovery ??= {};
+      config.modelDiscovery.newModelPolicy = body.policy;
+      if (body.policy === "off" && wasAbsent) {
+        const models = await fetchAllModels(config);
+        const known = config.modelDiscovery.knownModels ??= {};
+        const at = new Date().toISOString();
+        for (const name of Object.keys(config.providers)) {
+          known[name] ??= { ids: [...new Set(models.filter(m => m.provider === name).map(m => m.id))].sort(), removed: [], updatedAt: at };
+        }
+        baselineBootstrapped = true;
+      }
+    }
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, policy: body.policy, provider, ...(baselineBootstrapped ? { baselineBootstrapped } : {}), catalogRefresh });
+  }
+
+  if (url.pathname === "/api/model-discovery/acknowledge" && req.method === "POST") {
+    let body: { provider?: unknown; ids?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+    if (!provider || !Array.isArray(body.ids) || body.ids.some(id => typeof id !== "string")) {
+      return jsonResponse({ error: "provider and string ids are required" }, 400);
+    }
+    const acknowledged = new Set(body.ids as string[]);
+    const recent = config.modelDiscovery?.recentArrivals;
+    if (recent?.[provider]) recent[provider] = recent[provider].filter(row => !acknowledged.has(row.id));
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, provider, acknowledged: [...acknowledged], catalogRefresh });
+  }
+
   if (url.pathname === "/api/catalog" && req.method === "GET") {
     const { readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
     const catalog = readCatalog(readCodexCatalogPath());
@@ -376,6 +439,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
           providerConfig.selectedModels = [...new Set([...providerConfig.selectedModels, ...additions])];
         }
         disabled = disabled.filter(stored => !targets.some(target => matchesTarget(stored, target)));
+        const arrivals = config.modelDiscovery?.recentArrivals?.[provider];
+        if (arrivals) config.modelDiscovery!.recentArrivals![provider] = arrivals.filter(row => (
+          !targets.some(target => !target.native && target.id === row.id)
+        ));
       }
     } else {
       for (const target of targets) {

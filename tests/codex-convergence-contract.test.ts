@@ -372,10 +372,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 8 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 7 + 10 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 7],
-    ["model-routes.ts", 8],
+    ["model-routes.ts", 10],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -387,10 +387,18 @@ test("the route inventory contains exactly the specified 7 + 8 + 2 + 2 convergen
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 7,
-    "model-routes.ts": 8,
+    "model-routes.ts": 10,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });
+});
+
+test("both model-discovery write paths converge the Codex catalog", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "src", "server", "management", "model-routes.ts"), "utf8");
+  const settings = source.slice(source.indexOf('url.pathname === "/api/model-discovery" && req.method === "PUT"'), source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'));
+  const acknowledge = source.slice(source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'), source.indexOf('url.pathname === "/api/catalog"'));
+  expect(settings.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
+  expect(acknowledge.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
 });
 
 /**

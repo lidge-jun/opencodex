@@ -2135,4 +2135,6 @@ export const ko: Record<TKey, string> = {
   "dash.visionTimeout": "제한 시간",
   "dash.visionTimeoutInvalid": "{min}에서 {max} 밀리초 사이의 정수를 입력하세요.",
   "dash.visionAdvancedPopover": "고급 비전 설정",
+  "models.newPolicyGlobal": "새 모델을 비활성화 상태로 추가", "models.newPolicyProvider": "새 모델 정책",
+  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
 };
