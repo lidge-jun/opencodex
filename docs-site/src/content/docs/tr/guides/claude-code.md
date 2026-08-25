@@ -38,6 +38,9 @@ Etkinleştirildiğinde operasyonel sözleşme:
   böylece yeniden kimlik doğrulanana kadar seçimden hariç tutulur.
 - Uygun tüm hesaplar soğutuluyorsa, proxy bilindiğinde `Retry-After` ile
   birlikte **429** (401 değil) döndürür.
+- 429 yük devretmesi dahil kurtarma, mevcut soğuma ve yük devretme sınırlarını
+  değiştirmeden uygun yedek hesapları sıralamak için `quotaWindow` kullanır;
+  `round-robin` ise `quotaWindow` ayarını yok sayar.
 
 Bkz.
 [Yapılandırma](/tr/reference/configuration/#anthropicaccountpool-experimental).

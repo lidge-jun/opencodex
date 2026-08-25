@@ -160,7 +160,7 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` |スティッキー アフィニティと 429 クールダウン フェイルオーバーを有効にします。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` |新しいセッションでは、アクティブなアカウントがこのしきい値に達すると、設定した期間で既知のキャッシュ使用量が最も低いアカウントを選択します。 `0` はクォータ選択を無効にします。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。quota は `quotaWindow` で指定した期間を参照し、既定は 5 時間足です。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。`quota` は `quotaWindow` で指定した期間（既定は 5 時間足）でアカウントを順位付けし、`fill-first` も同じ期間で使い切りのしきい値を判定します。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` |使用量ベースのアカウント選択で評価するキャッシュ済み使用量です。`five-hour` は従来の動作を維持します。`weekly` は週次使用量を使いますが、5 時間使用量が上限に達したアカウントを除外します。`max-utilization` は 2 つの値のうち高い方を使います。どちらのモードでも同点の場合は 5 時間使用量が低い方を優先します。`round-robin` はこの設定を無視します。正常な affinity セッションを先回りして再配置することはありませんが、429 フェイルオーバーを含む終端エラーからの復旧では、既存のクールダウンとフェイルオーバー上限を変えずに、この期間で代替アカウントを順位付けします。アカウント別の週次使用量は、ダッシュボードのプロバイダーページで取得した後にのみ利用できます。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` |成功した新しいセッションのバインドは 1 つのラウンドロビン選択で保持されます。範囲は 1 ～ 100。 |
 

@@ -28,6 +28,8 @@ sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段�
 - Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
 - **401/403** 憑證失敗會隔離該帳號（`needsReauth`），直到重新認證前都不會參與選擇。
 - 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
+- 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
+  容錯移轉上限；`round-robin` 會忽略 `quotaWindow`。
 
 請見 [Configuration](/zh-tw/reference/configuration/#anthropicaccountpool-experimental)。
 

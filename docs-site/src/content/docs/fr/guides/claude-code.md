@@ -32,6 +32,9 @@ Comportement lorsque cette option est activée :
   sélection jusqu'à sa réauthentification.
 - Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
+- La récupération, y compris le basculement 429, utilise `quotaWindow` pour classer les comptes de
+  remplacement admissibles, sans modifier les limites existantes de temporisation ou de basculement ;
+  `round-robin` ignore `quotaWindow`.
 
 Voir [Configuration](/fr/reference/configuration/providers/#anthropicaccountpool-expérimental).
 
