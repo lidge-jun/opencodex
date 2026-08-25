@@ -706,6 +706,9 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     }
     for (const key of [
       "defaultModel",
+      "alias",
+      "modelAliases",
+      "defaultAliases",
       "disabled",
       "allowPrivateNetwork",
       "authMode",
@@ -757,6 +760,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     port: config.port,
     hostname: config.hostname ?? "127.0.0.1",
     defaultProvider: config.defaultProvider,
+    defaultModelAliases: config.defaultModelAliases,
     codexAutoStart: codexAutoStartEnabled(config),
     websockets: config.websockets,
     // The GUI's browser-open toggle reads and writes this; absent means the

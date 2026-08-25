@@ -69,6 +69,7 @@ export interface PersistedUsageAttempt {
 }
 
 export interface PersistedUsageEntry {
+  requestedAlias?: string;
   requestId: string;
   timestamp: number;
   provider: string;

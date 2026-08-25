@@ -29,6 +29,25 @@ uses the fresh-install default: one `openai` forward provider.
 
 ## Precedence and defaults
 
+### Provider and model aliases
+
+Aliases are optional short request names. They never change the native model id sent upstream, and omitting every alias field preserves existing routing exactly.
+
+```jsonc
+{
+  "providers": {
+    "openrouter": {
+      "alias": "or",
+      "modelAliases": { "anthropic/claude-opus-5": "opus" },
+      "defaultAliases": true
+    }
+  },
+  "defaultModelAliases": false
+}
+```
+
+Aliases match case-insensitively. A model alias works as `or/opus` or, when globally unique, bare `opus`; an ambiguous bare alias reports its qualified candidates. A provider's `defaultAliases` value overrides `defaultModelAliases`. Built-ins are skipped when multiple models in one provider match the same pattern.
+
 Valid values in `config.json` override built-in defaults. Missing optional fields use the defaults
 documented on the domain pages. `OPENCODEX_HOME` takes precedence over the default configuration
 directory. Fields that accept an environment reference, such as `apiKey: "${PROVIDER_API_KEY}"`,

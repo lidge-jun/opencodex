@@ -203,6 +203,16 @@ export function comboConfigIssues(
   }
 
   const body = raw as Record<string, unknown>;
+  if (typeof body.alias === "string") {
+    const alias = body.alias.toLowerCase();
+    for (const [providerName, provider] of Object.entries(providers)) {
+      if (provider.alias?.toLowerCase() === alias) {
+        issues.push({ path: ["alias"], message: `alias "${body.alias}" is already used by provider "${providerName}"` });
+      }
+      const model = Object.entries(provider.modelAliases ?? {}).find(([, value]) => value.toLowerCase() === alias);
+      if (model) issues.push({ path: ["alias"], message: `alias "${body.alias}" is already used by model "${providerName}/${model[0]}"` });
+    }
+  }
   if (body.strategy !== undefined
     && body.strategy !== "failover"
     && body.strategy !== "round-robin") {

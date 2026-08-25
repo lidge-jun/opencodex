@@ -430,6 +430,10 @@ const commandRunners: Record<string, CommandRunner> = {
     await handleModels(deps.args.slice(1));
     return 0;
   },
+  alias: async deps => {
+    const { handleAliasCommand } = await import("./alias");
+    return await handleAliasCommand(deps.args.slice(1));
+  },
   combo: async deps => {
     const { handleComboCommand } = await import("./combo");
     return await handleComboCommand(deps.args.slice(1));

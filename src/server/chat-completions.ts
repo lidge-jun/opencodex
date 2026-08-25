@@ -120,6 +120,7 @@ async function handleChatCompletionsWithBudget(
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
+    if (route.routeReason === "model-alias" || route.modelId !== requestedModel && requestedModel.includes("/")) logCtx.requestedAlias = requestedModel;
     logCtx.provider = route.providerName;
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;

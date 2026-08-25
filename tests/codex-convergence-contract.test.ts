@@ -375,7 +375,7 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
 test("the route inventory contains exactly the specified 7 + 8 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 7],
-    ["model-routes.ts", 8],
+    ["model-routes.ts", 11],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -387,10 +387,19 @@ test("the route inventory contains exactly the specified 7 + 8 + 2 + 2 convergen
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 7,
-    "model-routes.ts": 8,
+    "model-routes.ts": 11,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });
+});
+
+test("all three alias write routes converge the Codex catalog", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "src", "server", "management", "model-routes.ts"), "utf8");
+  for (const marker of ["providerAliasMatch && req.method", "modelAliasMatch && req.method", 'url.pathname === "/api/default-aliases"']) {
+    const start = source.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    expect(source.slice(start, source.indexOf("\n  if (", start + 1))).toContain("await convergeCodexCatalog()");
+  }
 });
 
 /**
