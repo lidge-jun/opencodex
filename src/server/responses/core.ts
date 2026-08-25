@@ -74,6 +74,7 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import {
   CYBER_POLICY_ERROR_CODE,
   CYBER_POLICY_FALLBACK_MESSAGE,
+  adapterFailureFromMessage,
   isCyberPolicyCode,
   isCyberPolicyMessage,
 } from "../../lib/errors";
@@ -2871,6 +2872,7 @@ async function handleResponsesInner(
     (logCtx.attempts ??= []).push(attempt);
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
+  let runTurnAdapter = adapter;
   if (adapter.runTurn) {
     recordAdapterTierMetadata(logCtx, adapter.tierLogForRunTurn?.(parsed));
   }
@@ -4465,7 +4467,7 @@ async function handleResponsesInner(
             pacingSlotAcquired: true,
           },
         );
-        await adapter.runTurn?.(
+        await runTurnAdapter.runTurn?.(
           parsed,
           {
             headers: selectedForwardHeaders,
@@ -4498,6 +4500,81 @@ async function handleResponsesInner(
       }
     };
     const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true);
+    const rotateRunTurnAdapterOnPreflight429 = async (
+      error: Extract<AdapterEvent, { type: "error" }>,
+    ): Promise<boolean> => {
+      const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
+      if (
+        status !== 429
+        || !genericFailoverAccountId
+        || genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        || !isGenericOAuthFailoverEnabled(config, route.providerName)
+      ) return false;
+      const nextAccountId = rotateGenericOAuthAccountOn429(
+        config,
+        route.providerName,
+        genericFailoverAccountId,
+        null,
+      );
+      if (!nextAccountId) return false;
+      try {
+        const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+        genericFailoverAccountId = nextAccountId;
+        genericFailovers += 1;
+        route.provider = { ...route.provider, apiKey: snapshot.accessToken };
+        if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
+        if (route.provider.googleMode === "cloud-code-assist" && snapshot.projectId) {
+          route.provider = { ...route.provider, project: snapshot.projectId };
+        }
+        // A Cursor conversation/checkpoint is credential-scoped. The failed attempt emitted no
+        // client-visible bytes, so replay is safe, but carrying its account identity into the next
+        // account would not be. Let the rotated adapter derive a fresh identity and conversation.
+        parsed._cursorIdentityScope = undefined;
+        parsed._cursorConversationId = undefined;
+        if (parsed._providerContinuation?.cursor) {
+          const { cursor: _discardedCursor, ...otherProviderState } = parsed._providerContinuation;
+          parsed._providerContinuation = otherProviderState;
+        }
+        const rotatedProvider = resolveWireProtocolOverride(
+          route.providerName,
+          route.modelId,
+          route.provider,
+          inboundWire,
+        );
+        const rotatedAdapter = resolveAdapter(rotatedProvider, config.cacheRetention);
+        if (!rotatedAdapter.runTurn) return false;
+        runTurnAdapter = rotatedAdapter;
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: rotatedProvider,
+          adapterName: rotatedAdapter.name,
+          oauthCredentialSnapshot: { accountId: snapshot.accountId, generation: snapshot.generation },
+          codexAuthContext: authCtx,
+          forwardHeaders: selectedForwardHeaders,
+        });
+        sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, rotatedAdapter.name, logCtx.accountLogLabel);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const preflightRunTurnFailover = async (
+      firstSource: AsyncIterable<AdapterEvent>,
+    ): Promise<AsyncIterable<AdapterEvent>> => {
+      let source = firstSource;
+      while (true) {
+        const preflight = await preflightAdapterEvents(source);
+        if (!preflight.error || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
+          return preflight.stream;
+        }
+        const retryQueue = createAdapterEventQueue({
+          onBacklogExceeded: () => runTurnAbort.abort(),
+        });
+        void runTurnAttempt(retryQueue, "oauth-account-429");
+        source = retryQueue.stream();
+      }
+    };
     // The empty-completion retry re-runs the turn against a fresh queue: the
     // first queue is closed once its attempt settles, and pushing into it after
     // close is a silent no-op.
@@ -4513,6 +4590,11 @@ async function handleResponsesInner(
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
+      if (genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName)) {
+        // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
+        // replayed transparently; after any output reaches the bridge, a later error stays terminal.
+        eventSource = await preflightRunTurnFailover(eventSource);
+      }
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(eventSource);
         if (preflight.error || preflight.empty) {
@@ -4592,15 +4674,22 @@ async function handleResponsesInner(
 
     await runTurn();
     const firstAttemptEvents = await queue.collect();
+    let runTurnEvents: AdapterEvent[] = firstAttemptEvents;
+    if (genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName)) {
+      runTurnEvents = [];
+      for await (const event of await preflightRunTurnFailover(
+        (async function* () { yield* firstAttemptEvents; })(),
+      )) runTurnEvents.push(event);
+    }
     let events: AdapterEvent[];
     if (emptyCompletionGuardEnabled) {
       events = [];
       for await (const event of guardEmptyCompletionEventStream({
-        firstEvents: (async function* () { yield* firstAttemptEvents; })(),
+        firstEvents: (async function* () { yield* runTurnEvents; })(),
         continuation: runTurnRetrySource,
       })) events.push(event);
     } else {
-      events = firstAttemptEvents;
+      events = runTurnEvents;
     }
     if (options.comboAttempt) {
       const firstMeaningful = events.find(event => event.type !== "heartbeat");
