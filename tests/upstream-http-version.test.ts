@@ -128,7 +128,11 @@ describe("providerFetch upstreamHttpVersion propagation", () => {
     const seen: { init?: RequestInit } = {};
     const fetcher = providerFetch(provider({ fetch: stubFetch(seen) }));
     await fetcher(HTTPS_URL, { method: "POST", body: "{}" });
-    expect(seen.init).toEqual({ method: "POST", body: "{}" });
+    // The caller's fields survive untouched and no protocol pin is invented. `timeout: 0` is
+    // added unconditionally (#2567) to disable Bun's per-request socket idle timer, so assert
+    // the caller's fields and the absence of a pin rather than exact object equality.
+    expect(seen.init).toMatchObject({ method: "POST", body: "{}" });
+    expect((seen.init as RequestInit & { protocol?: string })?.protocol).toBeUndefined();
   });
 
   test("no init still applies a pinned version to the fetch call", async () => {
