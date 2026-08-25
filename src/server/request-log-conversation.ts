@@ -61,6 +61,13 @@ export function sessionIdHeaderFromRequest(headers: Headers): string | null {
   return headers.get("session_id") ?? headers.get("session-id");
 }
 
+/** Fixed-size logical turn lane; true thread identity wins over a fallback session header. */
+export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
+  return normalizeLogConversationId(headers.get("x-codex-parent-thread-id"))
+    ?? normalizeLogConversationId(headers.get("thread-id"))
+    ?? normalizeLogConversationId(sessionIdHeaderFromRequest(headers));
+}
+
 function firstSanitizedConversationId(
   ...values: Array<string | null | undefined>
 ): string | undefined {

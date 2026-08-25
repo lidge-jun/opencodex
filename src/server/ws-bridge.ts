@@ -34,6 +34,8 @@ export interface WsData {
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
+  /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
+  sessionLaneId?: string;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
   kind?: "responses" | "live-sideband";
   liveUpstream?: WebSocket;
@@ -60,10 +62,20 @@ export interface WsData {
  * A test that only asserts "the socket opened" would still pass if the admission
  * were dropped from the payload, so the payload itself is what gets asserted.
  */
-export function buildResponsesWsData(headers: Headers, admission: DataPlaneAdmission, admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>): WsData {
+export function buildResponsesWsData(
+  headers: Headers,
+  admission: DataPlaneAdmission,
+  admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
+  sessionLaneId?: string,
+): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
-  return { headers, admission, ...(admissionLease ? { admissionLease } : {}) };
+  return {
+    headers,
+    admission,
+    ...(admissionLease ? { admissionLease } : {}),
+    ...(sessionLaneId ? { sessionLaneId } : {}),
+  };
 }
 
 export class WsSendDroppedError extends Error {

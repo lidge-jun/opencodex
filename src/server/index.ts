@@ -109,6 +109,7 @@ import {
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
+import { sessionLaneIdFromRequest } from "./request-log-conversation";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -701,7 +702,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     policy: RequestPolicyView,
     work: (lease: ActiveTurnLease) => Promise<Response>,
   ): Promise<Response> {
-    const lease = tryAdmitTurn();
+    const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
     if (!lease) return serverBusyResponse(req, "active turns", policy);
     let response: Response;
     try {
@@ -896,7 +897,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
         // request to the public server's upgrade would fail or cross sockets.
         if (requestServer.upgrade(req, {
-          data: buildResponsesWsData(selectForwardHeaders(req.headers), admission, websocketLease),
+          data: buildResponsesWsData(
+            selectForwardHeaders(req.headers),
+            admission,
+            websocketLease,
+            sessionLaneIdFromRequest(req.headers),
+          ),
         })) return undefined as unknown as Response;
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
@@ -1501,7 +1507,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           provider: "unknown",
           ...admissionFields(admission),
         };
-        const turnAdmissionLease = tryAdmitTurn();
+        const turnAdmissionLease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
         if (!turnAdmissionLease) return serverBusyResponse(req, "active turns", policy);
         let resolved;
         try {
@@ -1653,7 +1659,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return;
         }
 
-        const turnAdmissionLease = tryAdmitTurn();
+        const turnAdmissionLease = tryAdmitTurn(ws.data.sessionLaneId);
         if (!turnAdmissionLease) {
           sendJsonFrame(ws, buildWsErrorFrame(503, {
             type: "server_error",
