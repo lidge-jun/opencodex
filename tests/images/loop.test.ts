@@ -6,6 +6,7 @@ import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
+import { OcxRequestValidationError } from "../../src/lib/errors";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../../src/lib/debug-settings";
@@ -660,13 +661,17 @@ describe("runWithImageBridge", () => {
 
   test("validates a rotated adapter before the second image-bridge build", async () => {
     let builds = 0;
+    let fetches = 0;
     const firstAdapter: ProviderAdapter = {
       ...mockAdapter,
       buildRequest: async () => {
         builds += 1;
         return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
       },
-      fetchResponse: async () => new Response("rate limited", { status: 429 }),
+      fetchResponse: async () => {
+        fetches += 1;
+        return new Response("rate limited", { status: 429 });
+      },
     };
     const rotatedAdapter: ProviderAdapter = {
       ...mockAdapter,
@@ -674,17 +679,73 @@ describe("runWithImageBridge", () => {
         builds += 1;
         return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
       },
+      fetchResponse: async () => {
+        fetches += 1;
+        return new Response("unexpected rotated fetch", { status: 200 });
+      },
     };
     streamQueue = [[{ type: "done" }]];
     const response = await runWithImageBridge({
       parsed: makeParsed(), adapter: firstAdapter, plan, maxRounds: 0,
       on429: () => rotatedAdapter,
       validateAdapter: (_parsed, adapter) => {
-        if (adapter === rotatedAdapter) throw new Error("provider options route changed");
+        if (adapter === rotatedAdapter) throw new OcxRequestValidationError("provider options route changed");
       },
     });
-    await response.text();
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { message: "provider options route changed", type: "invalid_request_error", code: "invalid_request_error" },
+    });
     expect(builds).toBe(1);
+    expect(fetches).toBe(1);
+  });
+
+  test("a streamed image rotation failure is a typed 400 terminal", async () => {
+    let firstBuilds = 0;
+    let rotatedBuilds = 0;
+    let fetches = 0;
+    const firstAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest: async () => {
+        firstBuilds += 1;
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => {
+        fetches += 1;
+        return new Response(fetches === 1 ? "ok" : "rate limited", { status: fetches === 1 ? 200 : 429 });
+      },
+    };
+    const rotatedAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      buildRequest: async () => {
+        rotatedBuilds += 1;
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => {
+        fetches += 1;
+        return new Response("unexpected rotated fetch", { status: 200 });
+      },
+    };
+    streamQueue = [[...imageCallEvents]];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: firstAdapter,
+      plan,
+      maxRounds: 1,
+      on429: () => rotatedAdapter,
+      validateAdapter: (_parsed, adapter) => {
+        if (adapter === rotatedAdapter) throw new OcxRequestValidationError("provider options route changed");
+      },
+    });
+    const sse = await response.text();
+    expect(response.status).toBe(200);
+    expect(firstBuilds).toBe(2);
+    expect(rotatedBuilds).toBe(0);
+    expect(fetches).toBe(2);
+    expect(sse).toContain("event: response.failed");
+    expect(sse).toContain('"type":"invalid_request_error"');
+    expect(sse).not.toContain('"code":"upstream_server_error"');
+    expect(sse).not.toContain("event: response.completed");
   });
 
   test("onUsage does not double-count hiddenUsage across image iterations", async () => {

@@ -35,6 +35,7 @@ import { submitVideoJob } from "./xai-video-client";
 import { downloadVideoToArtifact, createImageBudget, pruneArtifacts } from "./artifacts";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "./synthetic-tool";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
+import { OcxRequestValidationError } from "../lib/errors";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -210,7 +211,14 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
 }
 
 function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), {
+  const invalidRequest = status === 400;
+  return new Response(JSON.stringify({
+    error: {
+      message,
+      type: invalidRequest ? "invalid_request_error" : "upstream_error",
+      code: invalidRequest ? "invalid_request_error" : null,
+    },
+  }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -614,6 +622,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       return prepared;
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
+      if (error instanceof OcxRequestValidationError) throw new LoopError(error.status, error.message);
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }

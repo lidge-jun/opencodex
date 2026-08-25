@@ -2,6 +2,7 @@ import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./bas
 import { debugDroppedFrame } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
+import { OcxRequestValidationError } from "../lib/errors";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -717,7 +718,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     name: "google",
     validateRequest(parsed: OcxParsedRequest) {
       if (provider.googleMode === "cloud-code-assist" && parsed.options.providerOptions?.google) {
-        throw new Error("provider_options.google is not supported on Google Cloud Code Assist routes");
+        throw new OcxRequestValidationError("provider_options.google is not supported on Google Cloud Code Assist routes");
+      }
+      const googleOptions = parsed.options.providerOptions?.google;
+      if (isImageCapableModel(parsed.modelId)
+        && (googleOptions?.thinkingBudget !== undefined || googleOptions?.includeThoughts !== undefined)) {
+        throw new OcxRequestValidationError(
+          "provider_options.google thinking_budget and include_thoughts are not supported for image-capable Gemini models",
+        );
       }
     },
 

@@ -23,6 +23,7 @@ import {
 import { formatWebSearchResults } from "./format-result";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
+import { OcxRequestValidationError } from "../lib/errors";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -231,7 +232,14 @@ function forcedAnswerNudge(): OcxMessage {
 }
 
 function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), {
+  const invalidRequest = status === 400;
+  return new Response(JSON.stringify({
+    error: {
+      message,
+      type: invalidRequest ? "invalid_request_error" : "upstream_error",
+      code: invalidRequest ? "invalid_request_error" : null,
+    },
+  }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -558,6 +566,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       return prepared;
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
+      if (error instanceof OcxRequestValidationError) throw new LoopError(error.status, error.message);
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
@@ -872,7 +881,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               message: "upstream translation buffer exceeded the safe limit",
             };
           } else {
-            yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
+            const message = e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e));
+            yield {
+              type: "error",
+              ...(e instanceof LoopError ? {
+                status: e.status,
+                ...(e.status === 400 ? { errorType: "invalid_request_error", code: "invalid_request_error" } : {}),
+              } : {}),
+              message,
+            };
           }
           return;
         }

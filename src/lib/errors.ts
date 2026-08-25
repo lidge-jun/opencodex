@@ -4,6 +4,16 @@ export interface OcxErrorPayload {
   code: string | null;
 }
 
+/** A local request validation failure that must remain a client-visible HTTP 400. */
+export class OcxRequestValidationError extends Error {
+  readonly status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OcxRequestValidationError";
+  }
+}
+
 /** OpenAI / Codex hard block for high-risk cybersecurity activity (HTTP 400 or mid-stream). */
 export const CYBER_POLICY_ERROR_CODE = "cyber_policy";
 

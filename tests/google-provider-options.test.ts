@@ -119,6 +119,42 @@ describe("Google provider options", () => {
     });
   });
 
+  test("rejects explicit thinking controls for image-capable AI Studio and Vertex models before transport", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return Response.json({ candidates: [{ content: { parts: [{ text: "unexpected" }] } }] });
+    }) as typeof fetch;
+    try {
+      for (const [providerName, provider] of [
+        ["google-ai-studio", { adapter: "google", googleMode: "ai-studio", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" }],
+        ["google-vertex", { adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", apiKey: "key", project: "project", location: "global" }],
+      ] as const) {
+        for (const googleOptions of [
+          { thinking_budget: 128 },
+          { include_thoughts: true },
+          { thinking_budget: 128, include_thoughts: true },
+        ]) {
+          const response = await handleResponses(new Request("http://localhost/v1/responses", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              ...base,
+              model: "gemini-3.1-flash-image",
+              provider_options: { google: googleOptions },
+            }),
+          }), providerConfig(providerName, provider), { model: "", provider: "" });
+          expect(response.status).toBe(400);
+          expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+        }
+      }
+      expect(fetches).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("rejects unknown nested provider keys", () => {
     expect(() => parseRequest({
       ...base,

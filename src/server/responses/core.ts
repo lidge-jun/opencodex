@@ -15,6 +15,7 @@ import {
 } from "../../config";
 import { parseRequest } from "../../responses/parser";
 import { googleProviderOptionsRouteError } from "../../responses/google-provider-options";
+import type { ProviderAdapter } from "../../adapters/base";
 import {
   bindReasoningReplayScope,
   commitReasoningReplayServingIdentity,
@@ -74,6 +75,7 @@ import {
 import { isDebugEnabled, isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { debugStreamDiagnostic } from "../../lib/debug";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
+import { OcxRequestValidationError } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
@@ -2910,16 +2912,17 @@ async function handleResponsesInner(
     return formatErrorResponse(400, "invalid_request_error", googleOptionsError);
   }
   const assertGoogleOptionsRoute = (
-    candidate: { name: string },
+    candidate: Pick<ProviderAdapter, "name" | "validateRequest">,
     provider: OcxProviderConfig,
-    requestParsed: Pick<OcxParsedRequest, "options"> = parsed,
+    requestParsed: OcxParsedRequest = parsed,
   ): void => {
     const message = googleProviderOptionsRouteError(requestParsed, {
       providerName: route.providerName,
       provider,
       adapterName: candidate.name,
     });
-    if (message) throw new Error(message);
+    if (message) throw new OcxRequestValidationError(message);
+    if (requestParsed.options.providerOptions?.google) candidate.validateRequest?.(requestParsed);
   };
   bindRouteReasoningReplayScope({
     parsed,
