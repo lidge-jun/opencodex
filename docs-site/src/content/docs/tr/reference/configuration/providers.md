@@ -219,8 +219,9 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 | Anahtar | Tip | Varsayılan | Açıklama |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Yapışkan bağlılığı ve 429 soğuma yük devretmesini etkinleştirin. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Yeni oturumlar için bu eşikte veya üzerinde bilinen en düşük önbelleğe alınmış 5 saatlik kullanımı seçin. `0` kota seçimini devre dışı bırakır. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Yeni oturumlarda etkin hesap bu eşiğe ulaştığında, yapılandırılan penceredeki bilinen en düşük önbelleğe alınmış kullanımı seçin. `0` kota seçimini devre dışı bırakır. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni oturum stratejisi; kota, `quotaWindow` ile belirlenen pencereyi okur; varsayılan 5 saatlik çubuklardır. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Kullanıma dayalı hesap seçiminin puanladığı önbelleğe alınmış kullanım çubuğu. `five-hour` mevcut davranışı korur. `weekly` haftalık çubuğu kullanır, ancak 5 saatlik çubuğu tükenmiş hesapları atlar ve haftalık eşitliklerde daha düşük 5 saatlik kullanımı tercih eder. `max-utilization` iki çubuktan yüksek olanı kullanır. `round-robin` bu ayarı yok sayar. Sağlıklı affinity oturumları önceden yeniden dengelenmez; 429 yük devretmesi dahil terminal hata kurtarması, mevcut soğuma ve yük devretme sınırlarını değiştirmeden uygun yedek hesapları bu pencereye göre sıralar. Hesap başına haftalık çubuklar ancak dashboard Sağlayıcılar sayfasında sorgulandıktan sonra bilinir. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Bir round-robin seçiminde tutulan başarılı yeni oturum bağlamaları. Aralık 1–100. |
 
 Etkinleştirildiğinde 429, `Retry-After`'dan veya varsayılan bir geri çekilmeden
@@ -479,4 +480,3 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
-

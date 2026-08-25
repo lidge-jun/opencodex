@@ -193,8 +193,9 @@ rotation automatique peut déclencher des restrictions du fournisseur.
 | Clé | Type | Par défaut | Description |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Active l'affinité persistante et le basculement après une temporisation 429. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Pour les nouvelles sessions, choisir la plus faible utilisation connue et mise en cache sur 5 heures qui atteint ou dépasse ce seuil. `0` désactive la sélection selon le quota. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Pour les nouvelles sessions, lorsque le compte actif atteint ce seuil, choisir la plus faible utilisation connue et mise en cache dans la fenêtre configurée. `0` désactive la sélection selon le quota. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie des nouvelles sessions ; quota lit la fenêtre définie par `quotaWindow`, par défaut les barres sur 5 heures. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Barre d'utilisation mise en cache utilisée pour classer les comptes. `five-hour` conserve le comportement actuel. `weekly` utilise la barre hebdomadaire, ignore les comptes dont la barre sur 5 heures est épuisée et départage les égalités par la plus faible utilisation sur 5 heures. `max-utilization` utilise la plus élevée des deux barres. `round-robin` ignore ce réglage. Une session saine avec affinité n'est pas rééquilibrée de manière proactive ; la récupération après une erreur terminale, y compris le basculement 429, classe néanmoins les remplaçants avec cette fenêtre sans modifier les limites de temporisation ou de basculement. Les barres hebdomadaires ne sont connues qu'après leur interrogation dans la page Fournisseurs du tableau de bord. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Liaisons de nouvelle session réussies conservées sur une sélection à tour de rôle. Portée 1–100. |
 
 Lorsque cette option est activée, un 429 enregistre une temporisation bornée à partir de `Retry-After` ou d'un délai de repli, puis peut

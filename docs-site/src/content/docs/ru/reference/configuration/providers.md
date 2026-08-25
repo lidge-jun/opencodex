@@ -194,8 +194,9 @@ reauth или порога исчерпания; здоровые привяза
 | Ключ | Тип | По умолчанию | Описание |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Включить sticky affinity и cooldown failover на 429. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Для новых сессий выбирать аккаунт с наименьшим известным cached 5-hour usage, если активный аккаунт достиг порога. `0` отключает выбор по quota. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Для новых сессий выбирать аккаунт с наименьшим известным cached usage в настроенном окне, если активный аккаунт достиг порога. `0` отключает выбор по quota. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Стратегия для новых сессий; quota смотрит на окно, заданное в `quotaWindow`; по умолчанию это 5-hour bar'ы. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Cached usage bar для оценки при выборе аккаунта по использованию. `five-hour` сохраняет прежнее поведение. `weekly` использует недельный bar, но пропускает аккаунты с исчерпанным 5-hour bar и при равенстве недельного usage выбирает меньший 5-hour usage. `max-utilization` использует большее из двух значений. `round-robin` игнорирует настройку. Здоровая сессия с affinity не перебалансируется заранее; восстановление после терминальной ошибки, включая 429 failover, всё равно ранжирует доступные замены по этому окну, не меняя лимиты cooldown и failover. Недельные bar'ы аккаунтов известны только после опроса на странице Providers в dashboard. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Сколько успешных bind'ов новых сессий удерживать на одном выборе round-robin. Диапазон 1–100. |
 
 Если функция включена, 429 записывает ограниченный cooldown из `Retry-After` или из default
