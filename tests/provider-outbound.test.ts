@@ -467,9 +467,9 @@ describe("provider outbound POST transport", () => {
     const body = JSON.stringify({ project: "test-project" });
 
     const response = await providerOutboundPost(
-      "custom",
-      { baseUrl: "https://provider.example" },
-      "https://provider.example/v1internal:fetchAvailableModels",
+      "google-antigravity",
+      { baseUrl: "https://daily-cloudcode-pa.googleapis.com", adapter: "google", authMode: "oauth", googleMode: "cloud-code-assist" },
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
       { headers: { authorization: "Bearer test-token" }, body },
       dependencies,
     );
