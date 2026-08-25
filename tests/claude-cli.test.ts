@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { claudeNotFoundHint } from "../src/cli/claude";
+import { buildClaudeEnv, claudeNotFoundHint, rootSkipPermissionsNotice, shouldAllowRootSkipPermissions } from "../src/cli/claude";
 import { commandInvocation } from "../src/lib/win-exec";
-import { buildClaudeEnv } from "../src/cli/claude";
 import type { OcxConfig } from "../src/types";
 
 function cfg(extra?: Partial<OcxConfig>): OcxConfig {
@@ -27,6 +26,40 @@ const AUTH_PRESENT = {
 };
 
 describe("ocx claude env assembly", () => {
+  test("root skip-permissions bypass requires both the explicit flag and uid 0", () => {
+    expect(shouldAllowRootSkipPermissions(["--dangerously-skip-permissions"], () => 0)).toBe(true);
+    expect(shouldAllowRootSkipPermissions([], () => 0)).toBe(false);
+    expect(shouldAllowRootSkipPermissions(["--dangerously-skip-permissions"], () => 1000)).toBe(false);
+    expect(shouldAllowRootSkipPermissions(["--dangerously-skip-permissions"], null)).toBe(false);
+  });
+
+  test("root skip-permissions opt-in marks only that launch as sandboxed", () => {
+    const bypass = buildClaudeEnv(cfg(), 10100, {}, {}, {
+      ...AUTH_PRESENT,
+      allowRootSkipPermissions: true,
+    });
+    expect(bypass.IS_SANDBOX).toBe("1");
+
+    const ordinary = buildClaudeEnv(cfg(), 10100, {}, {}, AUTH_PRESENT);
+    expect(ordinary.IS_SANDBOX).toBeUndefined();
+  });
+
+  test("an explicit user sandbox value wins over the root skip-permissions opt-in", () => {
+    const env = buildClaudeEnv(cfg(), 10100, { IS_SANDBOX: "0" }, {}, {
+      ...AUTH_PRESENT,
+      allowRootSkipPermissions: true,
+    });
+    expect(env.IS_SANDBOX).toBe("0");
+    expect(rootSkipPermissionsNotice(env)).toContain("preserving user IS_SANDBOX=0");
+    expect(rootSkipPermissionsNotice(env)).toContain("root guard remains in control");
+  });
+
+  test("the unsafe root bypass notice discloses that no OS sandbox was created", () => {
+    const notice = rootSkipPermissionsNotice({ IS_SANDBOX: "1" });
+    expect(notice).toContain("set IS_SANDBOX=1");
+    expect(notice).toContain("did not create an OS sandbox");
+  });
+
   test("injects base URL, discovery flag and model slots — NO auth token by default (subscription mode)", () => {
     const env = buildClaudeEnv(cfg({
       claudeCode: { model: "claude-ocx-gemini--gemini-3-pro", smallFastModel: "gemini/gemini-3-flash" },

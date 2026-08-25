@@ -34,6 +34,8 @@ export type ClaudeEnvDeps = {
   authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens">;
   /** Test seam; production uses the authenticated Node-launcher context. */
   preBunAnthropicSlots?: readonly AnthropicParentEnvSlot[] | null;
+  /** Explicit unsafe opt-in from a root `--dangerously-skip-permissions` launch. */
+  allowRootSkipPermissions?: boolean;
 };
 
 function isClaudeLoopbackHostname(hostname: string): boolean {
@@ -115,6 +117,9 @@ export function buildClaudeEnv(
     if (env[name] !== undefined && env[name] !== "") return; // user wins
     env[name] = value;
   };
+  if (deps.allowRootSkipPermissions === true) {
+    setDefault("IS_SANDBOX", "1");
+  }
   setDefault("ANTHROPIC_BASE_URL", `http://127.0.0.1:${port}`);
   const existingBaseUrl = env.ANTHROPIC_BASE_URL;
   if (existingBaseUrl) {
@@ -301,6 +306,22 @@ export function claudeNotFoundHint(
   return platform === "win32" && code === 9009 && !signal ? CLAUDE_INSTALL_HINT : null;
 }
 
+export function shouldAllowRootSkipPermissions(
+  args: readonly string[],
+  getuid: (() => number) | null | undefined = process.getuid,
+): boolean {
+  return args.includes("--dangerously-skip-permissions")
+    && typeof getuid === "function"
+    && getuid() === 0;
+}
+
+export function rootSkipPermissionsNotice(env: ClaudeLaunchEnv): string {
+  if (env.IS_SANDBOX === "1") {
+    return "⚠ Root --dangerously-skip-permissions requested: OpenCodex set IS_SANDBOX=1 to bypass Claude Code's root guard. OpenCodex did not create an OS sandbox; prefer running as a non-root user.";
+  }
+  return `⚠ Root --dangerously-skip-permissions requested: preserving user IS_SANDBOX=${env.IS_SANDBOX}; Claude Code's root guard remains in control.`;
+}
+
 export async function cmdClaude(args: string[]): Promise<number> {
   const config = loadConfig();
   if (config.claudeCode?.enabled === false) {
@@ -313,7 +334,11 @@ export async function cmdClaude(args: string[]): Promise<number> {
     return 1;
   }
   const contextWindows = await fetchClaudeContextWindows(config, port);
-  const env = buildClaudeEnv(config, port, process.env, contextWindows);
+  const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
+  const env = buildClaudeEnv(config, port, process.env, contextWindows, { allowRootSkipPermissions });
+  if (allowRootSkipPermissions) {
+    console.error(rootSkipPermissionsNotice(env));
+  }
   // Pre-write the CLI's gateway-model cache (devlog 030): without a token the CLI
   // never refreshes it, so the picker would keep showing yesterday's aliases.
   try {
