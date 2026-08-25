@@ -28,10 +28,8 @@ when a maintainer steps down.
 
 ## Review and merge policy
 
-- Pull requests target `dev`. It is the upstream integration line, and
-  promotion to upstream `main` happens only from `dev`. The public fork also
-  accepts fork-owned maintenance and upstream-sync pull requests targeting
-  fork `main`; upstream contributions from the fork still target `dev`.
+- Pull requests target `dev`. It is the only integration line, and promotion to
+  `main` happens only from `dev`. The target-branch check accepts `dev` alone.
 - The **`enforce-target`** CI check rejects pull requests whose head
   ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
   empty, thin, or malformed descriptions; PRs whose title or description

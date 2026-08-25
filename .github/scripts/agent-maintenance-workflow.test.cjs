@@ -10,7 +10,7 @@ const workflow = fs.readFileSync(path.join(__dirname, "../workflows/agent-mainte
 describe("agent maintenance workflow", () => {
   it("uses trusted events, reconciliation, and curated schedules", () => {
     assert.match(workflow, /^  issues:\n\s+types: \[labeled\]/m);
-    assert.match(workflow, /^  pull_request_target:[\s\S]*?branches: \[main\]/m);
+    assert.match(workflow, /^  pull_request_target:[\s\S]*?branches: \[dev\]/m);
     assert.match(workflow, /^  check_run:\n\s+types: \[completed\]/m);
     assert.match(workflow, /^  workflow_dispatch:/m);
     for (const cron of ["*/15 * * * *", "23 7 * * 1", "41 8 1 * *"]) assert.match(workflow, new RegExp(cron.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));

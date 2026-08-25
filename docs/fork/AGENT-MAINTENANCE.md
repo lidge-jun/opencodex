@@ -1,6 +1,6 @@
 # Jules and Cursor maintenance
 
-This fork uses GitHub as the control plane. Jules implements trusted maintenance issues and opens pull requests against fork `main`; the existing Cursor Automation continues to own only `hotspot-handoff` and `history-diverged` upstream-sync cases. Cursor Bugbot, CodeRabbit, CI, and maintainers review every resulting pull request. No agent merges or force-pushes `main`.
+This repository uses GitHub as the control plane. Jules implements trusted maintenance issues and opens pull requests against `dev` (the repository integration branch); the existing Cursor Automation continues to own only `hotspot-handoff` and `history-diverged` upstream-sync cases. Cursor Bugbot, CodeRabbit, CI, and maintainers review every resulting pull request. Changes merge to `dev` first and promote to `main` on release.
 
 ## Repository settings
 
@@ -21,7 +21,7 @@ Capture the IDs from a staging Bugbot review. Keep the controller at `off` until
 
 A current `write`, `maintain`, or `admin` actor applies `agent:jules` for direct implementation or `agent:plan` for plan approval. The controller stores one state marker on the issue, limits Jules to two active tasks, and reconciles every 15 minutes. Duplicate events reuse the deterministic task title; uncertain create responses are resolved by listing sessions before any retry.
 
-Every Jules PR must remain open in this repository with base `main`. Bugbot passes only with a successful check from the configured App ID on the live head. `neutral`, stale checks, comments, and resolved threads do not pass. The `review-bot-waived` outage label passes only with approvals from two current maintainers on that exact head.
+Every Jules PR must remain open in this repository with base `dev`. Bugbot passes only with a successful check from the configured App ID on the live head. `neutral`, stale checks, comments, and resolved threads do not pass. The `review-bot-waived` outage label passes only with approvals from two current maintainers on that exact head.
 
 Repair mode accepts only current-head review comments from `CURSOR_BUGBOT_USER_ID`, caps the digest at 10 findings and 12 KiB, and permits two prompts. Protected paths, unexpected head movement, a third dirty review, or an allowlist expansion stop at `agent:needs-human`.
 

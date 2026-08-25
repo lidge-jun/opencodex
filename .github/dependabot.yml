@@ -4,7 +4,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    target-branch: main
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
@@ -14,7 +14,7 @@ updates:
 
   - package-ecosystem: bun
     directory: /
-    target-branch: main
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
@@ -24,7 +24,7 @@ updates:
 
   - package-ecosystem: bun
     directory: /gui
-    target-branch: main
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
@@ -34,7 +34,7 @@ updates:
 
   - package-ecosystem: bun
     directory: /docs-site
-    target-branch: main
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
@@ -44,7 +44,7 @@ updates:
 
   - package-ecosystem: bun
     directory: /integrations/replit-gateway
-    target-branch: main
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 2

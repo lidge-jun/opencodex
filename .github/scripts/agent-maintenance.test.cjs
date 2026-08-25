@@ -256,7 +256,7 @@ describe("Jules API boundary", () => {
         prompt: "Implement issue #42 under repository policy.",
         sourceContext: {
           source: "sources/github/yansigit/opencodex",
-          githubRepoContext: { startingBranch: "main" },
+          githubRepoContext: { startingBranch: "dev" },
         },
         requirePlanApproval: true,
         automationMode: "AUTO_CREATE_PR",
@@ -289,7 +289,7 @@ describe("Jules API boundary", () => {
     });
     assert.deepEqual(await client.listSessions(), []);
     await assert.rejects(
-      () => client.createSession({ title: "x", prompt: "x", sourceContext: { source: "s", githubRepoContext: { startingBranch: "main" } }, requirePlanApproval: false, automationMode: "AUTO_CREATE_PR" }),
+      () => client.createSession({ title: "x", prompt: "x", sourceContext: { source: "s", githubRepoContext: { startingBranch: "dev" } }, requirePlanApproval: false, automationMode: "AUTO_CREATE_PR" }),
       /HTTP 503/,
     );
     assert.equal(calls.length, 3);
@@ -373,7 +373,7 @@ describe("Jules API boundary", () => {
           id: "s1",
           name: "sessions/1",
           title: "opencodex-agent:issue-42",
-          sourceContext: { source: "s", githubRepoContext: { startingBranch: "main" } },
+          sourceContext: { source: "s", githubRepoContext: { startingBranch: "dev" } },
         });
       },
       sleep: async () => {},
@@ -381,7 +381,7 @@ describe("Jules API boundary", () => {
     const session = await client.createSessionIdempotently({
       title: "opencodex-agent:issue-42",
       prompt: "x",
-      sourceContext: { source: "s", githubRepoContext: { startingBranch: "main" } },
+      sourceContext: { source: "s", githubRepoContext: { startingBranch: "dev" } },
       requirePlanApproval: false,
       automationMode: "AUTO_CREATE_PR",
     });
@@ -401,7 +401,7 @@ describe("Jules API boundary", () => {
           name: "sessions/1",
           id: "s1",
           title: "task",
-          sourceContext: { source: "sources/repo", githubRepoContext: { startingBranch: "main" } },
+          sourceContext: { source: "sources/repo", githubRepoContext: { startingBranch: "dev" } },
         }),
       ];
       const client = createJulesClient({
@@ -411,7 +411,7 @@ describe("Jules API boundary", () => {
       });
       assert.equal((await client.createSessionIdempotently({
         title: "task",
-        sourceContext: { source: "sources/repo", githubRepoContext: { startingBranch: "main" } },
+        sourceContext: { source: "sources/repo", githubRepoContext: { startingBranch: "dev" } },
       })).name, "sessions/1");
     }
   });
@@ -424,7 +424,7 @@ describe("Jules API boundary", () => {
         name: "sessions/1",
         id: "s1",
         title: "task",
-        sourceContext: { source: "sources/other", githubRepoContext: { startingBranch: "main" } },
+        sourceContext: { source: "sources/other", githubRepoContext: { startingBranch: "dev" } },
       }),
     ];
     const client = createJulesClient({
@@ -435,7 +435,7 @@ describe("Jules API boundary", () => {
     await assert.rejects(
       () => client.createSessionIdempotently({
         title: "task",
-        sourceContext: { source: "sources/repo", githubRepoContext: { startingBranch: "main" } },
+        sourceContext: { source: "sources/repo", githubRepoContext: { startingBranch: "dev" } },
       }),
       /source mismatch/,
     );
@@ -461,14 +461,14 @@ describe("Jules API boundary", () => {
       title: "opencodex-agent:issue-42",
       outputs: [{ pullRequest: { url: "https://github.com/yansigit/opencodex/pull/77" } }],
     };
-    const pr = { number: 77, state: "open", base: { ref: "main", repo: { full_name: "yansigit/opencodex" } }, head: { sha: SHA } };
+    const pr = { number: 77, state: "open", base: { ref: "dev", repo: { full_name: "yansigit/opencodex" } }, head: { sha: SHA } };
     const authoredPr = { ...pr, user: { id: 77 }, head: { ...pr.head, repo: { full_name: "yansigit/opencodex" } } };
     assert.deepEqual(validateSessionPullRequest({ session, pr: authoredPr, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), { number: 77, headSha: SHA });
     assert.throws(() => validateSessionPullRequest({ session, pr: { ...authoredPr, state: "closed", merged: true }, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), /must remain open/);
     assert.deepEqual(validateSessionPullRequest({ session, pr: { ...authoredPr, state: "closed", merged: true }, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77, allowClosed: true }), { number: 77, headSha: SHA });
     assert.throws(() => validateSessionPullRequest({ session, pr: { ...authoredPr, user: { id: 8 } }, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), /author mismatch/);
     assert.throws(() => validateSessionPullRequest({ session, pr: { ...authoredPr, head: { ...authoredPr.head, repo: null } }, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), /head branch/);
-    assert.throws(() => validateSessionPullRequest({ session, pr: { ...authoredPr, base: { ...authoredPr.base, ref: "dev" } }, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), /base main/);
+    assert.throws(() => validateSessionPullRequest({ session, pr: { ...authoredPr, base: { ...authoredPr.base, ref: "main" } }, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), /base dev/);
     assert.throws(() => validateSessionPullRequest({ session: { ...session, outputs: [{ pullRequest: { url: "https://example.com/yansigit/opencodex/pull/77" } }] }, pr: authoredPr, owner: "yansigit", repo: "opencodex", expectedAuthorId: 77 }), /GitHub URL/);
   });
 });

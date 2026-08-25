@@ -217,7 +217,7 @@ function validateSessionPullRequest({ session, pr, owner, repo, expectedAuthorId
   }
   const number = Number(match[3]);
   if (pr?.number !== number || pr?.base?.repo?.full_name?.toLowerCase() !== `${owner}/${repo}`.toLowerCase()) throw new Error("live pull request identity mismatch");
-  if (pr.base?.ref !== "main") throw new Error("Jules pull request must base main");
+  if (pr.base?.ref !== "dev") throw new Error("Jules pull request must base dev");
   if (!allowClosed && pr.state !== "open") throw new Error("Jules pull request must remain open");
   if (!pr.head?.repo?.full_name) throw new Error("Jules pull request head branch was deleted");
   if (!Number.isSafeInteger(Number(expectedAuthorId)) || Number(pr.user?.id) !== Number(expectedAuthorId)) throw new Error("Jules pull request author mismatch");
@@ -229,7 +229,7 @@ function buildJulesSessionRequest({ title, prompt, source, requirePlanApproval }
   return {
     title,
     prompt,
-    sourceContext: { source, githubRepoContext: { startingBranch: "main" } },
+    sourceContext: { source, githubRepoContext: { startingBranch: "dev" } },
     requirePlanApproval: Boolean(requirePlanApproval),
     automationMode: "AUTO_CREATE_PR",
   };

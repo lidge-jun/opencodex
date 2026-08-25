@@ -5,7 +5,7 @@ on:
     types: [labeled]
   pull_request_target:
     types: [opened, synchronize, reopened, closed]
-    branches: [main]
+    branches: [dev]
   check_run:
     types: [completed]
   workflow_dispatch:
@@ -369,7 +369,7 @@ jobs:
                   ? "Audit weekly documentation drift. Change only README.md, docs-site/**, screenshots/**, examples/**, and related documentation tests. Fill .github/PULL_REQUEST_TEMPLATE.md and record `bun run prepush` in Verification."
                   : taskKind === "scheduled-tests"
                     ? "Improve monthly test health. Change only tests/** and existing test helpers. If production code is needed, stop and explain why. Fill .github/PULL_REQUEST_TEMPLATE.md and record `bun run prepush` in Verification."
-                    : `Implement trusted maintenance issue #${issue.number}. Follow AGENTS.md and nested instructions, target fork main, and fill .github/PULL_REQUEST_TEMPLATE.md. Issue title: ${issue.title}\nIssue body:\n${issue.body || ""}`;
+                    : `Implement trusted maintenance issue #${issue.number}. Follow AGENTS.md and nested instructions, target dev, and fill .github/PULL_REQUEST_TEMPLATE.md. Issue title: ${issue.title}\nIssue body:\n${issue.body || ""}`;
                 try {
                   const request = buildJulesSessionRequest({
                     title: `opencodex-agent:${taskId}`,
