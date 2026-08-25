@@ -17,7 +17,9 @@ bun install
 bun run dev:proxy    # geliştirme modunda proxy API
 bun run dev:gui      # kontrol paneli geliştirme sunucusu (başka bir terminalde)
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev`, `bun run dev:proxy` komutunun bir takma adıdır. Kontrol paneli

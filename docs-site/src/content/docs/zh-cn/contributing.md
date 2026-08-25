@@ -12,7 +12,9 @@ bun install
 bun run dev:proxy    # 开发模式代理 API
 bun run dev:gui      # 仪表盘 dev 服务器（另一个终端）
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev` 继续作为 `bun run dev:proxy` 的别名。仪表盘 dev 服务器使用 `bun run dev:gui`；

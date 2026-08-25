@@ -12,7 +12,9 @@ bun install
 bun run dev:proxy    # прокси-API в режиме разработки
 bun run dev:gui      # dev-сервер дашборда (другой терминал)
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev` остаётся псевдонимом для `bun run dev:proxy`. Dev-сервер дашборда — `bun run dev:gui`;

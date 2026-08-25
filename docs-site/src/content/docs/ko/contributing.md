@@ -12,7 +12,9 @@ bun install
 bun run dev:proxy    # 개발 모드 프록시 API
 bun run dev:gui      # 대시보드 dev 서버(다른 터미널)
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev`는 계속 `bun run dev:proxy`의 별칭으로 동작합니다. 대시보드 dev 서버는
