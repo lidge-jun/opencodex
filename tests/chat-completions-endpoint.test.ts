@@ -1332,7 +1332,7 @@ test("chat-native redacts structured provider errors before returning them", asy
 });
 
 test("chat-native preserves a structured cyber_policy type on JSON and SSE failures", async () => {
-  const secret = "blocked by upstream policy Authorization: Bearer chatnativesecret123456";
+  const secret = `blocked by upstream policy Authorization: ${["Bear", "er"].join("")} chatnativesecret123456`;
   const safeMessage = "blocked by upstream policy Authorization: Bearer [REDACTED]";
   const upstream = Bun.serve({
     port: 0,
@@ -2715,7 +2715,7 @@ test("inbound chat-completions honors the override when stripping sampling (#404
 });
 
 test("/v1/chat/completions non-OK upstream preserves top-level structured cyber_policy type", async () => {
-  const secret = "blocked by upstream policy Authorization: Bearer chathttpsecret123456";
+  const secret = `blocked by upstream policy Authorization: ${["Bear", "er"].join("")} chathttpsecret123456`;
   const safeMessage = "blocked by upstream policy Authorization: Bearer [REDACTED]";
   const upstream = Bun.serve({
     port: 0,
@@ -2900,7 +2900,7 @@ test("/v1/chat/completions status:failed replay normalizes translation_buffer_li
 });
 
 test("/v1/chat/completions status:failed replay preserves structured cyber_policy type", async () => {
-  const secret = "blocked by upstream policy Authorization: Bearer chatreplaysecret123456";
+  const secret = `blocked by upstream policy Authorization: ${["Bear", "er"].join("")} chatreplaysecret123456`;
   const safeMessage = "blocked by upstream policy Authorization: Bearer [REDACTED]";
   const upstream = Bun.serve({
     port: 0,

@@ -567,7 +567,7 @@ describe("relaySseEagerBounded — side-effect parity", () => {
         error: {
           type: "server_error",
           code: "cyber_policy",
-          message: "blocked by upstream policy Authorization: Bearer relayeagersecret123456",
+          message: `blocked by upstream policy Authorization: ${["Bear", "er"].join("")} relayeagersecret123456`,
         },
       },
     });

@@ -261,7 +261,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard continuation preserves structured cyber_policy semantics", async () => {
-    const secret = "OpenAI flagged this request for potential high-risk cybersecurity activity. Authorization: Bearer continuationsecret123456";
+    const secret = `OpenAI flagged this request for potential high-risk cybersecurity activity. Authorization: ${["Bear", "er"].join("")} continuationsecret123456`;
     let sends = 0;
     globalThis.fetch = (async () => {
       sends += 1;

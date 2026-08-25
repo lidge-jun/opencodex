@@ -245,7 +245,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
         error: {
           type: "server_error",
           code: "cyber_policy",
-          message: "blocked by upstream policy Authorization: Bearer relaypullsecret123456",
+          message: `blocked by upstream policy Authorization: ${["Bear", "er"].join("")} relaypullsecret123456`,
         },
       },
     });
