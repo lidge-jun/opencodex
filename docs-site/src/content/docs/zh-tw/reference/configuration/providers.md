@@ -127,7 +127,7 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | 啟用 sticky 親和性與 429 冷卻容錯移轉。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 對於新 session，選擇在此閾值或以上的最低已知快取 5 小時用量。`0` 停用量量挑選。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新 session 策略；quota 僅使用 5 小時列。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新 session 策略；quota 讀取 `quotaWindow` 指定的視窗，預設為 5 小時列。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次 round-robin 選擇上保留的成功新 session 綁定。範圍 1–100。 |
 
 啟用時，429 記錄來自 `Retry-After` 或預設 backoff 的有界冷卻，並可能在請求內輪換。親和性為行程本地且有界。憑證 401/403 將帳號標記為需要重新認證。若所有合格帳號都在冷卻，客戶端收到附帶已知 `Retry-After` 的 429，而非認證錯誤。

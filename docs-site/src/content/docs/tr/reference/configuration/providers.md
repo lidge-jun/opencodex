@@ -220,7 +220,7 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Yapışkan bağlılığı ve 429 soğuma yük devretmesini etkinleştirin. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Yeni oturumlar için bu eşikte veya üzerinde bilinen en düşük önbelleğe alınmış 5 saatlik kullanımı seçin. `0` kota seçimini devre dışı bırakır. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni oturum stratejisi; kota yalnızca 5 saatlik çubukları kullanır. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni oturum stratejisi; kota, `quotaWindow` ile belirlenen pencereyi okur; varsayılan 5 saatlik çubuklardır. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Bir round-robin seçiminde tutulan başarılı yeni oturum bağlamaları. Aralık 1–100. |
 
 Etkinleştirildiğinde 429, `Retry-After`'dan veya varsayılan bir geri çekilmeden

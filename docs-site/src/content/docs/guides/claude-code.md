@@ -15,7 +15,8 @@ add-account). By default every request uses the **active** account only.
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
 session affinity and 429 cooldown failover across those OAuth accounts. For **new** sessions
 only, `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks
-lowest known 5-hour usage when above `autoSwitchThreshold`; `round-robin` spreads evenly
+lowest known usage in the window set by `quotaWindow` (default the 5-hour bar) when above
+`autoSwitchThreshold`; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
 reauthentication, or threshold, then advances. It is **off by default**, shows a GUI warning,
 and is not battle-tested — Anthropic may restrict accounts that look like automated rotation;

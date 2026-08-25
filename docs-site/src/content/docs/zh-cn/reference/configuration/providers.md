@@ -158,7 +158,7 @@ affinity。这些策略不能规避 provider enforcement。
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | 启用粘性亲和性和 429 冷却故障转移。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 对于新会话，选择已知缓存的、5 小时使用率最低且达到或超过此阈值的账户。`0` 会禁用配额选择。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话策略；quota 只使用 5 小时条形数据。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话策略；quota 读取 `quotaWindow` 指定的窗口，默认是 5 小时条形数据。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次轮询选择中保留的成功新会话绑定次数。范围 1–100。 |
 
 启用后，429 会根据 `Retry-After` 记录有界冷却，或者使用默认退避，并且可能在同一请求内轮换。亲和性是进程本地的，并且有大小上限。凭据 401/403 会将账户标记为需要重新认证。如果所有合格账户都在冷却，客户端会在已知时收到带 `Retry-After` 的 429，而不是身份验证错误。

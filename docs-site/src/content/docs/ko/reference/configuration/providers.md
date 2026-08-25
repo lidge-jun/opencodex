@@ -164,7 +164,7 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | sticky 결속과 429 쿨다운 failover를 켭니다. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 새 세션에서는 이 임계값 이상에서 알려진 캐시 5시간 사용량이 가장 낮은 계정을 고릅니다. `0`이면 quota 선택을 끕니다. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 전략입니다. quota는 5시간 막대만 사용합니다. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 전략입니다. quota는 `quotaWindow`로 지정한 창을 읽으며, 기본값은 5시간 막대입니다. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 성공한 새 세션 결속이 한 번의 라운드로빈 선택에 유지되는 횟수입니다. 범위는 1–100입니다. |
 
 활성화되면 429 레코드가 `Retry-After` 또는 기본 backoff에서 제한된 쿨다운을 기록하고, 요청 안에서 회전할 수 있습니다. 결속은 프로세스 로컬이며 크기가 제한됩니다. 자격 증명 401/403은 해당 계정이 재인증이 필요함을 표시합니다. 적격한 계정이 모두 쿨다운 중이면, 클라이언트는 인증 오류가 아니라 알려진 경우 `Retry-After`가 포함된 429를 받습니다.

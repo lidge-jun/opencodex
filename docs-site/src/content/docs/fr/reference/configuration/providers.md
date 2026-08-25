@@ -194,7 +194,7 @@ rotation automatique peut déclencher des restrictions du fournisseur.
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Active l'affinité persistante et le basculement après une temporisation 429. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Pour les nouvelles sessions, choisir la plus faible utilisation connue et mise en cache sur 5 heures qui atteint ou dépasse ce seuil. `0` désactive la sélection selon le quota. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie des nouvelles sessions ; quota utilise uniquement les barres sur 5 heures. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie des nouvelles sessions ; quota lit la fenêtre définie par `quotaWindow`, par défaut les barres sur 5 heures. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Liaisons de nouvelle session réussies conservées sur une sélection à tour de rôle. Portée 1–100. |
 
 Lorsque cette option est activée, un 429 enregistre une temporisation bornée à partir de `Retry-After` ou d'un délai de repli, puis peut

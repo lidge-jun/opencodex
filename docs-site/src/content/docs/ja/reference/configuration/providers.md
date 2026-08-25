@@ -160,7 +160,7 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` |スティッキー アフィニティと 429 クールダウン フェイルオーバーを有効にします。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` |新しいセッションの場合は、このしきい値以上の、既知の最も低いキャッシュされた 5 時間の使用量を選択します。 `0` はクォータの選択を無効にします。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。クォータでは 5 時間足のみを使用します。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。quota は `quotaWindow` で指定した期間を参照し、既定は 5 時間足です。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` |成功した新しいセッションのバインドは 1 つのラウンドロビン選択で保持されます。範囲は 1 ～ 100。 |
 
 有効にすると、429 レコードは `Retry-After` またはデフォルトのバックオフからの制限されたクールダウンを記録し、リクエスト内でローテーションする可能性があります。アフィニティはプロセスローカルであり、サイズ制限があります。資格情報 401/403 は、アカウントに再認証が必要であることをマークします。すべての対象となるアカウントが冷却されている場合、クライアントは、既知の場合、認証エラーではなく、`Retry-After` を含む 429 を受け取ります。

@@ -195,7 +195,7 @@ reauth или порога исчерпания; здоровые привяза
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Включить sticky affinity и cooldown failover на 429. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Для новых сессий выбирать аккаунт с наименьшим известным cached 5-hour usage, если активный аккаунт достиг порога. `0` отключает выбор по quota. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Стратегия для новых сессий; quota смотрит только на 5-hour bar'ы. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Стратегия для новых сессий; quota смотрит на окно, заданное в `quotaWindow`; по умолчанию это 5-hour bar'ы. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Сколько успешных bind'ов новых сессий удерживать на одном выборе round-robin. Диапазон 1–100. |
 
 Если функция включена, 429 записывает ограниченный cooldown из `Retry-After` или из default
