@@ -15,6 +15,14 @@ on:
   # branch, so a PR cannot suppress or rewrite this signal path. The status is
   # only a wake-up signal; the gate re-reads live reviews before any write.
   status:
+  check_run:
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Pull request to reconcile against live GitHub state
+        required: true
+        type: number
 
 # pull-requests:write covers title/comment/label updates.
 # contents:write is required for convertPullRequestToDraft /
@@ -22,6 +30,7 @@ on:
 # (otherwise: "Resource not accessible by integration"). This workflow
 # never checks out PR head code.
 permissions:
+  checks: read
   contents: write
   pull-requests: write
 
@@ -36,6 +45,9 @@ jobs:
        github.event.state == 'success' &&
        github.event.sender.login == 'coderabbitai[bot]' &&
        github.event.sender.id == 136622811) ||
+      github.event_name == 'check_run' ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
       (github.event_name == 'pull_request_target' &&
        ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
         github.event.label.name == 'gui-screenshot-waived' ||
@@ -44,9 +56,11 @@ jobs:
         github.event.label.name == 'test-exception-approved' ||
         github.event.label.name == 'suppression-approved' ||
         github.event.label.name == 'generated-change-approved' ||
-        github.event.label.name == 'dependency-change-approved'))
+        github.event.label.name == 'dependency-change-approved' ||
+        github.event.label.name == 'review-bot-waived'))
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: read
       pull-requests: read
     outputs:
@@ -55,10 +69,62 @@ jobs:
       - name: Resolve trusted gate event to PR
         id: resolve
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CURSOR_BUGBOT_APP_ID: ${{ vars.CURSOR_BUGBOT_APP_ID }}
         with:
           script: |
             const { owner, repo } = context.repo;
             let pullNumber = context.payload.pull_request?.number ?? null;
+
+            if (context.eventName === "workflow_dispatch") {
+              const defaultBranch = context.payload.repository?.default_branch;
+              if (!defaultBranch || context.ref !== `refs/heads/${defaultBranch}`) {
+                core.info("Manual reconciliation is only permitted from the default branch; skipping.");
+                return;
+              }
+              const requested = Number(context.payload.inputs?.pull_number);
+              if (!Number.isSafeInteger(requested) || requested <= 0) {
+                core.info("Manual reconciliation requires a positive pull request number; skipping.");
+                return;
+              }
+              const live = (await github.rest.pulls.get({
+                owner, repo, pull_number: requested
+              })).data;
+              if (live.number !== requested || live.state !== "open" || live.merged || live.merged_at) {
+                core.info(`Pull request #${requested} is not an open, unmerged PR; skipping.`);
+                return;
+              }
+              pullNumber = live.number;
+            }
+
+            if (context.eventName === "check_run") {
+              const check = context.payload.check_run;
+              const expectedAppId = Number(process.env.CURSOR_BUGBOT_APP_ID);
+              if (
+                check?.name !== "Cursor Bugbot" ||
+                !Number.isSafeInteger(expectedAppId) ||
+                check.app?.id !== expectedAppId
+              ) {
+                core.info("Check producer is not the configured Cursor Bugbot App; skipping.");
+                return;
+              }
+              const openPrs = await github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100
+              });
+              const candidates = openPrs.filter(
+                candidate => candidate.head?.sha === check.head_sha
+              );
+              if (candidates.length !== 1) {
+                core.info(
+                  `Cursor Bugbot check ${check.head_sha} maps to ${candidates.length} open current-head PRs; skipping ambiguous/stale revalidation.`
+                );
+                return;
+              }
+              pullNumber = candidates[0].number;
+            }
 
             if (context.eventName === "status") {
               const sender = context.payload.sender;
@@ -142,6 +208,7 @@ jobs:
     runs-on: ubuntu-latest
     # Job-scoped permissions replace, rather than extend, the workflow default.
     permissions:
+      checks: read
       contents: write
       pull-requests: write
     concurrency:
@@ -165,7 +232,7 @@ jobs:
           # `main`-targeting PR must take its scripts from `main`, or the gate
           # runs a `main` workflow definition against `dev` scripts. Every
           # other base, including a stacked child's, resolves to `dev`.
-          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}
+          ref: ${{ github.event_name != 'pull_request_target' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}
           persist-credentials: false
           sparse-checkout: |
             .github/scripts
@@ -174,6 +241,8 @@ jobs:
       - name: Enforce PR target, ancestry, and description
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
+          CURSOR_BUGBOT_APP_ID: ${{ vars.CURSOR_BUGBOT_APP_ID }}
+          CURSOR_BUGBOT_POLICY: ${{ vars.CURSOR_BUGBOT_POLICY }}
           RESOLVED_PULL_NUMBER: ${{ needs.resolve-pr.outputs.pull-number }}
         with:
           script: |
@@ -250,6 +319,17 @@ jobs:
                 "pr-maintainers.cjs"
               ),
             );
+            const {
+              exactHeadBugbotEvidence,
+              hasExactHeadMaintainerWaiver
+            } = require(
+              path.join(
+                process.cwd(),
+                ".github",
+                "scripts",
+                "agent-maintenance.cjs"
+              ),
+            );
 
             const ALLOWED_BASES =
               context.repo.owner === "lidge-jun" ? ["dev"] : ["dev", "main"];
@@ -277,7 +357,7 @@ jobs:
             // Defense in depth: the resolver job is the primary event gate, but
             // the write-capable script also rejects event classes this workflow
             // never intends to mutate from.
-            if (!["pull_request_target", "status"].includes(context.eventName)) {
+            if (!["pull_request_target", "status", "check_run", "workflow_dispatch"].includes(context.eventName)) {
               core.info(`Unsupported gate event ${context.eventName}; skipping.`);
               return;
             }
@@ -671,6 +751,50 @@ jobs:
               }),
             ];
 
+            const bugbotPolicy = process.env.CURSOR_BUGBOT_POLICY || "shadow";
+            if (!["shadow", "required"].includes(bugbotPolicy)) {
+              throw new Error(`Invalid CURSOR_BUGBOT_POLICY: ${bugbotPolicy}`);
+            }
+            const bugbotAppId = Number(process.env.CURSOR_BUGBOT_APP_ID);
+            let bugbotEvidence = null;
+            let bugbotWaived = false;
+            if (bugbotPolicy === "required" || bugbotPolicy === "shadow") {
+              try {
+                const checkRuns = await github.paginate(
+                  github.rest.checks.listForRef,
+                  { owner, repo, ref: pr.head.sha, per_page: 100 }
+                );
+                bugbotEvidence = exactHeadBugbotEvidence({
+                  checkRuns,
+                  liveHeadSha: pr.head.sha,
+                  expectedAppId: bugbotAppId
+                });
+              } catch (error) {
+                core.warning(`Could not verify Cursor Bugbot: ${error.message}`);
+              }
+              if (!bugbotEvidence && labelNames.includes("review-bot-waived")) {
+                try {
+                  const waiverReviews = await github.paginate(
+                    github.rest.pulls.listReviews,
+                    { owner, repo, pull_number, per_page: 100 }
+                  );
+                  bugbotWaived = hasExactHeadMaintainerWaiver({
+                    labels: labelNames,
+                    reviews: waiverReviews,
+                    maintainers: readMaintainerLogins(),
+                    headSha: pr.head.sha
+                  });
+                } catch (error) {
+                  core.warning(`Could not verify Cursor Bugbot waiver: ${error.message}`);
+                }
+              }
+              if (!bugbotEvidence && !bugbotWaived && bugbotPolicy === "required") {
+                failures.push({ code: "bugbot_review" });
+              } else if (!bugbotEvidence && !bugbotWaived) {
+                core.info("Cursor Bugbot exact-head evidence is absent (shadow mode).");
+              }
+            }
+
             // A maintainer issue comment saying the change does not touch
             // the GUI waives the screenshot gate. The flag is what tells the
             // author the screenshot is not required, even though the failure
@@ -1051,6 +1175,11 @@ jobs:
               if (failures.some(failure => failure.code === "missing_ui_screenshot")) {
                 actions.push(
                   "Add a screenshot of the UI change to the PR description."
+                );
+              }
+              if (failures.some(failure => failure.code === "bugbot_review")) {
+                actions.push(
+                  "Wait for a successful Cursor Bugbot check on the current head, or obtain the exact-head outage waiver."
                 );
               }
               for (const failure of failures) {

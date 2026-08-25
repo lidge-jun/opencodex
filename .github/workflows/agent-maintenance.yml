@@ -1,0 +1,702 @@
+name: Agent maintenance
+
+on:
+  issues:
+    types: [labeled]
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed]
+    branches: [dev]
+  check_run:
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Optional maintenance issue to dispatch or reconcile
+        required: false
+        type: number
+  schedule:
+    - cron: "*/15 * * * *"
+    - cron: "23 7 * * 1"
+    - cron: "41 8 1 * *"
+
+concurrency:
+  # ponytail: one repository-wide writer; split by issue only if controller throughput becomes measurable.
+  group: agent-maintenance-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  control:
+    if: >
+      github.event_name != 'workflow_dispatch' ||
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            MAINTAINERS.md
+
+      - name: Dispatch or reconcile maintenance
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          AGENT_MAINTENANCE_MODE: ${{ vars.AGENT_MAINTENANCE_MODE }}
+          AGENT_MAINTENANCE_SCHEDULES: ${{ vars.AGENT_MAINTENANCE_SCHEDULES }}
+          CURSOR_BUGBOT_APP_ID: ${{ vars.CURSOR_BUGBOT_APP_ID }}
+          CURSOR_BUGBOT_USER_ID: ${{ vars.CURSOR_BUGBOT_USER_ID }}
+          JULES_BOT_USER_ID: ${{ vars.JULES_BOT_USER_ID }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        with:
+          script: |
+            const path = require("node:path");
+            const {
+              MAX_REPAIR_ATTEMPTS,
+              buildJulesRepairComment,
+              buildJulesSessionRequest,
+              changedFileListComplete,
+              createJulesClient,
+              defaultAgentMaintenanceState,
+              exactHeadBugbotEvidence,
+              findGithubSource,
+              isExpectedJulesHeadAdvance,
+              julesSessionDisposition,
+              latestActiveLabelActor,
+              parseAgentMaintenanceState,
+              quotaExhaustionExpired,
+              requiredChecksSuccessful,
+              repairMarker,
+              stateMarker,
+              trustedActiveMaintenanceCount,
+              validateSessionPullRequest,
+              verifiedBugbotFindings
+            } = require(path.join(process.cwd(), ".github", "scripts", "agent-maintenance.cjs"));
+            const { isAgentProtectedPath } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-sponsored-surface.cjs")
+            );
+
+            const { owner, repo } = context.repo;
+            const mode = process.env.AGENT_MAINTENANCE_MODE || "off";
+            const schedulesEnabled = process.env.AGENT_MAINTENANCE_SCHEDULES === "on";
+            if (!["off", "shadow", "dispatch", "repair"].includes(mode)) {
+              throw new Error(`Invalid AGENT_MAINTENANCE_MODE: ${mode}`);
+            }
+            if (mode === "off") {
+              core.info("Agent maintenance kill switch is off.");
+              return;
+            }
+            if (context.eventName === "workflow_dispatch") {
+              const defaultBranch = context.payload.repository?.default_branch;
+              if (!defaultBranch || context.ref !== `refs/heads/${defaultBranch}`) {
+                core.info("workflow_dispatch is only permitted from the default branch; skipping.");
+                return;
+              }
+            }
+            if (context.eventName === "check_run") {
+              const configuredBugbotAppId = Number(process.env.CURSOR_BUGBOT_APP_ID);
+              if (
+                context.payload.check_run?.name !== "Cursor Bugbot" ||
+                !Number.isSafeInteger(configuredBugbotAppId) ||
+                configuredBugbotAppId <= 0 ||
+                Number(context.payload.check_run?.app?.id) !== configuredBugbotAppId
+              ) {
+                core.info("Ignoring an untrusted check_run wake-up.");
+                return;
+              }
+            }
+
+            const LABELS = {
+              "agent:jules": ["8250df", "Trusted Jules implementation request"],
+              "agent:plan": ["5319e7", "Jules request requiring plan approval"],
+              "agent:generated": ["0969da", "Trusted scheduled maintenance issue"],
+              "agent:queued": ["d4c5f9", "Maintenance task queued"],
+              "agent:running": ["fbca04", "Maintenance agent is running"],
+              "agent:reviewing": ["1d76db", "Maintenance PR is under automated review"],
+              "agent:needs-human": ["d93f0b", "Maintenance task needs a maintainer"],
+              "agent:failed": ["b60205", "Maintenance task failed"],
+              "agent:done": ["0e8a16", "Maintenance task completed"],
+              "review-bot-waived": ["6f42c1", "Two-maintainer exact-head review outage waiver"]
+            };
+            const LIFECYCLE = [
+              "agent:queued", "agent:running", "agent:reviewing",
+              "agent:needs-human", "agent:failed", "agent:done"
+            ];
+            async function ensureLabels() {
+              const existing = new Set((await github.paginate(
+                github.rest.issues.listLabelsForRepo,
+                { owner, repo, per_page: 100 }
+              )).map(label => label.name));
+              for (const [name, [color, description]] of Object.entries(LABELS)) {
+                if (existing.has(name)) continue;
+                await github.rest.issues.createLabel({ owner, repo, name, color, description });
+              }
+            }
+
+            async function setLifecycle(issueNumber, target) {
+              const issue = (await github.rest.issues.get({ owner, repo, issue_number: issueNumber })).data;
+              const names = new Set((issue.labels || []).map(label => typeof label === "string" ? label : label.name));
+              for (const label of LIFECYCLE) {
+                if (label === target || !names.has(label)) continue;
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number: issueNumber, name: label });
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+              }
+              if (!names.has(target)) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: [target] });
+              }
+            }
+
+            async function loadRecord(issue) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: issue.number, per_page: 100
+              });
+              const comment = comments.filter(item =>
+                item.user?.login === "github-actions[bot]" &&
+                item.body?.includes("<!-- opencodex-agent-maintenance-state:")
+              ).sort((a, b) => Number(b.id) - Number(a.id))[0] || null;
+              try {
+                return { comment, state: comment ? parseAgentMaintenanceState(comment.body) : null };
+              } catch (error) {
+                error.comment = comment;
+                throw error;
+              }
+            }
+
+            async function saveRecord(issueNumber, comment, state) {
+              const saved = { ...state, updatedAt: new Date().toISOString() };
+              const body = [
+                "<!-- opencodex-agent-maintenance -->",
+                stateMarker(saved),
+                "",
+                `Agent maintenance status: **${saved.status}**.`,
+                saved.sessionUrl ? `[Jules session](${saved.sessionUrl})` : "",
+                saved.pullRequestNumber ? `Pull request: #${saved.pullRequestNumber}.` : "",
+                saved.reason ? `Reason: ${saved.reason}` : ""
+              ].filter(Boolean).join("\n");
+              if (comment) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: comment.id, body });
+                return { ...comment, body };
+              }
+              return (await github.rest.issues.createComment({
+                owner, repo, issue_number: issueNumber, body
+              })).data;
+            }
+
+            async function currentPermission(login) {
+              if (!login) return "none";
+              try {
+                return (await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: login })).data.permission;
+              } catch (error) {
+                core.warning(`Could not verify permission for ${login}: ${error.message}`);
+                return "none";
+              }
+            }
+
+            async function currentDispatchLabeler(issueNumber, label) {
+              const events = await github.paginate(github.rest.issues.listEvents, {
+                owner, repo, issue_number: issueNumber, per_page: 100
+              });
+              return latestActiveLabelActor(events, label);
+            }
+
+            async function allOpenAgentIssues() {
+              const issues = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, state: "open", per_page: 100
+              });
+              return issues.filter(issue =>
+                !issue.pull_request && (issue.labels || []).some(label => String(label.name || label).startsWith("agent:"))
+              );
+            }
+
+            function recipeForSchedule(schedule) {
+              const now = new Date();
+              if (schedule === "23 7 * * 1") {
+                const first = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+                const week = String(Math.ceil((((now - first) / 86400000) + first.getUTCDay() + 1) / 7)).padStart(2, "0");
+                return {
+                  taskId: `docs-${now.getUTCFullYear()}-w${week}`,
+                  taskKind: "scheduled-docs",
+                  title: `[agent:docs] ${now.getUTCFullYear()}-W${week}`,
+                  body: "### Documentation problem type\n\nOutdated documentation\n\n### Documentation location\n\nREADME.md and docs-site/**\n\n### What is wrong or missing?\n\nRun the curated weekly documentation drift check.\n\n### What should the documentation explain instead?\n\nKeep public documentation consistent with current behavior.\n\n### Suggested wording or example\n\nJules should make only evidence-backed documentation corrections.\n\n### Additional context or attachments\n\nGenerated by the trusted maintenance controller.\n\n### Checks\n\n- [x] I searched existing documentation issues.\n- [x] No secrets or personal information are included."
+                };
+              }
+              if (schedule === "41 8 1 * *") {
+                const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+                return {
+                  taskId: `tests-${now.getUTCFullYear()}-${month}`,
+                  taskKind: "scheduled-tests",
+                  title: `[agent:tests] ${now.getUTCFullYear()}-${month}`,
+                  body: "### Area\n\nMultiple areas\n\n### What are you trying to accomplish?\n\nKeep the test suite healthy with a bounded monthly maintenance pass.\n\n### What prevents this today?\n\nTest-only cleanup and focused coverage drift accumulate between releases.\n\n### What should OpenCodex do?\n\nChange tests/** and existing test helpers only. Production changes require a new agent:plan issue.\n\n### Example usage or interface\n\nRun existing focused tests and bun run prepush.\n\n### Alternatives or workarounds\n\nManual monthly maintenance.\n\n### Additional context\n\nGenerated by the trusted maintenance controller.\n\n### Checks\n\n- [x] I searched existing issues and documentation.\n- [x] This request describes a concrete OpenCodex workflow rather than merely naming a desired technology.\n- [x] I removed secrets and personal data."
+                };
+              }
+              return null;
+            }
+
+            if (mode === "shadow") {
+              core.info(`Shadow mode observed ${context.eventName}; no dispatch or controller state changes.`);
+              return;
+            }
+            const client = createJulesClient({ apiKey: process.env.JULES_API_KEY });
+            await ensureLabels();
+
+            let candidates = [];
+            const generatedIssueNumbers = new Set();
+            const recipe = context.eventName === "schedule" ? recipeForSchedule(context.payload.schedule) : null;
+            if (recipe) {
+              if (!schedulesEnabled) {
+                core.info("Schedule dispatch is disabled until the staged rollout enables it.");
+                return;
+              }
+              const existing = (await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, state: "all", per_page: 100
+              })).find(issue => !issue.pull_request && issue.title === recipe.title);
+              if (existing) {
+                core.info(`Scheduled task ${recipe.taskId} already has issue #${existing.number}.`);
+                return;
+              }
+              const generatedIssue = (await github.rest.issues.create({
+                owner, repo, title: recipe.title, body: recipe.body,
+                labels: ["agent:generated", "agent:jules", "agent:queued"]
+              })).data;
+              generatedIssueNumbers.add(generatedIssue.number);
+              candidates = [generatedIssue];
+            } else if (context.eventName === "issues") {
+              if (!["agent:jules", "agent:plan"].includes(context.payload.label?.name)) return;
+              const permission = await currentPermission(context.payload.sender?.login);
+              if (!["write", "maintain", "admin"].includes(permission)) {
+                core.setFailed("Only a current write-capable actor may dispatch Jules.");
+                return;
+              }
+              candidates = [context.payload.issue];
+            } else if (context.eventName === "workflow_dispatch" && context.payload.inputs?.issue_number) {
+              candidates = [(await github.rest.issues.get({
+                owner, repo, issue_number: Number(context.payload.inputs.issue_number)
+              })).data];
+            } else {
+              candidates = await allOpenAgentIssues();
+            }
+
+            const activeRecords = [];
+            for (const activeIssue of await allOpenAgentIssues()) {
+              try {
+                activeRecords.push(await loadRecord(activeIssue));
+              } catch (error) {
+                activeRecords.push({ error });
+              }
+            }
+            let activeCount = trustedActiveMaintenanceCount(activeRecords);
+            let source = null;
+            async function connectedSource() {
+              source ??= findGithubSource(await client.listSources(), owner, repo);
+              return source;
+            }
+
+            for (const issue of candidates) {
+              let record;
+              try {
+                record = await loadRecord(issue);
+              } catch (error) {
+                const failed = defaultAgentMaintenanceState({ taskId: `issue-${issue.number}`, taskKind: "implement", issueNumber: issue.number });
+                failed.status = "needs-human";
+                failed.reason = `Stored state is corrupt: ${error.message}`;
+                await saveRecord(issue.number, error.comment || null, failed);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              let { comment, state } = record;
+              const priorQuotaReason = state?.reason?.startsWith("quota-429:") ? state.reason : null;
+              if (state && !state.sessionId && priorQuotaReason) {
+                if (quotaExhaustionExpired(priorQuotaReason)) {
+                  state.status = "needs-human";
+                  state.reason = "Jules quota remained exhausted for more than 24 hours";
+                  await saveRecord(issue.number, comment, state);
+                  await setLifecycle(issue.number, "agent:needs-human");
+                  continue;
+                }
+                state = null;
+              }
+              const labelNames = new Set((issue.labels || []).map(label => label.name || label));
+
+              if (!state) {
+                if (!labelNames.has("agent:jules") && !labelNames.has("agent:plan")) continue;
+                const trustedGenerated =
+                  labelNames.has("agent:generated") &&
+                  issue.user?.login === "github-actions[bot]";
+                let labelsTrusted = true;
+                for (const name of ["agent:jules", "agent:plan"].filter(label => labelNames.has(label))) {
+                  const labeler = await currentDispatchLabeler(issue.number, name);
+                  const trustedGeneratedLabel = trustedGenerated &&
+                    (generatedIssueNumbers.has(issue.number) || labeler === "github-actions[bot]");
+                  if (!trustedGeneratedLabel && !["write", "maintain", "admin"].includes(await currentPermission(labeler))) {
+                    labelsTrusted = false;
+                  }
+                }
+                if (!labelsTrusted) {
+                  for (const name of ["agent:jules", "agent:plan"]) {
+                    if (!labelNames.has(name)) continue;
+                    await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name });
+                  }
+                  await setLifecycle(issue.number, "agent:needs-human");
+                  core.warning(`Rejected untrusted maintenance label on issue #${issue.number}.`);
+                  continue;
+                }
+                if (activeCount >= 2) {
+                  await setLifecycle(issue.number, "agent:queued");
+                  continue;
+                }
+                const scheduledTaskKind = trustedGenerated && issue.title.startsWith("[agent:docs]")
+                  ? "scheduled-docs"
+                  : trustedGenerated && issue.title.startsWith("[agent:tests]")
+                    ? "scheduled-tests"
+                    : null;
+                const taskKind = recipe?.taskKind || scheduledTaskKind || (labelNames.has("agent:plan") ? "plan" : "implement");
+                const periodKey = issue.title.replace(/^\[agent:(?:docs|tests)\]\s*/, "");
+                const taskId = recipe?.taskId || (scheduledTaskKind ? `${scheduledTaskKind === "scheduled-docs" ? "docs" : "tests"}-${periodKey}` : `issue-${issue.number}`);
+                state = defaultAgentMaintenanceState({ taskId, taskKind, issueNumber: issue.number });
+                const prompt = taskKind === "scheduled-docs"
+                  ? "Audit weekly documentation drift. Change only README.md, docs-site/**, screenshots/**, examples/**, and related documentation tests. Fill .github/PULL_REQUEST_TEMPLATE.md and record `bun run prepush` in Verification."
+                  : taskKind === "scheduled-tests"
+                    ? "Improve monthly test health. Change only tests/** and existing test helpers. If production code is needed, stop and explain why. Fill .github/PULL_REQUEST_TEMPLATE.md and record `bun run prepush` in Verification."
+                    : `Implement trusted maintenance issue #${issue.number}. Follow AGENTS.md and nested instructions, target dev, and fill .github/PULL_REQUEST_TEMPLATE.md. Issue title: ${issue.title}\nIssue body:\n${issue.body || ""}`;
+                try {
+                  const request = buildJulesSessionRequest({
+                    title: `opencodex-agent:${taskId}`,
+                    prompt,
+                    source: await connectedSource(),
+                    requirePlanApproval: taskKind === "plan"
+                  });
+                  if (request.automationMode !== "AUTO_CREATE_PR") throw new Error("Jules request is not PR-only");
+                  const session = await client.createSessionIdempotently(request);
+                  state.sessionId = session.name.slice("sessions/".length);
+                  state.sessionUrl = session.url || null;
+                  state.status = taskKind === "plan" ? "planning" : "running";
+                  comment = await saveRecord(issue.number, comment, state);
+                  await setLifecycle(issue.number, "agent:running");
+                  activeCount += 1;
+                } catch (error) {
+                  if (error.status === 429) {
+                    state.reason = priorQuotaReason || `quota-429:${new Date().toISOString()}`;
+                  } else if (error.uncertain) {
+                    state.status = "needs-human";
+                    state.reason = error.message;
+                  } else {
+                    state.status = "failed";
+                    state.reason = error.message;
+                  }
+                  await saveRecord(issue.number, comment, state);
+                  await setLifecycle(issue.number, error.status === 429
+                    ? "agent:queued"
+                    : error.uncertain ? "agent:needs-human" : "agent:failed");
+                }
+                continue;
+              }
+
+              if (
+                ["failed", "needs-human"].includes(state.status) ||
+                (state.status === "completed" && state.reason === "PR merged") ||
+                !state.sessionId
+              ) continue;
+              let session;
+              try {
+                session = await client.getSession(state.sessionId);
+              } catch (error) {
+                if (error.status === 429) {
+                  state.reason = state.reason?.startsWith("quota-429:")
+                    ? state.reason
+                    : `quota-429:${new Date().toISOString()}`;
+                  if (quotaExhaustionExpired(state.reason)) {
+                    state.status = "needs-human";
+                    state.reason = "Jules quota remained exhausted for more than 24 hours";
+                    await setLifecycle(issue.number, "agent:needs-human");
+                  }
+                } else {
+                  state.reason = `Jules session read failed: ${error.message}`;
+                }
+                await saveRecord(issue.number, comment, state);
+                continue;
+              }
+              const sessionState = String(session.state || "").toUpperCase();
+              const output = session.outputs?.find(item => item?.pullRequest?.url);
+              const disposition = julesSessionDisposition(sessionState, Boolean(output));
+              if (disposition === "planning") {
+                state.status = "planning";
+                await saveRecord(issue.number, comment, state);
+                continue;
+              }
+              if (disposition === "failed") {
+                state.status = "failed";
+                state.reason = `Jules session ended as ${sessionState}`;
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:failed");
+                continue;
+              }
+              if (disposition === "needs-human") {
+                state.status = "needs-human";
+                state.reason = `Jules session requires human attention: ${sessionState || "UNKNOWN"}`;
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              if (disposition === "running") {
+                state.status = "running";
+                await saveRecord(issue.number, comment, state);
+                continue;
+              }
+
+              let pr;
+              let validated;
+              try {
+                const match = new URL(output.pullRequest.url).pathname.match(/^\/[^/]+\/[^/]+\/pull\/(\d+)$/);
+                if (!match) throw new Error("Jules returned an invalid pull request URL");
+                pr = (await github.rest.pulls.get({ owner, repo, pull_number: Number(match[1]) })).data;
+                validated = validateSessionPullRequest({
+                  session,
+                  pr,
+                  owner,
+                  repo,
+                  expectedAuthorId: Number(process.env.JULES_BOT_USER_ID),
+                  allowClosed: state.pullRequestNumber !== null
+                });
+              } catch (error) {
+                state.status = "needs-human";
+                state.reason = `Jules pull request validation failed: ${error.message}`;
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              if (state.pullRequestNumber !== null && state.pullRequestNumber !== validated.number) {
+                state.status = "needs-human";
+                state.reason = "Jules session changed pull request identity";
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              if (state.pullRequestNumber === null) {
+                state.pullRequestNumber = validated.number;
+                state.expectedHeadSha = validated.headSha;
+                state.reviewCycle = 1;
+                state.status = "reviewing";
+              } else if (state.expectedHeadSha !== validated.headSha) {
+                let comparison = null;
+                let headCommit = null;
+                try {
+                  [comparison, headCommit] = await Promise.all([
+                    github.rest.repos.compareCommitsWithBasehead({
+                      owner,
+                      repo,
+                      basehead: `${state.expectedHeadSha}...${validated.headSha}`
+                    }).then(response => response.data),
+                    github.rest.repos.getCommit({ owner, repo, ref: validated.headSha }).then(response => response.data)
+                  ]);
+                } catch (error) {
+                  core.warning(`Could not verify Jules head movement: ${error.message}`);
+                }
+                const directJulesPush =
+                  context.eventName === "pull_request_target" &&
+                  context.payload.action === "synchronize" &&
+                  context.payload.pull_request?.number === pr.number
+                    ? context.payload.sender?.id
+                    : null;
+                const expectedAdvance = isExpectedJulesHeadAdvance({
+                  previousSha: state.expectedHeadSha,
+                  currentSha: validated.headSha,
+                  reason: state.reason,
+                  expectedJulesUserId: Number(process.env.JULES_BOT_USER_ID),
+                  observedPusherId: directJulesPush,
+                  comparison,
+                  headCommit
+                });
+                if (!expectedAdvance || state.reviewCycle >= 3) {
+                  state.status = "needs-human";
+                  state.reason = "Human, force-pushed, discontinuous, or otherwise unverified head movement";
+                } else {
+                  state.expectedHeadSha = validated.headSha;
+                  state.reviewCycle += 1;
+                  state.reason = null;
+                }
+              }
+              if (pr.state !== "open") {
+                state.status = pr.merged ? "completed" : "needs-human";
+                state.reason = pr.merged ? "PR merged" : "Maintenance PR closed without merge";
+              }
+              if (["needs-human", "completed"].includes(state.status)) {
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, state.status === "completed" ? "agent:done" : "agent:needs-human");
+                continue;
+              }
+
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number: pr.number, per_page: 100
+              });
+              if (!changedFileListComplete(pr.changed_files, files)) {
+                state.status = "needs-human";
+                state.reason = "GitHub changed-file list is incomplete or malformed";
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              const protectedExpansion = files.some(isAgentProtectedPath);
+              const filePaths = file => [file.filename, file.previous_filename].filter(Boolean);
+              const scheduledViolation = state.taskKind === "scheduled-docs"
+                ? files.some(file => filePaths(file).some(name => !/^(README\.md|docs-site\/|screenshots\/|examples\/|tests\/.*(?:doc|readme))/i.test(name)))
+                : state.taskKind === "scheduled-tests"
+                  ? files.some(file => filePaths(file).some(name => !/^tests\//.test(name)))
+                  : false;
+              if (protectedExpansion || scheduledViolation) {
+                state.status = "needs-human";
+                state.reason = protectedExpansion ? "Protected-path expansion" : "Scheduled recipe path allowlist exceeded";
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+
+              const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+                owner, repo, ref: pr.head.sha, per_page: 100
+              });
+              if (context.eventName === "schedule" && context.payload.schedule === "*/15 * * * *") {
+                try {
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner,
+                    repo,
+                    workflow_id: "enforce-pr-target.yml",
+                    ref: context.payload.repository.default_branch,
+                    inputs: { pull_number: String(pr.number) }
+                  });
+                } catch (error) {
+                  core.warning(`Could not wake the PR enforcer for #${pr.number}: ${error.message}`);
+                }
+              }
+              const baselineNames = ["ci", "enforce-target", "hygiene"];
+              const baselineReady = requiredChecksSuccessful(checkRuns, pr.head.sha, baselineNames, 15368);
+              const appId = Number(process.env.CURSOR_BUGBOT_APP_ID);
+              const evidence = exactHeadBugbotEvidence({ checkRuns, liveHeadSha: pr.head.sha, expectedAppId: appId });
+              if (evidence && baselineReady) {
+                state.lastBugbotCheckRunId = evidence.checkRunId;
+                state.status = "reviewing";
+                state.reason = `automated-review-passed:${pr.head.sha}`;
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:reviewing");
+                continue;
+              }
+
+              await setLifecycle(issue.number, "agent:reviewing");
+              if (mode !== "repair") {
+                await saveRecord(issue.number, comment, state);
+                continue;
+              }
+              const bugbotChecks = checkRuns
+                .filter(check => check.name === "Cursor Bugbot" && Number(check.app?.id) === appId && check.head_sha === pr.head.sha)
+                .sort((a, b) => Number(b.id) - Number(a.id));
+              const latestBugbot = bugbotChecks[0];
+              if (!latestBugbot || latestBugbot.status !== "completed") continue;
+              if (latestBugbot.conclusion !== "failure" && latestBugbot.conclusion !== "neutral") {
+                core.info(`Cursor Bugbot check concluded with ${latestBugbot.conclusion}; escalating to maintainer.`);
+                state.status = "needs-human";
+                state.reason = `Cursor Bugbot check ended with conclusion: ${latestBugbot.conclusion}`;
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              if (state.reason === `repair-requested:${pr.head.sha}`) continue;
+              state.lastBugbotCheckRunId = latestBugbot.id;
+              if (!baselineReady) {
+                core.info(`Waiting for successful baseline CI on ${pr.head.sha}.`);
+                continue;
+              }
+              if (state.repairAttempts >= MAX_REPAIR_ATTEMPTS) {
+                state.status = "needs-human";
+                state.reason = "Cursor Bugbot review remained dirty after the repair budget";
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+                owner, repo, pull_number: pr.number, per_page: 100
+              });
+              const resolvedCommentIds = new Set();
+              try {
+                let threadCursor = null;
+                let hasNextPage = true;
+                while (hasNextPage) {
+                  const threadPage = await github.graphql(
+                    `query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                      repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) {
+                          reviewThreads(first: 100, after: $cursor) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                              isResolved
+                              comments(first: 100) {
+                                nodes { id databaseId }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }`,
+                    { owner, repo, number: pr.number, cursor: threadCursor }
+                  );
+                  const threads = threadPage?.repository?.pullRequest?.reviewThreads?.nodes || [];
+                  for (const thread of threads) {
+                    if (thread.isResolved) {
+                      for (const c of (thread.comments?.nodes || [])) {
+                        if (c.databaseId) resolvedCommentIds.add(Number(c.databaseId));
+                        if (c.id) resolvedCommentIds.add(c.id);
+                      }
+                    }
+                  }
+                  const pageInfo = threadPage?.repository?.pullRequest?.reviewThreads?.pageInfo;
+                  hasNextPage = Boolean(pageInfo?.hasNextPage);
+                  threadCursor = pageInfo?.endCursor || null;
+                }
+              } catch (error) {
+                core.warning(`Could not query GraphQL review threads: ${error.message}`);
+              }
+              let findings;
+              try {
+                findings = verifiedBugbotFindings({
+                  comments: reviewComments,
+                  resolvedCommentIds,
+                  botUserId: Number(process.env.CURSOR_BUGBOT_USER_ID),
+                  headSha: pr.head.sha
+                });
+              } catch (error) {
+                state.status = "needs-human";
+                state.reason = error.message;
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              if (findings.length === 0) {
+                state.status = "needs-human";
+                state.reason = "Cursor Bugbot did not provide verified current-head findings";
+                await saveRecord(issue.number, comment, state);
+                await setLifecycle(issue.number, "agent:needs-human");
+                continue;
+              }
+              const marker = repairMarker(pr.head.sha);
+              const existingRepair = (await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100
+              })).some(item => item.user?.login === "github-actions[bot]" && item.body?.includes(marker));
+              if (!existingRepair) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pr.number,
+                  body: buildJulesRepairComment({ headSha: pr.head.sha, findings })
+                });
+              }
+              state.repairAttempts += 1;
+              state.reason = `repair-requested:${pr.head.sha}`;
+              await saveRecord(issue.number, comment, state);
+            }

@@ -31,7 +31,7 @@ describe("enforce-pr-target workflow", () => {
       .map((line) => line.trim())
       .filter(Boolean)
       .sort();
-    assert.deepEqual(lines, ["contents: write", "pull-requests: write"]);
+    assert.deepEqual(lines, ["checks: read", "contents: write", "pull-requests: write"]);
   });
 
   it("fails the required check on a wrong base even if draft conversion fails", () => {
@@ -70,6 +70,18 @@ describe("enforce-pr-target workflow", () => {
     assert.match(workflow, /listPullRequestsAssociatedWithCommit/);
     assert.match(workflow, /candidate\.head\?\.sha === statusSha/);
     assert.match(workflow, /candidates\.length !== 1/);
+  });
+
+  it("wakes from trusted Bugbot checks and revalidates exact-head evidence", () => {
+    assert.match(workflow, /^  check_run:\n\s+types: \[completed\]/m);
+    assert.match(workflow, /^  workflow_dispatch:/m);
+    assert.match(workflow, /CURSOR_BUGBOT_APP_ID/);
+    assert.match(workflow, /CURSOR_BUGBOT_POLICY/);
+    assert.match(workflow, /exactHeadBugbotEvidence/);
+    assert.match(workflow, /checks\.listForRef/);
+    assert.match(workflow, /check\.app\?\.id/);
+    assert.match(workflow, /pr\.head\.sha/);
+    assert.match(workflow, /Invalid CURSOR_BUGBOT_POLICY/);
   });
 
   it("does not add review events that would break the trusted-base model", () => {
@@ -188,7 +200,7 @@ describe("enforce-pr-target workflow", () => {
     assert.ok(ref, "trusted checkout must declare ref");
     assert.equal(
       ref.replace(/\s+/g, " ").trim(),
-      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+      "${{ github.event_name != 'pull_request_target' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
     );
     assert.doesNotMatch(ref, /base\.sha|head\.(?:sha|ref)/);
     // Pinning the checkout ref only gates one step. A later `run:` or
@@ -221,7 +233,7 @@ describe("enforce-pr-target workflow", () => {
     const checkouts = workflow.match(/uses:\s*actions\/checkout@[\s\S]*?(?=\n {6}- name:|$)/g) ?? [];
     for (const step of checkouts) {
       const stepRef = (step.match(/^\s*ref:\s*(.+)$/m)?.[1] ?? "").replace(/\s+/g, " ").trim();
-      assert.equal(stepRef, "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}", "every checkout must use the trusted ref");
+      assert.equal(stepRef, "${{ github.event_name != 'pull_request_target' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}", "every checkout must use the trusted ref");
       assert.doesNotMatch(step, /repository:/, "a checkout must not retarget its repository");
     }
     // Checkout is not the only way to obtain PR-controlled code. A `run:` step
