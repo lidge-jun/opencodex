@@ -354,6 +354,10 @@ async function main(): Promise<void> {
 }
 
 main().catch(error => {
-  console.error(`FAIL disposable service acceptance: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+  // message FIRST and unconditionally: Bun's `stack` renders a multi-line message as a bare
+  // "Error", which hid the actual cause of every failing row.
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`FAIL disposable service acceptance: ${message}`);
+  if (error instanceof Error && error.stack) console.error(error.stack);
   process.exitCode = 1;
 });
