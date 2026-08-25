@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { flushAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { flushResponseState } from "../responses/state";
 import { setStorageCleanupPolicyLiveSink } from "../storage/policy";
@@ -30,6 +31,8 @@ import { releaseNativeMainStartupLifecycle } from "../codex/native-profile-start
 // ---------------------------------------------------------------------------
 
 export const MAX_ACTIVE_TURNS = 256;
+export const MAX_ACTIVE_SESSION_LANES = 64;
+export const SESSION_LANE_ID_BYTES = 32;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
   bindAbortController(ac: AbortController): void;
@@ -38,6 +41,10 @@ export interface ActiveTurnLease extends AdmissionLease {
 }
 const activeTurns = new Map<AbortController, ActiveTurnLease>();
 const admittedTurns = new Set<ActiveTurnLease>();
+const activeSessionLanes = new Set<string>();
+let sessionLanePeak = 0;
+let sessionLaneAdmitted = 0;
+let sessionLaneRejected = 0;
 const knownTurnControllers = new WeakSet<AbortController>();
 let turnReleaseMisses = 0;
 let shutdownDraining = false;
@@ -149,6 +156,10 @@ export function resetLifecycleDrainStateForTests(): void {
   temporaryDrainOwners.clear();
   nativeMainDrainOwners.clear();
   nativeMainTurns.clear();
+  activeSessionLanes.clear();
+  sessionLanePeak = 0;
+  sessionLaneAdmitted = 0;
+  sessionLaneRejected = 0;
   nativeMainSelections = 0;
   for (const resolve of temporaryDrainWaiters) resolve();
   temporaryDrainWaiters.clear();
@@ -157,10 +168,22 @@ export function resetLifecycleDrainStateForTests(): void {
   serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
 }
-export function tryAdmitTurn(): ActiveTurnLease | null {
+export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
   if (isDraining()) return null;
+  const opaqueSessionLaneId = sessionLaneId
+    ? createHash("sha256").update(sessionLaneId).digest("hex").slice(0, SESSION_LANE_ID_BYTES)
+    : undefined;
+  if (opaqueSessionLaneId && (activeSessionLanes.has(opaqueSessionLaneId) || activeSessionLanes.size >= MAX_ACTIVE_SESSION_LANES)) {
+    sessionLaneRejected += 1;
+    return null;
+  }
   const gateLease = turnGate.tryAcquire();
   if (!gateLease) return null;
+  if (opaqueSessionLaneId) {
+    activeSessionLanes.add(opaqueSessionLaneId);
+    sessionLaneAdmitted += 1;
+    sessionLanePeak = Math.max(sessionLanePeak, activeSessionLanes.size);
+  }
   const controllers = new Set<AbortController>();
   let active = true;
   let transferred = false;
@@ -211,6 +234,7 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
       }
       controllers.clear();
       nativeMainTurns.delete(lease);
+      if (opaqueSessionLaneId) activeSessionLanes.delete(opaqueSessionLaneId);
       gateLease.release();
     },
   };
@@ -261,6 +285,22 @@ export function unregisterTurn(ac: AbortController): void {
 }
 export function isDraining(): boolean { return shutdownDraining || temporaryDrainOwners.size > 0; }
 export function getActiveTurnCount(): number { return turnGate.metrics().active; }
+export interface SessionLaneMetrics {
+  active: number;
+  peak: number;
+  admitted: number;
+  rejected: number;
+  retainedBytes: number;
+}
+export function sessionLaneMetrics(): SessionLaneMetrics {
+  return {
+    active: activeSessionLanes.size,
+    peak: sessionLanePeak,
+    admitted: sessionLaneAdmitted,
+    rejected: sessionLaneRejected,
+    retainedBytes: activeSessionLanes.size * SESSION_LANE_ID_BYTES,
+  };
+}
 export function getNativeMainProfileRequestCount(): number {
   return nativeMainSelections + nativeMainTurns.size;
 }
