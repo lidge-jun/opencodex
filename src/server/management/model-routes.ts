@@ -99,6 +99,8 @@ import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
 import { knownModelIdsForProvider } from "../../router";
+import { effectiveModelAliases, MODEL_ALIAS_PATTERN } from "../../providers/default-aliases";
+import { comboPublicModelId } from "../../combos/types";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -238,6 +240,89 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({ ok: true, provider, acknowledged: [...acknowledged], catalogRefresh });
+  }
+
+  if (url.pathname === "/api/aliases" && req.method === "GET") {
+    const providers: Record<string, string> = {};
+    const models: Record<string, Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }>> = {};
+    for (const [name, provider] of Object.entries(config.providers)) {
+      if (provider.alias) providers[name] = provider.alias;
+      const known = knownModelIdsForProvider(name, provider, config);
+      const knownSet = new Set(known);
+      const rows: Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }> = {};
+      for (const [id, value] of effectiveModelAliases(config, provider, new Set([...known, ...Object.keys(provider.modelAliases ?? {})]))) {
+        rows[id] = { ...value, ...(!knownSet.has(id) ? { stale: true } : {}) };
+      }
+      if (Object.keys(rows).length) models[name] = rows;
+    }
+    return jsonResponse({ providers, models, defaults: {
+      global: config.defaultModelAliases ?? false,
+      providers: Object.fromEntries(Object.entries(config.providers).filter(([, p]) => p.defaultAliases !== undefined).map(([n, p]) => [n, p.defaultAliases])),
+    } });
+  }
+
+  const providerAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/alias$/);
+  if (providerAliasMatch && req.method === "PUT") {
+    const name = decodeURIComponent(providerAliasMatch[1]!);
+    const provider = config.providers[name];
+    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw) || (raw.alias !== null && typeof raw.alias !== "string")) return jsonResponse({ error: "alias must be a string or null" }, 400, req, config);
+    const alias = typeof raw.alias === "string" ? raw.alias.trim() : null;
+    if (alias && !isValidProviderName(alias)) return jsonResponse({ error: "invalid provider alias" }, 400, req, config);
+    const lower = alias?.toLowerCase();
+    const collision = lower && Object.entries(config.providers).find(([other, p]) =>
+      other !== name && (other.toLowerCase() === lower || p.alias?.toLowerCase() === lower));
+    const comboCollision = lower && Object.entries(config.combos ?? {}).find(([, combo]) => comboPublicModelId("", combo).toLowerCase() === lower);
+    const accountCollision = lower && Object.keys(config.codexAccountNamespaces ?? {}).find(value => value.toLowerCase() === lower);
+    if (collision || comboCollision || accountCollision) return jsonResponse({ error: `alias conflicts with '${collision?.[0] ?? comboCollision?.[0] ?? accountCollision}'` }, 409, req, config);
+    if (alias) provider.alias = alias; else delete provider.alias;
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, provider: name, alias, catalogRefresh });
+  }
+
+  const modelAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-aliases$/);
+  if (modelAliasMatch && req.method === "PUT") {
+    const name = decodeURIComponent(modelAliasMatch[1]!);
+    const provider = config.providers[name];
+    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw) || (raw.set !== undefined && !isPlainRecord(raw.set)) || (raw.remove !== undefined && !Array.isArray(raw.remove))) return jsonResponse({ error: "invalid model alias update" }, 400, req, config);
+    const next = { ...(provider.modelAliases ?? {}) };
+    for (const id of (raw.remove ?? []) as unknown[]) if (typeof id === "string") delete next[id];
+    const conflicts: Array<{ alias: string; heldBy: string }> = [];
+    const known = knownModelIdsForProvider(name, provider, config);
+    for (const [id, value] of Object.entries((raw.set ?? {}) as Record<string, unknown>)) {
+      if (typeof value !== "string" || !MODEL_ALIAS_PATTERN.test(value)) return jsonResponse({ error: `invalid model alias for '${id}'` }, 400, req, config);
+      const lower = value.toLowerCase();
+      const heldBy = Object.entries(next).find(([other, alias]) => other !== id && alias.toLowerCase() === lower)?.[0]
+        ?? known.find(native => native.toLowerCase() === lower)
+        ?? Object.entries(config.combos ?? {}).find(([, combo]) => comboPublicModelId("", combo).toLowerCase() === lower)?.[0];
+      if (heldBy || /^(?:gpt-|o1-|o3-|o4-|codex-)/i.test(value)) conflicts.push({ alias: value, heldBy: heldBy ?? "native OpenAI family" });
+      else next[id] = value;
+    }
+    if (conflicts.length) return jsonResponse({ error: "model alias collision", conflicts }, 409, req, config);
+    provider.modelAliases = next;
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, aliases: next, catalogRefresh });
+  }
+
+  if (url.pathname === "/api/default-aliases" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw) || typeof raw.enabled !== "boolean" || (raw.provider !== undefined && typeof raw.provider !== "string")) return jsonResponse({ error: "enabled must be boolean" }, 400, req, config);
+    if (typeof raw.provider === "string") {
+      const provider = config.providers[raw.provider];
+      if (!provider) return jsonResponse({ error: `provider '${raw.provider}' not found` }, 404, req, config);
+      provider.defaultAliases = raw.enabled;
+    } else config.defaultModelAliases = raw.enabled;
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, catalogRefresh });
   }
 
   if (url.pathname === "/api/catalog" && req.method === "GET") {

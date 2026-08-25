@@ -60,6 +60,7 @@ import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
+import { MODEL_ALIAS_PATTERN } from "./providers/default-aliases";
 import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
@@ -479,6 +480,9 @@ const fastWireSchema = z.object({
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  alias: z.string().optional(),
+  modelAliases: z.record(z.string(), z.string()).optional(),
+  defaultAliases: z.boolean().optional(),
   requestPacing: requestPacingSchema.optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
@@ -865,6 +869,7 @@ const configSchema = z.object({
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
+  defaultModelAliases: z.boolean().optional(),
   // A retry can be billable, so absence and malformed hand edits both stay off.
   emptyCompletionRetry: z.boolean().optional().catch(false),
   // A malformed hand edit must not silently stop opening the browser: fall back
@@ -1794,6 +1799,7 @@ export function loadConfig(): OcxConfig {
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
+    sanitizeAliasesForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
@@ -1862,6 +1868,43 @@ export function loadConfig(): OcxConfig {
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
     return getDefaultConfig();
+  }
+}
+
+/** Hand-edited alias mistakes disable only the bad alias; providers and routing survive. */
+function sanitizeAliasesForLoad(raw: unknown): void {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  const root = raw as Record<string, unknown>;
+  if (!root.providers || typeof root.providers !== "object" || Array.isArray(root.providers)) return;
+  const providers = root.providers as Record<string, Record<string, unknown>>;
+  const providerNames = new Set(Object.keys(providers).map(name => name.toLowerCase()));
+  const claimedProviders = new Set<string>();
+  const comboAliases = new Set(Object.values((root.combos as Record<string, { alias?: unknown }> | undefined) ?? {})
+    .map(combo => typeof combo?.alias === "string" ? combo.alias.toLowerCase() : "").filter(Boolean));
+  const accountNamespaces = new Set(Object.keys((root.codexAccountNamespaces as Record<string, unknown> | undefined) ?? {}).map(name => name.toLowerCase()));
+  for (const provider of Object.values(providers)) {
+    const alias = provider.alias;
+    if (typeof alias !== "string" || !isValidProviderName(alias)
+      || providerNames.has(alias.toLowerCase()) || claimedProviders.has(alias.toLowerCase())
+      || comboAliases.has(alias.toLowerCase()) || accountNamespaces.has(alias.toLowerCase())) {
+      if (alias !== undefined) console.warn("Ignoring invalid or colliding provider alias in config.json");
+      delete provider.alias;
+    } else claimedProviders.add(alias.toLowerCase());
+    if (!provider.modelAliases || typeof provider.modelAliases !== "object" || Array.isArray(provider.modelAliases)) {
+      if (provider.modelAliases !== undefined) delete provider.modelAliases;
+      continue;
+    }
+    const aliases = provider.modelAliases as Record<string, unknown>;
+    const nativeIds = new Set((Array.isArray(provider.models) ? provider.models : []).filter((id): id is string => typeof id === "string").map(id => id.toLowerCase()));
+    const claimed = new Set<string>();
+    for (const [id, value] of Object.entries(aliases)) {
+      const lower = typeof value === "string" ? value.toLowerCase() : "";
+      if (typeof value !== "string" || !MODEL_ALIAS_PATTERN.test(value) || claimed.has(lower)
+        || nativeIds.has(lower) || comboAliases.has(lower) || /^(?:gpt-|o1-|o3-|o4-|codex-)/i.test(value)) {
+        console.warn(`Ignoring invalid or colliding model alias for ${id} in config.json`);
+        delete aliases[id];
+      } else claimed.add(lower);
+    }
   }
 }
 

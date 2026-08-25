@@ -165,6 +165,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "alias",
+    usage: "ocx alias <list|set|rm|defaults> ...",
+    summary: "Manage short provider and model names.",
+  },
+  {
     name: "models",
     aliases: ["model"],
     usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|preset|context|shadow> ...",

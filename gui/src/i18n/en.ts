@@ -2146,6 +2146,19 @@ export const en = {
   "models.newPolicyGlobal": "New models start disabled", "models.newPolicyProvider": "New model policy",
   "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On",
   "models.newBadge": "NEW", "models.newCount": "{count} new, off",
+  "models.aliases": "Aliases",
+  "models.aliasesTable": "Alias table",
+  "models.aliasPrompt": "Provider alias (leave empty to clear)",
+  "models.modelAliasPrompt": "Model alias (leave empty to clear)",
+  "models.aliasSaved": "Alias saved",
+  "models.aliasConflict": "That alias conflicts with an existing name",
+  "models.editProviderAlias": "Edit provider alias",
+  "models.editModelAlias": "Edit model alias",
+  "models.useDefaultAliases": "Use default aliases",
+  "models.useDefaultAliasesGlobal": "Use default aliases globally",
+  "models.aliasAuto": "auto",
+  "models.aliasUser": "user",
+  "models.aliasStale": "stale",
 } as const;
 
 export type TKey = keyof typeof en;

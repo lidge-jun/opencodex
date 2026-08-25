@@ -1,4 +1,5 @@
 import { markActivity } from "../lib/sidecar-tracker";
+import { knownModelIdsForProvider } from "../router";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -1189,12 +1190,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const data = [
           ...visibleNatives.map(id => nativeModelRow(id)),
           ...visibleAccountNatives.map(({ id, metadataId }) => nativeModelRow(id, metadataId)),
-          ...uniqueCatalogModelsForRawPublicList(goOrdered).map(m => ({
-            id: m.alias ?? `${m.provider}/${m.id}`,
-            object: "model",
-            created: 0,
-            owned_by: m.owned_by ?? m.provider,
-            ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
+          ...await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
+            const provider = config.providers[m.provider];
+            const effective = provider
+              ? (await import("../providers/default-aliases")).effectiveModelAliases(
+                  config,
+                  provider,
+                  knownModelIdsForProvider(m.provider, provider, config),
+                ).get(m.id)
+              : undefined;
+            return {
+              id: m.alias ?? `${m.provider}/${m.id}`,
+              object: "model",
+              created: 0,
+              owned_by: m.owned_by ?? m.provider,
+              ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+              ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
+            };
           })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);

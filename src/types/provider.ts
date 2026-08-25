@@ -136,6 +136,12 @@ export type TierDecision =
  * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
  */
 export interface OcxProviderConfig {
+  /** Optional short provider namespace used only at request/catalog presentation time. */
+  alias?: string;
+  /** Native model id -> short, slash-free request alias. */
+  modelAliases?: Record<string, string>;
+  /** Override the global built-in model-alias switch for this provider. */
+  defaultAliases?: boolean;
   adapter: string;
   /**
    * Codex tool calling mode for routed models.

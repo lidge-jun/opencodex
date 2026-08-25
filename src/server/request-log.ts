@@ -66,6 +66,8 @@ export interface RequestLogContext {
   /** Stable non-PII Codex Pool account identity for durable usage attribution. */
   accountLogLabel?: string;
   requestedModel?: string;
+  /** User-facing alias selector when routing resolved one; native model remains `model`. */
+  requestedAlias?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
@@ -145,6 +147,7 @@ export interface RequestLogEntry {
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   requestedModel?: string;
+  requestedAlias?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
   requestedEffort?: string;
@@ -260,6 +263,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(entry.requestedAlias ? { requestedAlias: entry.requestedAlias } : {}),
     ...(entry.shadowCallRewrittenFrom
       ? { shadowCallRewrittenFrom: entry.shadowCallRewrittenFrom }
       : {}),
@@ -380,6 +384,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+      ...(entry.requestedAlias ? { requestedAlias: entry.requestedAlias } : {}),
       ...(entry.shadowCallRewrittenFrom
         ? { shadowCallRewrittenFrom: entry.shadowCallRewrittenFrom }
         : {}),
@@ -969,6 +974,7 @@ export function addFinalRequestLog(
       : {}),
     ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
+    ...(logCtx.requestedAlias ? { requestedAlias: logCtx.requestedAlias } : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),

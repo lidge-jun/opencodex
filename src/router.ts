@@ -32,6 +32,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
 } from "./providers/openai-tiers";
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
+import { resolveModelAlias } from "./providers/default-aliases";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -646,7 +647,14 @@ function routeModelInternal(
   //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when
   //    no such provider exists.
   if (slash > 0) {
-    const provName = modelId.slice(0, slash);
+    const requestedProvider = modelId.slice(0, slash);
+    const provName = hasOwnProvider(config.providers, requestedProvider)
+      ? requestedProvider
+      : Object.entries(config.providers).find(([, provider]) =>
+        typeof provider.alias === "string" && provider.alias.toLowerCase() === requestedProvider.toLowerCase())?.[0];
+    if (!provName) {
+      // A genuine slash-containing native model id still falls through unchanged.
+    } else {
     if (provName === LEGACY_CHATGPT_PROVIDER_ID || provName === LEGACY_OPENAI_MULTI_PROVIDER_ID) {
       throw new Error(`No provider configured for model: ${modelId}`);
     }
@@ -662,13 +670,19 @@ function routeModelInternal(
       }
       // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
       // slash id via an exact known-id lookup; raw full-slash selectors keep working.
+      const requestedModel = modelId.slice(slash + 1);
+      const decoded = decodeRoutedModelIdOrThrow(requestedModel, known);
+      const nativeModel = known.includes(decoded)
+        ? decoded
+        : resolveModelAlias(config, prov, known, requestedModel) ?? decoded;
       return routeResult(
         provName,
         prov,
-        decodeRoutedModelIdOrThrow(modelId.slice(slash + 1), known),
+        nativeModel,
         "explicit-provider",
         "explicit-provider-namespace",
       );
+    }
     }
   }
 
@@ -697,6 +711,24 @@ function routeModelInternal(
         return routeResult(provName, prov, hit, "explicit-provider", "configured-model-list");
       }
     }
+  }
+
+  const aliasMatches: Array<{ provider: string; model: string; qualified: string }> = [];
+  for (const [provName, prov] of activeProviderEntries(config)) {
+    const known = knownModelIdsForProvider(provName, prov, config);
+    const native = resolveModelAlias(config, prov, known, modelId);
+    if (native) aliasMatches.push({
+      provider: provName,
+      model: native,
+      qualified: `${prov.alias || provName}/${modelId}`,
+    });
+  }
+  if (aliasMatches.length > 1) {
+    throw new Error(`model alias '${modelId}' is ambiguous: ${aliasMatches.map(match => match.qualified).sort().join(", ")}`);
+  }
+  if (aliasMatches[0]) {
+    const match = aliasMatches[0];
+    return routeResult(match.provider, config.providers[match.provider], match.model, "explicit-provider", "model-alias");
   }
 
   if (config.defaultProvider === LEGACY_CHATGPT_PROVIDER_ID) {

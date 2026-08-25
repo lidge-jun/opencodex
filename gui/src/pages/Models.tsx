@@ -4,7 +4,7 @@ import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
-import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh } from "../icons";
+import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh, IconPencil } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
@@ -117,6 +117,12 @@ interface ModelDiscoveryView {
   policy: "on" | "off";
   providers: Record<string, "on" | "off" | "inherit">;
   recentArrivals: Record<string, Array<{ id: string; at: string; state: string }>>;
+}
+
+interface AliasView {
+  providers: Record<string, string>;
+  models: Record<string, Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }>>;
+  defaults: { global: boolean; providers: Record<string, boolean> };
 }
 
 export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string; restartEpoch?: number }) {
@@ -246,6 +252,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   // freeze the others.
   const [presets, setPresets] = useState<Record<string, ModelPresetView>>({});
   const [modelDiscovery, setModelDiscovery] = useState<ModelDiscoveryView | null>(null);
+  const [aliases, setAliases] = useState<AliasView>({ providers: {}, models: {}, defaults: { global: false, providers: {} } });
+  const [showAliases, setShowAliases] = useState(false);
   const [presetBusy, setPresetBusy] = useState<string | null>(null);
   const [v2Loading, setV2Loading] = useState(true);
   const [v2Busy, setV2Busy] = useState(false);
@@ -255,6 +263,48 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
+
+  const reloadAliases = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch(`${apiBase}/api/aliases`, { signal });
+    const data = await readJsonIfOk<AliasView>(response);
+    if (data && !signal?.aborted) setAliases(data);
+  }, [apiBase]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void reloadAliases(controller.signal);
+    return () => controller.abort();
+  }, [reloadAliases]);
+
+  const saveProviderAlias = async (provider: string) => {
+    const entered = window.prompt(t("models.aliasPrompt"), aliases.providers[provider] ?? "");
+    if (entered === null) return;
+    const response = await fetch(`${apiBase}/api/providers/${encodeURIComponent(provider)}/alias`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: entered.trim() || null }),
+    });
+    if (!response.ok) { publishFeedback(false, t("models.aliasConflict")); return; }
+    await reloadAliases();
+    publishFeedback(true, t("models.aliasSaved"));
+  };
+
+  const saveModelAlias = async (provider: string, model: string) => {
+    const current = aliases.models[provider]?.[model]?.alias ?? "";
+    const entered = window.prompt(t("models.modelAliasPrompt"), current);
+    if (entered === null) return;
+    const body = entered.trim() ? { set: { [model]: entered.trim() } } : { remove: [model] };
+    const response = await fetch(`${apiBase}/api/providers/${encodeURIComponent(provider)}/model-aliases`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!response.ok) { publishFeedback(false, t("models.aliasConflict")); return; }
+    await reloadAliases();
+    publishFeedback(true, t("models.aliasSaved"));
+  };
+
+  const setDefaultAliases = async (enabled: boolean, provider?: string) => {
+    const response = await fetch(`${apiBase}/api/default-aliases`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled, ...(provider ? { provider } : {}) }),
+    });
+    if (response.ok) await reloadAliases();
+  };
   const [customModalMode, setCustomModalMode] = useState<"add" | "edit">("add");
   const [customModalProvider, setCustomModalProvider] = useState("");
   const [customModalId, setCustomModalId] = useState("");
@@ -1168,7 +1218,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
             style={{ flex: 1, border: 0, background: "transparent", padding: 0, color: "inherit", cursor: "pointer", textAlign: "left" }}
           >
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
-          <span className="text-body font-semibold">{providerDisplaySlug(provider)}</span>
+          <span className="text-body font-semibold" style={{ whiteSpace: "nowrap" }}>{providerDisplaySlug(provider)}</span>
+          {aliases.providers[provider] && <span className="models-chip mono text-caption">{aliases.providers[provider]}</span>}
           {nativeProviderGroup && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
@@ -1183,6 +1234,12 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           {recentForProvider.length > 0 && <span className="models-chip mono text-caption">{t("models.newCount", { count: recentForProvider.length })}</span>}
           </button>
            <div className="row models-provider-actions">
+             <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editProviderAlias")} title={t("models.editProviderAlias")} onClick={() => void saveProviderAlias(provider)}><IconPencil style={{ width: 14, height: 14 }} /></button>
+             <Switch
+               on={aliases.defaults.providers[provider] ?? aliases.defaults.global}
+               onClick={() => void setDefaultAliases(!(aliases.defaults.providers[provider] ?? aliases.defaults.global), provider)}
+               label={t("models.useDefaultAliases")}
+             />
              {/* Available on every card, including the native one: the canonical `openai` seed
                  check now admits contextWindow/modelContextWindows as user-owned overlays, and
                  the native accessors only ever narrow the measured window with them. The cap
@@ -1374,7 +1431,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                  >
                    <div className="row models-model-row">
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                     {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                     {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
+                     <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
@@ -1498,6 +1558,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
             <Switch on={modelDiscovery.policy === "off"} onClick={() => void saveModelDiscovery(modelDiscovery.policy === "off" ? "on" : "off")} label={t("models.newPolicyGlobal")} />
           </div>
         )}
+        <div className="row">
+          <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
+        </div>
         <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
           <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
@@ -2079,6 +2143,20 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
           {controlsBlock}
           {collapseControls}
+          {showAliases && (
+            <div className="card" aria-label={t("models.aliasesTable")}>
+              <div className="row group-head"><strong>{t("models.aliases")}</strong></div>
+              {Object.entries(aliases.models).flatMap(([provider, rows]) => Object.entries(rows).map(([model, value]) => (
+                <div className="row models-model-row" key={`${provider}/${model}`}>
+                  <code className="mono text-caption" style={{ flex: 1 }}>{provider}/{model}</code>
+                  <strong className="mono text-control">{value.alias}</strong>
+                  <span className="models-chip muted text-caption">{value.source === "builtin" ? t("models.aliasAuto") : t("models.aliasUser")}</span>
+                  {value.stale && <span className="badge badge-amber">{t("models.aliasStale")}</span>}
+                  <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, model)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+                </div>
+              )))}
+            </div>
+          )}
           <div className="models-provider-list">
             {
               // eslint-disable-next-line react-hooks/refs, react/react-compiler -- The hover ref is only read by row event handlers nested in this renderer.

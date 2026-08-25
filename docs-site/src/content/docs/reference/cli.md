@@ -14,6 +14,10 @@ opencodex state.
 
 ## Command families
 
+### `ocx alias`
+
+`ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`.
+
 - [Lifecycle](/reference/cli/lifecycle/) — setup, proxy and service lifecycle, health, diagnostics,
   catalog sync, the dashboard, and updates.
 - [Providers, accounts, and models](/reference/cli/providers-accounts/) — provider configuration,

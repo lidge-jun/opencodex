@@ -372,10 +372,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 10 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 7 + 13 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 7],
-    ["model-routes.ts", 10],
+    ["model-routes.ts", 13],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -387,7 +387,7 @@ test("the route inventory contains exactly the specified 7 + 10 + 2 + 2 converge
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 7,
-    "model-routes.ts": 10,
+    "model-routes.ts": 13,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });
@@ -396,9 +396,21 @@ test("the route inventory contains exactly the specified 7 + 10 + 2 + 2 converge
 test("both model-discovery write paths converge the Codex catalog", () => {
   const source = readFileSync(join(import.meta.dir, "..", "src", "server", "management", "model-routes.ts"), "utf8");
   const settings = source.slice(source.indexOf('url.pathname === "/api/model-discovery" && req.method === "PUT"'), source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'));
-  const acknowledge = source.slice(source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'), source.indexOf('url.pathname === "/api/catalog"'));
+  // Sliced to the NEXT route rather than to /api/catalog: the alias routes (#2463) landed
+  // between them, so a fixed far boundary would swallow their convergence calls and count
+  // them as this route's.
+  const acknowledge = source.slice(source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'), source.indexOf('url.pathname === "/api/aliases"'));
   expect(settings.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
   expect(acknowledge.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
+});
+
+test("all three alias write routes converge the Codex catalog", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "src", "server", "management", "model-routes.ts"), "utf8");
+  for (const marker of ["providerAliasMatch && req.method", "modelAliasMatch && req.method", 'url.pathname === "/api/default-aliases"']) {
+    const start = source.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    expect(source.slice(start, source.indexOf("\n  if (", start + 1))).toContain("await convergeCodexCatalog()");
+  }
 });
 
 /**
