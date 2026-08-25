@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../src/web-search";
 import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../src/web-search/loop";
@@ -11,6 +11,8 @@ import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base"
 import type { OcxMessage, OcxParsedRequest } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 
 /** Run the web-search loop with a default test translator budget. */
 function runWithWebSearch(
@@ -380,7 +382,46 @@ describe("web-search sidecar planning", () => {
 });
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+const originalDebug = process.env.OCX_DEBUG;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  resetDebugSettingsForTests();
+  resetDebugLogBufferForTests();
+  if (originalDebug === undefined) delete process.env.OCX_DEBUG;
+  else process.env.OCX_DEBUG = originalDebug;
+});
+
+test("routed web-search streams carry adapter and bridge diagnostics", async () => {
+  process.env.OCX_DEBUG = "1";
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const adapter: ProviderAdapter = {
+      name: "diagnostic-search",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        yield { type: "text_delta", text: "search diagnostic secret" };
+        yield { type: "done" };
+      },
+    };
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+      diagnostic: { requestId: "search-diagnostic", adapterName: "diagnostic-search" },
+    });
+    await response.text();
+    const lines = getDebugLogEntries().map(entry => entry.line);
+    expect(lines.some(line => line.includes('"stage":"adapter"') && line.includes('"eventType":"text_delta"'))).toBe(true);
+    expect(lines.some(line => line.includes('"stage":"bridge"') && line.includes('"eventType":"text_delta"'))).toBe(true);
+  } finally {
+    error.mockRestore();
+  }
+});
 
 test("OpenAI web-search execution uses the pinned canonical URL and selected credentials", async () => {
   const cfg = config({

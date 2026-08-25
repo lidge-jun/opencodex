@@ -3,7 +3,7 @@ import { appendDebugLogLine, debugBufferMetrics, getDebugLogEntries, resetDebugL
 import { ResourceAdmissionError, RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../src/lib/admission";
 import { getInjectionDebugLogEntries, injectionDebugLog, resetInjectionDebugLogBufferForTests } from "../src/lib/injection-debug-log";
 import { markActivity, activityBreadcrumb } from "../src/lib/sidecar-tracker";
-import { debugDroppedFrame, debugProviderDiagnostic } from "../src/lib/debug";
+import { debugDroppedFrame, debugFingerprint, debugProviderDiagnostic, debugStreamDiagnostic } from "../src/lib/debug";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 
 describe("debug frame logging", () => {
@@ -70,6 +70,47 @@ describe("debug frame logging", () => {
     try {
       debugProviderDiagnostic("cursor", "dial", { host: "api2.cursor.sh" });
       expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("debug fingerprints are process-stable, content-free, and debug-gated", () => {
+    delete process.env.OCX_DEBUG;
+    expect(debugFingerprint("fixture reasoning and secret")).toBeUndefined();
+
+    process.env.OCX_DEBUG = "1";
+    const same = debugFingerprint("fixture reasoning and secret");
+    const again = debugFingerprint("fixture reasoning and secret");
+    const different = debugFingerprint("different fixture");
+    expect(same).toMatch(/^[0-9a-f]{64}$/);
+    expect(again).toBe(same);
+    expect(different).toMatch(/^[0-9a-f]{64}$/);
+    expect(different).not.toBe(same);
+    expect(getDebugLogEntries()).toHaveLength(0);
+  });
+
+  test("stream diagnostics are structural and omit content", () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      debugStreamDiagnostic(
+        { requestId: "req-1", adapterName: "openai-chat" },
+        "adapter",
+        3,
+        "text_delta",
+        { byteLength: 21, fingerprint: debugFingerprint("fixture reasoning and secret"), attempt: 2, recovery: "empty-completion" },
+      );
+      const line = getDebugLogEntries()[0]?.line ?? "";
+      expect(line).toContain("[ocx:openai-chat:stream]");
+      expect(line).toContain('"stage":"adapter"');
+      expect(line).toContain('"sequence":3');
+      expect(line).toContain('"eventType":"text_delta"');
+      expect(line).toContain('"byteLength":21');
+      expect(line).toContain('"fingerprint"');
+      expect(line).toContain('"attempt":2');
+      expect(line).toContain('"recovery":"empty-completion"');
+      expect(line).not.toContain("fixture reasoning and secret");
     } finally {
       error.mockRestore();
     }

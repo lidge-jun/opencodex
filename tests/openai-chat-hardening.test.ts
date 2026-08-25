@@ -163,6 +163,105 @@ describe("openai-chat request hardening", () => {
   });
 });
 
+describe("xAI tool-catalog diagnostics", () => {
+  const xaiProvider = () => provider({ baseUrl: "https://cli-chat-proxy.grok.com/v1" });
+
+  function tool(parameters: Record<string, unknown>, name = "private_tool_name"): NonNullable<OcxParsedRequest["context"]["tools"]>[number] {
+    return {
+      name,
+      namespace: "private_namespace",
+      description: "private schema description",
+      parameters,
+    };
+  }
+
+  function diagnosticDetails(): Record<string, unknown> {
+    const line = getDebugLogEntries().find(entry => entry.line.includes("[ocx:openai-chat:tool-catalog]"))?.line ?? "";
+    if (!line) return {};
+    return JSON.parse(line.slice(line.indexOf("] ") + 2)) as Record<string, unknown>;
+  }
+
+  test("reports a lossless xAI catalog with zero omissions and keeps the tool", () => {
+    process.env.OCX_DEBUG = "1";
+    const request = createOpenAIChatAdapter(xaiProvider()).buildRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        tools: [tool({
+          type: "object",
+          properties: { private_argument: { type: "string" } },
+          required: ["private_argument"],
+        })],
+      },
+    });
+    const body = JSON.parse(request.body) as { tools?: unknown[] };
+
+    expect(body.tools).toHaveLength(1);
+    expect(diagnosticDetails()).toEqual({ declared: 1, emitted: 1, omitted: 0 });
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    expect(lines).not.toContain("private_tool_name");
+    expect(lines).not.toContain("private_argument");
+    expect(lines).not.toContain("private schema description");
+  });
+
+  test("classifies an unsupported root union while preserving omission behavior", () => {
+    process.env.OCX_DEBUG = "1";
+    const request = createOpenAIChatAdapter(xaiProvider()).buildRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        tools: [tool({
+          oneOf: [
+            { type: "object", properties: { left_secret: { type: "string" } } },
+            { type: "object", properties: { right_secret: { type: "number" } } },
+          ],
+        })],
+      },
+    });
+    const body = JSON.parse(request.body) as { tools?: unknown[] };
+
+    expect(body.tools).toBeUndefined();
+    expect(diagnosticDetails()).toEqual({
+      declared: 1,
+      emitted: 0,
+      omitted: 1,
+      omissionCause: "xai_schema_not_lossless",
+    });
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    expect(lines).not.toContain("private_tool_name");
+    expect(lines).not.toContain("left_secret");
+    expect(lines).not.toContain("right_secret");
+  });
+
+  test("does not add catalog diagnostics for non-xAI providers", () => {
+    process.env.OCX_DEBUG = "1";
+    createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        tools: [tool({ type: "object", properties: {} })],
+      },
+    });
+
+    const lines = getDebugLogEntries().map(entry => entry.line);
+    expect(lines.filter(line => line.includes("[ocx:openai-chat:request]")).length).toBe(1);
+    expect(lines.some(line => line.includes("[ocx:openai-chat:tool-catalog]"))).toBe(false);
+  });
+
+  test("does not add catalog diagnostics when provider debug is off", () => {
+    delete process.env.OCX_DEBUG;
+    createOpenAIChatAdapter(xaiProvider()).buildRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        tools: [tool({ type: "object", properties: {} })],
+      },
+    });
+
+    expect(getDebugLogEntries()).toHaveLength(0);
+  });
+});
+
 describe("openai-chat non-stream response hardening", () => {
   test("surfaces an upstream error envelope message", async () => {
     const adapter = createOpenAIChatAdapter(provider());

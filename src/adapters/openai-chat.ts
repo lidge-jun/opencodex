@@ -1244,6 +1244,15 @@ function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig
       },
     }];
   });
+  if (xaiTarget) {
+    const omitted = tools.length - formatted.length;
+    debugProviderDiagnostic("openai-chat", "tool-catalog", {
+      declared: tools.length,
+      emitted: formatted.length,
+      omitted,
+      ...(omitted > 0 ? { omissionCause: "xai_schema_not_lossless" } : {}),
+    });
+  }
   return formatted.length > 0 ? formatted : undefined;
 }
 

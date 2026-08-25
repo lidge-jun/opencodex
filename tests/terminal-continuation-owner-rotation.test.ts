@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,8 @@ import type {
   OcxParsedRequest,
   OcxProviderConfig,
 } from "../src/types";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 
 interface BuildObservation {
   key: string;
@@ -23,6 +25,7 @@ interface BuildObservation {
 }
 
 let builds: BuildObservation[] = [];
+const PREVIOUS_DEBUG = process.env.OCX_DEBUG;
 
 function eventsForPhase(phase: string): AdapterEvent[] {
   if (phase === "seed") {
@@ -42,6 +45,16 @@ function eventsForPhase(phase: string): AdapterEvent[] {
         type: "done",
         stopReason: "end_turn",
         providerState: { kiro: { conversationId: "private-a-plan" } },
+      },
+    ];
+  }
+  if (phase === "final") {
+    return [
+      { type: "text_delta", text: "completed after connection reset" },
+      {
+        type: "done",
+        stopReason: "end_turn",
+        providerState: { kiro: { conversationId: "private-final" } },
       },
     ];
   }
@@ -126,7 +139,75 @@ describe("terminal continuation provider-owner rotation", () => {
     else process.env.OPENCODEX_HOME = previousHome;
     clearKeyCooldowns();
     clearResponseStateForTests();
+    resetDebugSettingsForTests();
+    resetDebugLogBufferForTests();
+    if (PREVIOUS_DEBUG === undefined) delete process.env.OCX_DEBUG;
+    else process.env.OCX_DEBUG = PREVIOUS_DEBUG;
     rmSync(testHome, { recursive: true, force: true });
+  });
+
+  test("continuation connection-reset recovery labels adapter and bridge diagnostics", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const key = "key-continuation-000111222333";
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "owned",
+      providers: {
+        owned: {
+          adapter: "test-terminal-owned",
+          baseUrl: "https://owned-terminal.test/v1",
+          authMode: "key",
+          apiKey: key,
+          terminalContinuationGuard: true,
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    let sends = 0;
+    globalThis.fetch = (async (_input, init) => {
+      sends += 1;
+      if (sends === 1) return new Response("", { headers: { "x-test-phase": "plan" } });
+      if (sends === 2) {
+        const reset = new Error("socket reset fixture");
+        (reset as Error & { code?: string }).code = "ECONNRESET";
+        throw reset;
+      }
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${key}`);
+      return new Response("", { headers: { "x-test-phase": "final" } });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "owned/model",
+            input: "Please modify the file now",
+            stream: true,
+            tools: [{ type: "function", name: "read_file", description: "read", parameters: { type: "object" } }],
+          }),
+        }),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+      const lines = getDebugLogEntries().map(entry => entry.line);
+      const adapter = lines.find(line =>
+        line.includes('"stage":"adapter"')
+        && line.includes('"eventType":"text_delta"')
+        && line.includes('"recovery":"connection-reset"')) ?? "";
+      const bridge = lines.find(line =>
+        line.includes('"stage":"bridge"')
+        && line.includes('"eventType":"text_delta"')
+        && line.includes('"recovery":"connection-reset"')) ?? "";
+      expect(adapter).toContain('"recovery":"connection-reset"');
+      expect(bridge).toContain('"recovery":"connection-reset"');
+      expect(sends).toBe(3);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   test("429 rotation fences inherited state and persists the rotated owner", async () => {

@@ -145,6 +145,37 @@ With no scope, `ocx debug` prints usage and, when the proxy is stopped, the next
 defaults. Provider debug defaults from `OCX_DEBUG=1` (legacy `OCX_DEBUG_FRAMES=1` also works); usage
 debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
 
+#### Capturing a routed-provider trace
+
+Capture one unchanged reproduction so the request, route, model, and tool catalog stay comparable:
+
+```bash
+ocx debug provider on
+grok -m <same-model> -p '<same reproduction prompt>'
+ocx debug provider logs
+ocx debug provider off
+```
+
+Replace the placeholders with the exact client command, route, model, and tools that showed the
+problem; make this one reproduction unchanged.
+
+Share only the content-free fingerprint lines beginning with `[ocx:<adapter>:stream]` and, when
+present, the aggregate `[ocx:openai-chat:tool-catalog]` line. Do not share the other provider-debug
+output: it can include request metadata or provider messages. Stream records use `stage: "adapter"`
+for events emitted by the provider adapter and `stage: "bridge"` for events observed at the
+Responses bridge. Compare `sequence`, `eventType`, `requestId`, `attempt`, and `recovery` to find
+where an event disappears or repeats. `eventType: "assistant_boundary"` marks the internal boundary
+before a one-shot continuation; a changed `attempt` or `recovery` identifies the recovery path.
+
+For Grok tool catalogs, `declared`, `emitted`, and `omitted` are aggregate counts after tool-choice
+filtering. `omissionCause: "xai_schema_not_lossless"` means the CLI proxy could not preserve a
+schema losslessly; it is evidence about the adapter boundary, not an automatic behavior change.
+
+Fingerprints are process-local, content-free correlation aids: identical values correlate only while
+that proxy process keeps its random key, and they are not durable identifiers. Disable provider
+debug with `ocx debug provider off` after capture. A live fingerprint trace selects the next
+cause-specific branch; this workflow does not promise a fix before that evidence exists.
+
 ## API access
 
 ### `ocx access <key|endpoints|models|test> ...`
