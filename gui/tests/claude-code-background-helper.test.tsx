@@ -71,7 +71,7 @@ test("selected background helper keeps the neutral description and hides the nat
 // "[object Object]". These render the options the page actually builds, so
 // reintroducing String() fails here rather than only on screen.
 test("icon-bearing models render their name, never [object Object] (#668)", () => {
-  const slugs = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+  const slugs = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-daybreak-blue-latest", "daybreak-blue-latest", "daybreak-red-latest"];
   // The closed picker renders only the SELECTED option, so assert per slug.
   for (const slug of slugs) {
     const html = renderToStaticMarkup(
@@ -87,6 +87,14 @@ test("icon-bearing models render their name, never [object Object] (#668)", () =
     expect(html).toContain(slug);
     expect(html).toContain("<svg");
   }
+});
+
+test("Daybreak Red uses a cyber lock rather than the Blue solar identity", () => {
+  const blue = renderToStaticMarkup(modelLabel("daybreak-blue-latest"));
+  const red = renderToStaticMarkup(modelLabel("daybreak-red-latest"));
+  expect(blue).toContain('<circle cx="12" cy="12" r="4"></circle>');
+  expect(red).toContain('<rect x="4" y="11" width="16" height="10" rx="2"></rect>');
+  expect(red).not.toBe(blue);
 });
 
 test("background helper options keep icon labels as nodes and lead with the unset entry (#668)", () => {

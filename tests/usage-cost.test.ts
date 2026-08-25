@@ -570,6 +570,13 @@ describe("priority (Fast) service tier multiplier", () => {
     expect(PRIORITY_MULTIPLIERS["gpt-5.4-mini"]).toBe(2);
   });
 
+  test("P9b. Daybreak priority rules stay inside their routable provider namespace", () => {
+    expect(findPriorityPricingRule("openai", "gpt-daybreak-blue-latest")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("openai-apikey", "daybreak-blue-latest")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("openai-apikey", "gpt-daybreak-blue-latest")).toBeUndefined();
+    expect(findPriorityPricingRule("openai", "daybreak-blue-latest")).toBeUndefined();
+  });
+
   test("P10. attempt cost with priority tier", () => {
     const base = estimateAttemptCost({ ordinal: 1, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage }, overlays);
     const fast = estimateAttemptCost({ ordinal: 1, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage }, overlays, "priority");
@@ -778,8 +785,8 @@ describe("long-context pricing tiers (#908)", () => {
     const blue = resolveMatchedPrice("openai-apikey", "daybreak-blue-latest");
     const gptBlueOpenAi = resolveMatchedPrice("openai", "gpt-daybreak-blue-latest");
     expect(red?.cost4).toEqual({ input: 12.5, output: 75, cacheRead: 1.25, cacheWrite: 15.625 });
-    expect(blue?.cost4).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
-    expect(gptBlueOpenAi?.cost4).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+    expect(blue?.cost4).toEqual({ input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 });
+    expect(gptBlueOpenAi?.cost4).toEqual({ input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 });
     // verified-derived, never verified: the pricing page has no daybreak-* rows, only the
     // snapshots'. This status is also what keeps `estimated` on downstream, and an alias is
     // more drift-prone than a normal row because OpenAI can repoint it.

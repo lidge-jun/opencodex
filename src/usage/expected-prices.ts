@@ -39,7 +39,7 @@ export interface ExpectedPriceOverlay {
 }
 
 const GEMINI_31_PRO: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 };
-const GPT56_SOL: Cost4 = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
+const GPT56_SOL: Cost4 = { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 };
 /**
  * Daybreak aliases. `daybreak-*-latest` never appears in the pricing table itself — only its
  * current snapshot does — so these tuples are the snapshot's published rates and carry
@@ -263,13 +263,19 @@ const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/pr
  */
 export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
   ...["openai", "openai-apikey"].flatMap(provider =>
-    Object.entries(PRIORITY_MULTIPLIERS).map(([modelId, multiplier]): PriorityPricingRule => ({
-      provider,
-      modelId,
-      multiplier,
-      source: OPENAI_FAST_PRICING,
-      verifiedAt: "2026-08-05",
-    })),
+    Object.entries(PRIORITY_MULTIPLIERS)
+      // Daybreak's `gpt-` selector belongs to ChatGPT/Codex accounts; its bare selector belongs
+      // to the separately billed API-key catalog. All ordinary GPT ids remain valid on both.
+      .filter(([modelId]) => provider === "openai"
+        ? modelId !== "daybreak-blue-latest"
+        : modelId !== "gpt-daybreak-blue-latest")
+      .map(([modelId, multiplier]): PriorityPricingRule => ({
+        provider,
+        modelId,
+        multiplier,
+        source: OPENAI_FAST_PRICING,
+        verifiedAt: "2026-08-05",
+      })),
   ),
   ...["grok-4.5", "grok-4.6"].map((modelId): PriorityPricingRule => ({
     provider: "xai",
