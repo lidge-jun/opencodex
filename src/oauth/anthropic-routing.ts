@@ -269,7 +269,7 @@ function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: 
   const scored: ScoredAccount[] = eligible.map(accountId => ({
     accountId,
     score: usageScore(config, accountId),
-    fiveHourTieBreak: window === "weekly" ? fiveHourScore(accountId) : 0,
+    fiveHourTieBreak: window === "five-hour" ? 0 : fiveHourScore(accountId),
   }));
   let best = scored[0]!;
   for (let i = 1; i < scored.length; i++) {

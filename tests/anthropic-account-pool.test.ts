@@ -500,6 +500,15 @@ describe("anthropic account pool quota window scoring", () => {
     expect(resolveAnthropicAccountForSession("max-hotter", cfg(true, 80, { quotaWindow: "max-utilization" })).accountId).toBe(bId);
   });
 
+  test("max-utilization tie breaks by lower five-hour usage", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    const updatedAt = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 90, weeklyPercent: 20, updatedAt });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 40, weeklyPercent: 90, updatedAt });
+
+    expect(resolveAnthropicAccountForSession("max-five-hour-tie", cfg(true, 80, { quotaWindow: "max-utilization" })).accountId).toBe(bId);
+  });
+
   test("omitted quotaWindow equals explicit five-hour", async () => {
     const { aId, bId } = await seedTwoAccounts();
     const updatedAt = Date.now();
