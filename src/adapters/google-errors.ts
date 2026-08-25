@@ -15,14 +15,47 @@ function googleErrorDetail(payloadText: string): { message?: string; status?: st
   };
 }
 
+
+
+const GOOGLE_QUOTA_EXHAUSTED_NEEDLES = [
+  "quotafailure",
+  "quota exceeded",
+  "exceeded your current quota",
+  "billing",
+  "individual quota reached",
+  "quota reached",
+  "enable overages",
+  "exhausted your capacity",
+  "daily limit reached",
+  "weekly limit reached",
+];
+
+// Per-minute / per-second / concurrency limits are transient rate limits: they should be
+// retried, not treated as hard quota exhaustion. These guards run before the needles so a
+// message like "Per-minute quota exceeded" stays in the retryable bucket.
+const GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS = [
+  "per minute",
+  "per-minute",
+  "per min",
+  "rpm",
+  "requests per minute",
+  "too many requests",
+  "rate limit",
+  "retry after",
+  "concurrent request limit",
+];
+
+export function isGoogleQuotaExhaustedText(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS.some(needle => lower.includes(needle))) return false;
+  return GOOGLE_QUOTA_EXHAUSTED_NEEDLES.some(needle => lower.includes(needle));
+}
+
+
 function classifyGoogle(label: string, status: number | undefined, enumStatus: string | undefined, text: string): string {
   const lower = `${enumStatus ?? ""} ${text}`.toLowerCase();
-  const quotaExhausted =
-    lower.includes("quotafailure") ||
-    lower.includes("quota exceeded") ||
-    lower.includes("exceeded your current quota") ||
-    lower.includes("billing");
-  if (enumStatus === "RESOURCE_EXHAUSTED" && quotaExhausted) return `${label} quota exhausted`;
+  const quotaExhausted = isGoogleQuotaExhaustedText(lower);
+  if ((!enumStatus || enumStatus === "RESOURCE_EXHAUSTED") && quotaExhausted) return `${label} quota exhausted`;
   if (status === 429 || enumStatus === "RESOURCE_EXHAUSTED" || lower.includes("rate limit")) {
     return `${label} rate limit exceeded`;
   }
@@ -76,10 +109,6 @@ export function retryableGoogleStatus(status: number): boolean {
  */
 export function isQuotaExhaustedBody(payloadText: string): boolean {
   const { message, status } = googleErrorDetail(payloadText);
-  if (status !== "RESOURCE_EXHAUSTED") return false;
-  const lower = (message ?? "").toLowerCase();
-  return lower.includes("quotafailure")
-    || lower.includes("quota exceeded")
-    || lower.includes("exceeded your current quota")
-    || lower.includes("billing");
+  if (status && status !== "RESOURCE_EXHAUSTED") return false;
+  return isGoogleQuotaExhaustedText(message ?? payloadText);
 }
