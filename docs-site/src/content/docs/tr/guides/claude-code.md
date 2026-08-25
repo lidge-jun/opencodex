@@ -19,7 +19,8 @@ fazla Claude hesabına giriş yapabilirsiniz. Varsayılan olarak her istek yaln�
 bağlılığı ve 429 bekleme süresi (cooldown) yük devretmesi ekler. Yalnızca
 **yeni** oturumlar için `anthropicAccountPool.strategy` uygun hesaplar arasından
 seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
-bilinen en düşük 5 saatlik kullanımı seçer; `round-robin` eşit olarak dağıtır
+`anthropicAccountPool.quotaWindow` ile yapılandırılan penceredeki bilinen en düşük kullanımı
+seçer (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir); `round-robin` eşit olarak dağıtır
 (`stickyLimit`, varsayılan `1`); `fill-first`, bekleme süresi, yeniden kimlik
 doğrulama veya eşiğe kadar aktif hesabı tüketir, ardından ilerler. **Varsayılan
 olarak kapalıdır**, bir GUI uyarısı gösterir ve sahada kapsamlı olarak test
@@ -607,4 +608,3 @@ modellerde opencodex varsayılan olarak bunu taslakla değiştirir (`blockedSkil
 aracının `model` argümanını değil, `<!-- ocx-route: ... -->` yönergelerini
 kullanır. Yönergenin hedeflenen rotayla eşleştiğinden emin olun. Model yer
 tutucusu olarak `"haiku"` iletin.
-
