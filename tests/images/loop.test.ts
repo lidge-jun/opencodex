@@ -924,4 +924,28 @@ describe("runWithImageBridge — runTurn adapter", () => {
     await response.text();
     expect(received).toBe("antigravity-account-a");
   });
+
+  test("runTurn adapter streams emit adapter diagnostics exactly once per event", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      runTurnEventQueue = [
+        [{ type: "text_delta", text: "hello runTurn diagnostic" }, { type: "done" }],
+      ];
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: runTurnAdapter,
+        plan,
+        diagnostic: { requestId: "runturn-diag", adapterName: "test" },
+      });
+      await response.text();
+      const lines = getDebugLogEntries().map(entry => entry.line);
+      const adapterLines = lines.filter(line => line.includes('"stage":"adapter"') && line.includes('"eventType":"text_delta"'));
+      const bridgeLines = lines.filter(line => line.includes('"stage":"bridge"') && line.includes('"eventType":"text_delta"'));
+      expect(adapterLines).toHaveLength(1);
+      expect(bridgeLines).toHaveLength(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
 });

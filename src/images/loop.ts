@@ -436,10 +436,6 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         for await (const event of queue.stream()) {
           if (timedOut) break;
           idle.reset();
-          if (deps.diagnostic) {
-            deps.diagnostic.adapterName = adapter.name;
-            diagnoseAdapterEvent(deps.diagnostic, event);
-          }
           events.push(event);
         }
       } finally {
