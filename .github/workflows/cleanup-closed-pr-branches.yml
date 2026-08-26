@@ -1,0 +1,148 @@
+name: Clean branches from closed pull requests
+
+# GitHub's repository setting `delete_branch_on_merge` only deletes a head
+# branch when the pull request MERGES. A pull request that is closed without
+# merging leaves its head branch behind forever, which is how this repository
+# accumulated dozens of dead `codex/*` and `ingw/*` branches.
+#
+# Scheduled workflows only run from the repository DEFAULT branch (currently
+# `main`), not from `dev`. Landing this on `dev` alone does not start the
+# cleanup until the change is also promoted to that default branch.
+on:
+  schedule:
+    # Daily at 06:30 UTC (offset from the hour to reduce Action load spikes).
+    - cron: "30 6 * * *"
+  # No workflow_dispatch: a branch-selected manual run would execute that
+  # branch's workflow body with contents:write, bypassing default-branch
+  # review. Schedule-only keeps the trusted revision on the default branch.
+
+permissions: {}
+
+concurrency:
+  group: cleanup-closed-pr-branches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete branches left by closed pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # contents: write is required to delete refs; pull-requests: read supplies
+      # the closed/open/merged state the deletion plan plus its keep rules read.
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted default-branch code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Delete head branches of closed, unmerged pull requests
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          # Days to wait after a pull request is closed. A mistaken close can be
+          # reopened inside this window with its head branch still intact.
+          GRACE_DAYS: "14"
+          # Set to "true" to log the plan without deleting anything.
+          DRY_RUN: "false"
+        with:
+          script: |
+            const path = require("node:path");
+            const { planClosedPrBranchDeletions } = require(
+              path.join(process.cwd(), ".github", "scripts", "closed-pr-branch-cleanup.cjs"),
+            );
+
+            const { owner, repo } = context.repo;
+            const dryRun = String(process.env.DRY_RUN || "").toLowerCase() === "true";
+            const graceDays = Number(process.env.GRACE_DAYS || "14");
+
+            const rawPulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "all",
+              per_page: 100,
+            });
+            const pullRequests = rawPulls.map((pr) => ({
+              number: pr.number,
+              state: String(pr.state || "").toUpperCase(),
+              merged: Boolean(pr.merged_at),
+              closedAt: pr.closed_at,
+              headRefName: pr.head && pr.head.ref,
+              baseRefName: pr.base && pr.base.ref,
+              // A fork head lives in the contributor's repository. Comparing
+              // repo ids (not names) keeps a same-name fork from looking local.
+              isCrossRepository:
+                !pr.head || !pr.head.repo || pr.head.repo.id !== pr.base.repo.id,
+            }));
+
+            const rawBranches = await github.paginate(github.rest.repos.listBranches, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+            const branches = rawBranches.map((branch) => branch.name);
+            const protectedByGitHub = new Set(
+              rawBranches.filter((branch) => branch.protected).map((branch) => branch.name),
+            );
+
+            const { deletions, keeps } = planClosedPrBranchDeletions({
+              pullRequests,
+              branches,
+              now: Date.now(),
+              graceDays,
+            });
+
+            const keepCounts = new Map();
+            for (const entry of keeps) {
+              keepCounts.set(entry.reason, (keepCounts.get(entry.reason) || 0) + 1);
+            }
+            for (const [reason, count] of [...keepCounts].sort()) {
+              core.info(`kept ${count} branch(es): ${reason}`);
+            }
+
+            let deleted = 0;
+            const failures = [];
+            for (const entry of deletions) {
+              // Branch protection is authoritative over any plan this job made.
+              if (protectedByGitHub.has(entry.branch)) {
+                core.info(`skip ${entry.branch}: branch protection`);
+                continue;
+              }
+              const prs = entry.pullRequests.map((n) => `#${n}`).join(", ");
+              if (dryRun) {
+                core.info(`[dry-run] would delete ${entry.branch} (closed: ${prs})`);
+                continue;
+              }
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${entry.branch}`,
+                });
+                deleted += 1;
+                core.info(`deleted ${entry.branch} (closed: ${prs})`);
+              } catch (err) {
+                // 422 means the ref moved or vanished between plan and delete.
+                if (err.status === 422 || err.status === 404) {
+                  core.info(`skip ${entry.branch}: already gone`);
+                  continue;
+                }
+                failures.push(`${entry.branch}: ${err.message || err}`);
+              }
+            }
+
+            core.summary
+              .addHeading("Closed-PR branch cleanup", 3)
+              .addRaw(
+                dryRun
+                  ? `Dry run: ${deletions.length} branch(es) eligible.`
+                  : `Deleted ${deleted} of ${deletions.length} eligible branch(es).`,
+              )
+              .addRaw(` Kept ${keeps.length} branch(es).`);
+            await core.summary.write();
+
+            if (failures.length > 0) {
+              core.setFailed(`Failed to delete ${failures.length} branch(es):\n${failures.join("\n")}`);
+            }
