@@ -9,6 +9,14 @@ export interface AccountQuota {
   shortResetAt?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
+  creditsUsd?: {
+    used: number;
+    limit: number;
+    remaining: number;
+    percent: number;
+    expiresAt?: number;
+    unlimited?: boolean;
+  };
   resetCredits?: number;
   updatedAt: number;
 }
@@ -31,6 +39,7 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
   return {
     ...(normalized.monthlyPercent !== undefined ? { monthlyPercent: normalized.monthlyPercent } : {}),
     ...(normalized.monthlyResetAt !== undefined ? { monthlyResetAt: normalized.monthlyResetAt } : {}),
+    ...(normalized.creditsUsd !== undefined ? { creditsUsd: normalized.creditsUsd } : {}),
     ...(normalized.resetCredits !== undefined ? { resetCredits: normalized.resetCredits } : {}),
     updatedAt: normalized.updatedAt,
   };

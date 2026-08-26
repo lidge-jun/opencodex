@@ -1048,6 +1048,8 @@ export const ru: Record<TKey, string> = {
   "quota.cursorFirstParty": "Собственные модели",
   "quota.cursorApiUsage": "Использование API",
   "quota.totalSubscriptionCredits": "Всего кредитов подписки",
+  "quota.creditsBalance": "Остаток кредитов",
+  "quota.creditsPeriodEnds": "Расчётный период заканчивается {date}",
   "quota.usedPercent": "Использовано {pct}%",
   "quota.limitReached": "Лимит исчерпан",
   "quota.resetsToday": "Сброс сегодня в {time}",

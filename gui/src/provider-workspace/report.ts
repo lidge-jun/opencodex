@@ -54,6 +54,27 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
         }];
       })
     : [];
+  const creditsRaw = q.creditsUsd && typeof q.creditsUsd === "object" && !Array.isArray(q.creditsUsd)
+    ? q.creditsUsd as Record<string, unknown>
+    : null;
+  const creditsUsed = finite(creditsRaw?.used);
+  const creditsLimit = finite(creditsRaw?.limit);
+  const creditsRemaining = finite(creditsRaw?.remaining);
+  const creditsPercent = finite(creditsRaw?.percent);
+  const creditsExpiresAt = finite(creditsRaw?.expiresAt);
+  const creditsUsd = creditsUsed !== undefined
+    && creditsLimit !== undefined
+    && creditsRemaining !== undefined
+    && creditsPercent !== undefined
+    ? {
+        used: creditsUsed,
+        limit: creditsLimit,
+        remaining: creditsRemaining,
+        percent: creditsPercent,
+        ...(creditsExpiresAt !== undefined ? { expiresAt: creditsExpiresAt } : {}),
+        ...(typeof creditsRaw?.unlimited === "boolean" ? { unlimited: creditsRaw.unlimited } : {}),
+      }
+    : undefined;
   const out: AccountQuota = {
     ...(finite(q.fiveHourPercent) !== undefined ? { fiveHourPercent: q.fiveHourPercent as number } : {}),
     ...(finite(q.fiveHourResetAt) !== undefined ? { fiveHourResetAt: q.fiveHourResetAt as number } : {}),
@@ -62,12 +83,14 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     ...(finite(q.monthlyPercent) !== undefined ? { monthlyPercent: q.monthlyPercent as number } : {}),
     ...(finite(q.monthlyResetAt) !== undefined ? { monthlyResetAt: q.monthlyResetAt as number } : {}),
     ...(windows.length > 0 ? { customWindows: windows } : {}),
+    ...(creditsUsd ? { creditsUsd } : {}),
     updatedAt: finite(q.updatedAt) ?? fallbackUpdatedAt ?? Date.now(),
   };
   return out.fiveHourPercent !== undefined
     || out.weeklyPercent !== undefined
     || out.monthlyPercent !== undefined
     || (out.customWindows?.length ?? 0) > 0
+    || out.creditsUsd !== undefined
     ? out
     : null;
 }

@@ -1591,6 +1591,8 @@ export const zh: Record<TKey, string> = {
   "quota.cursorFirstParty": "官方模型",
   "quota.cursorApiUsage": "API 用量",
   "quota.totalSubscriptionCredits": "订阅总额度",
+  "quota.creditsBalance": "额度余额",
+  "quota.creditsPeriodEnds": "账单周期结束于 {date}",
   "quota.usedPercent": "已用 {pct}%",
   "quota.limitReached": "已达上限",
   "quota.resetsToday": "今天 {time} 重置",
