@@ -17,6 +17,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Units, symbols, protocol values, machine labels, and product names.
   "uptime.hour",
   "uptime.second",
+  // "auto" is the same word in French, and it labels a machine-derived alias source rather
+  // than prose. Translating it would invent a difference the UI does not have.
+  "models.aliasAuto",
   "common.github",
   "common.ok",
   "nav.api",

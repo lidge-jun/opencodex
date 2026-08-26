@@ -5,7 +5,10 @@ const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "zh", "zh-TW"] as const;
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
   const out = new Map<string, string>();
-  for (const m of src.matchAll(/^\s*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/gm)) {
+  // NOT anchored to the line start: these catalogs pack several entries onto one line, and a
+  // `^\s*`-anchored pattern silently reads only the first of them. That made this parity check
+  // report a phantom missing key while the catalogs were in fact identical.
+  for (const m of src.matchAll(/"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/g)) {
     out.set(m[1]!, m[2]!);
   }
   return out;
