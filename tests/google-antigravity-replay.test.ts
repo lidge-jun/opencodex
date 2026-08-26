@@ -1000,4 +1000,19 @@ describe("durable antigravity replay snapshot", () => {
       warn.mockRestore();
     }
   });
+  test("fallback to skip_thought_signature_validator on the first functionCall when replay cache misses", () => {
+    const contents = [
+      {
+        role: "model",
+        parts: [
+          { functionCall: { name: "exec", args: { input: "ls" } } },
+          { functionCall: { name: "read", args: { path: "/a" } } }
+        ]
+      }
+    ];
+    applyAntigravityReplay(MODEL, "-uncached-session", contents);
+    const parts = (contents[0] as { parts: Record<string, unknown>[] }).parts;
+    expect(parts[0].thoughtSignature).toBe("skip_thought_signature_validator");
+    expect(parts[1].thoughtSignature).toBeUndefined();
+  });
 });
