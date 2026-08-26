@@ -20,14 +20,28 @@ function freePort(): Promise<number> {
   return promise;
 }
 
+/**
+ * Budget for the whole recovery case, and the arithmetic that keeps it honest.
+ *
+ * A cold detached proxy takes ~2s locally, but this test runs inside a CI batch of twelve files
+ * on a shared runner where the same boot has blown a 15s budget. Raising the readiness wait to
+ * 45s fixed that and introduced a worse failure: the case ALSO spawns `node launcher update`
+ * (up to 30s) before the wait even starts, and `node launcher stop` (up to 30s) after it. With
+ * a 60s Bun timeout, a 45s wait leaves the readiness probe unable to finish inside the case at
+ * all — observed failing at 46-47s on macOS, which reads as a product defect and is not one.
+ *
+ * So the budget is derived from the timeout rather than guessed against it: the wait gets what
+ * remains after the spawns, and the Bun timeout is stated as the sum of its parts. The deadline
+ * exists to stop a HUNG proxy, not to assert a boot deadline the suite never intended to
+ * enforce — a slow-but-live proxy must still pass.
+ */
+const UPDATE_SPAWN_TIMEOUT_MS = 30_000;
+const PROXY_READY_TIMEOUT_MS = 45_000;
+/** Spawn + readiness + teardown spawn, plus headroom for fixture IO on a loaded runner. */
+const RECOVERY_CASE_TIMEOUT_MS = UPDATE_SPAWN_TIMEOUT_MS + PROXY_READY_TIMEOUT_MS + UPDATE_SPAWN_TIMEOUT_MS + 15_000;
+
 async function waitForProxy(port: number): Promise<boolean> {
-  // A cold detached proxy takes ~2s locally, but this test runs inside a CI
-  // batch of twelve files on a shared runner, where the same boot has been
-  // observed to blow a 15s budget and fail the whole shard. The test's own
-  // Bun timeout is 60s, so the readiness wait may use most of that: this
-  // deadline exists to stop a hung proxy, not to assert a boot deadline the
-  // suite never intended to enforce.
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + PROXY_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
@@ -200,7 +214,7 @@ esac
           env,
           stdout: "pipe",
           stderr: "pipe",
-          timeout: 30_000,
+          timeout: UPDATE_SPAWN_TIMEOUT_MS,
         });
         const output = result.stdout.toString() + result.stderr.toString();
 
@@ -219,7 +233,7 @@ esac
               env,
               stdout: "ignore",
               stderr: "ignore",
-              timeout: 30_000,
+              timeout: UPDATE_SPAWN_TIMEOUT_MS,
             })
           : null;
         if (stopped?.exitCode !== 0) {
@@ -233,8 +247,27 @@ esac
         rmSync(root, { recursive: true, force: true });
       }
     },
-    60_000,
+    RECOVERY_CASE_TIMEOUT_MS,
   );
+
+  /**
+   * The budget arithmetic itself, pinned.
+   *
+   * The recovery case spawns `update`, waits for readiness, then spawns `stop`. A wait budget
+   * chosen independently of the Bun timeout is how this test became flaky: 45s of readiness
+   * inside a 60s case that also spends up to 60s on two spawns cannot finish, and it failed at
+   * 46-47s on macOS while the product was healthy.
+   *
+   * This asserts the relationship rather than the numbers, so raising any single budget in
+   * future cannot silently recreate the impossible one.
+   */
+  test("the recovery case timeout can actually contain its own spawns and readiness wait", () => {
+    // Both spawns plus the readiness wait must fit, with room left for fixture IO.
+    const consumed = UPDATE_SPAWN_TIMEOUT_MS * 2 + PROXY_READY_TIMEOUT_MS;
+    expect(RECOVERY_CASE_TIMEOUT_MS).toBeGreaterThanOrEqual(consumed);
+    expect(RECOVERY_CASE_TIMEOUT_MS - consumed).toBeGreaterThanOrEqual(10_000);
+  });
+
 
   test("both update paths surface an incomplete manifest-backed history restore after the stop", () => {
     // A codex-history-backup-*.json surviving `ocx stop` means exact metadata restoration
