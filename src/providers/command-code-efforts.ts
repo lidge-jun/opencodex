@@ -9,6 +9,18 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
   },
+  "deepseek/deepseek-v4-flash-vision-exp": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/deepseek-v4-flash-vision-exp",
+  },
+  "gpt-5.6-luna": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    profileUrl: "https://commandcode.ai/models/gpt-5-6-luna",
+  },
+  "google/gemini-3.7-flash": {
+    efforts: ["low", "medium", "high"],
+    profileUrl: "https://commandcode.ai/models/gemini-3-7-flash",
+  },
   // Ox Alpha (stealth preview, added in Command Code v1.31.0): free 1M-context
   // reasoning model on every plan. The profile does not publish an effort ladder,
   // so mirror the OpenRouter contract (reasoning mandatory; max/high/low).

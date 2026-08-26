@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createCommandCodeAdapter } from "../src/adapters/command-code";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../src/oauth/command-code";
 import { buildModelsRequest, OAUTH_PROVIDERS } from "../src/oauth";
-import { commandCodeReasoningEfforts, resetCommandCodeReasoningEffortsForTest } from "../src/providers/command-code-efforts";
+import {
+  commandCodeReasoningEfforts,
+  refreshCommandCodeReasoningEfforts,
+  resetCommandCodeReasoningEffortsForTest,
+} from "../src/providers/command-code-efforts";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -464,6 +468,22 @@ describe("Command Code provider", () => {
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
     const generated = requests.filter(request => request.url.endsWith("/alpha/generate"));
     expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("fetches Luna and Gemini effort profiles from their canonical public URLs", async () => {
+    const urls: string[] = [];
+    const fetch = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return new Response("Reasoning efforts high are supported; no other reasoning settings.");
+    }) as typeof globalThis.fetch;
+
+    await refreshCommandCodeReasoningEfforts("gpt-5.6-luna", fetch);
+    await refreshCommandCodeReasoningEfforts("google/gemini-3.7-flash", fetch);
+
+    expect(urls).toEqual([
+      "https://commandcode.ai/models/gpt-5-6-luna",
+      "https://commandcode.ai/models/gemini-3-7-flash",
+    ]);
   });
 
   test("omits effort when the caller did not choose one", async () => {
