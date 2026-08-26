@@ -226,6 +226,11 @@ For Codex, `on` sets 80% and `off` sets 0%. For OAuth pools, `on`/`off` toggle t
 its threshold; `threshold <n>` stores the integer from 0 through 100 and enables the pool when nonzero.
 `status` reads the current policy. Other providers and invalid values exit 1. `--json` returns:
 
+For `google-antigravity`, `off` disables the specialized quota-aware pool and also stores the
+per-provider generic OAuth 429 opt-out, so the command really enters strict single-account mode.
+Directly setting only `googleAntigravityAccountPool.enabled: false` does not change that separate
+generic policy.
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

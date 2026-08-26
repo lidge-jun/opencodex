@@ -217,6 +217,12 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
   return earliest === null ? null : Math.max(1, Math.ceil((earliest - now) / 1000));
 }
 
+/** Clear one account's generic cooldown without disturbing sibling account health. */
+export function clearGenericFailoverAccountHealth(providerName: string, accountId: string): boolean {
+  presence.delete(providerName);
+  return health.delete(healthKey(providerName, accountId));
+}
+
 /** Test seam and manual-recovery hook. */
 export function clearGenericFailoverHealth(providerName?: string): void {
   if (!providerName) {

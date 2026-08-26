@@ -72,6 +72,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `modelContextWindows?` | `Record<string, number>` | 모델별 컨텍스트 값이자 상한입니다. `contextWindow`보다 우선하며, 창 크기를 알 수 없으면 설정값을 쓰고 더 작은 라이브 메타데이터가 있으면 그쪽을 따릅니다. |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` 또는 `["text", "image"]` 같은 모델별 입력 힌트입니다. |
 | `modelMaxInputTokens?` | `Record<string, number>` | 카탈로그 자동 압축 힌트에 쓰는 양수 모델별 최대 입력 한도입니다. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 모델별 양의 안전 정수형 소프트 자동 압축 예산입니다. 유효한 컨텍스트 또는 최대 입력의 90% 한도를 낮출 수만 있으며, 신뢰할 수 있는 컨텍스트 창을 알 수 없으면 내보내지 않습니다. canonical `openai`에서는 키가 공급자나 계정 선택자 접두사가 없는 정확한 지원 네이티브 모델 ID여야 합니다. 공급자 PATCH는 항목을 병합하며, 키를 `null`로 지정하면 해당 키를 삭제하고 필드 전체를 `null`로 지정하면 맵을 지웁니다. 이 `null` tombstone은 PATCH에서만 사용할 수 있습니다. |
 | `defaultMaxOutputTokens?` | `number` | 클라이언트가 `max_output_tokens`를 생략했을 때 쓰는 공급자 전반의 `openai-chat` 폴백입니다. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 양수 모델별 `openai-chat` 폴백 예산입니다. 정확한 일치와 패턴 일치가 공급자 기본값보다 우선합니다. |
 | `modelCosts?` | `Record<string, Cost4>` | 모델별 표시 가격(100만 토큰당 USD). 해당 공급자의 정확한 업스트림 모델 ID를 키로 사용하며(공급자 식별자나 라우팅된 `provider/model` 레이블이 아님) 값은 `input`, `output`, `cacheRead`, `cacheWrite` 네 필드입니다(예: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`). 커스텀 공급자는 `openai-chat` 어댑터로 임의의 OpenAI 호환 엔드포인트를 대상으로 할 수 있으며, 내장 카탈로그에 없는 로컬·내부 공급자 ID도 유효합니다. 사용자 구성 가격은 Logs `~$` 및 Usage 추정에서 내장 카탈로그보다 우선합니다. 기존 항목도 현재 오버레이로 다시 계산되므로 가격을 편집하면 과거 합계가 바뀔 수 있습니다(폴백 순서: 사용자 설정 → jawcode 카탈로그 → expected-price 오버레이 → 모델별 벤더 가격). 전부 0인 항목은 다음 소스로 폴백합니다. 각 요율은 0 이상의 유한한 숫자이며 최대 1,000,000(100만 토큰당 USD)입니다. 범위를 벗어난 행은 관리 경계에서 거부되고 로드 시 삭제됩니다. 표시 전용 추정이며 라우팅·계정 선택·할당량·청구에는 영향을 주지 않습니다. |
@@ -177,6 +178,14 @@ Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두
 이 선택 기능은 `google-antigravity` Cloud Code Assist 공급자에만 Google Antigravity OAuth
 계정을 풀로 묶습니다. 기본값은 비활성화입니다. 이 풀의 자격 증명은 Google AI Studio,
 Vertex AI, 다른 공급자 항목 또는 API 키 경로에 사용되지 않습니다.
+
+이 특수 풀을 비활성화하면 할당량 인식 선택, 세션 affinity, 해당 풀의 402/429 재시도
+예산이 꺼집니다. 그러나 별도로 계정 존재 여부에 따라 활성화되는 일반 OAuth 429 fallback은
+비활성화되지 않습니다. Google을 엄격하게 단일 계정으로 유지하려면
+`providers.google-antigravity.oauthAccountFailover.enabled`도 `false`로 설정하십시오.
+
+`googleAntigravityAccountPool.enabled`가 `true`이면 이 특수 풀이 Google 라우팅을 소유합니다.
+꺼져 있으면 일반 `oauthAccountFailover` 정책이 여전히 긴급 429 failover를 제공할 수 있습니다.
 
 | 키 | 타입 | 기본값 | 설명 |
 | --- | --- | --- | --- |

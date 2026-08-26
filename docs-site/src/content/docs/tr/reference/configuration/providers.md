@@ -91,6 +91,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `modelContextWindows?` | `Record<string, number>` | Model başına bağlam geri dönüşleri/sınırları. Bunlar `contextWindow`'u geçersiz kılar: bilinmeyen bir pencere yapılandırılmış değeri kullanırken, daha küçük canlı meta veriler yetkili kalır. |
 | `modelInputModalities?` | `Record<string, string[]>` | Model başına girdi ipuçları, örn. `["text"]` veya `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Katalog otomatik sıkıştırma ipuçları için kullanılan pozitif model başına maksimum girdi sınırları. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Model başına pozitif güvenli tamsayı biçiminde yumuşak otomatik sıkıştırma bütçeleri. Değerler yalnızca bağlamın veya maksimum girdinin etkin %90 zarfını düşürebilir ve yetkili bir bağlam penceresi bilinmiyorsa yayımlanmaz. Canonical `openai` için anahtarlar, sağlayıcı veya hesap seçici öneki olmadan desteklenen tam yerel model kimlikleri olmalıdır. Sağlayıcı PATCH girdileri birleştirir; bir anahtarı `null` yapmak o anahtarı siler, alanın tamamını `null` yapmak haritayı temizler. Bu `null` silme işaretleri yalnızca PATCH içindir. |
 | `defaultMaxOutputTokens?` | `number` | İstemci `max_output_tokens` değerini atladığında sağlayıcı genelinde `openai-chat` geri dönüşü. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Pozitif model başına `openai-chat` geri dönüş bütçeleri; tam/kalıp eşleşmeleri sağlayıcı varsayılanını yener. |
 | `modelCosts?` | `Record<string, Cost4>` | Sağlayıcının tam yukarı akış model kimliğine göre anahtarlanan model başına görüntüleme fiyatları (1M token başına USD) — bir sağlayıcı tanımlayıcısı veya yönlendirilen `provider/model` etiketi değil, örn. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Herhangi bir model kimliği geçerli bir anahtardır — özel sağlayıcılar `openai-chat` adaptörü aracılığıyla herhangi bir OpenAI uyumlu uç noktayı hedefleyebilir ve yerel veya dahili sağlayıcı kimlikleri yerleşik kataloglarda bulunmasalar bile çalışır. Kullanıcı tarafından yapılandırılan fiyatlar Günlükler `~$` ve Kullanım tahminlerinde yerleşik katalogları yener; geçmiş girdiler geçerli katmandan yeniden fiyatlandırılır, bu nedenle bir fiyatı düzenlemek geçmiş toplamları değiştirebilir. Geri dönüş sırası: kullanıcı `modelCosts` → jawcode kataloğu → beklenen fiyat katmanı → model düzeyinde satıcı geri dönüşü ve tamamen sıfır bir girdi bu dizideki bir sonraki kaynağa düşer. Her oran en fazla 1.000.000 (1M token başına USD) olan negatif olmayan sonlu bir sayı olmalıdır; aralık dışı satırlar yönetim sınırı tarafından reddedilir ve yükleme sırasında bırakılır. Yalnızca görüntüleme zamanı tahmini: katmanlar yönlendirmeyi, hesap seçimini, kotaları veya faturalandırmayı asla etkilemez. |
@@ -239,6 +240,11 @@ Bu isteğe bağlı özellik Google Antigravity OAuth hesaplarını yalnızca `go
 Assist sağlayıcısı için havuzlar. Varsayılan olarak devre dışıdır. Havuz, kimlik bilgilerini hiçbir
 zaman Google AI Studio, Vertex AI, başka bir sağlayıcı kaydı veya API anahtarı rotasına vermez.
 
+Bu özelleşmiş havuzu devre dışı bırakmak kota duyarlı seçimi, oturum bağlılığını ve kendi 402/429
+yeniden deneme bütçesini kapatır. Ayrı, varlığa dayalı genel OAuth 429 yük devretmesini devre dışı
+bırakmaz. Google'ı katı biçimde tek hesapta tutmak için ayrıca
+`providers.google-antigravity.oauthAccountFailover.enabled` değerini `false` olarak ayarlayın.
+
 | Anahtar | Tip | Varsayılan | Açıklama |
 | --- | --- | --- | --- |
 | `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | İşleme özgü oturum bağlılığını ve son 429 ya da yüzeye çıkan 402 yanıtında sınırlı yük devretmeyi etkinleştirir. |
@@ -263,6 +269,66 @@ tamamı soğuyorsa istemci en erken bilinen `Retry-After` ile 429 alır.
 Bu havuzu geçici hesap hatalarından kurtulmak için kullanın; kota veya sağlayıcı yaptırımını aşmak için
 kullanmayın. Çoklu hesap otomasyonu sağlayıcı koşullarını ihlal edebilir; bu riski kabul etmiyorsanız
 özelliği devre dışı bırakın.
+:::
+
+### `oauthAccountFailover`
+
+Bir hesap hız sınırına takıldığında, sağlayıcıya ait bir havuz etkin değilken aynı OAuth
+sağlayıcısının oturum açılmış başka bir hesabına geçer — xAI, Cursor, Kimi, GitHub Copilot, Google
+Antigravity ve Nous. `googleAntigravityAccountPool.enabled` değeri `true` olduğunda Google
+yönlendirmesini bunun yerine bu özelleşmiş havuz yönetir; kapalı olduğunda bu genel politika acil 429
+yük devretmesi sağlamaya devam edebilir.
+
+**İkinci bir hesapla oturum açmak bunu etkinleştirir.** Yapılandırma olmadan, bu sağlayıcılardan yeniden
+kimlik doğrulama için işaretlenmemiş 2 veya daha fazla hesaba sahip herhangi biri için rotasyon
+etkinleşir — `apiKeyPool`'un 2+ anahtarlı bir havuza zaten uyguladığı kuralla aynıdır. Saklanan tek
+hesabı olan bir sağlayıcı tam olarak önceki gibi davranır.
+
+| Anahtar | Tip | Varsayılan | Açıklama |
+| --- | --- | --- | --- |
+| `oauthAccountFailover.enabled?` | `boolean` | varlığa dayalı | Genel geçersiz kılma. `false` her yerde tek hesap davranışını zorlar; `true` rotasyonu zorla etkinleştirir. |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | devralır | Sağlayıcı başına geçersiz kılma; genel ayarı ve hesap varlığını geçersiz kılar. |
+
+Koşullarını sınamak istemediğiniz bir sağlayıcıda katı tek hesap davranışını korumak için:
+
+```json
+{
+  "providers": {
+    "cursor": {
+      "oauthAccountFailover": { "enabled": false }
+    }
+  }
+}
+```
+
+Bu ayar oturum açma, hesap ekleme ve yeniden kimlik doğrulama işlemleri boyunca korunur.
+
+`anthropicAccountPool`'dan kasıtlı olarak daha dardır: oturum bağlılığı, kota sıralamalı seçim ve prob
+kiralamaları yoktur. Yalnızca tek bir soruyu yanıtlar — az önce 429 döndüren hesap soğumaya alındı;
+kullanılabilir başka bir hesap var mı?
+
+Codex havuzu ve Anthropic havuzu kapsam dışıdır ve kendi rotasyonlarını sürdürür; bunu etkinleştirmek
+ikisini de değiştirmez. Saklanan tek hesabı olan bir sağlayıcı için kesinlikle işlem yapılmaz ve hiçbir
+soğuma kaydedilmez.
+
+429 durumunda başarısız hesap, mevcut olduğunda `Retry-After` kullanılarak (en fazla 15 dakika) veya
+varsayılan bir geri çekilmeyle soğumaya alınır ve istek, istek başına en fazla üç rotasyonla sonraki
+uygun hesapta yeniden oynatılır. Yeniden kimlik doğrulama için işaretlenen bir hesap asla seçilmez.
+Soğuma süreleri işleme özgüdür; yeniden başlatma bunları unutur.
+
+Rotasyon yalnızca bearer belirtecini değil, alternatif hesabın **tam** kimlik bilgisi anlık görüntüsünü
+taşır. Böylece yönlendirme meta verilerini belirteciyle eşleştiren bir sağlayıcı — örneğin
+Antigravity'nin Cloud Code Assist proje kimliği — bir hesabın belirtecini başka bir hesabın meta
+verileriyle gönderemez.
+
+Geçerli kapsam sıradan Responses istek yollarıdır. Cursor, hız sınırlarını HTTP durumu yerine adaptör
+olayları olarak bildirir ve bağımsız Antigravity görüntü uç noktasının kendi istek yolu vardır; henüz
+ikisi de rotasyon yapmaz.
+
+:::caution[Deneysel]
+Abonelik hesapları arasında rotasyon yapmak ikinci bir hesabın kotasını harcar ve bazı sağlayıcıların
+koşullarını ihlal edebilir. İstediğiniz ödünleşim bu değilse genel olarak veya söz konusu sağlayıcı için
+`enabled: false` ayarlayın.
 :::
 
 ### Yönetilen kayıt biçimleri

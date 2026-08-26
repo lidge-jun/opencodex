@@ -216,6 +216,11 @@ activent ou désactivent le pool tout en conservant son seuil. `threshold <n>` e
 Les fournisseurs non pris en charge et les valeurs invalides entraînent le code de sortie 1.
 `--json` renvoie :
 
+Pour `google-antigravity`, `off` désactive le pool spécialisé tenant compte des quotas et enregistre
+également la désactivation du basculement OAuth générique sur 429 pour ce fournisseur ; la commande
+passe donc réellement en mode strict à compte unique. Définir directement uniquement
+`googleAntigravityAccountPool.enabled: false` ne modifie pas cette stratégie générique distincte.
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

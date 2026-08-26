@@ -2948,13 +2948,15 @@ async function handleResponsesInner(
           accountId: snapshot.accountId,
           generation: snapshot.generation,
         };
+        if (!applyFailoverSnapshot(snapshot)) {
+          return formatErrorResponse(
+            401,
+            "authentication_error",
+            "No eligible Google Antigravity OAuth account available",
+          );
+        }
         bindGoogleAntigravitySessionAffinity(googleAntigravitySessionKey, selection.accountId);
         promoteGoogleAntigravityActiveAccount(selection.accountId);
-        route.provider = {
-          ...route.provider,
-          apiKey: snapshot.accessToken,
-          project: snapshot.projectId,
-        };
         logCtx.provider = formatGoogleAntigravityProviderForLog("google-antigravity", selection.accountId);
       } else {
         const resolved = await getValidAccessTokenSnapshot(route.providerName);
@@ -5302,17 +5304,13 @@ async function handleResponsesInner(
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
           const snapshot = await getGoogleAntigravityPoolAccessSnapshot(nextAccountId);
+          if (!applyFailoverSnapshot(snapshot)) break;
           bindGoogleAntigravitySessionAffinity(googleAntigravitySessionKey, nextAccountId);
           googleAntigravityPoolAccountId = nextAccountId;
           googleAntigravityPoolFailovers += 1;
           replayOAuthCredentialSnapshot = {
             accountId: snapshot.accountId,
             generation: snapshot.generation,
-          };
-          route.provider = {
-            ...route.provider,
-            apiKey: snapshot.accessToken,
-            project: snapshot.projectId,
           };
           invalidateSameTargetRequest();
           promoteGoogleAntigravityActiveAccount(nextAccountId);
@@ -5774,17 +5772,13 @@ async function handleResponsesInner(
             try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
             try {
               const snapshot = await getGoogleAntigravityPoolAccessSnapshot(nextAccountId);
+              if (!applyFailoverSnapshot(snapshot)) break;
               bindGoogleAntigravitySessionAffinity(googleAntigravitySessionKey, nextAccountId);
               googleAntigravityPoolAccountId = nextAccountId;
               googleAntigravityPoolFailovers += 1;
               replayOAuthCredentialSnapshot = {
                 accountId: snapshot.accountId,
                 generation: snapshot.generation,
-              };
-              route.provider = {
-                ...route.provider,
-                apiKey: snapshot.accessToken,
-                project: snapshot.projectId,
               };
               invalidateSameTargetRequest();
               promoteGoogleAntigravityActiveAccount(nextAccountId);

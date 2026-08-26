@@ -86,6 +86,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Positive per-model max input limits used for catalog auto-compaction hints. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Positive safe-integer per-model soft auto-compaction budgets. Values can only lower the effective 90%-of-context/max-input envelope and are omitted when no authoritative context window is known. For canonical `openai`, keys must be exact supported native model IDs without provider or account-selector prefixes. Provider PATCH merges entries; set a key to `null` to delete it or the whole field to `null` to clear the map. These `null` tombstones are PATCH-only. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
 | `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an all-zero entry falls through to the next source in that sequence. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
@@ -300,6 +301,11 @@ This opt-in pools Google Antigravity OAuth accounts for the `google-antigravity`
 provider only. It is disabled by default. The pool never supplies credentials to Google AI Studio,
 Vertex AI, another provider entry, or an API-key route.
 
+Disabling this specialized pool turns off quota-aware selection, session affinity, and its 402/429
+retry budget. It does not disable the separate presence-driven generic OAuth 429 fallback. To keep
+Google strictly on one account, also set
+`providers.google-antigravity.oauthAccountFailover.enabled` to `false`.
+
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | Enable process-local session affinity and bounded failover on a final 429 or surfaced 402 response. |
@@ -329,8 +335,10 @@ risk.
 ### `oauthAccountFailover`
 
 Rotates to another logged-in account of the same provider when one is rate-limited, for OAuth
-providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot, Google Antigravity,
-and Nous.
+providers while no provider-owned pool is active — xAI, Cursor, Kimi, GitHub Copilot, Google
+Antigravity, and Nous. When `googleAntigravityAccountPool.enabled` is `true`, that specialized pool
+owns Google routing instead; when it is off, this generic policy may still provide emergency 429
+failover.
 
 **Logging in a second account is what turns this on.** With no configuration, rotation activates
 for any of those providers holding 2 or more accounts that are not flagged for reauthentication —

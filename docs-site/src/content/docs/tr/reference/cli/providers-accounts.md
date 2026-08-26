@@ -242,6 +242,11 @@ havuzlarında `on` / `off`, mevcut eşiği koruyarak havuzun etkin durumunu değ
 havuzu etkinleştirir. `status` geçerli politikayı okur. Desteklenmeyen sağlayıcılar ve
 geçersiz değerler 1 ile çıkar. `--json` şunu döndürür:
 
+`google-antigravity` için `off`, özelleşmiş kota duyarlı havuzu devre dışı bırakır ve ayrıca
+sağlayıcı başına genel OAuth 429 devre dışı bırakma ayarını saklar; böylece komut gerçekten katı tek
+hesap moduna geçer. Yalnızca `googleAntigravityAccountPool.enabled: false` değerini doğrudan ayarlamak
+bu ayrı genel politikayı değiştirmez.
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

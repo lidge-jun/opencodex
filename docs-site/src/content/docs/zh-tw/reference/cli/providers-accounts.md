@@ -142,6 +142,10 @@ List and switch provider accounts and API-key pools (masked output only).
 會切換池的啟用狀態，同時保留現有閾值。`threshold <n>` 會儲存 0 到 100 的整數，且非零值
 會啟用池。`status` 讀取目前政策。不支援的供應商與無效值會以 1 離開。`--json` 回傳：
 
+對 `google-antigravity` 而言，`off` 會停用專用的配額感知池，並同時儲存該供應商的通用 OAuth
+429 停用設定，因此此指令確實會進入嚴格的單一帳號模式。只直接設定
+`googleAntigravityAccountPool.enabled: false` 並不會變更那項獨立的通用政策。
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
@@ -174,7 +178,8 @@ List and switch provider accounts and API-key pools (masked output only).
 清除 `openai` Codex 池或支援的 `anthropic`、`google-antigravity` OAuth 池中一個 runtime 冷卻。
 `main` 只適用於 `openai`，並會在 JSON 中正規化為 `__main__`。無效供應商或未知帳號會被 API
 以 400 拒絕，CLI 以 1 離開。對於沒有作用中冷卻的真實帳號，操作會冪等成功：API 回傳 200、
-CLI 以 0 離開，且 `cleared` 為 `false`。`--json` 嚴格回傳以下結構：
+CLI 以 0 離開，且 `cleared` 為 `false`。對 `google-antigravity`，此操作會同時清除專用池狀態
+與通用 fallback 狀態，因此在池模式變更後仍然有效。`--json` 嚴格回傳以下結構：
 
 ```text
 { ok: true, provider, id, cleared: boolean }

@@ -172,10 +172,16 @@ Authorization: Bearer <admin-token>
 experimental: true }`，没有 `config` 包装层。格式错误或非对象的请求体、不支持的 provider 或
 无效字段都会返回通用 HTTP 400 错误响应。
 
+对于 `google-antigravity`，写入 `enabled: false` 还会保存
+`providers.google-antigravity.oauthAccountFailover.enabled: false`。这使管理 API/CLI 中“关闭”的
+含义名副其实：它会同时禁用专用的配额感知池和原本由账户存在情况驱动的通用 429 回退。仅直接编辑
+`googleAntigravityAccountPool.enabled` 不会改变这项通用策略。
+
 `POST /api/oauth/accounts/clear-cooldown` 的请求体为 `{ provider, accountId }`。provider 必须是
 `anthropic` 或 `google-antigravity`，且账号必须存在于该 provider 内。未知账号返回通用 HTTP 400
 `account not found` 错误。已知账号即使不在冷却中也会幂等成功：HTTP 200 和
-`{ ok: true, cleared: false }`。这些响应不会包含 token、电子邮件地址或完整密钥。
+`{ ok: true, cleared: false }`。对于 Google，此操作会同时清除专用池状态和通用回退状态，因此
+即使池模式发生变化，该操作仍然有效。这些响应不会包含 token、电子邮件地址或完整密钥。
 
 凭证列表响应会刻意脱敏。OAuth 访问令牌和完整的 provider API 密钥不会返回给仪表板客户端。
 

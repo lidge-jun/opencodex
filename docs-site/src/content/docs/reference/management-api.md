@@ -196,11 +196,18 @@ values. Success returns top-level `{ ok: true, provider, enabled, autoSwitchThre
 stickyLimit, experimental: true }`; there is no `config` wrapper. A malformed or non-object body,
 an unsupported provider, or any invalid field returns a generic HTTP 400 error response.
 
+For `google-antigravity`, writing `enabled: false` also stores
+`providers.google-antigravity.oauthAccountFailover.enabled: false`. This keeps the management/CLI
+meaning of “off” honest by disabling both the specialized quota-aware pool and the otherwise
+presence-driven generic 429 fallback. Editing only `googleAntigravityAccountPool.enabled` directly
+does not alter the generic policy.
+
 `POST /api/oauth/accounts/clear-cooldown` takes `{ provider, accountId }`. The provider must be
 `anthropic` or `google-antigravity`, and the account must exist within that provider. An unknown
 account returns a generic HTTP 400 `account not found` error. A known account that is not cooled down
-is an idempotent success: HTTP 200 with `{ ok: true, cleared: false }`. These responses never include
-tokens, email addresses, or complete keys.
+is an idempotent success: HTTP 200 with `{ ok: true, cleared: false }`. For Google, the operation
+clears both the specialized pool state and the generic fallback state, so it remains valid after a
+pool-mode change. These responses never include tokens, email addresses, or complete keys.
 
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
 keys are not returned to dashboard clients.

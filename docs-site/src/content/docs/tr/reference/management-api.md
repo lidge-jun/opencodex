@@ -208,11 +208,18 @@ autoSwitchThreshold, strategy, stickyLimit, experimental: true }` döndürür; `
 yoktur. Bozuk veya nesne olmayan gövde, desteklenmeyen provider ya da geçersiz alan genel bir HTTP
 400 hata yanıtı döndürür.
 
+`google-antigravity` için `enabled: false` yazmak ayrıca
+`providers.google-antigravity.oauthAccountFailover.enabled: false` değerini saklar. Bu, hem özelleşmiş
+kota duyarlı havuzu hem de aksi halde varlığa dayalı genel 429 yük devretmesini devre dışı bırakarak
+yönetim/CLI'daki `off` anlamını dürüst kılar. Yalnızca `googleAntigravityAccountPool.enabled` değerini
+doğrudan düzenlemek genel politikayı değiştirmez.
+
 `POST /api/oauth/accounts/clear-cooldown`, `{ provider, accountId }` gövdesini alır. Provider
 `anthropic` veya `google-antigravity` olmalı ve account ilgili provider içinde bulunmalıdır. Bilinmeyen
 account, genel HTTP 400 `account not found` hatası döndürür. Cooldown durumunda olmayan bilinen bir
-account için işlem idempotent olarak başarılıdır: HTTP 200 ve `{ ok: true, cleared: false }`. Bu
-yanıtlar token, e-posta adresi veya eksiksiz key içermez.
+account için işlem idempotent olarak başarılıdır: HTTP 200 ve `{ ok: true, cleared: false }`. Google
+için işlem hem özelleşmiş havuz durumunu hem de genel yük devretme durumunu temizler; böylece havuz modu
+değişikliğinden sonra da geçerli kalır. Bu yanıtlar token, e-posta adresi veya eksiksiz key içermez.
 
 Kimlik bilgisi listesi yanıtları kasıtlı olarak maskelenir. OAuth erişim
 belirteçleri ve eksiksiz sağlayıcı API anahtarları kontrol paneli istemcilerine

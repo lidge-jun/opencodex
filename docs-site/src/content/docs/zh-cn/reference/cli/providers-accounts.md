@@ -182,6 +182,10 @@ token，也不是简单重读账号列表。`--json` 返回
 会切换池的启用状态，同时保留现有阈值。`threshold <n>` 会保存 0 到 100 的整数，且非零值
 会启用池。`status` 读取当前策略。不支持的提供方和无效值都会以 1 退出。`--json` 返回：
 
+对于 `google-antigravity`，`off` 会禁用专用的配额感知池，并同时保存按提供方设置的通用 OAuth
+429 停用项，因此该命令会真正进入严格的单账户模式。仅直接设置
+`googleAntigravityAccountPool.enabled: false` 不会改变这项独立的通用策略。
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

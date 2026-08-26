@@ -413,6 +413,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
     });
+    if (provider === "google-antigravity" && body.enabled === false) {
+      const providerConfig = config.providers?.[provider];
+      if (providerConfig) {
+        providerConfig.oauthAccountFailover = {
+          ...providerConfig.oauthAccountFailover,
+          enabled: false,
+        };
+      }
+    }
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     return jsonResponse({
@@ -437,9 +446,16 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!getAccountSet(provider)?.accounts.some(account => account.id === accountId)) {
       return jsonResponse({ error: "account not found" }, 400);
     }
-    const cleared = provider === "anthropic"
-      ? (await import("../../oauth/anthropic-routing")).clearAnthropicAccountCooldown(accountId)
-      : (await import("../../oauth/google-antigravity-routing")).clearGoogleAntigravityAccountCooldown(accountId);
+    let cleared: boolean;
+    if (provider === "anthropic") {
+      cleared = (await import("../../oauth/anthropic-routing")).clearAnthropicAccountCooldown(accountId);
+    } else {
+      const specializedCleared = (await import("../../oauth/google-antigravity-routing"))
+        .clearGoogleAntigravityAccountCooldown(accountId);
+      const genericCleared = (await import("../../oauth/generic-account-failover"))
+        .clearGenericFailoverAccountHealth(provider, accountId);
+      cleared = specializedCleared || genericCleared;
+    }
     return jsonResponse({ ok: true, cleared });
   }
 
@@ -514,6 +530,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { removeAccount, getAccountSet } = await import("../../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
     reconcileLiveStateStores();
+    const { clearGenericFailoverAccountHealth } = await import("../../oauth/generic-account-failover");
+    clearGenericFailoverAccountHealth(provider, id);
     if (provider === "anthropic") {
       const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
       clearAnthropicAccountCooldown(id);

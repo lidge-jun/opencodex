@@ -72,6 +72,7 @@ selector，而不是分配一个新名称。
 | `modelContextWindows?` | `Record<string, number>` | 按模型设置的上下文数值与上限。优先于 `contextWindow`：窗口未知时采用所配置的数值，而更小的实时元数据仍然优先。 |
 | `modelInputModalities?` | `Record<string, string[]>` | 按模型设置的输入提示，例如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 正数型、按模型设置的最大输入限制，用于目录自动压缩提示。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 按模型设置的正安全整数软自动压缩预算。该值只能降低“上下文或最大输入的 90%”这一有效上限；没有已知的权威上下文窗口时不会输出。对于规范 `openai`，键必须是受支持的精确原生模型 ID，且不得包含提供者或账户选择器前缀。提供者 PATCH 会合并条目；将某个键设为 `null` 会删除该键，将整个字段设为 `null` 会清空映射。这些 `null` 删除标记仅适用于 PATCH。 |
 | `defaultMaxOutputTokens?` | `number` | 当客户端省略 `max_output_tokens` 时，`openai-chat` 的提供者级回退值。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正数型、按模型设置的 `openai-chat` 回退预算；精确/模式匹配优先于提供者默认值。 |
 | `modelCosts?` | `Record<string, Cost4>` | 按模型设置的显示价格（每 100 万 token 的美元数），以该提供者的精确上游模型 ID 为键（不是提供者标识符或路由后的 `provider/model` 标签），值为四个字段：`input`、`output`、`cacheRead`、`cacheWrite`（示例：`{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。任何模型 ID 都是有效键——自定义提供者可以通过 `openai-chat` 适配器指向任意 OpenAI 兼容端点，即使不存在于内置目录中，本地 OpenAI 兼容和内部提供者的 ID 同样有效。用户配置的价格在 Logs 的 `~$` 和 Usage 估算中优先于内置目录；历史条目也会按当前覆盖项重新计价，因此修改价格可能改变过去的总额（回退顺序：用户配置 → jawcode 目录 → expected-price 覆盖 → 模型级厂商价格）；全零条目会回退到该顺序中的下一个来源。每个费率必须是大于等于 0 的有限数字，且不超过 1,000,000（每 100 万 token 的美元数）；超出范围的条目会在管理边界被拒绝，并在加载时被丢弃。仅用于显示的估算：覆盖项不影响路由、账户选择、配额或计费。 |
@@ -171,6 +172,10 @@ affinity。这些策略不能规避 provider enforcement。
 此可选功能仅为 `google-antigravity` Cloud Code Assist 提供方池化 Google Antigravity OAuth
 账户，默认关闭。该池绝不会把凭据用于 Google AI Studio、Vertex AI、其他提供方条目或 API 密钥路由。
 
+禁用此专用池会关闭配额感知选择、会话亲和性及其 402/429 重试预算，但不会禁用另一项由账户
+存在情况驱动的通用 OAuth 429 故障转移。要让 Google 严格只使用一个账户，还需将
+`providers.google-antigravity.oauthAccountFailover.enabled` 设为 `false`。
+
 | 键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 启用进程本地会话亲和性，以及最终 429 或透传到此处的 402 响应触发的有界故障转移。 |
@@ -192,6 +197,58 @@ Assist `projectId`。最终 429 或透传到此处的 402 会让失败账户进�
 :::caution[用于运行韧性，而不是绕过配额]
 请只用该池从暂时性账户故障中恢复，不要用它规避配额或提供方管控。多账户自动化可能违反提供方
 条款；如果不接受这一风险，请保持关闭。
+:::
+
+### `oauthAccountFailover`
+
+当没有提供方自有的池处于活动状态时，如果某个账户受到限流，此策略会为 OAuth 提供方轮换到
+同一提供方的另一个已登录账户——适用于 xAI、Cursor、Kimi、GitHub Copilot、Google Antigravity
+和 Nous。当 `googleAntigravityAccountPool.enabled` 为 `true` 时，该专用池会接管 Google 路由；
+关闭时，这项通用策略仍可提供紧急 429 故障转移。
+
+**登录第二个账户就是开启此功能的方式。** 未配置时，只要上述任一提供方持有 2 个或更多未标记为
+需要重新认证的账户，轮换就会启用——与 `apiKeyPool` 已对包含 2 个以上密钥的密钥池采用的规则
+相同。只存储一个账户的提供方仍保持原有行为。
+
+| 键 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `oauthAccountFailover.enabled?` | `boolean` | 由账户存在情况驱动 | 全局覆盖项。`false` 强制所有提供方保持单账户行为；`true` 强制启用轮换。 |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | 继承 | 按提供方设置的覆盖项；优先级高于全局设置和账户存在情况。 |
+
+若要让某个不想试探其条款的提供方严格保持单账户行为：
+
+```json
+{
+  "providers": {
+    "cursor": {
+      "oauthAccountFailover": { "enabled": false }
+    }
+  }
+}
+```
+
+该设置在登录、添加账户和重新认证后都会保留。
+
+此功能刻意比 `anthropicAccountPool` 更窄：没有会话亲和性、没有按配额排名的选择，也没有探测租约。
+它只回答一个问题——刚刚返回 429 的账户已进入冷却，是否还有另一个账户可用。
+
+Codex 池和 Anthropic 池不在此功能范围内，并保留各自的轮换；启用此功能不会改变两者。仅存储一个
+账户的提供方严格不执行任何操作，也不会为其记录冷却。
+
+收到 429 时，失败账户会按 `Retry-After`（上限 15 分钟）或默认退避进入冷却，并在下一个合格账户
+上重放请求；每个请求最多轮换三次。标记为需要重新认证的账户永远不会被选中。冷却仅存在于进程
+本地，因此重启后会被遗忘。
+
+轮换会携带替代账户的**完整**凭据快照，而不只是 bearer；这样，对于将路由元数据与 token 配对的
+提供方——例如 Antigravity 的 Cloud Code Assist 项目 id——就不会把一个账户的 token 与另一个
+账户的元数据一起发送。
+
+当前范围是普通 Responses 请求路径。Cursor 会以适配器事件而不是 HTTP 状态报告限流，而独立的
+Antigravity 图像端点拥有自己的请求路径；两者目前都不会轮换。
+
+:::caution[实验性]
+在订阅账户之间轮换会消耗第二个账户的配额，也可能违反某些提供方的条款。如果你不接受这种取舍，
+请在全局或相应提供方上设置 `enabled: false`。
 :::
 
 ### 托管记录形状

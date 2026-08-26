@@ -172,11 +172,18 @@ Authorization: Bearer <admin-token>
 stickyLimit, experimental: true }` を返し、`config` ラッパーはありません。不正形式またはオブジェクト
 以外の body、未対応の provider、不正なフィールドは、汎用の HTTP 400 エラーレスポンスになります。
 
+`google-antigravity` では、`enabled: false` を書き込むと
+`providers.google-antigravity.oauthAccountFailover.enabled: false` も保存されます。これにより、管理 API / CLI
+における「off」は、専用のクォータ認識プールと、アカウントの存在によって有効になる汎用 429
+フォールバックの両方を無効にするという実際の意味を保ちます。`googleAntigravityAccountPool.enabled` だけを
+直接編集しても、汎用ポリシーは変更されません。
+
 `POST /api/oauth/accounts/clear-cooldown` の body は `{ provider, accountId }` です。provider は
 `anthropic` または `google-antigravity` で、その account は同じ provider 内に存在する必要があります。
 不明な account は汎用の HTTP 400 `account not found` エラーになります。既知の account が cooldown
-中でなくても、HTTP 200 と `{ ok: true, cleared: false }` を返す冪等な成功です。これらのレスポンスには
-token、メールアドレス、完全な key は含まれません。
+中でなくても、HTTP 200 と `{ ok: true, cleared: false }` を返す冪等な成功です。Google では、この操作に
+よって専用プールの状態と汎用フォールバックの状態の両方がクリアされるため、プールモードの変更後も
+有効です。これらのレスポンスには token、メールアドレス、完全な key は含まれません。
 
 資格情報リストの応答は意図的にマスクされます。 OAuth アクセス トークンと完全なプロバイダー API キーはダッシュボード クライアントに返されません。
 

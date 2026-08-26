@@ -169,14 +169,21 @@ Authorization: Bearer <admin-token>
 `enabled`(boolean), `autoSwitchThreshold`(0~100 정수), `strategy`(`quota`, `round-robin`,
 `fill-first`), `stickyLimit`(1~100 정수)을 받을 수 있습니다. 생략된 필드는 현재값 또는 기본값을
 유지합니다. 성공 응답은 최상위에 `{ ok: true, provider, enabled, autoSwitchThreshold, strategy,
-stickyLimit, experimental: true }`를 반환하며 `config` 래퍼는 없습니다. 잘못된 형식이나 객체가 아닌
+`stickyLimit, experimental: true }`를 반환하며 `config` 래퍼는 없습니다. 잘못된 형식이나 객체가 아닌
 본문, 지원되지 않는 provider, 잘못된 필드는 일반 HTTP 400 오류 응답을 반환합니다.
+
+`google-antigravity`의 경우 `enabled: false`를 쓰면
+`providers.google-antigravity.oauthAccountFailover.enabled: false`도 저장됩니다. 이렇게 하면 특수
+할당량 인식 풀과, 그렇지 않으면 계정 존재 여부에 따라 활성화되는 일반 429 fallback을 모두
+비활성화하여 관리 API/CLI에서 “off”가 실제로 엄격한 단일 계정 모드를 뜻하게 됩니다.
+`googleAntigravityAccountPool.enabled`만 직접 편집하면 일반 정책은 변경되지 않습니다.
 
 `POST /api/oauth/accounts/clear-cooldown`의 본문은 `{ provider, accountId }`입니다. provider는
 `anthropic` 또는 `google-antigravity`여야 하며 account는 해당 provider 안에 존재해야 합니다. 알 수
 없는 account는 일반 HTTP 400 `account not found` 오류를 반환합니다. 알려진 account가 cooldown 상태가
-아니어도 HTTP 200과 `{ ok: true, cleared: false }`를 반환하는 멱등 성공입니다. 이 응답에는 token,
-이메일 주소 또는 전체 key가 포함되지 않습니다.
+아니어도 HTTP 200과 `{ ok: true, cleared: false }`를 반환하는 멱등 성공입니다. Google의 경우 이 작업은
+특수 풀 상태와 일반 fallback 상태를 모두 지우므로 pool mode가 변경된 뒤에도 유효합니다. 이 응답에는
+token, 이메일 주소 또는 전체 key가 포함되지 않습니다.
 
 자격 증명 목록 응답은 의도적으로 마스킹됩니다. OAuth access token과 완전한 provider API key는 대시보드 클라이언트에 반환되지 않습니다.
 

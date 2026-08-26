@@ -172,10 +172,16 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 stickyLimit, experimental: true }`，沒有 `config` 包裝層。格式錯誤或非物件的 body、不支援的
 provider 或無效欄位都會回傳通用 HTTP 400 錯誤回應。
 
+對 `google-antigravity` 寫入 `enabled: false` 時，也會儲存
+`providers.google-antigravity.oauthAccountFailover.enabled: false`。這可確保管理 API／CLI 中
+「off」的語意一致：專用的配額感知池與原本由帳號存在情況驅動的通用 429 容錯移轉都會停用。
+只直接編輯 `googleAntigravityAccountPool.enabled` 並不會變更該通用政策。
+
 `POST /api/oauth/accounts/clear-cooldown` 的 body 為 `{ provider, accountId }`。provider 必須是
 `anthropic` 或 `google-antigravity`，且帳號必須存在於該 provider 內。未知帳號回傳通用 HTTP 400
 `account not found` 錯誤。已知帳號即使不在冷卻中也會冪等成功：HTTP 200 與
-`{ ok: true, cleared: false }`。這些回應不會包含 token、電子郵件地址或完整金鑰。
+`{ ok: true, cleared: false }`。對 Google 而言，此操作會同時清除專用池狀態與通用 fallback
+狀態，因此在池模式變更後仍然有效。這些回應不會包含 token、電子郵件地址或完整金鑰。
 
 憑證清單回應被刻意遮罩。OAuth access token 與完整的供應商 API 金鑰不回傳給儀表板客戶端。
 

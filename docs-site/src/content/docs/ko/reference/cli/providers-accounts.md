@@ -162,6 +162,10 @@ OAuth 및 API 키 제공자에는 제공자의 할당량 보고 엔드포인트�
 정수를 저장하며, 0이 아니면 풀을 활성화합니다. `status`는 현재 정책을 읽습니다. 지원되지 않는
 제공자와 잘못된 값은 종료 코드 1로 끝납니다. `--json`은 다음을 반환합니다:
 
+`google-antigravity`에서 `off`는 특수 할당량 인식 풀을 비활성화하고 공급자별 일반 OAuth 429
+옵트아웃도 저장하므로, 이 명령은 실제로 엄격한 단일 계정 모드로 전환합니다.
+`googleAntigravityAccountPool.enabled: false`만 직접 설정하면 별도의 일반 정책은 변경되지 않습니다.
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

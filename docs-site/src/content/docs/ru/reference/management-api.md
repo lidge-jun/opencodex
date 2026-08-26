@@ -191,11 +191,18 @@ autoSwitchThreshold, strategy, stickyLimit, experimental: true }`; обёртк�
 или не являющийся объектом body, неподдерживаемый provider или некорректное поле возвращает обычный
 ответ с ошибкой HTTP 400.
 
+Для `google-antigravity` запись `enabled: false` также сохраняет
+`providers.google-antigravity.oauthAccountFailover.enabled: false`. Благодаря этому значение «off»
+в management API/CLI действительно отключает как специализированный пул с учётом квоты, так и
+generic fallback при 429, который в противном случае активируется наличием аккаунтов. Прямое
+редактирование только `googleAntigravityAccountPool.enabled` не изменяет эту generic policy.
+
 `POST /api/oauth/accounts/clear-cooldown` принимает `{ provider, accountId }`. Provider должен быть
 `anthropic` или `google-antigravity`, а аккаунт должен существовать внутри этого provider. Неизвестный
 аккаунт возвращает обычную ошибку HTTP 400 `account not found`. Известный аккаунт без cooldown даёт
-идемпотентный успех: HTTP 200 с `{ ok: true, cleared: false }`. Эти ответы не содержат token'ов,
-email-адресов или полных key.
+идемпотентный успех: HTTP 200 с `{ ok: true, cleared: false }`. Для Google операция очищает как
+состояние специализированного пула, так и состояние generic fallback, поэтому остаётся допустимой
+после смены pool-mode. Эти ответы не содержат token'ов, email-адресов или полных key.
 
 Ответы со списками credential'ов намеренно маскируются. OAuth access-token'ы и полные API-key'и
 провайдеров клиентам дашборда не возвращаются.

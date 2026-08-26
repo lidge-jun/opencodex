@@ -162,6 +162,10 @@ OAuth プロバイダーと API キー プロバイダーの場合、これに�
 整数を保存し、0 以外ならプールを有効にします。`status` は現在のポリシーを読み取ります。未対応の
 プロバイダーと無効な値は終了コード 1 になります。`--json` は次を返します。
 
+`google-antigravity` では、`off` は専用のクォータ認識プールを無効にするだけでなく、プロバイダー単位の
+汎用 OAuth 429 オプトアウトも保存するため、コマンドは実際に厳格な単一アカウントモードへ移行します。
+`googleAntigravityAccountPool.enabled: false` だけを直接設定しても、この別個の汎用ポリシーは変更されません。
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

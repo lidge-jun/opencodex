@@ -54,6 +54,7 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | `modelContextWindows?` | `Record<string, number>` | Per-model context 上限。這些覆寫 `contextWindow` 且永不提高較小的即時中繼資料。 |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model 輸入提示，如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 用於目錄自動壓縮提示的正數 per-model max input 限制。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；沒有已知的權威 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
 | `defaultMaxOutputTokens?` | `number` | 當客戶端省略 `max_output_tokens` 時的供應商範圍 `openai-chat` 後備。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正數 per-model `openai-chat` 後援預算；精確／模式比對勝過供應商預設。 |
 | `headers?` | `Record<string, string>` | 額外上游標頭。Authorization、cookie、API-key 標頭、內嵌換行與無效名稱被拒絕。 |
@@ -140,6 +141,10 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 此選用功能只為 `google-antigravity` Cloud Code Assist 供應商池化 Google Antigravity OAuth
 帳號，預設停用。此池絕不會把憑證用於 Google AI Studio、Vertex AI、其他供應商項目或 API-key 路由。
 
+停用此專用池會關閉配額感知選擇、session 親和性及其 402/429 重試額度，但不會停用另一個
+由帳號存在情況驅動的通用 OAuth 429 容錯移轉。若要讓 Google 嚴格只使用單一帳號，還必須將
+`providers.google-antigravity.oauthAccountFailover.enabled` 設為 `false`。
+
 | Key | 型別 | 預設值 | 說明 |
 | --- | --- | --- | --- |
 | `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 啟用行程本地的 session 親和性，以及最終 429 或傳到此處的 402 回應所觸發的有界容錯移轉。 |
@@ -162,6 +167,13 @@ Assist `projectId`。最終 429 或傳到此處的 402 會讓失敗帳號進入�
 請只用此池從暫時性帳號故障中復原，不要用來規避配額或供應商管控。多帳號自動化可能違反供應商
 條款；若不接受這項風險，請保持停用。
 :::
+
+### `oauthAccountFailover`
+
+當沒有供應商自有的池處於啟用狀態時，若某個 OAuth 帳號遭到限流，此機制會輪換到同一供應商的
+另一個已登入帳號，適用於 xAI、Cursor、Kimi、GitHub Copilot、Google Antigravity 與 Nous。
+當 `googleAntigravityAccountPool.enabled` 為 `true` 時，該專用池會接管 Google 路由；當它關閉時，
+這項通用政策仍可能提供緊急 429 容錯移轉。
 
 ### 受管記錄結構
 

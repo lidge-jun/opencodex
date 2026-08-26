@@ -201,6 +201,11 @@ quota-bar'ов дашборда.
 включает пул, если значение ненулевое. `status` читает текущую политику. Для неподдерживаемых
 провайдеров и некорректных значений команда завершается кодом 1. `--json` возвращает:
 
+Для `google-antigravity` команда `off` отключает специализированный пул с учётом квоты и также
+сохраняет per-provider opt-out для generic OAuth-failover при 429, поэтому команда действительно
+переводит провайдера в строгий режим одного аккаунта. Если напрямую задать только
+`googleAntigravityAccountPool.enabled: false`, эта отдельная generic policy не изменится.
+
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```

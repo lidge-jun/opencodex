@@ -18,6 +18,12 @@ import {
   resolveGoogleAntigravityAccountForSession,
   rotateGoogleAntigravityAccountOnQuotaError,
 } from "../src/oauth/google-antigravity-routing";
+import {
+  clearGenericFailoverHealth,
+  genericFailoverRetryAfterSeconds,
+  isGenericOAuthFailoverEnabled,
+  rotateGenericOAuthAccountOn429,
+} from "../src/oauth/generic-account-failover";
 import { getAccountSet, removeAccount, saveCredential } from "../src/oauth/store";
 
 function makeCodexConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
@@ -172,6 +178,7 @@ describe("Anthropic account pool strategy management API", () => {
   }
 
   beforeEach(() => {
+    clearGenericFailoverHealth();
     previousHome = process.env.OPENCODEX_HOME;
     isolatedCodexHome = installIsolatedCodexHome("ocx-pool-mgmt-codex-");
     testDir = mkdtempSync(join(tmpdir(), "ocx-pool-mgmt-"));
@@ -195,6 +202,7 @@ describe("Anthropic account pool strategy management API", () => {
   });
 
   afterEach(() => {
+    clearGenericFailoverHealth();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
     isolatedCodexHome?.restore();
@@ -437,6 +445,52 @@ describe("Anthropic account pool strategy management API", () => {
     }
   });
 
+  test("turning the Google pool off also opts out of presence-driven generic failover", async () => {
+    const config = baseConfig();
+    expect(isGenericOAuthFailoverEnabled(config, "google-antigravity")).toBe(true);
+    const req = new Request("http://localhost/api/oauth/accounts/pool", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "google-antigravity", enabled: false }),
+    });
+    const response = await handleOauthAccountRoutes({
+      req,
+      url: new URL(req.url),
+      config,
+      deps: {},
+      convergeCodexCatalog: async () => ({ status: "unchanged" }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+
+    expect(response?.status).toBe(200);
+    expect(config.googleAntigravityAccountPool?.enabled).toBe(false);
+    expect(config.providers["google-antigravity"]?.oauthAccountFailover).toEqual({ enabled: false });
+    expect(isGenericOAuthFailoverEnabled(config, "google-antigravity")).toBe(false);
+  });
+
+  test("updating a disabled Google pool without an enabled field preserves generic failover intent", async () => {
+    const config = baseConfig();
+    config.googleAntigravityAccountPool = { enabled: false };
+    config.providers["google-antigravity"]!.oauthAccountFailover = { enabled: true };
+    const req = new Request("http://localhost/api/oauth/accounts/pool", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "google-antigravity", strategy: "round-robin" }),
+    });
+    const response = await handleOauthAccountRoutes({
+      req,
+      url: new URL(req.url),
+      config,
+      deps: {},
+      convergeCodexCatalog: async () => ({ status: "unchanged" }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+
+    expect(response?.status).toBe(200);
+    expect(config.providers["google-antigravity"]?.oauthAccountFailover).toEqual({ enabled: true });
+    expect(isGenericOAuthFailoverEnabled(config, "google-antigravity")).toBe(true);
+  });
+
   test("Google Antigravity partial updates normalize invalid current pool fields before saving", async () => {
     const invalidConfig = baseConfig() as OcxConfig & {
       googleAntigravityAccountPool: Record<string, unknown>;
@@ -538,6 +592,34 @@ describe("Anthropic account pool strategy management API", () => {
     }
   });
 
+  test("Google clear-cooldown clears the generic fallback state when the specialized pool is off", async () => {
+    const config = baseConfig();
+    const set = getAccountSet("google-antigravity")!;
+    const aId = set.accounts.find(account => account.id === "google-a")!.id;
+    const bId = set.accounts.find(account => account.id === "google-b")!.id;
+    expect(rotateGenericOAuthAccountOn429(
+      config,
+      "google-antigravity",
+      aId,
+      "120",
+    )).toBe(bId);
+    expect(genericFailoverRetryAfterSeconds("google-antigravity")).toBeGreaterThan(0);
+
+    const server = startServer(0);
+    try {
+      const clear = await fetch(new URL("/api/oauth/accounts/clear-cooldown", server.url), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: aId }),
+      });
+      expect(clear.status).toBe(200);
+      expect(await clear.json()).toEqual({ ok: true, cleared: true });
+      expect(genericFailoverRetryAfterSeconds("google-antigravity")).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("deleting Google account state makes a deterministic re-add immediately eligible", async () => {
     const config = baseConfig();
     config.googleAntigravityAccountPool = { enabled: true, strategy: "round-robin", stickyLimit: 5 };
@@ -552,8 +634,25 @@ describe("Anthropic account pool strategy management API", () => {
       email: "delete@example.test",
       projectId: "delete-project",
     });
+    await saveCredential("google-antigravity", {
+      access: "replacement-access",
+      refresh: "replacement-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "replacement-identity",
+      email: "replacement@example.test",
+      projectId: "replacement-project",
+    });
     const accountId = getAccountSet("google-antigravity")!.accounts
       .find(account => account.credential.accountId === "delete-identity")!.id;
+    const replacementId = getAccountSet("google-antigravity")!.accounts
+      .find(account => account.credential.accountId === "replacement-identity")!.id;
+    expect(rotateGenericOAuthAccountOn429(
+      config,
+      "google-antigravity",
+      accountId,
+      "120",
+    )).toBe(replacementId);
+    expect(genericFailoverRetryAfterSeconds("google-antigravity")).toBeGreaterThan(0);
     rotateGoogleAntigravityAccountOnQuotaError(config, accountId, "120", "gemini-3.7-flash");
     resetGoogleAntigravityRoutingForManualSelection(accountId);
     bindGoogleAntigravitySessionAffinity("deleted-account-thread", accountId);
@@ -569,17 +668,8 @@ describe("Anthropic account pool strategy management API", () => {
       expect(removed.status).toBe(200);
       expect(getGoogleAntigravityAccountHealthSnapshot(accountId)).toBeNull();
       expect(googleAntigravitySessionAffinitySizeForTests()).toBe(0);
+      expect(genericFailoverRetryAfterSeconds("google-antigravity")).toBeNull();
 
-      await saveCredential("google-antigravity", {
-        access: "replacement-access",
-        refresh: "replacement-refresh",
-        expires: Date.now() + 3_600_000,
-        accountId: "replacement-identity",
-        email: "replacement@example.test",
-        projectId: "replacement-project",
-      });
-      const replacementId = getAccountSet("google-antigravity")!.accounts
-        .find(account => account.credential.accountId === "replacement-identity")!.id;
       await saveCredential("google-antigravity", {
         access: "delete-access-new",
         refresh: "delete-refresh-new",
@@ -591,6 +681,7 @@ describe("Anthropic account pool strategy management API", () => {
       const readdedId = getAccountSet("google-antigravity")!.accounts
         .find(account => account.credential.accountId === "delete-identity")!.id;
       expect(readdedId).toBe(accountId);
+      expect(genericFailoverRetryAfterSeconds("google-antigravity")).toBeNull();
       expect(getEligibleGoogleAntigravityAccounts()).toContain(accountId);
       expect(resolveGoogleAntigravityAccountForSession(
         "post-delete-rotation", "gemini-3.7-flash", config,

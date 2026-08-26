@@ -197,11 +197,20 @@ conservent leur valeur actuelle ou par défaut. En cas de succès, la réponse c
 sans enveloppe `config`. Un corps mal formé ou qui n'est pas un objet, un fournisseur non pris en
 charge ou un champ invalide renvoie une réponse d'erreur HTTP 400 générique.
 
+Pour `google-antigravity`, écrire `enabled: false` enregistre également
+`providers.google-antigravity.oauthAccountFailover.enabled: false`. Cela garantit que le sens de
+« off » pour l'API de gestion et la CLI reste fidèle, en désactivant à la fois le pool spécialisé
+tenant compte des quotas et le mécanisme de basculement générique sur 429, autrement activé selon la
+présence de comptes. Modifier directement uniquement `googleAntigravityAccountPool.enabled` ne
+change pas cette stratégie générique.
+
 `POST /api/oauth/accounts/clear-cooldown` accepte `{ provider, accountId }`. Le fournisseur doit être
 `anthropic` ou `google-antigravity`, et le compte doit exister pour ce fournisseur. Un compte inconnu
 renvoie l'erreur HTTP 400 générique `account not found`. Un compte connu qui n'est pas en
-temporisation produit un succès idempotent : HTTP 200 avec `{ ok: true, cleared: false }`. Ces
-réponses ne contiennent jamais de jetons, d'adresses e-mail ni de clés complètes.
+temporisation produit un succès idempotent : HTTP 200 avec `{ ok: true, cleared: false }`. Pour
+Google, l'opération efface à la fois l'état du pool spécialisé et celui du mécanisme de basculement
+générique ; elle reste donc valable après un changement de mode du pool. Ces réponses ne contiennent
+jamais de jetons, d'adresses e-mail ni de clés complètes.
 
 Les réponses qui répertorient les identifiants sont délibérément masquées. Les jetons d'accès OAuth et les clés API complètes des
 fournisseurs ne sont pas renvoyés aux clients du tableau de bord.
