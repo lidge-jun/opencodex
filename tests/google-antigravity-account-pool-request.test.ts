@@ -259,8 +259,8 @@ describe("google antigravity Responses account failover", () => {
     }
   });
 
-  test.each([1, 2, 3, 4])(
-    "terminal continuation exhaustion across %d eligible accounts surfaces all-cooled",
+  test.each([1, 2, 3])(
+    "terminal continuation exhaustion across %d eligible accounts surfaces all-cooled within the dispatch cap",
     async eligibleCount => {
     const { accountIds } = await seedAccounts(eligibleCount, 4);
     let initialSends = 0;
@@ -321,8 +321,10 @@ describe("google antigravity Responses account failover", () => {
     },
   );
 
-  test("terminal continuation cap preserves quota status without dispatching an eligible fifth account", async () => {
-    const { accountIds } = await seedAccounts(5, 5);
+  test.each([4, 5])(
+    "terminal continuation cap across %d eligible accounts stops at four total dispatches",
+    async eligibleCount => {
+    const { accountIds } = await seedAccounts(eligibleCount, 5);
     let initialSends = 0;
     const quotaDispatches: Dispatch[] = [];
     const upstream = Bun.serve({
@@ -351,20 +353,65 @@ describe("google antigravity Responses account failover", () => {
     try {
       const response = await fetch(new URL("/v1/responses", proxy.url), {
         method: "POST",
-        headers: { "content-type": "application/json", "thread-id": "five-account-continuation-cap" },
+        headers: { "content-type": "application/json", "thread-id": `continuation-cap-${eligibleCount}` },
         body: JSON.stringify({ model: "gemini-3.7-flash", input: "hello", stream: false }),
       });
       const body = await response.text();
 
-      expect([response.status, response.headers.get("retry-after")]).toEqual([402, "450"]);
+      expect([response.status, response.headers.get("retry-after")]).toEqual([429, "400"]);
       expect(body).toContain("Google Antigravity quota exhausted after bounded account failover");
       expect(initialSends).toBe(1);
-      expect(quotaDispatches).toEqual(["a", "b", "c", "d"].map(suffix => ({
+      expect(quotaDispatches).toEqual(["a", "b", "c"].map(suffix => ({
         authorization: `Bearer request-token-${suffix}`,
         project: `request-project-${suffix}`,
       })));
-      expect(accountIds.slice(0, 4).every(id => getGoogleAntigravityAccountHealthSnapshot(id) !== null)).toBe(true);
-      expect(getGoogleAntigravityAccountHealthSnapshot(accountIds[4]!)).toBeNull();
+      expect(accountIds.slice(0, 3).every(id => getGoogleAntigravityAccountHealthSnapshot(id) !== null)).toBe(true);
+      expect(accountIds.slice(3).every(id => getGoogleAntigravityAccountHealthSnapshot(id) === null)).toBe(true);
+    } finally {
+      await proxy.stop(true);
+      upstream.stop(true);
+    }
+    },
+  );
+
+  test("main failovers consume the shared dispatch budget before terminal continuation", async () => {
+    await seedAccounts(5, 5);
+    const dispatches: Dispatch[] = [];
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(request) {
+        const body = await request.json() as { project?: unknown };
+        const authorization = request.headers.get("authorization");
+        dispatches.push({ authorization, project: body.project });
+        if (authorization !== "Bearer request-token-d") {
+          return exhaustedCcaResponse(authorization);
+        }
+        return Response.json({
+          response: {
+            candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 0 },
+          },
+        });
+      },
+    });
+    saveConfig({ ...config(upstream.url.origin), emptyCompletionRetry: true });
+    const proxy = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", proxy.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "thread-id": "main-exhausts-shared-cap" },
+        body: JSON.stringify({ model: "gemini-3.7-flash", input: "hello", stream: false }),
+      });
+      const body = await response.text();
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(body).toContain("Google Antigravity quota exhausted after bounded account failover");
+      expect(dispatches).toEqual(["a", "b", "c", "d"].map(suffix => ({
+        authorization: `Bearer request-token-${suffix}`,
+        project: `request-project-${suffix}`,
+      })));
     } finally {
       await proxy.stop(true);
       upstream.stop(true);

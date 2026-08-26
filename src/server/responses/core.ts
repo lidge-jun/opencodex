@@ -854,6 +854,8 @@ function assertNeverGoogleAntigravityRotation(value: never): never {
 
 const GOOGLE_ANTIGRAVITY_FAILOVER_LIMIT_MESSAGE =
   "Google Antigravity quota exhausted after bounded account failover";
+const GOOGLE_ANTIGRAVITY_POOL_MAX_DISPATCHES_PER_REQUEST =
+  GOOGLE_ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST + 1;
 
 function googleAntigravityFailoverLimitResponse(status: 429 | 402, retryAfter: string | null): Response {
   return formatErrorResponse(
@@ -2891,6 +2893,7 @@ async function handleResponsesInner(
     : null;
   let googleAntigravityPoolAccountId: string | null = null;
   let googleAntigravityPoolFailovers = 0;
+  let googleAntigravityPoolDispatches = 0;
   const googleAntigravityPoolActive = route.providerName === "google-antigravity"
     && route.provider.authMode === "oauth"
     && route.provider.googleMode === "cloud-code-assist"
@@ -4968,6 +4971,7 @@ async function handleResponsesInner(
   const invalidateSameTargetRequest = (): void => { transportToken += 1; };
   let upstreamResponse: Response;
   try {
+    if (googleAntigravityPoolActive) googleAntigravityPoolDispatches += 1;
     if (activeAdapter.fetchResponse) {
       noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate);
       await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
@@ -5039,6 +5043,12 @@ async function handleResponsesInner(
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
     ): Promise<Response | { failed: Response }> => {
+      if (
+        googleAntigravityPoolActive
+        && googleAntigravityPoolDispatches >= GOOGLE_ANTIGRAVITY_POOL_MAX_DISPATCHES_PER_REQUEST
+      ) {
+        return { failed: googleAntigravityFailoverLimitResponse(429, null) };
+      }
       let retryRequest: AdapterRequest;
       if (sameTargetRequest !== undefined && sameTargetParsed === parsed && sameTargetToken === transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
@@ -5074,6 +5084,7 @@ async function handleResponsesInner(
       logCtx.providerAdapter = activeAdapter.name;
       sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
       noteAttemptSend(logCtx.activeAttempt, retryEstimate, recovery);
+      if (googleAntigravityPoolActive) googleAntigravityPoolDispatches += 1;
       try {
         try {
           if (activeAdapter.fetchResponse) {
@@ -5289,7 +5300,10 @@ async function handleResponsesInner(
           case "no-eligible-account":
             break googleAntigravityFailover;
           case "next-account":
-            if (googleAntigravityPoolFailovers >= GOOGLE_ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST) {
+            if (
+              googleAntigravityPoolFailovers >= GOOGLE_ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST
+              || googleAntigravityPoolDispatches >= GOOGLE_ANTIGRAVITY_POOL_MAX_DISPATCHES_PER_REQUEST
+            ) {
               try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
               return googleAntigravityFailoverLimitResponse(
                 upstreamResponse.status === 402 ? 402 : 429,
@@ -5555,6 +5569,7 @@ async function handleResponsesInner(
       // Optional recovery label for same-target / failover continuation sends.
       const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
       try {
+        if (googleAntigravityPoolActive) googleAntigravityPoolDispatches += 1;
         if (activeAdapter.fetchResponse) {
           noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
@@ -5597,6 +5612,19 @@ async function handleResponsesInner(
       }
     };
     while (true) {
+      if (
+        googleAntigravityPoolActive
+        && googleAntigravityPoolDispatches >= GOOGLE_ANTIGRAVITY_POOL_MAX_DISPATCHES_PER_REQUEST
+      ) {
+        googleAntigravityContinuationFailoverLimit.value = { status: 429, retryAfter: null };
+        yield {
+          type: "error",
+          status: 429,
+          errorType: "rate_limit_error",
+          message: GOOGLE_ANTIGRAVITY_FAILOVER_LIMIT_MESSAGE,
+        };
+        return;
+      }
       try {
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
@@ -5643,6 +5671,22 @@ async function handleResponsesInner(
         // replay so the continuation never starts work for a request the client abandoned.
         if (options.abortSignal?.aborted || upstream.signal.aborted) {
           yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
+          return;
+        }
+        if (
+          googleAntigravityPoolActive
+          && googleAntigravityPoolDispatches >= GOOGLE_ANTIGRAVITY_POOL_MAX_DISPATCHES_PER_REQUEST
+        ) {
+          googleAntigravityContinuationFailoverLimit.value = {
+            status: 429,
+            retryAfter: response.headers.get("retry-after"),
+          };
+          yield {
+            type: "error",
+            status: 429,
+            errorType: "rate_limit_error",
+            message: GOOGLE_ANTIGRAVITY_FAILOVER_LIMIT_MESSAGE,
+          };
           return;
         }
         try {
@@ -5753,7 +5797,10 @@ async function handleResponsesInner(
           case "no-eligible-account":
             break;
           case "next-account": {
-            if (googleAntigravityPoolFailovers >= GOOGLE_ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST) {
+            if (
+              googleAntigravityPoolFailovers >= GOOGLE_ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST
+              || googleAntigravityPoolDispatches >= GOOGLE_ANTIGRAVITY_POOL_MAX_DISPATCHES_PER_REQUEST
+            ) {
               try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
               const status = response.status as 429 | 402;
               googleAntigravityContinuationFailoverLimit.value = {
