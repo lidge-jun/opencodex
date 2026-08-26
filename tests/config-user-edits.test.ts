@@ -386,6 +386,29 @@ test("config diagnostics sanitize invalid retryOn429 before schema validation", 
   expect(diagnostics.config.providers.test.retryOn429).toBeUndefined();
 });
 
+test("config diagnostics degrade only invalid provider model display names", () => {
+  writeDiskConfig({
+    providers: {
+      test: {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        modelDisplayNames: {
+          "model-a": "  Model Alpha  ",
+          "model-b": "Bad/Name",
+        },
+      },
+    },
+  });
+
+  const diagnostics = readConfigDiagnostics();
+
+  expect(diagnostics.source).toBe("file");
+  expect(diagnostics.error).toBeNull();
+  expect(diagnostics.config.providers.test.modelDisplayNames).toEqual({ "model-a": "Model Alpha" });
+});
+
 test("invalid retryOn429 values never log the raw value", () => {
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {

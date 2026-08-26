@@ -9,6 +9,7 @@ import {
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
+  modelDisplayNamesConfigError,
   multiAgentGuidanceEnabled,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
@@ -555,6 +556,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
     }
+    const displayNamesError = modelDisplayNamesConfigError(prov.modelDisplayNames);
+    if (displayNamesError) return jsonResponse({ error: displayNamesError }, 400);
     if (!isValidProviderName(name)) {
       return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
     }

@@ -72,7 +72,7 @@ function readDefaultReasoningEffort(raw: unknown, efforts: string[] | undefined)
 import type { CatalogModel } from "../../codex/catalog";
 import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
-import { getProviderLiveModelCount } from "../../codex/model-cache";
+import { clearModelCache, getProviderLiveModelCount } from "../../codex/model-cache";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -380,6 +380,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     );
     if (displayName === null) delete nextDisplayNames[modelId];
     else nextDisplayNames[modelId] = displayName;
+    const mergedValidationError = modelDisplayNamesConfigError(nextDisplayNames);
+    if (mergedValidationError) return jsonResponse({ error: mergedValidationError }, 400, req, config);
     if (Object.keys(nextDisplayNames).length > 0) provider.modelDisplayNames = nextDisplayNames;
     else delete provider.modelDisplayNames;
 
@@ -390,6 +392,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       else delete provider.modelDisplayNames;
       throw error;
     }
+    clearModelCache(name);
     const catalogRefresh = await convergeCodexCatalog();
     const row = (await listManagementModelRows(config)).find(candidate => (
       candidate.native !== true

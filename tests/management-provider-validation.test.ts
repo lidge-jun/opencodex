@@ -692,6 +692,34 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST rejects unsafe submitted modelDisplayNames", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-display-invalid",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            modelDisplayNames: { "model-a": "Bad/Name" },
+          },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(loadConfig().providers["custom-display-invalid"]).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider POST overwrite preserves the account-failover opt-out when the payload omits it (#2568d)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

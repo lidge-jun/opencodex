@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { clearModelCache, setCached } from "../src/codex/model-cache";
+import { clearModelCache, getFreshCached, setCached } from "../src/codex/model-cache";
 import { listManagementModelRows, toExportModel } from "../src/server/management/model-rows";
 import { handleModelRoutes } from "../src/server/management/model-routes";
 import type { OcxConfig } from "../src/types";
@@ -175,6 +175,20 @@ describe("provider model display name mutation route", () => {
     });
   });
 
+  test("rejects an update that would grow the stored map beyond its limit", async () => {
+    const existing = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [`model-${index}`, `Model ${index}`]),
+    );
+    const liveConfig = config(existing);
+
+    const result = await call(liveConfig, { modelId: "model-over-limit", displayName: "Too Many" });
+
+    expect(result.response?.status).toBe(400);
+    expect(result.persisted).toHaveLength(0);
+    expect(result.convergeCalls).toBe(0);
+    expect(liveConfig.providers[DISPLAY_PROVIDER].modelDisplayNames).toEqual(existing);
+  });
+
   test("reset removes only the target and returns the fallback name", async () => {
     const liveConfig = config({ "model-a": "Alpha", "model-b": "Beta" }, ["model-a", "model-b"]);
 
@@ -189,6 +203,26 @@ describe("provider model display name mutation route", () => {
     });
     expect(result.persisted).toHaveLength(1);
     expect(result.convergeCalls).toBe(1);
+  });
+
+  test("reset clears an overlaid discovery cache before catalog convergence", async () => {
+    const liveConfig = config({ "model-a": "Operator Name" });
+    setCached(DISPLAY_PROVIDER, [{
+      provider: DISPLAY_PROVIDER,
+      id: "model-a",
+      displayName: "Operator Name",
+    }]);
+    let cacheWasClearAtConvergence = false;
+
+    const result = await call(liveConfig, { modelId: "model-a", displayName: null }, {
+      converge: async () => {
+        cacheWasClearAtConvergence = getFreshCached(DISPLAY_PROVIDER, 60_000) === null;
+        return catalogRefresh;
+      },
+    });
+
+    expect(result.response?.status).toBe(200);
+    expect(cacheWasClearAtConvergence).toBe(true);
   });
 
   test("reset omits an empty map", async () => {
