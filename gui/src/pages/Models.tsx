@@ -1,4 +1,5 @@
 import { CodexStaleBanner } from "../components/codex-stale-banner";
+import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
 import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
@@ -263,6 +264,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
+  const [displayNameSaving, setDisplayNameSaving] = useState(false);
+  const [displayNameRequestError, setDisplayNameRequestError] = useState<string | null>(null);
+  const displayNameSavingRef = useRef(false);
+  const displayNameTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const reloadAliases = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch(`${apiBase}/api/aliases`, { signal });
@@ -490,6 +496,63 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       }
     }
   }, [applyCatalog, cacheKey, fetchCatalog]);
+
+  const finishDisplayNameEdit = useCallback(() => {
+    const trigger = displayNameTriggerRef.current;
+    setDisplayNameModel(null);
+    setDisplayNameRequestError(null);
+    window.setTimeout(() => {
+      if (trigger?.isConnected) trigger.focus();
+    }, 0);
+  }, []);
+
+  const closeDisplayNameEdit = useCallback(() => {
+    if (!displayNameSavingRef.current) finishDisplayNameEdit();
+  }, [finishDisplayNameEdit]);
+
+  const saveDisplayName = useCallback(async (displayName: string | null) => {
+    const model = displayNameModel;
+    if (!model || displayNameSavingRef.current) return;
+    displayNameSavingRef.current = true;
+    setDisplayNameSaving(true);
+    setDisplayNameRequestError(null);
+    try {
+      const response = await fetch(
+        `${apiBase}/api/providers/${encodeURIComponent(model.provider)}/model-display-names`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelId: model.id, displayName }),
+        },
+      );
+      const result = await readJsonOrThrow<{
+        displayName?: string;
+        displayNameOverride?: string | null;
+        displayNameSource?: ModelRow["displayNameSource"];
+      }>(response, t("models.displayNameSaveFailed"));
+      if (result) {
+        setModels(current => current.map(row => row.namespaced !== model.namespaced ? row : {
+          ...row,
+          displayName: result.displayName ?? row.displayName,
+          displayNameOverride: result.displayNameOverride ?? undefined,
+          displayNameSource: result.displayNameSource ?? row.displayNameSource,
+        }));
+      }
+      await load(true);
+      displayNameSavingRef.current = false;
+      setDisplayNameSaving(false);
+      publishFeedback(true, displayName === null
+        ? t("models.displayNameResetDone")
+        : t("models.displayNameSaved"));
+      finishDisplayNameEdit();
+    } catch (error) {
+      displayNameSavingRef.current = false;
+      setDisplayNameSaving(false);
+      setDisplayNameRequestError(error instanceof Error && error.message
+        ? error.message
+        : t("models.displayNameSaveFailed"));
+    }
+  }, [apiBase, displayNameModel, finishDisplayNameEdit, load, t]);
 
   // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
   useEffect(() => {
@@ -1455,9 +1518,29 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
                      {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                      {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                     <span className="models-model-identity">
+                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                       {!m.native && m.displayName?.trim() && m.displayName.trim() !== m.namespaced && (
+                         <span className="models-model-friendly text-caption">{m.displayName.trim()}</span>
+                       )}
+                     </span>
                      {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
                      <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+                     {!m.native && !m.custom && (
+                       <button
+                         type="button"
+                         className="btn btn-ghost btn-sm text-caption models-display-name-trigger"
+                         aria-haspopup="dialog"
+                         aria-label={t("models.displayNameActionLabel", { model: m.namespaced })}
+                         onClick={event => {
+                           displayNameTriggerRef.current = event.currentTarget;
+                           setDisplayNameRequestError(null);
+                           setDisplayNameModel(m);
+                         }}
+                       >
+                         {t("models.displayNameAction")}
+                       </button>
+                     )}
                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
@@ -2317,6 +2400,17 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </ErrorBoundary>
         )}
       </div>
+
+      {displayNameModel && (
+        <ModelDisplayNameDialog
+          model={displayNameModel}
+          saving={displayNameSaving}
+          requestError={displayNameRequestError}
+          onSave={value => void saveDisplayName(value)}
+          onReset={() => void saveDisplayName(null)}
+          onClose={closeDisplayNameEdit}
+        />
+      )}
     </>
   );
 

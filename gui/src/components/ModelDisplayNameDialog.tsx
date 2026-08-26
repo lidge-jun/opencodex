@@ -108,7 +108,7 @@ export default function ModelDisplayNameDialog({
         <input
           ref={inputRef}
           id={`${titleId}-input`}
-          className="field-input"
+          className="input"
           value={draft}
           maxLength={129}
           placeholder={t("models.displayNamePlaceholder")}

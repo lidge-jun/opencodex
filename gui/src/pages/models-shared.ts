@@ -45,7 +45,15 @@ export interface ModelRow {
   reasoningEfforts?: string[];
 }
 
-const DISPLAY_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+function containsDisplayNameControlCharacter(value: string): boolean {
+  return [...value].some(character => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint <= 0x1f
+      || (codePoint >= 0x7f && codePoint <= 0x9f)
+      || codePoint === 0x2028
+      || codePoint === 0x2029;
+  });
+}
 
 /** Mirror the server display-name contract for immediate form feedback. */
 export function modelDisplayNameValidationKey(value: string): TKey | null {
@@ -53,7 +61,7 @@ export function modelDisplayNameValidationKey(value: string): TKey | null {
   if (!trimmed) return "models.displayNameRequired";
   if (trimmed.length > 128) return "models.displayNameTooLong";
   if (trimmed.includes("/")) return "models.displayNameNoSlash";
-  if (DISPLAY_NAME_CONTROL_CHARS.test(trimmed)) return "models.displayNameNoControl";
+  if (containsDisplayNameControlCharacter(trimmed)) return "models.displayNameNoControl";
   return null;
 }
 
