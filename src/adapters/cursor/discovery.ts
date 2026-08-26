@@ -214,9 +214,22 @@ export function filterCursorConfiguredModelsByLiveDiscovery<T extends { id: stri
   liveIds: readonly string[],
 ): T[] {
   return configured.filter(model =>
-    isCursorRouterModelId(model.id) || isCursorModelAvailableForAccount(model.id, liveIds),
+    !CURSOR_KNOWN_UNCALLABLE_MODEL_IDS.has(model.id)
+    && (isCursorRouterModelId(model.id) || isCursorModelAvailableForAccount(model.id, liveIds)),
   );
 }
+
+/**
+ * Models GetUsableModels advertises but whose every Run returns not_found (catalog honesty,
+ * devlog 260826_cursor_responses_gap 060). Live probes 2026-08-26: cursor/claude-opus-5 failed
+ * 100% ("Cursor Connect error not_found") while its -fast and -thinking siblings — separate
+ * wire families — succeed. Quarantined here, in the shared filter, so live, cached, stale, and
+ * static serving paths all agree. Custom user provider overrides are not routed through this
+ * canonical seed and stay untouched.
+ */
+export const CURSOR_KNOWN_UNCALLABLE_MODEL_IDS: ReadonlySet<string> = new Set([
+  "claude-opus-5",
+]);
 
 export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorModels([
   // Context windows and the model lineup mirror Cursor's public models/pricing docs plus the jawcode
@@ -245,7 +258,8 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "claude-opus-4-7-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-4-8-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-4-8", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-opus-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  // claude-opus-5 (bare) removed from the seed: GetUsableModels lists it but every Run returns
+  // not_found (quarantined via CURSOR_KNOWN_UNCALLABLE_MODEL_IDS; -fast/-thinking families stay).
   { id: "claude-opus-5-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-fable-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
 
