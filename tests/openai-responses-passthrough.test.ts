@@ -3,6 +3,7 @@ import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterP
 import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
 import { routeModel } from "../src/router";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses, sanitizeEncryptedContentInPlace } from "../src/server/responses";
@@ -872,6 +873,120 @@ describe("OpenAI Responses passthrough sanitization", () => {
       },
       { type: "function", name: "valid_schema", parameters: validParameters },
     ]);
+  });
+
+  test("normalizes or omits xAI CLI root unions after namespace lowering", () => {
+    const unsafeAutomationParameters = {
+      oneOf: [
+        {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["view"] } },
+          required: ["mode"],
+        },
+        {
+          oneOf: [
+            {
+              type: "object",
+              properties: { id: { type: "string" }, mode: { const: "update" } },
+              required: ["id", "mode"],
+            },
+            {
+              type: "object",
+              properties: { name: { type: "string" }, mode: { const: "create" } },
+              required: ["name", "mode"],
+            },
+          ],
+        },
+      ],
+    };
+    const safeUnionParameters = {
+      type: "object",
+      properties: { token: { type: "string" } },
+      required: ["token"],
+      oneOf: [
+        { properties: { mode: { const: "view" } } },
+        { properties: { mode: { const: "delete" } } },
+      ],
+    };
+    const namespace = {
+      type: "namespace",
+      name: "mcp__codex_app",
+      tools: [
+        { type: "function", name: "automation_update", parameters: unsafeAutomationParameters },
+        { type: "function", name: "safe_union", parameters: safeUnionParameters },
+        { type: "function", name: "plain", parameters: {} },
+      ],
+    };
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: XAI_GROK_CLI_BASE_URL,
+      authMode: "oauth",
+      apiKey: "xai-test",
+    });
+    const build = (lite: boolean) => JSON.parse(adapter.buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        input: lite ? [{ type: "additional_tools", tools: [namespace] }] : [],
+        ...(lite ? {} : { tools: [namespace] }),
+      },
+    }, { headers: new Headers() }).body) as {
+      tools?: Array<{ name?: string; parameters?: Record<string, unknown> }>;
+      input: Array<{ type: string; tools?: Array<{ name?: string; parameters?: Record<string, unknown> }> }>;
+    };
+
+    for (const lite of [false, true]) {
+      const body = build(lite);
+      const tools = lite ? body.input[0]?.tools : body.tools;
+      expect(tools?.map(tool => tool.name)).toEqual([
+        "mcp__codex_app__safe_union",
+        "mcp__codex_app__plain",
+      ]);
+      const safe = tools?.find(tool => tool.name === "mcp__codex_app__safe_union")?.parameters;
+      expect(safe).toEqual({
+        type: "object",
+        properties: {
+          token: { type: "string" },
+          mode: { anyOf: [{ const: "view" }, { const: "delete" }] },
+        },
+        required: ["token"],
+      });
+      expect(tools?.find(tool => tool.name === "mcp__codex_app__plain")?.parameters)
+        .toEqual({ type: "object" });
+    }
+  });
+
+  test("keeps native root unions on public xAI Responses", () => {
+    const parameters = {
+      oneOf: [
+        { type: "object", properties: { mode: { const: "view" } } },
+        { oneOf: [{ type: "object", properties: {} }, { type: "object", properties: {} }] },
+      ],
+    };
+    const request = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+      apiKey: "xai-test",
+    }).buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "grok-4.6",
+        input: [],
+        tools: [{ type: "function", name: "automation_update", parameters }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      tools: Array<{ parameters: Record<string, unknown> }>;
+    };
+
+    expect(body.tools[0]?.parameters).toEqual({ ...parameters, type: "object" });
   });
 
   test("model reasoning-summary opt-out strips unsupported delivery fields (#323)", () => {

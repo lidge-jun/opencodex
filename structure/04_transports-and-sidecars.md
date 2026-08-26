@@ -124,6 +124,13 @@ Codex-private tool fields are removed at the same boundary from one table
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
 for tools a `tool_search_output` already loaded. A new private bit is a row there.
 
+After that namespace boundary has produced public function tools, the Grok CLI Responses transport
+applies the same root-schema policy as its Chat transport. A root `oneOf`/`anyOf` is flattened only
+when the shared xAI normalizer can preserve its meaning; an unsafe function is omitted instead of
+letting one incompatible declaration reject the entire request before inference. This is scoped to
+`cli-chat-proxy.grok.com`: public `api.x.ai` keeps native root unions, as do unrelated Responses
+gateways. Both top-level `tools` and Responses Lite `additional_tools` pass through this policy.
+
 The same noncanonical boundary strips ChatGPT's private `external_web_access` bit from routed
 `web_search` declarations. The public tool remains enabled and all other options remain intact;
 canonical OpenAI forwarding preserves the bit. xAI's public Responses schema enables browsing by

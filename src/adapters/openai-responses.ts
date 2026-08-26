@@ -20,6 +20,7 @@ import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-com
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { normalizeXaiResponsesWebSearch } from "./xai-web-search";
+import { isXaiSchemaTarget, normalizeXaiToolParameters } from "./xai-tool-schema";
 import {
   createAdapterTierMetadata,
 } from "../providers/fastwire";
@@ -531,8 +532,12 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-function normalizeFunctionToolSchema(tool: unknown): unknown {
+function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
+  if (xaiTarget) {
+    const parameters = normalizeXaiToolParameters(isPlainObject(tool.parameters) ? tool.parameters : {});
+    return parameters === undefined ? undefined : { ...tool, parameters };
+  }
   if (isPlainObject(tool.parameters) && tool.parameters.type === "object") return tool;
   return {
     ...tool,
@@ -540,16 +545,21 @@ function normalizeFunctionToolSchema(tool: unknown): unknown {
   };
 }
 
-function normalizeToolSchemas(body: unknown): unknown {
+function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
   if (!isPlainObject(body)) return body;
 
   const normalizeTools = (tools: unknown[]): unknown[] => {
     let changed = false;
-    const normalized = tools.map((tool) => {
-      const fixed = normalizeFunctionToolSchema(tool);
+    const normalized: unknown[] = [];
+    for (const tool of tools) {
+      const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
+      if (fixed === undefined) {
+        changed = true;
+        continue;
+      }
       if (fixed !== tool) changed = true;
-      return fixed;
-    });
+      normalized.push(fixed);
+    }
     return changed ? normalized : tools;
   };
 
@@ -1998,15 +2008,31 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = buildRoutedCompactionBody(outBody);
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(
-        outBody,
-        destinationDecodesNativeCompactionBlob(provider),
-        threadServingIdentityChanged,
-      ), {
-        preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
-        dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
-        stripEncryptedContent: threadServingIdentityChanged,
-      })))))));
+      const sanitizedBody = normalizeToolSchemas(
+        stripSparkCompatibility(
+          stripUnsupportedReasoningParams(
+            stripItemIdsWhenUnstored(
+              stripInvalidItemIds(
+                stripUnsupportedHostedTools(
+                  sanitizeReasoningInputContent(
+                    scrubOcxCompactionItems(
+                      outBody,
+                      destinationDecodesNativeCompactionBlob(provider),
+                      threadServingIdentityChanged,
+                    ),
+                    {
+                      preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+                      dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
+                      stripEncryptedContent: threadServingIdentityChanged,
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        isXaiSchemaTarget(provider),
+      );
       const finalBody = stripDisabledVerbosity(
         stripDisabledReasoningSummaries(
           normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
