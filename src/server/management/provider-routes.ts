@@ -596,6 +596,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // erase hand-edited per-model prices from Logs/Usage estimates.
     const existingCosts = config.providers[name]?.modelCosts;
     if (existingCosts && !prov.modelCosts) prov.modelCosts = existingCosts;
+    // And to the per-provider account-failover opt-out (#2568d). `ProviderPayload` has no
+    // member for it either, so an add/edit save structurally cannot carry it — and dropping it
+    // silently ENABLES rotation, because activation is presence-driven once the knob is gone.
+    // An overwrite must not spend a second subscription account's quota as a side effect.
+    const existingFailover = config.providers[name]?.oauthAccountFailover;
+    if (existingFailover && !prov.oauthAccountFailover) prov.oauthAccountFailover = existingFailover;
     // ...and to hand-edited context windows. `ProviderPayload` (gui/src/provider-payload.ts)
     // has no member for either field, so the add/edit form structurally cannot send them:
     // absence in the request means "not carried", never "the user deleted it". Deletion goes

@@ -654,6 +654,47 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST overwrite preserves the account-failover opt-out when the payload omits it (#2568d)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-failover",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            oauthAccountFailover: { enabled: false },
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      // Losing this one is worse than losing a cosmetic field: activation is presence-driven,
+      // so dropping the opt-out does not fall back to a neutral default — it ENABLES rotation
+      // across the operator's second subscription account, as a side effect of an edit that had
+      // nothing to do with failover.
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-failover",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers["custom-failover"]?.oauthAccountFailover).toEqual({ enabled: false });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   // #1409: the add/edit form's payload type has no member for contextWindow or
   // modelContextWindows, so an overwrite arrives without them. Registry enrichment then fills
   // the absent fields from the seed and the stored row loses the user's values — for
