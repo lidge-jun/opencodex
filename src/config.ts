@@ -3124,10 +3124,17 @@ export function applyProxyEnv(config: OcxConfig): void {
   const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
   const seen = new Set(entries.map(e => e.toLowerCase()));
-  for (const host of ["localhost", "127.0.0.1", "::1", "[::1]"]) {
-    if (!seen.has(host)) {
+  // Configured entries first, then loopback: loopback is unconditional, so appending it last
+  // keeps it present even when the operator lists a loopback host themselves.
+  const raw = config.noProxy;
+  const configured = (Array.isArray(raw) ? raw : (resolveEnvValue(raw) ?? "").split(","))
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  for (const host of [...configured, "localhost", "127.0.0.1", "::1", "[::1]"]) {
+    const key = host.toLowerCase();
+    if (!seen.has(key)) {
       entries.push(host);
-      seen.add(host);
+      seen.add(key);
     }
   }
   process.env.NO_PROXY = entries.join(",");

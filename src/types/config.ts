@@ -505,6 +505,13 @@ export interface OcxConfig {
    */
   proxy?: string;
   /**
+   * Hosts that bypass `proxy` for OpenCodex's own outbound provider calls, merged into
+   * NO_PROXY at startup. Accepts a comma-separated string (NO_PROXY syntax) or an array.
+   * Loopback is always excluded regardless of this setting, and an inherited NO_PROXY is
+   * preserved — this ADDS entries, it never replaces the environment.
+   */
+  noProxy?: string | string[];
+  /**
    * Upstream stall timeout (seconds). After this many seconds of no upstream data, emits
    * response.incomplete. Default 300. Min 1.
    */

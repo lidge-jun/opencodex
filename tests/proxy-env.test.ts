@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { applyProxyEnv } from "../src/config";
 import type { OcxConfig } from "../src/types";
 
-const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "OCX_TEST_PROXY_REF"] as const;
+const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -20,16 +20,27 @@ afterEach(() => {
   }
 });
 
-function configWithProxy(proxy?: string): OcxConfig {
-  return { proxy, providers: {} } as unknown as OcxConfig;
+function configWithProxy(proxy?: string, noProxy?: string | string[]): OcxConfig {
+  return { proxy, noProxy, providers: {} } as unknown as OcxConfig;
 }
 
 describe("applyProxyEnv", () => {
   test("no-op when config.proxy is unset", () => {
-    applyProxyEnv(configWithProxy(undefined));
+    process.env.NO_PROXY = "operator-owned.example";
+    applyProxyEnv(configWithProxy(undefined, "internal.example"));
     expect(process.env.HTTP_PROXY).toBeUndefined();
     expect(process.env.HTTPS_PROXY).toBeUndefined();
-    expect(process.env.NO_PROXY).toBeUndefined();
+    expect(process.env.NO_PROXY).toBe("operator-owned.example");
+  });
+
+  test("merges configured comma-separated noProxy entries", () => {
+    applyProxyEnv(configWithProxy("http://proxy.corp:8080", "internal.example,10.0.0.0/8"));
+    expect(process.env.NO_PROXY).toBe("internal.example,10.0.0.0/8,localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test("merges configured noProxy array entries like the string form", () => {
+    applyProxyEnv(configWithProxy("http://proxy.corp:8080", ["internal.example", "10.0.0.0/8"]));
+    expect(process.env.NO_PROXY).toBe("internal.example,10.0.0.0/8,localhost,127.0.0.1,::1,[::1]");
   });
 
   test("mirrors config.proxy into HTTP(S)_PROXY and excludes loopback (IPv4 + IPv6)", () => {
@@ -56,6 +67,17 @@ describe("applyProxyEnv", () => {
     process.env.NO_PROXY = "LOCALHOST,[::1]";
     applyProxyEnv(configWithProxy("http://proxy.corp:8080"));
     expect(process.env.NO_PROXY).toBe("LOCALHOST,[::1],127.0.0.1,::1");
+  });
+
+  test("dedup is case-insensitive for configured entries while preserving their casing", () => {
+    applyProxyEnv(configWithProxy("http://proxy.corp:8080", "LOCALHOST"));
+    expect(process.env.NO_PROXY).toBe("LOCALHOST,127.0.0.1,::1,[::1]");
+  });
+
+  test("resolves ${VAR}-style noProxy references", () => {
+    process.env.OCX_TEST_NO_PROXY_REF = "internal.example,10.0.0.0/8";
+    applyProxyEnv(configWithProxy("http://proxy.corp:8080", "${OCX_TEST_NO_PROXY_REF}"));
+    expect(process.env.NO_PROXY).toBe("internal.example,10.0.0.0/8,localhost,127.0.0.1,::1,[::1]");
   });
 
   test("resolves ${VAR}-style env references like other config secrets", () => {
