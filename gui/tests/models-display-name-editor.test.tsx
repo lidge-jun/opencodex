@@ -34,6 +34,7 @@ describe("Models dashboard discovered display name integration", () => {
   let root: Root | null;
   let mutationBodies: Array<{ modelId: string; displayName: string | null }>;
   let mutationFailure: string | null;
+  let mutationGate: Promise<void> | null;
   let modelFetches: number;
   let currentModels: ModelRow[];
 
@@ -73,6 +74,7 @@ describe("Models dashboard discovered display name integration", () => {
     ];
     mutationBodies = [];
     mutationFailure = null;
+    mutationGate = null;
     modelFetches = 0;
     testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
     testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
@@ -106,6 +108,7 @@ describe("Models dashboard discovered display name integration", () => {
       if (url.includes("/api/providers/xai-demo/model-display-names") && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { modelId: string; displayName: string | null };
         mutationBodies.push(body);
+        if (mutationGate) await mutationGate;
         if (mutationFailure) return Response.json({ error: mutationFailure }, { status: 500 });
         currentModels = currentModels.map(row => row.namespaced !== "xai-demo/grok-4.6" ? row : {
           ...row,
@@ -228,6 +231,39 @@ describe("Models dashboard discovered display name integration", () => {
     expect(container.querySelector("dialog")).not.toBeNull();
     expect(dialogInput().value).toBe("Retry Name");
     expect(container.textContent).toContain("Catalog refresh failed");
+  });
+
+  test("a pending save blocks duplicate mutations", async () => {
+    let releaseMutation!: () => void;
+    mutationGate = new Promise<void>(resolve => { releaseMutation = resolve; });
+    await mountModels();
+    await act(async () => nameTrigger().click());
+    const save = dialogButton("Save");
+
+    await act(async () => {
+      setInputValue(dialogInput(), "Grok Once");
+      save.click();
+      save.click();
+      await Promise.resolve();
+    });
+    expect(mutationBodies).toEqual([{ modelId: "grok-4.6", displayName: "Grok Once" }]);
+    expect(save.disabled).toBe(true);
+
+    releaseMutation();
+    await flush();
+    expect(container.querySelector("dialog")).toBeNull();
+  });
+
+  test("Cancel closes without mutation and restores focus to Name", async () => {
+    await mountModels();
+    const trigger = nameTrigger();
+    await act(async () => trigger.click());
+    await act(async () => dialogButton("Cancel").click());
+    await flush();
+
+    expect(mutationBodies).toHaveLength(0);
+    expect(container.querySelector("dialog")).toBeNull();
+    expect(testWindow.document.activeElement).toBe(trigger);
   });
 });
 
