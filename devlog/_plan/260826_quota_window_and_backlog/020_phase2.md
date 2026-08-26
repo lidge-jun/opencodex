@@ -55,28 +55,41 @@ showCodexSparkQuota?: boolean;
 the Codex Auth page already talks to. Follow the surrounding preservation discipline: an
 unrelated save must not drop it (the `oauthAccountFailover` lesson from #2568d).
 
-### Where the row is suppressed — server, both surfaces (audit B2)
+### Where the row is suppressed — server, THREE projections (implementation correction)
 
 The Spark window is dropped from the **API projection**, not hidden with CSS: anything the
 client does not render, it should not receive.
 
-An earlier draft justified this by claiming `maxQuotaUtilisation` would reorder Codex account
+An early draft justified this by claiming `maxQuotaUtilisation` would reorder Codex account
 cards. That was wrong — it sorts the **Providers overview**
 ([ProviderOverviewDashboard.tsx:66](../../../gui/src/components/provider-workspace/ProviderOverviewDashboard.tsx)),
-not the account cards. The real reason is worse for a naive fix:
+not the account cards. The audit corrected it to two projections. **Implementation found a
+third.**
 
-**Spark reaches the GUI through TWO independent projections.** `/api/codex-auth/accounts`
-builds its rows through `quotaForPlan` ([auth-api.ts:212](../../../src/codex/auth-api.ts)), and
-`/api/provider-quotas` reaches the same data through `listCodexAuthAccountsSnapshot`
-([providers/quota.ts:1129](../../../src/providers/quota.ts)). Filtering one leaves the other
-still rendering the row the operator just switched off.
+| Path | Reaches the data via |
+|---|---|
+| `/api/codex-auth/accounts` | `quotaForPlan` ([auth-api.ts:212](../../../src/codex/auth-api.ts)) |
+| `/api/provider-quotas` (pooled) | `listCodexAuthAccountsSnapshot` → the same DTO |
+| `/api/provider-quotas` (**direct mode**) | `fetchMainAccountInfoSnapshot` ([providers/quota.ts:1121](../../../src/providers/quota.ts)) — **never touches the Codex Auth DTO** |
 
-So the filter lands in a shared projection consumed by both, keyed on the exact raw label.
+The third path is how a `codexAccountMode: "direct"` install reports quota, and filtering at
+`quotaForPlan` alone leaves it untouched. It surfaced because the existing
+`tests/provider-quota.test.ts` Codex case **still passed** after the first attempt — a test
+asserting Spark is present, passing when it was supposed to have been filtered. That is the
+useful kind of test failure.
+
+The filter therefore lives in `withSparkVisibility` (exported from `auth-api.ts`) and is
+applied at BOTH `quotaForPlan` and `providerQuotaFromCodexQuota`, the latter being the one
+point every Codex-sourced provider report funnels through.
 
 **Label-exact is not a nicety.** `customWindows` is the generic carrier for Cursor
 (`First-party models`, `API usage`), Anthropic (`Fable`/`Opus`/`Sonnet`), Antigravity
 (`Gem`/`Cla`), Kimi (`Total subscription credits`) and a dozen dynamic provider labels. A
 filter written as "drop custom windows" blanks every one of them.
+
+**Never at parse or cache time.** Custom windows participate in quota-presence checks, snapshot
+reconciliation and capacity aggregation, so removing Spark upstream of the projection would
+change routing state rather than display.
 
 
 ### Client
