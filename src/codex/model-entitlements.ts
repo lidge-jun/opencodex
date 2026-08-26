@@ -46,18 +46,6 @@ export interface CodexModelEntitlementResolveOptions {
   readonly excludeAccountIds?: ReadonlySet<string>;
 }
 
-/**
- * Explicit request-boundary signal for an operational discovery failure that cannot be
- * represented by the ordinary fail-closed `confirmed: false` snapshot. Generic throws are
- * programming errors and must retain their original error path.
- */
-export class CodexModelEntitlementDiscoveryUnavailableError extends Error {
-  constructor(cause?: unknown) {
-    super("Codex model entitlement discovery is temporarily unavailable", { cause });
-    this.name = "CodexModelEntitlementDiscoveryUnavailableError";
-  }
-}
-
 const accountModelsCache = new Map<string, CachedAccountModels>();
 const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
 

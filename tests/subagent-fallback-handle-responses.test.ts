@@ -29,10 +29,7 @@ import {
   resetSubagentModelFallbackStateForTests,
   setSubagentQuotaPrimeForTests,
 } from "../src/codex/subagent-model-fallback";
-import {
-  CodexModelEntitlementDiscoveryUnavailableError,
-  resetCodexModelEntitlementCacheForTests,
-} from "../src/codex/model-entitlements";
+import { resetCodexModelEntitlementCacheForTests } from "../src/codex/model-entitlements";
 import { getMainAccountPlan, setMainAccountPlan } from "../src/codex/main-account";
 import { resolveCodexAuthContext, type CodexAuthContext } from "../src/codex/auth-context";
 import { handleResponses } from "../src/server/responses";
@@ -838,7 +835,7 @@ describe("native fallback account preview", () => {
     expect(capture.auths[0]).toContain("pool-a_token");
   });
 
-  test("entitlement discovery holds and releases preview admission on rejection", async () => {
+  test("pending preview entitlement errors release admission after preserving the original path", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;
     const cfg = poolNativePlusRoutedConfig({
@@ -866,53 +863,37 @@ describe("native fallback account preview", () => {
       },
     } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
     let fetchCalls = 0;
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      globalThis.fetch = (async () => {
-        fetchCalls += 1;
-        throw new Error("must not dispatch");
-      }) as typeof fetch;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("must not dispatch");
+    }) as typeof fetch;
 
-      const pending = postSpawn(
-        cfg,
-        { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
-        {
-          turnAdmissionLease,
-          resolveCodexModelEntitlements: async () => {
-            resolverCalls += 1;
-            signalResolverEntered();
-            return discovery;
-          },
+    const pending = postSpawn(
+      cfg,
+      { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      {
+        turnAdmissionLease,
+        resolveCodexModelEntitlements: async () => {
+          resolverCalls += 1;
+          signalResolverEntered();
+          return discovery;
         },
-      );
-      await resolverEntered;
+      },
+    );
+    await resolverEntered;
 
-      expect(resolverCalls).toBe(1);
-      expect(beginCount).toBe(1);
-      expect(releaseCount).toBe(0);
-      expect(fetchCalls).toBe(0);
+    expect(resolverCalls).toBe(1);
+    expect(beginCount).toBe(1);
+    expect(releaseCount).toBe(0);
+    expect(fetchCalls).toBe(0);
 
-      rejectDiscovery(new CodexModelEntitlementDiscoveryUnavailableError(new Error(
-        "entitlement discovery unavailable sk-secret123456\nforged-record\u2028next",
-      )));
-      const response = await pending;
-      expect(response.status).toBe(503);
-      const responseText = await response.text();
-      expect(responseText).toContain("Codex model eligibility is temporarily unavailable");
-      expect(responseText).not.toContain("entitlement discovery unavailable");
-      const warningText = warning.mock.calls.flat().join(" ");
-      expect(warningText).toContain("model eligibility discovery failed");
-      expect(warningText).toContain("[REDACTED]");
-      expect(warningText).not.toContain("sk-secret123456");
-      expect(warningText).not.toMatch(/[\r\n\u2028\u2029]/);
-      expect(releaseCount).toBe(1);
-      expect(fetchCalls).toBe(0);
-    } finally {
-      warning.mockRestore();
-    }
+    rejectDiscovery(new TypeError("preview entitlement programmer sentinel"));
+    await expect(pending).rejects.toThrow("preview entitlement programmer sentinel");
+    expect(releaseCount).toBe(1);
+    expect(fetchCalls).toBe(0);
   });
 
-  test("final auth maps a later entitlement discovery failure to a closed 503 response", async () => {
+  test("final-auth entitlement errors release both selection admissions on their original path", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;
     installPoolCredential("pool-a", "pool_acc_a", now);
@@ -929,44 +910,46 @@ describe("native fallback account preview", () => {
       confirmedAccountIds: new Set(["pool-a"]),
       credentialIdentities: new Map<string, string>(),
     };
+    let beginCount = 0;
+    let releaseCount = 0;
+    const turnAdmissionLease = {
+      release() {},
+      beginCodexAccountSelection() {
+        beginCount += 1;
+        return {
+          mainProfileDraining: false,
+          claimMainProfile: () => true,
+          release: () => { releaseCount += 1; },
+        };
+      },
+    } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
     let entitlementCalls = 0;
     let fetchCalls = 0;
-    const warning = spyOn(console, "warn").mockImplementation(() => {
-      throw new Error("logger unavailable");
-    });
-    try {
-      globalThis.fetch = (async () => {
-        fetchCalls += 1;
-        throw new Error("must not dispatch");
-      }) as typeof fetch;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("must not dispatch");
+    }) as typeof fetch;
 
-      const response = await postSpawn(
-        cfg,
-        { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
-        {
-          resolveCodexModelEntitlements: async () => {
-            entitlementCalls += 1;
-            if (entitlementCalls === 1) return entitlementSnapshot;
-            throw new CodexModelEntitlementDiscoveryUnavailableError(
-              new Error("later entitlement discovery unavailable"),
-            );
-          },
+    await expect(postSpawn(
+      cfg,
+      { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      {
+        turnAdmissionLease,
+        resolveCodexModelEntitlements: async () => {
+          entitlementCalls += 1;
+          if (entitlementCalls === 1) return entitlementSnapshot;
+          throw new TypeError("final-auth entitlement programmer sentinel");
         },
-      );
+      },
+    )).rejects.toThrow("final-auth entitlement programmer sentinel");
 
-      expect(response.status).toBe(503);
-      const responseText = await response.text();
-      expect(responseText).toContain("Codex model eligibility is temporarily unavailable");
-      expect(responseText).not.toContain("later entitlement discovery unavailable");
-      expect(entitlementCalls).toBe(2);
-      expect(fetchCalls).toBe(0);
-      expect(warning).toHaveBeenCalled();
-    } finally {
-      warning.mockRestore();
-    }
+    expect(entitlementCalls).toBe(2);
+    expect(beginCount).toBe(2);
+    expect(releaseCount).toBe(2);
+    expect(fetchCalls).toBe(0);
   });
 
-  test("programmer errors from entitlement discovery are not mislabeled as retryable 503s", async () => {
+  test("programmer errors from entitlement discovery retain their original path", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;
     installPoolCredential("pool-a", "pool_acc_a", now);
@@ -1743,48 +1726,6 @@ describe("account-gated retry entitlement boundary", () => {
     });
   }
 
-  test("an explicit discovery outage during the first 400 refresh returns a fixed 503", async () => {
-    const now = 1_800_000_000_000;
-    Date.now = () => now;
-    installPoolCredential("pool-a", "pool_acc_a", now);
-    const cfg = retryConfig();
-    let entitlementCalls = 0;
-    let fetchCalls = 0;
-    const upstreamResponses: Response[] = [];
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      const response = unsupportedCodexModelResponse(model);
-      upstreamResponses.push(response);
-      return response;
-    }) as typeof fetch;
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const response = await postDirectCodex(
-        cfg,
-        { model, input: "hello", stream: false },
-        {
-          resolveCodexModelEntitlements: async () => {
-            entitlementCalls += 1;
-            if (entitlementCalls === 1) return entitlementSnapshot({ "pool-a": [model] });
-            throw new CodexModelEntitlementDiscoveryUnavailableError(
-              new Error("first-refresh-secret"),
-            );
-          },
-        },
-      );
-
-      expect(response.status).toBe(503);
-      const text = await response.text();
-      expect(text).toContain("Codex model eligibility is temporarily unavailable");
-      expect(text).not.toContain("first-refresh-secret");
-      expect(entitlementCalls).toBe(2);
-      expect(fetchCalls).toBe(1);
-      expect(upstreamResponses.every(response => response.bodyUsed)).toBe(true);
-    } finally {
-      warning.mockRestore();
-    }
-  });
-
   test("a first-refresh programmer error cancels the 400 and releases its quota probe", async () => {
     const cooldownAt = 1_800_000_000_000;
     const probeAt = cooldownAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
@@ -1831,57 +1772,6 @@ describe("account-gated retry entitlement boundary", () => {
     });
     expect((nextProbe as { probeLeaseId?: string }).probeLeaseId).toBeTruthy();
     expect((nextProbe as { probeLeaseId?: string }).probeLeaseId).not.toBe(firstProbeLeaseId);
-  });
-
-  test("an explicit discovery outage while selecting an alternate account returns a fixed 503", async () => {
-    const now = 1_800_000_000_000;
-    Date.now = () => now;
-    installPoolCredential("pool-a", "pool_acc_a", now);
-    installPoolCredential("pool-b", "pool_acc_b", now);
-    const cfg = retryConfig(true);
-    let entitlementCalls = 0;
-    let fetchCalls = 0;
-    const upstreamResponses: Response[] = [];
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      const response = unsupportedCodexModelResponse(model);
-      upstreamResponses.push(response);
-      return response;
-    }) as typeof fetch;
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const response = await postDirectCodex(
-        cfg,
-        { model, input: "hello", stream: false },
-        {
-          resolveCodexModelEntitlements: async () => {
-            entitlementCalls += 1;
-            if (entitlementCalls === 1) {
-              return entitlementSnapshot({ "pool-a": [model], "pool-b": [model] });
-            }
-            if (entitlementCalls === 2) {
-              return entitlementSnapshot({
-                "pool-a": ["gpt-5.6-sol"],
-                "pool-b": [model],
-              });
-            }
-            throw new CodexModelEntitlementDiscoveryUnavailableError(
-              new Error("alternate-refresh-secret"),
-            );
-          },
-        },
-      );
-
-      expect(response.status).toBe(503);
-      const text = await response.text();
-      expect(text).toContain("Codex model eligibility is temporarily unavailable");
-      expect(text).not.toContain("alternate-refresh-secret");
-      expect(entitlementCalls).toBe(3);
-      expect(fetchCalls).toBe(1);
-      expect(upstreamResponses.every(response => response.bodyUsed)).toBe(true);
-    } finally {
-      warning.mockRestore();
-    }
   });
 
   test("an alternate-selection programmer error cancels the 400 and releases its quota probe", async () => {
@@ -1945,48 +1835,6 @@ describe("account-gated retry entitlement boundary", () => {
     });
     expect((nextProbe as { probeLeaseId?: string }).probeLeaseId).toBeTruthy();
     expect((nextProbe as { probeLeaseId?: string }).probeLeaseId).not.toBe(firstProbeLeaseId);
-  });
-
-  test("an explicit discovery outage between bounded same-account retries returns a fixed 503", async () => {
-    const now = 1_800_000_000_000;
-    Date.now = () => now;
-    installPoolCredential("pool-a", "pool_acc_a", now);
-    const cfg = retryConfig();
-    let entitlementCalls = 0;
-    let fetchCalls = 0;
-    const upstreamResponses: Response[] = [];
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      const response = unsupportedCodexModelResponse(model);
-      upstreamResponses.push(response);
-      return response;
-    }) as typeof fetch;
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const response = await postDirectCodex(
-        cfg,
-        { model, input: "hello", stream: false },
-        {
-          resolveCodexModelEntitlements: async () => {
-            entitlementCalls += 1;
-            if (entitlementCalls <= 2) return entitlementSnapshot({ "pool-a": [model] });
-            throw new CodexModelEntitlementDiscoveryUnavailableError(
-              new Error("same-account-refresh-secret"),
-            );
-          },
-        },
-      );
-
-      expect(response.status).toBe(503);
-      const text = await response.text();
-      expect(text).toContain("Codex model eligibility is temporarily unavailable");
-      expect(text).not.toContain("same-account-refresh-secret");
-      expect(entitlementCalls).toBe(3);
-      expect(fetchCalls).toBe(2);
-      expect(upstreamResponses.every(response => response.bodyUsed)).toBe(true);
-    } finally {
-      warning.mockRestore();
-    }
   });
 
   test("a programmer error between same-account retries keeps its original error path", async () => {
