@@ -240,10 +240,14 @@ Bu isteğe bağlı özellik Google Antigravity OAuth hesaplarını yalnızca `go
 Assist sağlayıcısı için havuzlar. Varsayılan olarak devre dışıdır. Havuz, kimlik bilgilerini hiçbir
 zaman Google AI Studio, Vertex AI, başka bir sağlayıcı kaydı veya API anahtarı rotasına vermez.
 
-Bu özelleşmiş havuzu devre dışı bırakmak kota duyarlı seçimi, oturum bağlılığını ve kendi 402/429
-yeniden deneme bütçesini kapatır. Ayrı, varlığa dayalı genel OAuth 429 yük devretmesini devre dışı
-bırakmaz. Google'ı katı biçimde tek hesapta tutmak için ayrıca
-`providers.google-antigravity.oauthAccountFailover.enabled` değerini `false` olarak ayarlayın.
+Yapılandırmada `googleAntigravityAccountPool.enabled` değerini doğrudan `false` yapmak kota duyarlı
+seçimi, oturum bağlılığını ve özelleşmiş 402/429 yeniden deneme bütçesini kapatır; ayrı genel OAuth
+fallback ayarını değiştirmez. Buna karşılık `ocx account auto-switch google-antigravity off` ile açıkça
+`enabled: false` gönderen Management API `PUT/PATCH /api/oauth/accounts/pool`, strict single-account
+denetimleridir ve `providers.google-antigravity.oauthAccountFailover.enabled` değerini de `false`
+olarak kaydeder. `enabled` alanını atlayan kısmi güncellemeler mevcut genel failover niyetini korur.
+Özelleşmiş havuz kapalıyken genel fallback'i korumak için yapılandırmayı doğrudan düzenleyip bu sağlayıcı
+override değerini `true` yapın.
 
 | Anahtar | Tip | Varsayılan | Açıklama |
 | --- | --- | --- | --- |

@@ -301,10 +301,13 @@ This opt-in pools Google Antigravity OAuth accounts for the `google-antigravity`
 provider only. It is disabled by default. The pool never supplies credentials to Google AI Studio,
 Vertex AI, another provider entry, or an API-key route.
 
-Disabling this specialized pool turns off quota-aware selection, session affinity, and its 402/429
-retry budget. It does not disable the separate presence-driven generic OAuth 429 fallback. To keep
-Google strictly on one account, also set
-`providers.google-antigravity.oauthAccountFailover.enabled` to `false`.
+Setting `googleAntigravityAccountPool.enabled` to `false` directly in config disables quota-aware
+selection, session affinity, and the specialized 402/429 retry budget without changing the separate
+generic OAuth fallback. By contrast, `ocx account auto-switch google-antigravity off` and a Management API
+`PUT/PATCH /api/oauth/accounts/pool` with explicit `enabled: false` are strict single-account controls:
+they also persist `providers.google-antigravity.oauthAccountFailover.enabled` as `false`. Partial
+updates that omit `enabled` preserve the existing generic-failover intent. To keep generic fallback
+while the specialized pool is off, edit config directly and set that provider override to `true`.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |

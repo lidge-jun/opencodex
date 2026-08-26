@@ -141,9 +141,13 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 此選用功能只為 `google-antigravity` Cloud Code Assist 供應商池化 Google Antigravity OAuth
 帳號，預設停用。此池絕不會把憑證用於 Google AI Studio、Vertex AI、其他供應商項目或 API-key 路由。
 
-停用此專用池會關閉配額感知選擇、session 親和性及其 402/429 重試額度，但不會停用另一個
-由帳號存在情況驅動的通用 OAuth 429 容錯移轉。若要讓 Google 嚴格只使用單一帳號，還必須將
-`providers.google-antigravity.oauthAccountFailover.enabled` 設為 `false`。
+在設定中直接將 `googleAntigravityAccountPool.enabled` 設為 `false`，只會關閉配額感知選擇、
+session 親和性及專用 402/429 重試額度，不會改變獨立的通用 OAuth fallback。相較之下，
+`ocx account auto-switch google-antigravity off` 與明確送出 `enabled: false` 的 Management API
+`PUT/PATCH /api/oauth/accounts/pool` 都是 strict single-account 操作：它們也會將
+`providers.google-antigravity.oauthAccountFailover.enabled` 持久化為 `false`。省略 `enabled` 的
+部分更新會保留既有的通用 failover 意圖。若要在專用池關閉時保留通用 fallback，請直接編輯
+設定並將此供應商 override 設為 `true`。
 
 | Key | 型別 | 預設值 | 說明 |
 | --- | --- | --- | --- |

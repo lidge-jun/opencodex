@@ -213,13 +213,14 @@ Cette option regroupe des comptes OAuth Google Antigravity uniquement pour le fo
 Assist `google-antigravity`. Elle est désactivée par défaut. Le pool ne fournit jamais d'identifiants à
 Google AI Studio, Vertex AI, une autre entrée de fournisseur ou une route utilisant une clé API.
 
-Désactiver ce pool spécialisé désactive la sélection selon les quotas, l'affinité de session et son
-budget de nouvelles tentatives après un 402 ou un 429. Cela ne désactive pas le mécanisme distinct de
-basculement OAuth générique sur 429, activé en fonction de la présence de comptes. Lorsque
-`googleAntigravityAccountPool.enabled` vaut `true`, le pool spécialisé prend en charge le routage
-Google ; lorsqu'il est désactivé, la stratégie générique peut encore assurer un basculement d'urgence
-après un 429. Pour limiter strictement Google à un seul compte, définissez également
-`providers.google-antigravity.oauthAccountFailover.enabled` sur `false`.
+Définir directement `googleAntigravityAccountPool.enabled` sur `false` dans la configuration désactive
+la sélection selon les quotas, l'affinité de session et le budget spécialisé 402/429 sans modifier le
+basculement OAuth générique distinct. En revanche, `ocx account auto-switch google-antigravity off` et un
+`PUT/PATCH /api/oauth/accounts/pool` de l'API de gestion avec `enabled: false` explicite imposent le
+mode strict à un seul compte : ils enregistrent aussi
+`providers.google-antigravity.oauthAccountFailover.enabled` à `false`. Une mise à jour partielle qui
+omet `enabled` conserve l'intention existante du basculement générique. Pour garder ce basculement avec
+le pool spécialisé désactivé, modifiez directement la configuration et réglez cet override sur `true`.
 
 | Clé | Type | Par défaut | Description |
 | --- | --- | --- | --- |

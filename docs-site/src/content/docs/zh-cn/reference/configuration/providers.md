@@ -172,9 +172,13 @@ affinity。这些策略不能规避 provider enforcement。
 此可选功能仅为 `google-antigravity` Cloud Code Assist 提供方池化 Google Antigravity OAuth
 账户，默认关闭。该池绝不会把凭据用于 Google AI Studio、Vertex AI、其他提供方条目或 API 密钥路由。
 
-禁用此专用池会关闭配额感知选择、会话亲和性及其 402/429 重试预算，但不会禁用另一项由账户
-存在情况驱动的通用 OAuth 429 故障转移。要让 Google 严格只使用一个账户，还需将
-`providers.google-antigravity.oauthAccountFailover.enabled` 设为 `false`。
+在配置中直接将 `googleAntigravityAccountPool.enabled` 设为 `false`，只会关闭配额感知选择、
+会话亲和性及专用 402/429 重试预算，不会改变独立的通用 OAuth fallback。相比之下，
+`ocx account auto-switch google-antigravity off` 以及显式提交 `enabled: false` 的 Management API
+`PUT/PATCH /api/oauth/accounts/pool` 属于 strict single-account 操作：它们还会将
+`providers.google-antigravity.oauthAccountFailover.enabled` 持久化为 `false`。省略 `enabled` 的
+部分更新会保留现有的通用 failover 意图。若要在专用池关闭时保留通用 fallback，请直接编辑
+配置并将此提供方 override 设为 `true`。
 
 | 键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |

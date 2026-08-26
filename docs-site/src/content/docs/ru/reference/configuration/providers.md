@@ -216,14 +216,14 @@ backoff и может переключить аккаунт уже внутри 
 провайдера `google-antigravity`. По умолчанию она выключена. Пул никогда не передаёт credentials в
 Google AI Studio, Vertex AI, другую запись провайдера или маршрут с API-ключом.
 
-Отключение этого специализированного пула выключает выбор с учётом квоты, привязку сессий и его
-бюджет повторов для 402/429. Оно не отключает отдельный generic OAuth-failover при 429, который
-активируется наличием аккаунтов. Чтобы Google строго использовал один аккаунт, также задайте
-`providers.google-antigravity.oauthAccountFailover.enabled` равным `false`.
-
-Когда `googleAntigravityAccountPool.enabled` равен `true`, маршрутизацией Google владеет этот
-специализированный пул. Когда он выключен, отдельная generic policy всё ещё может выполнять
-аварийный failover при 429.
+Если напрямую задать `googleAntigravityAccountPool.enabled` равным `false` в конфигурации, отключатся
+выбор с учётом квоты, привязка сессий и специализированный бюджет 402/429, но отдельный generic OAuth
+fallback не изменится. В отличие от этого, `ocx account auto-switch google-antigravity off` и Management API
+`PUT/PATCH /api/oauth/accounts/pool` с явным `enabled: false` являются strict single-account операциями:
+они также сохраняют `providers.google-antigravity.oauthAccountFailover.enabled` равным `false`.
+Частичное обновление без `enabled` сохраняет текущий intent generic failover. Чтобы оставить generic
+fallback при выключенном специализированном пуле, измените конфигурацию напрямую и задайте override
+провайдера равным `true`.
 
 | Ключ | Тип | По умолчанию | Описание |
 | --- | --- | --- | --- |

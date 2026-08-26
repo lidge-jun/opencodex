@@ -179,13 +179,13 @@ Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두
 계정을 풀로 묶습니다. 기본값은 비활성화입니다. 이 풀의 자격 증명은 Google AI Studio,
 Vertex AI, 다른 공급자 항목 또는 API 키 경로에 사용되지 않습니다.
 
-이 특수 풀을 비활성화하면 할당량 인식 선택, 세션 affinity, 해당 풀의 402/429 재시도
-예산이 꺼집니다. 그러나 별도로 계정 존재 여부에 따라 활성화되는 일반 OAuth 429 fallback은
-비활성화되지 않습니다. Google을 엄격하게 단일 계정으로 유지하려면
-`providers.google-antigravity.oauthAccountFailover.enabled`도 `false`로 설정하십시오.
-
-`googleAntigravityAccountPool.enabled`가 `true`이면 이 특수 풀이 Google 라우팅을 소유합니다.
-꺼져 있으면 일반 `oauthAccountFailover` 정책이 여전히 긴급 429 failover를 제공할 수 있습니다.
+설정에서 `googleAntigravityAccountPool.enabled`를 직접 `false`로 지정하면 할당량 인식 선택,
+세션 affinity, 특수 402/429 재시도 예산만 꺼지고 별도의 일반 OAuth fallback은 변경되지 않습니다.
+반면 `ocx account auto-switch google-antigravity off`와 `enabled: false`를 명시한 Management API의
+`PUT/PATCH /api/oauth/accounts/pool`은 strict single-account 제어입니다. 이 경로는
+`providers.google-antigravity.oauthAccountFailover.enabled`도 `false`로 저장합니다.
+`enabled`를 생략한 부분 업데이트는 기존 일반 failover 의도를 유지합니다. 특수 풀을 끈 채 일반
+fallback을 유지하려면 설정을 직접 편집하여 이 공급자 override를 `true`로 지정하십시오.
 
 | 키 | 타입 | 기본값 | 설명 |
 | --- | --- | --- | --- |

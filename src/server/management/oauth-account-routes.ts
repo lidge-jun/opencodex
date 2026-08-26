@@ -27,7 +27,7 @@ import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
+import { deriveOAuthProviderConfig, deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, supportsPerAccountQuota } from "../../providers/quota";
@@ -407,20 +407,25 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       stickyLimit = parsed;
     }
+    let googleProviderConfig: OcxProviderConfig | undefined;
+    if (provider === "google-antigravity" && body.enabled === false) {
+      googleProviderConfig = config.providers[provider] ?? deriveOAuthProviderConfig(provider);
+      if (!googleProviderConfig) {
+        return jsonResponse({ error: "google-antigravity OAuth provider is unavailable" }, 500);
+      }
+    }
     setOAuthPoolConfig(config, provider, {
       enabled,
       autoSwitchThreshold: threshold,
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
     });
-    if (provider === "google-antigravity" && body.enabled === false) {
-      const providerConfig = config.providers?.[provider];
-      if (providerConfig) {
-        providerConfig.oauthAccountFailover = {
-          ...providerConfig.oauthAccountFailover,
-          enabled: false,
-        };
-      }
+    if (googleProviderConfig) {
+      config.providers[provider] = googleProviderConfig;
+      googleProviderConfig.oauthAccountFailover = {
+        ...googleProviderConfig.oauthAccountFailover,
+        enabled: false,
+      };
     }
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();

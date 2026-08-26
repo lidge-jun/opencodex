@@ -175,10 +175,13 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 Antigravity OAuth アカウントをプールします。デフォルトでは無効です。このプールの認証情報が
 Google AI Studio、Vertex AI、別のプロバイダー項目、API キールートに使われることはありません。
 
-この専用プールを無効にすると、クォータを考慮した選択、セッション親和性、および専用の 402/429
-再試行予算が無効になります。ただし、アカウントの存在によって有効になる別個の汎用 OAuth 429
-フォールバックは無効になりません。Google を厳密に単一アカウントで運用するには、
-`providers.google-antigravity.oauthAccountFailover.enabled` も `false` に設定してください。
+設定で `googleAntigravityAccountPool.enabled` を直接 `false` にすると、クォータを考慮した選択、
+セッション親和性、専用の 402/429 再試行予算だけが無効になり、別個の汎用 OAuth fallback は変更されません。
+一方、`ocx account auto-switch google-antigravity off` と、`enabled: false` を明示した Management API の
+`PUT/PATCH /api/oauth/accounts/pool` は strict single-account 操作であり、
+`providers.google-antigravity.oauthAccountFailover.enabled` も `false` として保存します。
+`enabled` を省略した部分更新は既存の汎用 failover の意図を保持します。専用プールを無効にしたまま
+汎用 fallback を維持するには、設定を直接編集してこの provider override を `true` にしてください。
 
 | キー | 型 | デフォルト | 説明 |
 | --- | --- | --- | --- |

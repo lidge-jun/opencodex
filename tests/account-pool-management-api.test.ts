@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../src/codex/auth-api";
-import { saveConfig } from "../src/config";
+import { readConfigDiagnostics, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { handleOauthAccountRoutes } from "../src/server/management/oauth-account-routes";
 import type { OcxConfig } from "../src/types";
@@ -466,6 +466,32 @@ describe("Anthropic account pool strategy management API", () => {
     expect(config.googleAntigravityAccountPool?.enabled).toBe(false);
     expect(config.providers["google-antigravity"]?.oauthAccountFailover).toEqual({ enabled: false });
     expect(isGenericOAuthFailoverEnabled(config, "google-antigravity")).toBe(false);
+  });
+
+  test("turning the Google pool off creates and persists a missing provider opt-out", async () => {
+    const config = baseConfig();
+    delete config.providers["google-antigravity"];
+    saveConfig(config);
+    const req = new Request("http://localhost/api/oauth/accounts/pool", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "google-antigravity", enabled: false }),
+    });
+    const response = await handleOauthAccountRoutes({
+      req,
+      url: new URL(req.url),
+      config,
+      deps: {},
+      convergeCodexCatalog: async () => ({ status: "unchanged" }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+
+    expect(response?.status).toBe(200);
+    expect(config.providers["google-antigravity"]?.oauthAccountFailover).toEqual({ enabled: false });
+    expect(isGenericOAuthFailoverEnabled(config, "google-antigravity")).toBe(false);
+    const reloaded = readConfigDiagnostics().config;
+    expect(reloaded.providers["google-antigravity"]?.oauthAccountFailover).toEqual({ enabled: false });
+    expect(isGenericOAuthFailoverEnabled(reloaded, "google-antigravity")).toBe(false);
   });
 
   test("updating a disabled Google pool without an enabled field preserves generic failover intent", async () => {
