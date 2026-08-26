@@ -95,14 +95,16 @@ test("load drops only a malformed display name map", () => {
 test("load warnings never reveal display values or secret shaped provider names", () => {
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    writeCandidate({ model: "sk-secret-display-value/unsafe" }, "sk-secret-provider-name");
+    const displaySecret = ["sk", "secret", "display", "value"].join("-");
+    const providerSecret = ["sk", "secret", "provider", "name"].join("-");
+    writeCandidate({ model: `${displaySecret}/unsafe` }, providerSecret);
 
     const loaded = loadConfig();
 
-    expect(loaded.providers["sk-secret-provider-name"]).toBeDefined();
+    expect(loaded.providers[providerSecret]).toBeDefined();
     const output = warn.mock.calls.map(call => call.join(" ")).join("\n");
-    expect(output).not.toContain("sk-secret-display-value");
-    expect(output).not.toContain("sk-secret-provider-name");
+    expect(output).not.toContain(displaySecret);
+    expect(output).not.toContain(providerSecret);
     expect(output).toContain("[REDACTED]");
   } finally {
     warn.mockRestore();

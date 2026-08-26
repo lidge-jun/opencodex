@@ -110,8 +110,9 @@ describe("provider config validation leaf", () => {
   });
 
   test("does not echo a secret shaped model id in display name errors", () => {
-    const error = modelDisplayNamesConfigError({ "sk-secret-model-id-123456": "Bad/Name" });
-    expect(error).not.toContain("sk-secret-model-id-123456");
+    const secretModelId = ["sk", "secret", "model", "id", "123456"].join("-");
+    const error = modelDisplayNamesConfigError({ [secretModelId]: "Bad/Name" });
+    expect(error).not.toContain(secretModelId);
     expect(error).toContain("[REDACTED]");
   });
 });
