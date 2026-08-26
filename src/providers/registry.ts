@@ -495,6 +495,28 @@ const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
  * at which point this id retires the same way deepseek-chat/reasoner did.
  */
 const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
+/**
+ * CommandCode routes verified to accept image input end-to-end (#2406).
+ *
+ * Verified-negative and therefore deliberately ABSENT: deepseek/deepseek-v4-flash,
+ * deepseek/deepseek-v4-pro, zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
+ * routes accept the request and drop the image, which is worse than declining it — the
+ * model answers about an image it never saw. Do not add an id here on family resemblance;
+ * capability intersection trusts this map.
+ */
+const COMMAND_CODE_IMAGE_MODELS = [
+  "stealth/ox-alpha",
+  "openai/ox-alpha",
+  `deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`,
+  "gpt-5.6-luna",
+  "gpt-5.6-sol",
+  "MiniMaxAI/MiniMax-M3",
+  "moonshotai/Kimi-K3",
+  "meta/muse-spark-1.2",
+  "meta/muse-spark-1.2-contributor",
+] as const;
+const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text", "image"]> =
+  Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"]]));
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
 /*
  * OpenCode Zen's free slug for the OpenRouter stealth model "Ox Alpha"
@@ -1181,10 +1203,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "stealth/ox-alpha": OX_ALPHA_CONTEXT_WINDOW,
       [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
     },
-    modelInputModalities: {
-      "stealth/ox-alpha": ["text", "image"],
-      [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: ["text", "image"],
-    },
+    modelInputModalities: COMMAND_CODE_MODEL_INPUT_MODALITIES,
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,
@@ -1922,10 +1941,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "stealth/ox-alpha": OX_ALPHA_CONTEXT_WINDOW,
       [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
     },
-    modelInputModalities: {
-      "stealth/ox-alpha": ["text", "image"],
-      [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: ["text", "image"],
-    },
+    modelInputModalities: COMMAND_CODE_MODEL_INPUT_MODALITIES,
     modelDiscovery: {
       path: "models",
       maxResponseBytes: 256 * 1024,

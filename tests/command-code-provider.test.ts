@@ -83,6 +83,39 @@ describe("Command Code provider", () => {
     });
   });
 
+  test("OAuth and API-key presets share only verified image capabilities", () => {
+    const oauth = PROVIDER_REGISTRY.find(row => row.id === "command-code");
+    const apiKey = PROVIDER_REGISTRY.find(row => row.id === "commandcode");
+    const verifiedImageModels = [
+      "stealth/ox-alpha",
+      "openai/ox-alpha",
+      "deepseek/deepseek-v4-flash-vision-exp",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "MiniMaxAI/MiniMax-M3",
+      "moonshotai/Kimi-K3",
+      "meta/muse-spark-1.2",
+      "meta/muse-spark-1.2-contributor",
+    ];
+    const verifiedTextOnlyModels = [
+      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4-pro",
+      "zai-org/GLM-5.2",
+      "zai-org/GLM-5.3",
+      "xai/grok-4.6",
+    ];
+
+    expect(apiKey?.modelInputModalities).toEqual(oauth?.modelInputModalities);
+    for (const preset of [oauth, apiKey]) {
+      for (const id of verifiedImageModels) {
+        expect(preset?.modelInputModalities?.[id]).toEqual(["text", "image"]);
+      }
+      for (const id of verifiedTextOnlyModels) {
+        expect(preset?.modelInputModalities?.[id]).toBeUndefined();
+      }
+    }
+  });
+
   test("validates callback shape and state without exposing the key", () => {
     const secret = "super-secret-callback-key";
     const parsedCallback = parseCommandCodeCallback({ apiKey: secret, state: "state", userId: "u", userName: "name", keyName: "cli" }, "state");
