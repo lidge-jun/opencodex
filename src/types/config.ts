@@ -279,6 +279,12 @@ export interface OcxConfig {
    */
   subagentModels?: string[];
   /**
+   * Unlimited display favorites for the Codex model picker. Favorites reorder
+   * `subagentModels` when they overlap, but do not expand the spawn_agent
+   * featured band — only `subagentModels` owns that top-5 window.
+   */
+  favorites?: string[];
+  /**
    * Optional full picker ordering for the Codex model catalog, independent of the
    * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
    * the Codex model picker for large routed catalogs (10-20+ models) that would otherwise sort

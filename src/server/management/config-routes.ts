@@ -860,5 +860,141 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       sourceModels: shadowSourceModels(sci.sourceModels),
     });
   }
+
+  if (url.pathname === "/api/orchestration" && req.method === "GET") {
+    const { join } = await import("node:path");
+    // The v2 configure_orchestration.py script persists roles as standalone custom
+    // agents under <codex-home>/agents, not as [agents.*] config.toml sections.
+    const readAgentModel = (fileName: string): string | null => {
+      try {
+        const text = readFileSync(join(resolveCodexHomeDir(), "agents", fileName), "utf-8");
+        return text.match(/model\s*=\s*"([^"]+)"/)?.[1] ?? null;
+      } catch {
+        return null;
+      }
+    };
+    return jsonResponse({
+      planner: "root",
+      executor: readAgentModel("codex-orchestration-executor.toml") ?? "github-copilot/gpt-4.1-mini",
+      judge: readAgentModel("codex-orchestration-advisor.toml") ?? "anthropic/claude-opus-5",
+    });
+  }
+
+  if (url.pathname === "/api/orchestration" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const { planner: _planner, executor, judge } = raw as {
+      planner?: unknown;
+      executor?: unknown;
+      judge?: unknown;
+    };
+    const executorModel = typeof executor === "string" && executor.length > 0
+      ? executor
+      : "github-copilot/gpt-4.1-mini";
+    const judgeModel = typeof judge === "string" ? judge : "none";
+
+    const fs = await import("node:fs");
+    const pathLib = await import("node:path");
+    const homeDir = resolveCodexHomeDir().replace(/\\/g, "/");
+    const pluginsDir = `${homeDir}/plugins/cache/codex-orchestration/codex-orchestration`;
+    let scriptPath = "";
+    try {
+      const versions = fs.readdirSync(pluginsDir);
+      if (versions.length > 0) {
+        const latestVersion = versions[0];
+        scriptPath = pathLib.join(pluginsDir, latestVersion, "skills/codex-orchestration/scripts/configure_orchestration.py");
+      }
+    } catch { /* fall through to pinned path */ }
+    if (!scriptPath) {
+      scriptPath = `${homeDir}/plugins/cache/codex-orchestration/codex-orchestration/0.9.3/skills/codex-orchestration/scripts/configure_orchestration.py`;
+    }
+
+    const candidates = ["python", "py", "python3"];
+    if (process.platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? pathLib.join(process.env.USERPROFILE, "AppData", "Local") : null);
+      if (localAppData) {
+        candidates.push(pathLib.join(localAppData, "Python", "bin", "python.exe"));
+        const programsPythonDir = pathLib.join(localAppData, "Programs", "Python");
+        try {
+          if (fs.existsSync(programsPythonDir)) {
+            for (const dir of fs.readdirSync(programsPythonDir)) {
+              candidates.push(pathLib.join(programsPythonDir, dir, "python.exe"));
+            }
+          }
+        } catch { /* ignore missing Programs\Python */ }
+      }
+    }
+
+    let lastError: Error = new Error("No python executable found");
+    let spawned = false;
+    let stdout = "";
+    let stderr = "";
+    let exitCode = 0;
+
+    for (const pythonCmd of candidates) {
+      const args = [pythonCmd, scriptPath];
+      // Persist roles under the user's Codex home, never under the process cwd
+      // (the app can be launched with cwd C:\Windows\System32, which is not writable).
+      args.push("--scope", "personal");
+      args.push("--codex-home", homeDir);
+      args.push("--executor-model", executorModel);
+      args.push("--executor-effort", "low");
+      if (judgeModel && judgeModel !== "none") {
+        args.push("--advisor-model", judgeModel);
+        args.push("--advisor-effort", "high");
+      } else {
+        args.push("--remove-advisor");
+      }
+      args.push("--confirm-unlisted-models");
+      args.push("--apply");
+
+      try {
+        const proc = Bun.spawn(args, {
+          cwd: process.cwd(),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        stdout = await new Response(proc.stdout).text();
+        stderr = await new Response(proc.stderr).text();
+        exitCode = await proc.exited;
+        spawned = true;
+        break;
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+        if (lastError.message.includes("ENOENT")) continue;
+        break;
+      }
+    }
+
+    if (!spawned) {
+      return jsonResponse({ error: `Failed to execute python: ${lastError.message}` }, 500);
+    }
+    if (exitCode !== 0) {
+      return jsonResponse({ error: `Script exit ${exitCode}: ${stderr || stdout}` }, 500);
+    }
+    return jsonResponse({ ok: true, output: stdout });
+  }
+
+  if (url.pathname === "/api/favorites" && req.method === "GET") {
+    return jsonResponse({
+      models: config.favorites ?? [],
+    });
+  }
+
+  if (url.pathname === "/api/favorites" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const { models } = raw as { models?: unknown };
+    if (!Array.isArray(models) || models.some(m => typeof m !== "string")) {
+      return jsonResponse({ error: "models must be an array of strings" }, 400);
+    }
+    config.favorites = models as string[];
+    saveConfigPreservingClaudeCode(config);
+    await convergeCodexCatalog();
+    return jsonResponse({ ok: true, models: config.favorites });
+  }
+
   return null;
 }

@@ -15,6 +15,8 @@ export const ko: Record<TKey, string> = {
   "nav.models": "모델",
   "nav.combos": "콤보",
   "nav.subagents": "서브에이전트",
+  "nav.favorites": "즐겨찾기",
+  "nav.orchestrator": "오케스트레이터",
 
   // routing intelligence
   "routing.title": "라우팅 인텔리전스 (beta)",
@@ -1809,6 +1811,11 @@ export const ko: Record<TKey, string> = {
   "pws.testing": "테스트 중…",
   "pws.connectionOk": "연결 성공",
   "pws.connectionFailed": "연결 실패",
+  "pws.rediscoverModels": "모델 다시 검색",
+  "pws.rediscovering": "다시 검색 중…",
+  "pws.rediscoverOk": "제공자에서 라이브 모델 {count}개를 다시 검색했습니다.",
+  "pws.rediscoverFailed": "제공자에서 모델을 다시 검색하지 못했습니다.",
+  "pws.rediscoverNotApplicable": "이 제공자는 라이브 검색이 꺼져 있습니다. 설정에서 먼저 켜세요.",
   "pws.connectionNotApplicable": "해당 없음 — 이 프로바이더는 정적 모델 카탈로그를 사용합니다.",
   "pws.editSettings": "설정 편집",
   "pws.viewUsage": "사용량 상세 보기",

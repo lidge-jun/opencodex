@@ -560,9 +560,13 @@ export default function ProviderWorkspaceShell({
             usageTotals: usageTotals[selectedItem.name],
             modelUsage: usageModels[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
-            availableModels: availableModels[selectedItem.name] ?? [],
+            availableModels: Array.isArray(availableModels[selectedItem.name])
+              ? availableModels[selectedItem.name]!
+              : [],
             hasLiveModels: (liveModelCounts[selectedItem.name] ?? 0) > 0,
-            selectedModels: selectedModels[selectedItem.name] ?? [],
+            selectedModels: Array.isArray(selectedModels[selectedItem.name])
+              ? selectedModels[selectedItem.name]!
+              : [],
             modelsLoading,
             modelsLoadFailed,
             onRetryModels: retryModels,

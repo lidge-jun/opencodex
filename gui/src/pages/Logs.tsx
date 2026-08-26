@@ -27,7 +27,9 @@ import {
 } from "./log-route-decision";
 
 function logsCacheKey(apiBase: string): string {
-  return `ocx.logs.list.v1:${apiBase}`;
+  // v2: /api/logs returns `{ timeZone, total, logs }` — bump so a session cache that
+  // accidentally stored the envelope object cannot crash `.filter` on first paint.
+  return `ocx.logs.list.v2:${apiBase}`;
 }
 
 interface UsageBreakdown {
@@ -419,8 +421,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
     const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const raw = Array.isArray(body) ? body : (body.logs ?? []);
+    const body = await res.json() as unknown;
+    // Prefer the current `{ logs: [...] }` envelope; keep accepting a bare array for older proxies.
+    const raw = Array.isArray(body)
+      ? body
+      : (body && typeof body === "object" && Array.isArray((body as { logs?: unknown }).logs)
+        ? (body as { logs: LogEntry[] }).logs
+        : []);
     const next = raw.map(sanitizeLogEntryRouteDecision);
     writeSessionListCache(resourceKey, next);
     return next;
@@ -441,7 +448,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     },
   );
   const logsState = logsResource.state;
-  const logs = logsState.data ?? cachedLogs ?? [];
+  // Never let a stale session-cache object or a mis-shaped payload reach `.filter`.
+  const logsRaw = logsState.data ?? cachedLogs ?? [];
+  const logs = Array.isArray(logsRaw) ? logsRaw : [];
   const fetchLogs = logsResource.refresh;
 
   // A single failed tick on a two-second poll is noise, but an outage that never recovers must not

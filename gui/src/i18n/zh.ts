@@ -15,6 +15,8 @@ export const zh: Record<TKey, string> = {
   "nav.models": "模型",
   "nav.combos": "组合",
   "nav.subagents": "子代理",
+  "nav.favorites": "收藏",
+  "nav.orchestrator": "编排器",
 
   // routing intelligence
   "routing.title": "路由智能 (beta)",
@@ -1802,6 +1804,11 @@ export const zh: Record<TKey, string> = {
   "pws.testing": "测试中…",
   "pws.connectionOk": "连接成功",
   "pws.connectionFailed": "连接失败",
+  "pws.rediscoverModels": "重新发现模型",
+  "pws.rediscovering": "正在重新发现…",
+  "pws.rediscoverOk": "已从提供商重新发现 {count} 个实时模型。",
+  "pws.rediscoverFailed": "无法从提供商重新发现模型。",
+  "pws.rediscoverNotApplicable": "此提供商已关闭实时发现。请先在设置中启用。",
   "pws.connectionNotApplicable": "不适用 — 此提供方使用静态模型目录。",
   "pws.editSettings": "编辑设置",
   "pws.viewUsage": "查看详细用量",

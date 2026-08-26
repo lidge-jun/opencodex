@@ -687,6 +687,50 @@ export function orderForSubagents(goModels: CatalogModel[], featured?: string[])
 }
 
 /**
+ * Spawn/featured band owner: `subagentModels` only (Codex spawn_agent top-5 window).
+ * Favorites may reorder models already in that roster; favorites outside it are ignored here
+ * and belong in the display-only picker order instead.
+ */
+export function getFeaturedModels(config: { favorites?: string[]; subagentModels?: string[] }): string[] {
+  const favorites = config.favorites ?? [];
+  const subagentModels = config.subagentModels ?? [];
+  if (subagentModels.length === 0) return [];
+  if (favorites.length === 0) return subagentModels;
+
+  const used = new Set<number>();
+  const ordered: string[] = [];
+  for (const favorite of favorites) {
+    const index = subagentModels.findIndex((model, i) => !used.has(i) && slugsEquivalent(favorite, model));
+    if (index < 0) continue;
+    used.add(index);
+    ordered.push(subagentModels[index]!);
+  }
+  for (let i = 0; i < subagentModels.length; i++) {
+    if (!used.has(i)) ordered.push(subagentModels[i]!);
+  }
+  return ordered;
+}
+
+/** Display-only picker order: unlimited favorites first, then explicit modelPickerOrder. */
+export function displayModelPickerOrder(config: {
+  favorites?: string[];
+  modelPickerOrder?: string[];
+}): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (id: string) => {
+    if (typeof id !== "string" || id.length === 0) return;
+    const key = slugEquivalenceKey(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(id);
+  };
+  for (const id of config.favorites ?? []) push(id);
+  for (const id of config.modelPickerOrder ?? []) push(id);
+  return out;
+}
+
+/**
  * True when an existing catalog row was authored by OpenCodex routing (#855).
  * Every generated routed row — current full-slug form, the June–July 2026
  * provider-name form, and legacy combo aliases — carries the stable
@@ -1442,9 +1486,9 @@ function writeRetainedCatalogSync({
   // Hide disabled models from Codex, then feature the chosen subagent models (native OR routed)
   // by giving them the lowest priority — see buildCatalogEntries for why priority, not array order.
   const enabledGo = filterCatalogVisibleModels(goModels, config);
-  const featured = config.subagentModels ?? [];
+  const featured = getFeaturedModels(config);
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
-  const modelPickerOrder = config.modelPickerOrder ?? [];
+  const modelPickerOrder = displayModelPickerOrder(config);
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const bareEligibleAccountIds = providerCodexAccountMode(

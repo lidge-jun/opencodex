@@ -15,6 +15,8 @@ export const de: Record<TKey, string> = {
   "nav.models": "Modelle",
   "nav.combos": "Combos",
   "nav.subagents": "Sub-Agenten",
+  "nav.favorites": "Favoriten",
+  "nav.orchestrator": "Orchestrator",
 
   // routing intelligence
   "routing.title": "Routing-Intelligenz (beta)",
@@ -1782,6 +1784,11 @@ export const de: Record<TKey, string> = {
   "pws.testing": "Teste…",
   "pws.connectionOk": "Verbindung OK",
   "pws.connectionFailed": "Verbindung fehlgeschlagen",
+  "pws.rediscoverModels": "Modelle neu entdecken",
+  "pws.rediscovering": "Entdecke neu…",
+  "pws.rediscoverOk": "{count} Live-Modelle vom Anbieter neu entdeckt.",
+  "pws.rediscoverFailed": "Modelle konnten nicht neu entdeckt werden.",
+  "pws.rediscoverNotApplicable": "Live-Discovery ist für diesen Anbieter aus. Zuerst in den Einstellungen aktivieren.",
   "pws.connectionNotApplicable": "Nicht zutreffend — dieser Anbieter verwendet einen statischen Modellkatalog.",
   "pws.editSettings": "Einstellungen bearbeiten",
   "pws.viewUsage": "Detaillierte Nutzung anzeigen",

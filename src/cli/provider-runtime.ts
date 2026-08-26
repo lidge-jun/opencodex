@@ -19,6 +19,7 @@ const USAGE = `Usage:
       [--headers <json>] [--enabled <on|off>] [--live-models <on|off>]
       [--allow-private-network <on|off>] [--json]
   ocx provider test <name> [--json]
+  ocx provider rediscover <name> [--json]
   ocx provider quota [--refresh] [--json]
   ocx provider presets [--json]
   ocx provider account-mode <pool|direct> [--json]
@@ -102,6 +103,35 @@ async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<void>
   if (!ok) process.exitCode = 1;
 }
 
+async function rediscoverProvider(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const name = args.shift()?.trim();
+  const wantsJson = takeFlag(args, "--json");
+  if (!name) throw new CliUsageError("provider name is required", USAGE);
+  rejectArgs(args, USAGE);
+  const result = await runtimeRequest<Record<string, unknown>>(
+    `/api/providers/rediscover-models?name=${encodeURIComponent(name)}`,
+    { method: "POST" },
+    deps,
+  );
+  if (result.applicable === false) {
+    printData(result, wantsJson, [
+      `${name}: not applicable`,
+      String(result.message ?? "Live model discovery is off for this provider."),
+    ]);
+    process.exitCode = 1;
+    return;
+  }
+  const ok = result.ok === true;
+  printData(result, wantsJson, [
+    `${name}: ${ok ? "rediscovered" : "rediscovery failed"}`,
+    String(result.message ?? result.error ?? "No detail"),
+    `Live models: ${String(result.models ?? "?")}`,
+    `Latency: ${String(result.latencyMs ?? "?")} ms`,
+  ]);
+  if (!ok) process.exitCode = 1;
+}
+
 async function quota(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -166,6 +196,7 @@ export async function handleProviderRuntimeCommand(sub: string, argv: string[], 
     edit,
     update: edit,
     test: testProvider,
+    rediscover: rediscoverProvider,
     quota,
     presets,
     "account-mode": accountMode,

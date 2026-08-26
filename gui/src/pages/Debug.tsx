@@ -116,8 +116,9 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
       if (!initial && afterRef.current > 0) params.set("after", String(afterRef.current));
       const res = await fetch(`${logsPath}?${params}`, { signal });
       if (!res.ok || signal?.aborted || generation !== logGenerationRef.current) return;
-      const next = await res.json() as import("./debug-shared").DebugLogEntry[];
+      const payload = await res.json() as unknown;
       if (signal?.aborted || generation !== logGenerationRef.current) return;
+      const next = Array.isArray(payload) ? payload as import("./debug-shared").DebugLogEntry[] : [];
       if (next.length === 0) return;
       setEntries(prev => (initial ? next : [...prev, ...next]).slice(-2000));
       afterRef.current = next[next.length - 1]!.seq;

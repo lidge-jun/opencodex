@@ -41,6 +41,8 @@ import {
   import {
   buildCatalogEntriesFromObservedState,
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+  displayModelPickerOrder,
+  getFeaturedModels,
   mergeCatalogEntriesFromObservedState,
   mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
@@ -237,9 +239,9 @@ function prepareCatalog(
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
   const enabled = filterCatalogVisibleModels(routedModels, config);
-  const featured = config.subagentModels ?? [];
+  const featured = getFeaturedModels(config);
   const ordered = orderForSubagents(enabled, featured);
-  const modelPickerOrder = config.modelPickerOrder ?? [];
+  const modelPickerOrder = displayModelPickerOrder(config);
   const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);

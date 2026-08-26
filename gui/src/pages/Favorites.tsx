@@ -115,7 +115,7 @@ export default function Favorites({ apiBase }: { apiBase: string }) {
   return (
     <>
       <div className="page-head"><h2>Modelos Favoritos</h2></div>
-      <p className="page-sub">Selecione e organize a lista de modelos favoritos para acesso rápido. Esta lista é ilimitada.</p>
+      <p className="page-sub">Lista ilimitada para prioridade no picker. Só modelos que também estão em Subagents entram no top-5 do spawn_agent; o resto é só atalho de UI.</p>
 
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
 
@@ -123,7 +123,7 @@ export default function Favorites({ apiBase }: { apiBase: string }) {
       <div className="h-section">Favoritos Selecionados <span className="count">{chosen.length}</span></div>
       <div className="row muted text-label leading-body" style={{ alignItems: "flex-start", gap: 8, margin: "-2px 0 14px", maxWidth: "80ch" }}>
         <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
-        <span>Estes modelos serão exibidos com prioridade na interface. Arraste pelo ícone de ordenação ou use as setas para alterar a posição.</span>
+        <span>Prioridade no picker apenas. Para baratear subagents, coloque os modelos baratos em Subagents — Favoritos fora dessa lista não entram no spawn_agent.</span>
       </div>
 
       {chosen.length === 0 ? (

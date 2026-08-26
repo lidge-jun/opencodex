@@ -15,6 +15,8 @@ export const ja: Record<TKey, string> = {
   "nav.models": "モデル",
   "nav.combos": "コンボ",
   "nav.subagents": "サブエージェント",
+  "nav.favorites": "お気に入り",
+  "nav.orchestrator": "オーケストレーター",
 
   // routing intelligence
   "routing.title": "ルーティングインテリジェンス (beta)",
@@ -1213,6 +1215,11 @@ export const ja: Record<TKey, string> = {
   "pws.testing": "テスト中…",
   "pws.connectionOk": "接続 OK",
   "pws.connectionFailed": "接続失敗",
+  "pws.rediscoverModels": "モデルを再検出",
+  "pws.rediscovering": "再検出中…",
+  "pws.rediscoverOk": "プロバイダーからライブモデルを {count} 件再検出しました。",
+  "pws.rediscoverFailed": "プロバイダーからモデルを再検出できませんでした。",
+  "pws.rediscoverNotApplicable": "このプロバイダーはライブ検出がオフです。先に設定で有効にしてください。",
   "pws.connectionNotApplicable": "対象外 — このプロバイダーは静的モデルカタログを使用します。",
   "pws.editSettings": "設定を編集",
   "pws.viewUsage": "詳細な使用量を表示",

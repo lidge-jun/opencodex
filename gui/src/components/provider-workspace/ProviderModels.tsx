@@ -45,26 +45,39 @@ export default function ProviderModels({
   const [customModelsLoadFailed, setCustomModelsLoadFailed] = useState(false);
   const [customModelsLoadEpoch, setCustomModelsLoadEpoch] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [rediscovering, setRediscovering] = useState(false);
+  const [rediscoverStatus, setRediscoverStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const copyResetRef = useRef<number | null>(null);
-  const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
-  const configuredModels = useMemo(() => item.models ?? [], [item.models]);
+  const liveModels = useMemo(
+    () => (Array.isArray(availableModels) ? availableModels.filter((id): id is string => typeof id === "string") : []),
+    [availableModels],
+  );
+  const selectedModelIds = useMemo(
+    () => (Array.isArray(selectedModels) ? selectedModels.filter((id): id is string => typeof id === "string") : []),
+    [selectedModels],
+  );
+  const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const configuredModels = useMemo(
+    () => (Array.isArray(item.models) ? item.models.filter((id): id is string => typeof id === "string") : []),
+    [item.models],
+  );
   const trimmedCustomModelId = customModelId.trim();
   const knownModelIds = [
-    ...availableModels,
+    ...liveModels,
     ...customModelIds,
     ...configuredModels,
     ...(item.defaultModel ? [item.defaultModel] : []),
   ];
   const customModelInvalid = !customModelsReady
     || !trimmedCustomModelId
-    || availableModels.includes(trimmedCustomModelId)
+    || liveModels.includes(trimmedCustomModelId)
     || customModelIds.includes(trimmedCustomModelId)
     || configuredModels.includes(trimmedCustomModelId)
     || item.defaultModel === trimmedCustomModelId
     || encodedModelIdCollides(trimmedCustomModelId, knownModelIds);
   const models = useMemo(
-    () => filterModels(availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels),
-    [availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels],
+    () => filterModels(liveModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels),
+    [liveModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels],
   );
 
   useEffect(() => {
@@ -150,11 +163,54 @@ export default function ProviderModels({
     }
   };
 
-  const emptyBase = availableModels.length === 0
+  const rediscoverModels = async () => {
+    if (!apiBase || rediscovering) return;
+    if (item.liveModels === false) {
+      setRediscoverStatus({ ok: false, text: t("pws.rediscoverNotApplicable") });
+      return;
+    }
+    setRediscovering(true);
+    setRediscoverStatus(null);
+    try {
+      const response = await fetch(
+        `${apiBase}/api/providers/rediscover-models?name=${encodeURIComponent(item.name)}`,
+        { method: "POST" },
+      );
+      const body = await response.json().catch(() => null) as {
+        ok?: boolean;
+        applicable?: boolean;
+        models?: number;
+        message?: string;
+        error?: string;
+      } | null;
+      if (body?.applicable === false) {
+        setRediscoverStatus({ ok: false, text: t("pws.rediscoverNotApplicable") });
+        return;
+      }
+      if (response.ok && body?.ok === true) {
+        setRediscoverStatus({
+          ok: true,
+          text: t("pws.rediscoverOk", { count: String(body.models ?? 0) }),
+        });
+        onRetryModels?.();
+        return;
+      }
+      setRediscoverStatus({
+        ok: false,
+        text: body?.error || body?.message || t("pws.rediscoverFailed"),
+      });
+    } catch {
+      setRediscoverStatus({ ok: false, text: t("models.networkError") });
+    } finally {
+      setRediscovering(false);
+    }
+  };
+
+  const emptyBase = liveModels.length === 0
     && configuredModels.length === 0
     && customModelIds.length === 0
     && !item.defaultModel;
-  const showingConfiguredFallback = availableModels.length === 0 && configuredModels.length > 0;
+  const showingConfiguredFallback = liveModels.length === 0 && configuredModels.length > 0;
   // Aggregators (OpenRouter etc.) can return thousands of ids; capping the mounted
   // chips keeps the tab responsive. Filtering narrows the list, so the cap only
   // bites on the unfiltered full catalog.
@@ -166,9 +222,20 @@ export default function ProviderModels({
     <div className="pws-section">
       <div className="pws-section-head">
         <h3 className="pws-section-title">{t("pws.tab.models")}</h3>
-        {models.length > 0 && (
-          <span className="muted">{t("pws.modelsAvailable", { count: models.length })}</span>
-        )}
+        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+          {models.length > 0 && (
+            <span className="muted">{t("pws.modelsAvailable", { count: models.length })}</span>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => { void rediscoverModels(); }}
+            disabled={rediscovering || item.liveModels === false}
+            title={item.liveModels === false ? t("pws.rediscoverNotApplicable") : t("pws.rediscoverModels")}
+          >
+            {rediscovering ? t("pws.rediscovering") : t("pws.rediscoverModels")}
+          </button>
+        </div>
       </div>
       {needsReauth && (
         <div className="pws-inline-error" role="status">
@@ -182,6 +249,15 @@ export default function ProviderModels({
       )}
       {showingConfiguredFallback && !needsReauth && (
         <p className="muted text-label" style={{ marginBottom: 10 }}>{t("pws.modelsConfiguredFallback")}</p>
+      )}
+      {rediscoverStatus && (
+        <p
+          className={rediscoverStatus.ok ? "muted text-label" : "pws-inline-error"}
+          role="status"
+          style={{ marginBottom: 10 }}
+        >
+          {rediscoverStatus.text}
+        </p>
       )}
       <label className="text-label pws-custom-model-label" htmlFor={`pws-custom-model-${item.name}`}>
         {t("models.customAdd")}

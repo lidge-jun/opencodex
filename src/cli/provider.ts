@@ -428,6 +428,7 @@ Subcommands:
   add <name>            Add a provider (registry or custom)
   edit <name>           Edit live provider fields
   test <name>           Test the provider's upstream model endpoint
+  rediscover <name>     Force live /models rediscovery for a provider
   remove <name>         Remove a configured provider
   show <name>           Show provider config details
   set-default <name>    Change the default provider

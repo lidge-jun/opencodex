@@ -15,6 +15,8 @@ export const ru: Record<TKey, string> = {
   "nav.models": "Модели",
   "nav.combos": "Комбо",
   "nav.subagents": "Подагенты",
+  "nav.favorites": "Избранное",
+  "nav.orchestrator": "Оркестратор",
 
   // routing intelligence
   "routing.title": "Интеллект маршрутизации (beta)",
@@ -1264,6 +1266,11 @@ export const ru: Record<TKey, string> = {
   "pws.testing": "Проверка…",
   "pws.connectionOk": "Подключение успешно",
   "pws.connectionFailed": "Ошибка подключения",
+  "pws.rediscoverModels": "Переоткрыть модели",
+  "pws.rediscovering": "Переоткрытие…",
+  "pws.rediscoverOk": "Переоткрыто {count} live-моделей у провайдера.",
+  "pws.rediscoverFailed": "Не удалось переоткрыть модели у провайдера.",
+  "pws.rediscoverNotApplicable": "Live-обнаружение выключено для этого провайдера. Сначала включите в настройках.",
   "pws.connectionNotApplicable": "Не применимо — этот провайдер использует статический каталог моделей.",
   "pws.editSettings": "Изменить настройки",
   "pws.viewUsage": "Подробнее об использовании",

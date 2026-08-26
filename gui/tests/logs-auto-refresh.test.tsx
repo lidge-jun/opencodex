@@ -534,3 +534,25 @@ test("Logs: an intercepted helper row is badged and filterable", async () => {
   await act(async () => { root.unmount(); });
 });
 
+test("Logs: accepts the { timeZone, total, logs } envelope without crashing .filter", async () => {
+  // Regression: a stale GUI treated /api/logs as a bare array. After the API started
+  // wrapping rows in `{ timeZone, total, logs }`, first paint threw `r.filter is not a function`.
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse({
+      timeZone: "America/Sao_Paulo",
+      total: 1,
+      logs: [sampleLog],
+    });
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  expect(container.textContent).not.toContain("Page failed to load");
+  expectTableLoaded(container, "gpt-test");
+
+  await act(async () => { root.unmount(); });
+});
+

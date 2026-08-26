@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterCatalogVisibleModels, type CatalogModel } from "../src/codex/catalog";
+import { displayModelPickerOrder, filterCatalogVisibleModels, getFeaturedModels, type CatalogModel } from "../src/codex/catalog";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 function m(provider: string, id: string): CatalogModel {
@@ -119,5 +119,33 @@ describe("filterCatalogVisibleModels — slash-bearing ids", () => {
     const nested = [m("p", "x/y/z"), m("p", "other")];
     const visible = filterCatalogVisibleModels(nested, cfg({ p: { selectedModels: ["x-y-z"] } }));
     expect(visible.map(v => v.id)).toEqual(["x/y/z"]);
+  });
+});
+
+describe("getFeaturedModels — favorites only reorder within subagentModels", () => {
+  test("uses subagentModels when favorites is empty or missing", () => {
+    expect(getFeaturedModels({ subagentModels: ["m1", "m2"] })).toEqual(["m1", "m2"]);
+    expect(getFeaturedModels({ favorites: [], subagentModels: ["m1"] })).toEqual(["m1"]);
+  });
+
+  test("reorders overlapping favorites ahead of the rest of the spawn roster", () => {
+    expect(getFeaturedModels({ favorites: ["fav-1", "fav-2"], subagentModels: ["sub-1", "fav-1", "sub-2"] }))
+      .toEqual(["fav-1", "sub-1", "sub-2"]);
+  });
+
+  test("ignores favorites outside subagentModels so they cannot enter the spawn top-5", () => {
+    expect(getFeaturedModels({
+      favorites: ["gpt-5.5", "gpt-5.6-sol", "cheap-a"],
+      subagentModels: ["cheap-a", "cheap-b"],
+    })).toEqual(["cheap-a", "cheap-b"]);
+  });
+});
+
+describe("displayModelPickerOrder — unlimited favorites stay display-only", () => {
+  test("favorites lead, then modelPickerOrder, without duplicates", () => {
+    expect(displayModelPickerOrder({
+      favorites: ["gpt-5.5", "cheap-a"],
+      modelPickerOrder: ["cheap-a", "other/x"],
+    })).toEqual(["gpt-5.5", "cheap-a", "other/x"]);
   });
 });

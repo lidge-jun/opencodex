@@ -57,6 +57,7 @@ describe("ocx provider", () => {
     expect(result.stdout).toContain("Usage: ocx provider");
     expect(result.stdout).toContain("list");
     expect(result.stdout).toContain("add");
+    expect(result.stdout).toContain("rediscover");
     expect(result.stdout).toContain("remove");
   });
 
@@ -418,6 +419,7 @@ describe("ocx provider", () => {
     const result = runCli(["help", "provider"]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Non-interactive provider management");
+    expect(result.stdout).toContain("rediscover");
   });
 
   test("provider add warns on --api-key for oauth provider", () => {

@@ -151,6 +151,10 @@ export function formatQuotaSourceLabel(source: string | undefined): string {
  * Models-tab list derivation: live models, else configured static ids, else
  * the default model as a single-row fallback; filtered by substring query.
  */
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+}
+
 export function filterModels(
   base: string[],
   defaultModel: string | undefined,
@@ -165,11 +169,16 @@ export function filterModels(
    */
   hasLiveModels: boolean,
 ): string[] {
-  const fallback = configuredModels && configuredModels.length > 0
-    ? configuredModels
-    : defaultModel ? [defaultModel] : [];
-  const primary = hasLiveModels ? base : fallback;
-  const list = [...new Set([...primary, ...customModels])];
+  // Providers → Models used to crash with `r.filter is not a function` when a mis-shaped
+  // payload (or stale cache) handed a non-array into this helper. Coerce at the boundary.
+  const live = asStringArray(base);
+  const configured = asStringArray(configuredModels);
+  const custom = asStringArray(customModels);
+  const fallback = configured.length > 0
+    ? configured
+    : (typeof defaultModel === "string" && defaultModel.length > 0 ? [defaultModel] : []);
+  const primary = hasLiveModels ? live : fallback;
+  const list = [...new Set([...primary, ...custom])];
   const q = query.trim().toLowerCase();
   if (!q) return list;
   return list.filter(id => id.toLowerCase().includes(q));

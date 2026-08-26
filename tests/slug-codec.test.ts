@@ -129,6 +129,26 @@ describe("routeModel decode (proxy layer)", () => {
     expect(route.modelId).toBe("moonshotai/kimi-k3-free");
   });
 
+  test("DevWorld-style multi-segment gateway ids decode from live cache (not pass-through encoded)", () => {
+    // Regression: without the native id in knownModelIds, the encoded picker slug was sent
+    // upstream as `anthropic-gateway-...` and DevWorld answered 404 model_not_found.
+    setCached("devworld", [
+      { provider: "devworld", id: "anthropic/gateway/devworld--fable-5", owned_by: "devworld" },
+      { provider: "devworld", id: "devworld/gpt-5.6-terra-t", owned_by: "devworld" },
+    ]);
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "devworld",
+      providers: {
+        devworld: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "k", liveModels: true },
+      },
+    };
+    expect(routeModel(config, "devworld/anthropic-gateway-devworld--fable-5").modelId)
+      .toBe("anthropic/gateway/devworld--fable-5");
+    expect(routeModel(config, "devworld/devworld-gpt-5.6-terra-t").modelId)
+      .toBe("devworld/gpt-5.6-terra-t");
+  });
+
   test("unknown encoded-looking id passes through unchanged", () => {
     const route = routeModel(zenmuxConfig(), "zenmux/moonshotai-kimi-k9");
     expect(route.modelId).toBe("moonshotai-kimi-k9");

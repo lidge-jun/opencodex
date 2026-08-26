@@ -52,7 +52,7 @@ import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { clearModelCache, getProviderDiscoveryStatus } from "../../codex/model-cache";
+import { clearModelCache, getProviderDiscoveryStatus, getProviderLiveModelCount } from "../../codex/model-cache";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { modelAutoCompactTokenLimitsConfigError } from "../../providers/auto-compact-budget";
 import { resolveCodexHomeDir } from "../../codex/home";
@@ -782,6 +782,55 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         : {}),
       catalogRefresh,
     });
+  }
+
+  // Force a live /models rediscovery for one provider: drop the in-memory TTL cache and
+  // failure cooldown, then rebuild the Codex catalog so removed/renamed upstream ids leave
+  // the picker. Re-login already clears the cache; this is the explicit "refresh roster" path.
+  if (url.pathname === "/api/providers/rediscover-models" && req.method === "POST") {
+    const name = url.searchParams.get("name")?.trim();
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "unknown provider" }, 404);
+    }
+    const prov = config.providers[name]!;
+    if (prov.disabled) {
+      return jsonResponse({ ok: false, error: "Provider is disabled", models: 0 });
+    }
+    if (prov.liveModels === false) {
+      return jsonResponse({
+        applicable: false,
+        reason: "static_catalog",
+        ok: false,
+        models: 0,
+        message: "Live model discovery is off for this provider; enable it in provider settings first.",
+      });
+    }
+    const started = Date.now();
+    clearModelCache(name);
+    clearGatherRoutedModelsInflight();
+    const catalogRefresh = await convergeCodexCatalog();
+    const discovery = getProviderDiscoveryStatus(name);
+    const models = getProviderLiveModelCount(name) ?? 0;
+    const ok = discovery?.status === "ok";
+    return jsonResponse({
+      ok,
+      applicable: true,
+      name,
+      models,
+      latencyMs: Date.now() - started,
+      discovery: discovery ?? { status: "failed", reason: "provider" },
+      catalogRefresh,
+      message: ok
+        ? `Rediscovered ${models} live model${models === 1 ? "" : "s"} from ${name}.`
+        : `Live rediscovery for ${name} did not succeed; catalog may still show last-known rows.`,
+      ...(ok ? {} : {
+        error: discovery && discovery.status === "failed"
+          ? (discovery.reason === "http"
+            ? `discovery http ${discovery.httpStatus}`
+            : `discovery ${discovery.reason}`)
+          : "discovery failed",
+      }),
+    }, ok ? 200 : 502);
   }
 
   // Lightweight connectivity probe: perform the provider's live /models fetch DIRECTLY and

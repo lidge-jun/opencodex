@@ -340,6 +340,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     if (data === undefined || capsData === undefined || providerData === undefined) {
       throw new Error("models payload missing");
     }
+    if (!Array.isArray(data) || !Array.isArray(providerData)) {
+      throw new Error("models payload malformed");
+    }
     if (signal.aborted) throw new Error("models request aborted");
     const nextDisabled = collectDisabledNamespaced(data);
     const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0

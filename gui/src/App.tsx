@@ -14,7 +14,7 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconStar } from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -33,10 +33,8 @@ const PAGE_TKEY: Record<Page, TKey> = {
   providers: "nav.providers",
   models: "nav.models",
   subagents: "nav.subagents",
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  orchestrator: "nav.orchestrator" as any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  favorites: "nav.favorites" as any,
+  favorites: "nav.favorites",
+  orchestrator: "nav.orchestrator",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -67,10 +65,8 @@ const NAV: NavEntry[] = [
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  { id: "favorites", tkey: "Favoritos" as any, Icon: IconSparkle },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  { id: "orchestrator", tkey: "Orchestrator" as any, Icon: IconSparkle },
+  { id: "favorites", tkey: "nav.favorites", Icon: IconStar },
+  { id: "orchestrator", tkey: "nav.orchestrator", Icon: IconStar },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
