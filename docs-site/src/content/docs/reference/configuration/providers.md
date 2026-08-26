@@ -82,6 +82,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, these are the only discovered models. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
 | `selectedModels?` | `string[]` | Catalog allowlist after discovery. Non-empty exposes only those ids; empty or omitted exposes all discovered models. |
+| `modelDisplayNames?` | `Record<string, string>` | Durable display only labels keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change the routed `provider/model` selector or upstream wire model. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. |
 | `contextWindow?` | `number` | Provider-wide context fallback when upstream metadata is absent; otherwise a cap that retains smaller live metadata. The Models dashboard exposes this separately from `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
@@ -132,6 +133,30 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
+
+### Discovered model display names
+
+Use `modelDisplayNames` when a provider returns machine friendly ids but the Codex model picker
+needs shorter labels. The map belongs to one provider, so the same model id can have a different
+label under another provider:
+
+```json
+{
+  "providers": {
+    "xai": {
+      "modelDisplayNames": {
+        "grok-4.6": "Grok 4.6"
+      }
+    }
+  }
+}
+```
+
+The effective label order is operator `modelDisplayNames`, then provider catalog metadata, then the
+normal `provider/model` fallback. The model id remains `xai/grok-4.6` in routing and on the wire.
+Removing a map entry resets only its label. A management client can set or reset one label with
+`PUT /api/providers/:provider/model-display-names` and a body of
+`{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`; send `displayName: null` to reset it.
 
 ## Codex catalog and root `config.toml` settings
 

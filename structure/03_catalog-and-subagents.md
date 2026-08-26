@@ -101,8 +101,10 @@ liveness contract.
 ## Entry shape
 
 Routed entries keep Codex-required metadata such as reasoning levels, shell type, API support flags,
-base instructions, modalities, auto-compact fields, and strict parser booleans. The public slug and
-display name use `provider/model`.
+base instructions, modalities, auto-compact fields, and strict parser booleans. The public slug uses
+`provider/model`. Its display name uses the provider's exact `modelDisplayNames` override first,
+then provider catalog metadata, then the public slug. This overlay never changes route identity or
+the upstream wire model, and its catalog fingerprint makes a label edit refresh Codex output.
 
 ## Native passthrough
 
