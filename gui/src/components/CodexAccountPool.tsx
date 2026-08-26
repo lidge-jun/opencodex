@@ -233,19 +233,18 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch(`${apiBase}/api/settings`);
-        if (!response.ok) return;
-        const payload = await response.json() as { showCodexSparkQuota?: unknown };
-        if (cancelled || typeof payload.showCodexSparkQuota !== "boolean") return;
+    // AbortController rather than a `cancelled` flag: the in-flight request is actually torn
+    // down on unmount, and the state update lands in a .then() the linter can see is guarded.
+    const abort = new AbortController();
+    fetch(`${apiBase}/api/settings`, { signal: abort.signal })
+      .then(response => (response.ok ? response.json() : null))
+      .then((payload: { showCodexSparkQuota?: unknown } | null) => {
+        if (abort.signal.aborted || typeof payload?.showCodexSparkQuota !== "boolean") return;
         setSparkVisible(payload.showCodexSparkQuota);
-      } catch {
-        // A settings read failure leaves the switch unrendered rather than guessing a position.
-      }
-    })();
-    return () => { cancelled = true; };
+      })
+      // A settings read failure leaves the switch unrendered rather than guessing a position.
+      .catch(() => {});
+    return () => { abort.abort(); };
   }, [apiBase]);
 
   const toggleSpark = async () => {
