@@ -787,6 +787,48 @@ test("a provider deletion from a newer disk snapshot wins over a stale edit to t
   expect(Object.keys(diskConfig().providers as Record<string, unknown>)).toEqual(["test"]);
 });
 
+test("independent provider model display name edits survive a guarded stale save", () => {
+  const live = loadConfig();
+  live.providers.test.modelDisplayNames = { "model-a": "Alpha", "model-b": "Beta" };
+  saveConfig(live);
+  armClaudeCodeBaseline(live);
+
+  live.providers.test.modelDisplayNames["model-a"] = "Live Alpha";
+  writeDiskConfig({
+    providers: {
+      test: {
+        ...live.providers.test,
+        modelDisplayNames: { "model-a": "Alpha", "model-b": "Disk Beta" },
+      },
+    },
+  });
+  saveConfigPreservingClaudeCode(live);
+
+  expect((diskConfig().providers as Record<string, { modelDisplayNames?: Record<string, string> }>).test?.modelDisplayNames)
+    .toEqual({ "model-a": "Live Alpha", "model-b": "Disk Beta" });
+});
+
+test("a display name reset preserves a neighboring label added on disk", () => {
+  const live = loadConfig();
+  live.providers.test.modelDisplayNames = { "model-a": "Alpha", "model-b": "Beta" };
+  saveConfig(live);
+  armClaudeCodeBaseline(live);
+
+  delete live.providers.test.modelDisplayNames["model-a"];
+  writeDiskConfig({
+    providers: {
+      test: {
+        ...live.providers.test,
+        modelDisplayNames: { "model-a": "Alpha", "model-b": "Beta", "model-c": "Disk Gamma" },
+      },
+    },
+  });
+  saveConfigPreservingClaudeCode(live);
+
+  expect((diskConfig().providers as Record<string, { modelDisplayNames?: Record<string, string> }>).test?.modelDisplayNames)
+    .toEqual({ "model-b": "Beta", "model-c": "Disk Gamma" });
+});
+
 test("independent custom-model edits survive a guarded stale save", () => {
   const live = loadConfig();
   live.customModels = [customModel("one"), customModel("two")];

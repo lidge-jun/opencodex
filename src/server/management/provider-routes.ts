@@ -584,6 +584,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
+    const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
@@ -607,6 +608,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
     // through PATCH with an explicit null (#1409).
     const existing = config.providers[name];
+    if (!submittedModelDisplayNames && existing?.modelDisplayNames) {
+      prov.modelDisplayNames = { ...existing.modelDisplayNames };
+    }
     if (!submittedRequestPacing && existing?.requestPacing) {
       prov.requestPacing = structuredClone(existing.requestPacing);
     }

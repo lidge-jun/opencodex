@@ -654,6 +654,44 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST overwrite preserves modelDisplayNames when the payload omits it", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const names = { "grok-4.6": "Grok 4.6" };
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-display",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            modelDisplayNames: names,
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-display",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers["custom-display"]?.modelDisplayNames).toEqual(names);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider POST overwrite preserves the account-failover opt-out when the payload omits it (#2568d)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

@@ -78,6 +78,7 @@ import {
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
+  modelDisplayNamesConfigError,
   multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
@@ -347,6 +348,65 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   if (url.pathname === "/api/models" && req.method === "GET") {
     return jsonResponse(await listManagementModelRows(config));
+  }
+
+  const displayNameMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-display-names$/);
+  if (displayNameMatch && req.method === "PUT") {
+    let name: string;
+    try { name = decodeURIComponent(displayNameMatch[1]!); } catch { return jsonResponse({ error: "invalid provider encoding" }, 400); }
+    if (name === "keys") return null;
+    if (!hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    }
+    let body: unknown;
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(body) || typeof body.modelId !== "string"
+      || (body.displayName !== null && typeof body.displayName !== "string")) {
+      return jsonResponse({ error: "modelId and displayName string or null are required" }, 400, req, config);
+    }
+    const modelId = body.modelId.trim();
+    const displayName = typeof body.displayName === "string" ? body.displayName.trim() : null;
+    const validationError = modelDisplayNamesConfigError({
+      [modelId]: displayName ?? "Reset",
+    });
+    if (validationError) return jsonResponse({ error: validationError }, 400, req, config);
+
+    const provider = config.providers[name]!;
+    const hadDisplayNames = Object.hasOwn(provider, "modelDisplayNames");
+    const previousDisplayNames = provider.modelDisplayNames;
+    const nextDisplayNames = Object.assign(
+      Object.create(null) as Record<string, string>,
+      previousDisplayNames ?? {},
+    );
+    if (displayName === null) delete nextDisplayNames[modelId];
+    else nextDisplayNames[modelId] = displayName;
+    if (Object.keys(nextDisplayNames).length > 0) provider.modelDisplayNames = nextDisplayNames;
+    else delete provider.modelDisplayNames;
+
+    try {
+      persistConfig(config);
+    } catch (error) {
+      if (hadDisplayNames) provider.modelDisplayNames = previousDisplayNames;
+      else delete provider.modelDisplayNames;
+      throw error;
+    }
+    const catalogRefresh = await convergeCodexCatalog();
+    const row = (await listManagementModelRows(config)).find(candidate => (
+      candidate.native !== true
+      && candidate.custom !== true
+      && candidate.provider === name
+      && candidate.id === modelId
+    ));
+    const storedDisplayName = provider.modelDisplayNames?.[modelId] ?? null;
+    return jsonResponse({
+      ok: true,
+      provider: name,
+      modelId,
+      displayName: row?.displayName ?? storedDisplayName ?? routedSlug(name, modelId),
+      displayNameOverride: storedDisplayName,
+      displayNameSource: row?.displayNameSource ?? (storedDisplayName ? "operator" : "fallback"),
+      catalogRefresh,
+    });
   }
 
   /**
