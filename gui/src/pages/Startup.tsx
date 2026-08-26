@@ -88,8 +88,14 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   /** True while settings (runtime notice) are still in flight — reserves notice slot height. */
   const [runtimeNoticePending, setRuntimeNoticePending] = useState(() => !cached?.data);
   const paintedRef = useRef(Boolean(cached?.data));
+  const secondaryGenerationRef = useRef(0);
+
+  useEffect(() => () => {
+    secondaryGenerationRef.current += 1;
+  }, [apiBase]);
 
   const fetchStartup = useCallback(async (signal: AbortSignal): Promise<StartupHealthData> => {
+    const secondaryGeneration = ++secondaryGenerationRef.current;
     const keepSecondary = paintedRef.current;
     // Keep prior notice/tray visible on revalidation; only reserve empty slots on first paint.
     if (!keepSecondary) {
@@ -154,7 +160,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       // Health drives the main page, so publish it before the lower-priority settings/tray
       // requests finish. Their result updates the existing reserved slots independently.
       void Promise.all([settingsPromise, trayPromise]).then(([settings, trayResult]) => {
-        if (signal.aborted) return;
+        if (signal.aborted || secondaryGeneration !== secondaryGenerationRef.current) return;
         const nextTray = next.platform === "win32" ? trayResult.tray : null;
         if (next.platform === "win32") {
           setTray(nextTray);

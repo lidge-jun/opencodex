@@ -65,6 +65,36 @@ process.stdout.write(JSON.stringify({
   watchdogIncluded: true,
 }) + "\n");
 
+/**
+ * GC control channel (devlog/_plan/260822_260822-bun14-followup-memory/020):
+ * SIGUSR2 runs a full collection INSIDE the measured process and reports a
+ * timestamped receipt with the measured pause on the same stdout JSONL channel
+ * as "ready". Only the GC-relief evaluation orchestrator uses it, and it sets
+ * OCX_GC_EVAL=1 to install the handler.
+ *
+ * The gate is an env var rather than a comment because the locked 7h retention
+ * protocol must not be able to collect mid-run: a stray SIGUSR2 from any source
+ * would silently alter the very measurement that protocol exists to take.
+ * "Our orchestrator never sends it" is a claim about one sender, not a property
+ * of the process.
+ */
+if (process.env.OCX_GC_EVAL === "1") {
+  process.on("SIGUSR2", () => {
+  const t0 = Bun.nanoseconds();
+  try {
+    Bun.gc(true);
+    const durationMs = (Bun.nanoseconds() - t0) / 1e6;
+    process.stdout.write(JSON.stringify({ type: "gc", at: Date.now(), durationMs }) + "\n");
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      type: "gc-error",
+      at: Date.now(),
+      message: error instanceof Error ? error.message : String(error),
+    }) + "\n");
+  }
+  });
+}
+
 await new Promise<void>((resolve) => {
   let closing = false;
 

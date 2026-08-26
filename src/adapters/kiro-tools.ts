@@ -172,6 +172,12 @@ function omittedToolCatalogNotice(kept: number, omitted: readonly OcxTool[], reg
   return `[opencodex] Kiro's outbound catalog budget allows ${kept} of ${kept + omitted.length} client tools this turn. Omitted and unavailable this turn: ${summary}.`;
 }
 
+function boundedCatalogPriority(tool: OcxTool): number {
+  if (tool.loadedFromToolSearch) return 0;
+  if (tool.toolSearch) return 1;
+  return 2;
+}
+
 export function convertKiroToolContext(
   parsed: OcxParsedRequest,
   registry: KiroToolNameRegistry = createKiroToolNameRegistry(),
@@ -181,9 +187,7 @@ export function convertKiroToolContext(
   // Validate every listed name even when tool_choice:none emulates a tool-free turn.
   for (const tool of tools) registry.alias(namespacedToolName(tool.namespace, tool.name));
   const effectiveTools = parsed.options.toolChoice === "none" ? [] : tools;
-  const convertedTools: unknown[] = [];
-  let omittedAt = effectiveTools.length;
-  for (const [index, tool] of effectiveTools.entries()) {
+  const convertedEntries = effectiveTools.map((tool, index) => {
     const description = tool.description || `Tool: ${tool.name}`;
     // Send the full namespaced wire name (e.g. mcp__chrome-devtools__navigate_page) so Kiro echoes
     // it back; the bridge's toolNsMap is keyed by this name and restores the MCP namespace Codex
@@ -198,19 +202,26 @@ export function convertKiroToolContext(
         inputSchema: { json: ensureRootObjectType(sanitizeKiroSchema(tool.parameters ?? {})) },
       },
     };
-    // Preserve declaration order and only omit a suffix. Ranking tools would make a catalog change
-    // silently alter which capability disappears; this deterministic policy is paired with a
-    // model-visible omission notice so unavailable tools are explicit rather than assumed absent.
+    return { tool, index, converted };
+  });
+  const exceedsBudget = convertedEntries.length > MAX_KIRO_TOOL_COUNT
+    || serializedToolCatalogBytes(convertedEntries.map(entry => entry.converted)) > MAX_KIRO_TOOL_CATALOG_BYTES;
+  const candidates = exceedsBudget
+    ? convertedEntries.toSorted((a, b) => boundedCatalogPriority(a.tool) - boundedCatalogPriority(b.tool) || a.index - b.index)
+    : convertedEntries;
+  const convertedTools: unknown[] = [];
+  let omittedAt = candidates.length;
+  for (const [index, entry] of candidates.entries()) {
     if (
       convertedTools.length >= MAX_KIRO_TOOL_COUNT
-      || serializedToolCatalogBytes([...convertedTools, converted]) > MAX_KIRO_TOOL_CATALOG_BYTES
+      || serializedToolCatalogBytes([...convertedTools, entry.converted]) > MAX_KIRO_TOOL_CATALOG_BYTES
     ) {
       omittedAt = index;
       break;
     }
-    convertedTools.push(converted);
+    convertedTools.push(entry.converted);
   }
-  const omittedTools = effectiveTools.slice(omittedAt);
+  const omittedTools = candidates.slice(omittedAt).map(entry => entry.tool);
   return {
     tools: convertedTools,
     systemAdditions: omittedTools.length > 0 ? [omittedToolCatalogNotice(convertedTools.length, omittedTools, registry)] : [],

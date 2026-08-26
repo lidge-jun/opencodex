@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExportModel } from "../src/clients/config-export";
+import { buildClientContribution, type ExportModel } from "../src/clients/config-export";
 import { fileIO, type IntegrationIO } from "../src/integrations/config-io";
+import { protectedContributionFingerprint } from "../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
+import { exportContextOf, readIntegrationState } from "../src/integrations/state";
 import {
   applyIntegration,
   disableIntegration,
@@ -90,6 +92,14 @@ function installOmp(): string {
 
 function installDsh(): string {
   const spec = INTEGRATION_CLIENTS.dsh;
+  mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
+  const configPath = spec.configPath(TEST_ENV, home);
+  mkdirSync(dirname(configPath), { recursive: true });
+  return configPath;
+}
+
+function installZcode(): string {
+  const spec = INTEGRATION_CLIENTS.zcode;
   mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
   const configPath = spec.configPath(TEST_ENV, home);
   mkdirSync(dirname(configPath), { recursive: true });
@@ -193,6 +203,178 @@ describe("apply", () => {
     const third = applyIntegration(input({ clientId: "pi" }));
     expect(third.ok).toBe(true);
     if (third.ok) expect(third.changed).toBe(false);
+  });
+
+  test("ZCode runtime-derived model metadata is refreshable without weakening the provider envelope (#2389)", () => {
+    const configPath = installZcode();
+    const models: ExportModel[] = [
+      ...MODELS,
+      { namespaced: "mystery/model", provider: "mystery", id: "model" },
+    ];
+    const request = input({ clientId: "zcode", models });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const record = store.readRecords().zcode!;
+    expect(record.protectedBlockFingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(record.refreshablePaths).toContainEqual([
+      "provider", "opencodex", "models", "mystery/model", "limit", "context",
+    ]);
+    expect(record.refreshablePaths).not.toContainEqual([
+      "provider", "opencodex", "models", "anthropic/claude-opus-4-8", "limit", "context",
+    ]);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, {
+        models: Record<string, Record<string, unknown>>;
+        options: Record<string, unknown>;
+      }>;
+    };
+    const provider = document.provider.opencodex!;
+    const authoritative = provider.models["anthropic/claude-opus-4-8"]!;
+    authoritative.reasoning = { enabled: true, variants: ["off", "high"] };
+    (authoritative.limit as Record<string, unknown>).output = 64_000;
+    provider.models["mystery/model"]!.limit = { context: 128_000, output: 32_000 };
+    provider.models["mystery/model"]!.reasoning = { enabled: false };
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const status = readIntegrationState(request);
+    expect(status.state).toBe("stale");
+    expect(status.reason).toBeUndefined();
+
+    const refreshed = applyIntegration(request);
+    expect(refreshed.ok).toBe(true);
+    if (refreshed.ok) expect(refreshed.changed).toBe(true);
+
+    const after = JSON.parse(readFileSync(configPath, "utf8")) as typeof document;
+    expect(after.provider.opencodex!.models["anthropic/claude-opus-4-8"]!.reasoning).toBeUndefined();
+    expect((after.provider.opencodex!.models["anthropic/claude-opus-4-8"]!.limit as Record<string, unknown>).output).toBeUndefined();
+    expect(after.provider.opencodex!.models["mystery/model"]!.limit).toBeUndefined();
+  });
+
+  test("a legacy ZCode record accepts derived drift only while its generated catalog is unchanged (#2389)", () => {
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const legacy = { ...store.readRecords().zcode! };
+    delete legacy.protectedBlockFingerprint;
+    delete legacy.refreshablePaths;
+    store.putRecord(legacy);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { models: Record<string, Record<string, unknown>> }>;
+    };
+    document.provider.opencodex!.models["anthropic/claude-opus-4-8"]!.reasoning = { enabled: true };
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    expect(readIntegrationState(request).state).toBe("stale");
+    expect(applyIntegration(request).ok).toBe(true);
+  });
+
+  test("a recorded ZCode policy keeps derived drift refreshable across later catalog changes (#2389)", () => {
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { models: Record<string, Record<string, unknown>> }>;
+    };
+    document.provider.opencodex!.models["anthropic/claude-opus-4-8"]!.reasoning = { enabled: true };
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const changedCatalog = input({
+      clientId: "zcode",
+      models: [...MODELS, { namespaced: "new/model", provider: "new", id: "model" }],
+    });
+    expect(readIntegrationState(changedCatalog).state).toBe("stale");
+    const result = applyIntegration(changedCatalog);
+    expect(result.ok).toBe(true);
+    const after = JSON.parse(readFileSync(configPath, "utf8")) as typeof document;
+    expect(after.provider.opencodex!.models["new/model"]).toBeDefined();
+  });
+
+  test("a legacy ZCode record fails closed when derived drift overlaps catalog drift (#2389)", () => {
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const legacy = { ...store.readRecords().zcode! };
+    delete legacy.protectedBlockFingerprint;
+    delete legacy.refreshablePaths;
+    store.putRecord(legacy);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { models: Record<string, Record<string, unknown>> }>;
+    };
+    document.provider.opencodex!.models["anthropic/claude-opus-4-8"]!.reasoning = { enabled: true };
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const changedCatalog = input({
+      clientId: "zcode",
+      models: [...MODELS, { namespaced: "new/model", provider: "new", id: "model" }],
+    });
+    expect(readIntegrationState(changedCatalog)).toMatchObject({
+      state: "conflict",
+      reason: "foreign-edit",
+    });
+  });
+
+  test("ZCode connection edits remain a hard conflict after derived-drift support (#2389)", () => {
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { options: Record<string, unknown> }>;
+    };
+    document.provider.opencodex!.options.baseURL = "http://user-edited.invalid/v1";
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const status = readIntegrationState(request);
+    expect(status).toMatchObject({ state: "conflict", reason: "foreign-edit" });
+    const result = applyIntegration(request);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("conflict");
+  });
+
+  test("a malformed recorded ZCode policy cannot widen refreshable drift (#2389)", () => {
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const refreshablePaths = [["provider", "opencodex", "options", "baseURL"]] as const;
+    const contribution = buildClientContribution("zcode", exportContextOf(request));
+    store.putRecord({
+      ...store.readRecords().zcode!,
+      refreshablePaths,
+      protectedBlockFingerprint: protectedContributionFingerprint(contribution, refreshablePaths),
+    });
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { options: Record<string, unknown> }>;
+    };
+    document.provider.opencodex!.options.baseURL = "http://user-edited.invalid/v1";
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    expect(readIntegrationState(request)).toMatchObject({
+      state: "conflict",
+      reason: "foreign-edit",
+    });
+  });
+
+  test("ZCode cannot rewrite an authoritative OpenCodex context limit (#2389)", () => {
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { models: Record<string, Record<string, unknown>> }>;
+    };
+    const model = document.provider.opencodex!.models["anthropic/claude-opus-4-8"]!;
+    (model.limit as Record<string, unknown>).context = 1;
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    expect(readIntegrationState(request)).toMatchObject({ state: "conflict", reason: "foreign-edit" });
   });
 
   test("json disable after a sibling edit keeps the sibling (#1631)", () => {

@@ -194,6 +194,88 @@ describe("HTTP contract on /api/sidecar-settings", () => {
   });
 });
 
+// #2457: the picker offers every union backend, but the pair check used to
+// collapse the union into openai/anthropic and fall back to the STORED backend
+// for anything else. A submitted `gemini` was therefore validated as an OpenAI
+// model and 400'd, while writing the identical pair straight into config.json
+// worked. The executor was never the problem; only the write gate was.
+const antigravityOAuth: OcxProviderConfig = {
+  adapter: "google",
+  baseUrl: "https://cloudcode-pa.googleapis.com",
+  authMode: "oauth",
+};
+
+function armAntigravity(): void {
+  accountSets["google-antigravity"] = {
+    accounts: [{ id: "acct-antigravity" }],
+    activeAccountId: "acct-antigravity",
+  };
+  const set = accountSets["google-antigravity"] as unknown as {
+    accounts: Array<{ id: string; credential?: { projectId: string } }>;
+  };
+  set.accounts[0].credential = { projectId: "proj-1" };
+}
+
+describe("submitted backend drives the pair check (#2457)", () => {
+  test("PUT switches openai/luna to a gemini pair the picker offers", async () => {
+    armAntigravity();
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    const cfg = config({
+      providers: { openai: forward, claude: anthropicOAuth, "google-antigravity": antigravityOAuth },
+      webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" },
+    });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "gemini", model: "gemini-3.7-flash" } },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.webSearchSidecar).toMatchObject({ backend: "gemini", model: "gemini-3.7-flash" });
+  });
+
+  test("PUT accepts a gemini pair when no sidecar is configured at all", async () => {
+    armAntigravity();
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    const cfg = config({
+      providers: { openai: forward, claude: anthropicOAuth, "google-antigravity": antigravityOAuth },
+    });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "gemini", model: "gemini-3.7-flash" } },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.webSearchSidecar).toMatchObject({ backend: "gemini", model: "gemini-3.7-flash" });
+  });
+
+  test("PUT still rejects a gemini model submitted without its backend", async () => {
+    armAntigravity();
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    const cfg = config({
+      providers: { openai: forward, claude: anthropicOAuth, "google-antigravity": antigravityOAuth },
+      webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" },
+    });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { model: "gemini-3.7-flash" } },
+    });
+    expect(response.status).toBe(400);
+    expect(cfg.webSearchSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna" });
+  });
+
+  test("PUT still rejects a real mismatch inside the widened union", async () => {
+    armAntigravity();
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    const cfg = config({
+      providers: { openai: forward, claude: anthropicOAuth, "google-antigravity": antigravityOAuth },
+    });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "gemini", model: "gpt-5.6-luna" } },
+    });
+    expect(response.status).toBe(400);
+    expect(cfg.webSearchSidecar).toBeUndefined();
+  });
+});
+
 describe("xSearch config round-trip (review High)", () => {
   test("PUT validates doc limits (400) and persists+echoes a valid block; GET carries it; null clears", async () => {
     usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
@@ -283,5 +365,45 @@ describe("xSearch config round-trip (review High)", () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toContain(message);
     expect(cfg.webSearchSidecar).toEqual({ backend: "openai" });
+  });
+});
+
+// The Claude override is the second writer named in web-search-sidecar-options.ts:
+// "a gate on one route and a stale copy on the other is the same as no gate at
+// all." It carried the same collapsed ternary, so it needs the same proof (#2457).
+describe("claude-code webSearchSidecar override honors the submitted backend (#2457)", () => {
+  async function claudeCode(cfg: OcxConfig, body: unknown): Promise<Response> {
+    const url = new URL("http://localhost/api/claude-code");
+    const request = new Request(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const response = await handleManagementAPI(request, url, cfg);
+    if (!response) throw new Error("claude-code route did not handle the request");
+    return response;
+  }
+
+  function geminiConfig(): OcxConfig {
+    armAntigravity();
+    managementRows = [{ provider: "google-antigravity", id: "gemini-3.7-flash", disabled: false }];
+    return config({
+      providers: { openai: forward, claude: anthropicOAuth, "google-antigravity": antigravityOAuth },
+      claudeCode: { webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" } },
+    });
+  }
+
+  test("PUT persists a gemini override over a stored openai pair", async () => {
+    const cfg = geminiConfig();
+    const response = await claudeCode(cfg, { webSearchSidecar: { backend: "gemini", model: "gemini-3.7-flash" } });
+    expect(response.status).toBe(200);
+    expect(cfg.claudeCode?.webSearchSidecar).toMatchObject({ backend: "gemini", model: "gemini-3.7-flash" });
+  });
+
+  test("PUT still rejects a mismatched override pair", async () => {
+    const cfg = geminiConfig();
+    const response = await claudeCode(cfg, { webSearchSidecar: { backend: "gemini", model: "gpt-5.6-luna" } });
+    expect(response.status).toBe(400);
+    expect(cfg.claudeCode?.webSearchSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna" });
   });
 });

@@ -22,7 +22,7 @@ export function tomlStringPattern(key: string): RegExp {
   // A basic string escapes backslashes, so a Windows path is stored doubled; reading
   // the raw bytes back returned a path that matched nothing on disk and made the
   // journal's recorded catalog path un-restorable (#1798).
-  return new RegExp(`^\\s*${keyToken}\\s*=\\s*("(?:\\\\.|[^"])*"|'[^']*')\\s*(?:#.*)?$`);
+  return new RegExp(`^\\s*${keyToken}\\s*=\\s*("(?:\\\\.|[^"\\\\])*"|'[^']*')\\s*(?:#.*)?$`);
 }
 
 export function rootTomlString(content: string, key: string): string | null {

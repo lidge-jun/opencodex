@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ComboEffort, ComboStrategy, ComboTarget } from "../combo-workspace-data";
+import type { ComboEffort, ComboStrategy, ComboTarget, ProviderQuotaStates } from "../combo-workspace-data";
 import { comboImagesSupported } from "../combo-capabilities";
 import { COMBO_EFFORTS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
@@ -133,12 +133,14 @@ export function TargetEditor({
   strategy,
   providers,
   models,
+  providerQuotaStates,
   onChange,
 }: {
   targets: ComboTarget[];
   strategy: ComboStrategy;
   providers: ProviderOption[];
   models: ModelOption[];
+  providerQuotaStates: ProviderQuotaStates;
   onChange: (next: ComboTarget[]) => void;
 }) {
   const t = useT();
@@ -172,6 +174,7 @@ export function TargetEditor({
         const modelSelectDisabled = !row.provider;
         const dragging = dragIndex === index;
         const dropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
+        const quotaState = providerQuotaStates[row.provider.trim()] ?? "unknown";
         return (
           <div
             key={row.clientKey ?? `${row.provider}:${row.model}`}
@@ -282,6 +285,12 @@ export function TargetEditor({
                 }}
               />
             )}
+            <span
+              className={`cwi-quota-badge cwi-quota-badge--${quotaState}`}
+              aria-label={t(`cws.quota.${quotaState}`)}
+            >
+              {t(`cws.quota.${quotaState}`)}
+            </span>
             <div className="cwi-target-actions">
               <button
                 type="button"

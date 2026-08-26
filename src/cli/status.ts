@@ -1,5 +1,6 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
-import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics, readPid, readRuntimePort, type RuntimePortState } from "../config";
+import { codexAutoStartEnabled, getConfigPath, readConfigDiagnostics } from "../config";
+import { getPidPath, readPid, readRuntimePort, type RuntimePortState } from "../config/process-state";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
@@ -115,6 +116,29 @@ export function proxyHealthFailureReason(error: unknown, signal: AbortSignal): "
   return signal.aborted || (error instanceof Error && error.name === "AbortError")
     ? "timed out"
     : "unreachable";
+}
+
+/**
+ * `ocx status` greens on process liveness alone, so a proxy that answers
+ * /healthz reads healthy even when Codex is not pointed at it and every routed
+ * request goes to OpenAI instead (#2411). The proxy line is not wrong — the
+ * listener really is up — so it keeps its check, and this supplies the signal
+ * that was missing rather than corrupting the one that was already honest.
+ *
+ * Only `native` warns. `custom-local` and `unknown` are also "this proxy is
+ * unused", but startupHealthSummary already renders both as AT RISK with a
+ * remedy command, and `custom-remote` is a deliberate operator choice. Warning
+ * on all four would teach operators to skip the line that matters.
+ */
+export function unusedProxyWarningLines(input: {
+  proxyUp: boolean;
+  routingKind: StartupHealth["routingKind"];
+}): string[] {
+  if (!input.proxyUp || input.routingKind !== "native") return [];
+  return [
+    "⚠️  Codex routing is native — the running proxy is unused.",
+    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
+  ];
 }
 
 async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {

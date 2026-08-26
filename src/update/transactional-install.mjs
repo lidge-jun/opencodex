@@ -176,7 +176,14 @@ export function transactionalNpmUpdate({
   }
   const spec = pkgName + "@" + (targetVersion || tag);
   log("Staging " + spec + " into " + stageRoot);
-  const install = runNpm(["install", "-g", "--prefix", stageRoot, "--no-audit", "--no-fund", spec]);
+  // npm 12 blocks lifecycle scripts by default. Bun's postinstall copies the selected
+  // @oven/bun-* executable into bun/bin, so a successful npm exit without this narrow
+  // approval leaves the staged tree intentionally incomplete. Allow only the package
+  // whose executable the manifest verifies below; never broaden this to all scripts.
+  const install = runNpm([
+    "install", "-g", "--prefix", stageRoot,
+    "--allow-scripts=bun", "--no-audit", "--no-fund", spec,
+  ]);
   if (install.status !== 0) {
     try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
     return { ok: false, phase: "stage", error: "npm staging install failed (" + (install.status ?? "?") + ")" };

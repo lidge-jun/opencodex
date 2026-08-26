@@ -145,7 +145,7 @@ export default function AnthropicAccountPoolSettings({
   const toggleDisabled = loading || saving || loadError || (!enabled && accountCount < 2);
 
   return (
-    <div className="card" style={{ marginTop: 12 }} aria-busy={loading || saving}>
+    <div className="card anthropic-pool-card" aria-busy={loading || saving}>
       <div className="card-row" style={{ alignItems: "flex-start", gap: 12 }}>
         <div style={{ flex: 1 }}>
           <strong>{t("anthropicPool.title")}</strong>
@@ -179,17 +179,7 @@ export default function AnthropicAccountPoolSettings({
         </button>
       </div>
 
-      <div
-        role="alert"
-        className="card-sub"
-        style={{
-          marginTop: 10,
-          padding: "10px 16px",
-          border: "1px solid var(--border, #c9a227)",
-          borderRadius: 6,
-          background: "color-mix(in srgb, var(--warn, #c9a227) 12%, transparent)",
-        }}
-      >
+      <div role="alert" className="card-sub anthropic-pool-card__notice">
         {t("anthropicPool.experimentalWarning")}
       </div>
 
@@ -199,7 +189,7 @@ export default function AnthropicAccountPoolSettings({
 
       {enabled && state && (
         <>
-          <label className="field" style={{ display: "block", marginTop: 12 }}>
+          <label className="field anthropic-pool-card__field">
             <span className="field-label">{t("anthropicPool.threshold")}</span>
             <input
               className="input mono"

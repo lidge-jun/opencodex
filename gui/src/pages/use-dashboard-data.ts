@@ -466,11 +466,14 @@ export function useDashboardData(apiBase: string) {
   }, [grouped, modelQuery]);
   const sidecarModels = useMemo(() => {
     // Server-computed runnable set when present (#2188); legacy union otherwise.
+    // The shared SidecarSetting type admits vision's "routed", which the
+    // web-search picker cannot carry — narrow it away for this card.
+    const webBackend = sidecar?.webSearch.backend;
     return webSearchModelOptionsForPicker(
       sidecar?.webSearchModels,
       models,
       sidecar?.webSearch.model,
-      sidecar?.webSearch.backend,
+      webBackend === "routed" ? undefined : webBackend,
     );
   }, [models, sidecar?.webSearchModels, sidecar?.webSearch]);
   const visionModels = useMemo(

@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
+import { openBrowserRequestField } from "../oauth-open-browser-pref";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -21,7 +22,7 @@ export function useAddProviderOAuth({
       setOauthBusy: (v: boolean) => void;
       setOauthMsg: (v: string) => void;
       setOauthMsgTone: (v: "ok" | "warn") => void;
-      setOauthUrl: (url: string, providerId: string) => void;
+      setOauthUrl: (url: string, providerId: string, deviceCode?: string, instructions?: string) => void;
       setManualCode: (v: string) => void;
       setManualCodeMsg: (v: string) => void;
       setManualCodeOk: (v: boolean) => void;
@@ -39,7 +40,7 @@ export function useAddProviderOAuth({
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: providerId }),
+        body: JSON.stringify({ provider: providerId, ...openBrowserRequestField() }),
       });
       if (!aliveRef.current) return;
       if (!res.ok) {
@@ -50,9 +51,13 @@ export function useAddProviderOAuth({
           : (data.error || t("modal.loginFailStart")));
         return;
       }
-      const data = await res.json() as { url?: string; instructions?: string; error?: string };
-      if (data.url) { setOauthUrl(data.url, providerId); setOauthMsg(t("modal.waitingLogin")); }
-      else { setOauthMsg(data.instructions || t("modal.loggingIn")); }
+      // A device flow may return a user code with no URL, and `instructions` may
+      // carry the only human-readable step. Keep all three: the hint renderer
+      // decides what to show, rather than this hook deciding what to discard.
+      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; error?: string };
+      setOauthUrl(data.url ?? "", providerId, data.deviceCode, data.instructions);
+      if (data.url || data.deviceCode) setOauthMsg(t("modal.waitingLogin"));
+      else setOauthMsg(data.instructions || t("modal.loggingIn"));
       for (let i = 0; i < 100; i++) {
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current) return;

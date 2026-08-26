@@ -108,3 +108,48 @@ test("a revisit with session cache keeps Action required visible without a loadi
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test("a superseded settings response cannot overwrite newer Startup cache", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+
+  let settingsCalls = 0;
+  let resolveStaleSettings!: (response: Response) => void;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/startup-health")) return Response.json(atRiskHealth());
+    if (!url.includes("/api/settings")) return new Response(null, { status: 404 });
+    settingsCalls += 1;
+    if (settingsCalls === 1) {
+      return await new Promise<Response>(resolve => { resolveStaleSettings = resolve; });
+    }
+    return Response.json({ codexRuntime: { version: "fresh", newerAvailable: { version: "new" } } });
+  }) as typeof fetch;
+
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Startup apiBase={API_BASE} /></LanguageProvider>);
+  });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 20)); });
+
+  const refresh = Array.from(container.querySelectorAll("button"))
+    .find(button => button.textContent?.includes("Refresh"));
+  expect(refresh).toBeDefined();
+  await act(async () => { refresh?.click(); });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 20)); });
+  expect(settingsCalls).toBe(2);
+  expect(testWindow.sessionStorage.getItem(CACHE_KEY)).toContain("fresh");
+
+  await act(async () => {
+    resolveStaleSettings(Response.json({ codexRuntime: { version: "stale", newerAvailable: { version: "new" } } }));
+    await new Promise<void>(r => testWindow.setTimeout(r, 20));
+  });
+
+  expect(testWindow.sessionStorage.getItem(CACHE_KEY)).toContain("fresh");
+  expect(testWindow.sessionStorage.getItem(CACHE_KEY)).not.toContain("stale");
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});

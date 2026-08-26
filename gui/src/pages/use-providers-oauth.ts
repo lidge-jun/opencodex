@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
+import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 
@@ -80,6 +81,10 @@ export function useProvidersOAuth({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider,
+          // Explicit, never inferred, and omitted entirely when this operator has
+          // expressed no preference — otherwise the request would permanently
+          // overrule a persisted `oauthOpenBrowser: false`.
+          ...openBrowserRequestField(),
           ...(addAccount || reauthTargetId ? { addAccount: true } : {}),
           ...(reauthTargetId ? { accountId: reauthTargetId, reauth: true } : {}),
         }),

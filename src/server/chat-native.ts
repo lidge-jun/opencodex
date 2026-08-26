@@ -11,6 +11,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
+import { isModelTextOnly } from "../vision";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
@@ -61,6 +62,12 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
   if (rawBody.store === true || rawBody.background === true) return false;
   if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return false;
   if (rawBody.compaction_trigger !== undefined) return false;
+  // Vision sidecar coverage (roadmap 180): a text-only routed model with an
+  // image-bearing body must go through the Responses pipeline, whose plan
+  // site describes or strips the image. The native fast path has no vision
+  // handling, so letting it keep such a request forwards raw pixels to a
+  // model the operator declared blind.
+  if (isModelTextOnly(provider, route.modelId) && chatBodyCarriesImage(rawBody)) return false;
   if (Array.isArray(rawBody.tools)) {
     for (const tool of rawBody.tools) {
       if (!isRec(tool)) continue;
@@ -70,6 +77,19 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
     }
   }
   return true;
+}
+
+/** Any messages[].content[] part of type image_url. */
+function chatBodyCarriesImage(rawBody: Rec): boolean {
+  const messages = rawBody.messages;
+  if (!Array.isArray(messages)) return false;
+  for (const message of messages) {
+    if (!isRec(message) || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (isRec(part) && part.type === "image_url") return true;
+    }
+  }
+  return false;
 }
 
 function chatCompletionJson(value: unknown): Rec | null {

@@ -63,10 +63,15 @@ ocx restore back
 ocx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
+### `ocx recover-history --legacy-openai --yes`
 
 Explicit recovery for older development builds that remapped Codex App history before reversible
 backup support existed. Close Codex first if its history database is locked.
+
+This is a broad, destructive relabel: every user-message thread currently tagged `opencodex` is
+changed to `openai`, `exec` is normalized to `cli`, and the event marker is set. That includes
+legitimate dedicated-provider history. Back up the state and run it only when that full scope is
+intended.
 
 ### `ocx uninstall` · `ocx remove`
 
@@ -162,6 +167,23 @@ unreachable; and 64 for invalid arguments.
 
 ### `ocx doctor`
 
+The default report includes the native-write coordinator state and exact path using immutable
+read-only SQLite inspection. Zero-byte, empty-unversioned, and rowless states are shown separately
+from catalog/app-server health, so a successful catalog refresh is not mistaken for successful
+Codex config injection.
+
+After stopping the OpenCodex proxy/service, explicitly preserve and move a proven non-authoritative
+coordinator, then retry sync:
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+The recovery accepts only a proven zero-byte remnant. It refuses every non-empty, valid, unknown,
+changed, unsafe, or busy database and creates a same-directory `.zero-byte-backup-*` file instead
+of deleting anything.
+
 Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
 installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
 and pending history migration. The Codex app-home targeting section also detects the narrow Windows
@@ -198,7 +220,7 @@ same stale-`app-server` warning and optional `--restart-codex` behavior as `ocx 
 
 ## Background service
 
-### `ocx service [install|repair|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 Run opencodex as a login-managed background service (macOS **launchd**, Linux **systemd user unit**,
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
@@ -211,19 +233,25 @@ run `ocx service repair` to refresh the task with the restored package paths.
 
 | Subcommand | Action |
 | --- | --- |
-| none | Create/update and start the service. |
+| none | Install and start when absent; otherwise refresh and restart the existing service without re-registering it. |
 | `install` | Create and start the service. Registers it, which on Windows needs elevation. |
 | `repair` | Refresh an installed service in place and restart it, without re-registering it. |
+| `restart` | Alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
 | `status` | Report service and proxy diagnostics plus log paths. |
 | `uninstall` | Remove the service and restore native Codex. |
 | `remove` | Alias of `uninstall`. |
 
+On Windows, a bare `ocx service` runs the install path only after both Task Scheduler and WinSW are
+proven absent. If either status query is inconclusive, it refuses to register anything and asks you
+to run `ocx service status`; use explicit `ocx service install` only after confirming absence.
+
 ```bash
 ocx service
 ocx service install
 ocx service repair
+ocx service restart
 ocx service status
 ocx service uninstall
 ```
@@ -331,6 +359,19 @@ backs up the stable new launcher and restores the shim before dispatch. A launch
 changing is left untouched and retried later. Repair failures warn without failing the requested
 command; manual fallback: `ocx codex-shim install`. Set `codexShimAutoRestore` to `false`, or set
 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
+
+That restore needs the original launcher OpenCodex saved next to the shim. A version manager —
+mise, asdf, volta — rewrites its whole install tree on upgrade, which destroys the shim *and* that
+backup, so there is nothing left to restore from. **A version-manager install tree is not a
+supported shim target.** OpenCodex reports the condition and stops rather than wrapping the newly
+installed binary as a replacement original: doing so would record a history that never happened, and
+the next upgrade would overwrite it again, so the repair would silently undo itself on the version
+manager's schedule.
+
+If your `codex` is owned by a version manager, route through Codex configuration instead of the
+launcher: `ocx start` writes `openai_base_url`, and `ocx service install` provides autostart. Run
+`ocx status` to confirm — it reports the active routing, and warns when a running proxy is not the
+one Codex is pointed at.
 
 | Subcommand | Action |
 | --- | --- |

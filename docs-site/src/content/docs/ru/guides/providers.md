@@ -114,7 +114,7 @@ ocx logout <provider>
 
 | Провайдер | Адаптер | Базовый URL | Примечания |
 | --- | --- | --- | --- |
-| `xai` | `openai-chat` | `https://api.x.ai/v1` | Каталог Grok загружается в реальном времени; фолбэк по умолчанию — `grok-4.5`. |
+| `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth использует отдельный шлюз подписки Grok CLI. Переопределение с API-ключом использует `https://api.x.ai/v1` и может добавлять Priority Processing. Каталог Grok загружается в реальном времени; фолбэк по умолчанию — `grok-4.5`. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Модели Claude; актуальный список моделей загружается из `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Модели Kimi K2.7/K2.6/K2.5 для кодинга. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Шлюз подписки Nous Research (тот же бэкенд, что использует Hermes Agent). Вход по device grant против `portal.nousresearch.com`; access-токен — это JWT для каждого запроса к inference. Смешанный каталог платных + `:free` моделей (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, …) обнаруживается вживую по авторизованному аккаунту. Refresh-токены одноразовые и ротируются при каждом обновлении. |

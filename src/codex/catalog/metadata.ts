@@ -14,6 +14,7 @@ import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, r
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
+import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
@@ -204,6 +205,8 @@ export interface NativeContextLimits {
   readonly providerWindow?: number;
   /** `providers.openai.modelContextWindows` — per-model, wins over `providerWindow`. */
   readonly modelWindows?: Readonly<Record<string, number>>;
+  /** `providers.openai.modelAutoCompactTokenLimits` — soft, lowering-only budgets. */
+  readonly modelAutoCompactTokenLimits?: Readonly<Record<string, number>>;
 }
 
 export type NativeContextLimitsInput = NativeContextLimits | number | undefined;
@@ -227,12 +230,18 @@ export function nativeContextLimits(
     const window = positiveInt(value);
     if (window !== undefined) modelWindows[slug] = window;
   }
+  const modelAutoCompactTokenLimits: Record<string, number> = {};
+  for (const [slug, value] of Object.entries(provider?.modelAutoCompactTokenLimits ?? {})) {
+    const budget = positiveInt(value);
+    if (budget !== undefined) modelAutoCompactTokenLimits[slug] = budget;
+  }
   return {
     ...(positiveInt(providerContextCap(config, OPENAI_CODEX_PROVIDER_ID)) !== undefined
       ? { cap: providerContextCap(config, OPENAI_CODEX_PROVIDER_ID) }
       : {}),
     ...(positiveInt(provider?.contextWindow) !== undefined ? { providerWindow: provider!.contextWindow } : {}),
     ...(Object.keys(modelWindows).length > 0 ? { modelWindows } : {}),
+    ...(Object.keys(modelAutoCompactTokenLimits).length > 0 ? { modelAutoCompactTokenLimits } : {}),
   };
 }
 
@@ -275,6 +284,21 @@ export function nativeOpenAiMaxInputTokens(slug: string, limits?: NativeContextL
   const window = nativeOpenAiContextWindow(slug, limits);
   const narrowed = narrowToLimits(raw, slug, limits) ?? raw;
   return window === undefined ? narrowed : Math.min(narrowed, window);
+}
+
+/** Effective native soft budget after every hard window/input limit is resolved. */
+export function nativeOpenAiAutoCompactTokenLimit(
+  slug: string,
+  limits?: NativeContextLimitsInput,
+): number | undefined {
+  const contextWindow = nativeOpenAiContextWindow(slug, limits);
+  if (contextWindow === undefined) return undefined;
+  const configured = positiveInt(asLimits(limits).modelAutoCompactTokenLimits?.[slug]);
+  return clampAutoCompactTokenLimit(
+    contextWindow,
+    nativeOpenAiMaxInputTokens(slug, limits),
+    configured,
+  );
 }
 
 export function nativeInputModalities(slug: string): string[] {
@@ -387,7 +411,7 @@ export function desktopVisibleNativeSlugs(
   ]);
 }
 
-export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps" | "providers">): Array<{ slug: string; disabled: boolean; contextWindow?: number; maxInputTokens?: number }> {
+export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps" | "providers">): Array<{ slug: string; disabled: boolean; contextWindow?: number; maxInputTokens?: number; autoCompactTokenLimit?: number }> {
   const disabled = disabledNativeSlugs(config);
   const shadowed = configuredNativeAliasSlugs(config);
   // Both user levers, not just the cap: a per-model window set from the dashboard has to show
@@ -403,11 +427,13 @@ export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "comb
     .filter(slug => !shadowed.has(slug)).map(slug => {
     const contextWindow = nativeOpenAiContextWindow(slug, limits);
     const maxInputTokens = nativeOpenAiMaxInputTokens(slug, limits);
+    const autoCompactTokenLimit = nativeOpenAiAutoCompactTokenLimit(slug, limits);
     return {
       slug,
       disabled: disabled.has(slug),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
+      ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
     };
   });
 }

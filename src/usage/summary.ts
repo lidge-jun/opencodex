@@ -4,8 +4,17 @@ import { usageDisplayTotalTokens } from "./totals";
 import { isCodexUsageAccountLogLabel, type PersistedUsageEntry, type UsageStatus } from "./log";
 import { estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext } from "./cost";
 
-export type UsageRange = "7d" | "30d" | "all";
-export type UsageSurface = "all" | "codex" | "claude" | "grok";
+/**
+ * Canonical range members. The warm-up loop in the management usage route
+ * iterates this constant rather than its own literal: the two used to be
+ * written separately, and a subset literal type-checks perfectly happily, so a
+ * range added to the union but forgotten in the loop was never warmed and
+ * never invalidated alongside its siblings.
+ */
+export const USAGE_RANGES = ["today", "7d", "30d", "all"] as const;
+export type UsageRange = typeof USAGE_RANGES[number];
+export const USAGE_SURFACES = ["all", "codex", "claude", "grok"] as const;
+export type UsageSurface = typeof USAGE_SURFACES[number];
 
 export interface UsageSummaryTotals {
   requests: number;
@@ -40,6 +49,8 @@ export interface UsageDay {
   measuredRequests: number;
   reportedRequests: number;
   totalTokens: number;
+  /** Display-time estimated cost for this local day, summed from its model rows. */
+  estimatedCostUsd: number;
   models: UsageDayModel[];
 }
 
@@ -49,6 +60,8 @@ export interface UsageDayModel {
   requests: number;
   attemptCount: number;
   totalTokens: number;
+  /** Display-time estimated cost attributed to this provider/model on this day. */
+  estimatedCostUsd: number;
 }
 
 export interface UsageModel {
@@ -113,6 +126,26 @@ export interface UsageSummary {
   accounts: UsageAccount[];
 }
 
+/**
+ * Echo of an applied provider/model projection.
+ *
+ * Present only on a filtered response so a consumer can distinguish "no rows
+ * matched" from "no traffic in this window", and can tell that the totals it
+ * is reading are a projection rather than the whole window.
+ */
+export interface UsageFilterEcho {
+  provider: string | null;
+  model: string | null;
+  matched: boolean;
+  /**
+   * True when a retained row came from a combo attribution. Cost partitions
+   * cleanly across attempts, but a combo request is counted once per
+   * participating model, so a filtered REQUEST count can exceed the number of
+   * distinct requests. Cost is unaffected.
+   */
+  comboOverlap: boolean;
+}
+
 const DAY_MS = 86_400_000;
 export const MAX_USAGE_MODEL_BREAKDOWN_ROWS = 256;
 
@@ -127,6 +160,10 @@ function retainedBreakdownRows<T>(
 }
 
 export function parseRange(input: string | null | undefined): UsageRange {
+  // `1d` normalises here rather than becoming a second union member: a second
+  // member would need its own cache slot, its own grid arm and its own test
+  // matrix for no user-visible gain.
+  if (input === "today" || input === "1d") return "today";
   if (input === "7d" || input === "30d" || input === "all") return input;
   return "30d";
 }
@@ -143,6 +180,11 @@ function startOfLocalDay(ts: number): number {
 }
 
 export function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
+  // Handled before the others because the fallthrough below is the `all`
+  // window: a range that reaches it is silently reported as all-time history,
+  // which for a cost surface is a plausible-looking wrong answer rather than a
+  // visible failure.
+  if (range === "today") return { since: startOfLocalDay(now), days: 1 };
   if (range === "7d") {
     const start = new Date(startOfLocalDay(now));
     start.setDate(start.getDate() - 6);
@@ -335,6 +377,33 @@ function addEstimatedCost(
   totals.estimatedCostUsd += estimate.cost.total;
 }
 
+/**
+ * Per-attribution cost for one entry, keyed by `provider/model`.
+ *
+ * Mirrors the attribution branch in {@link buildModels}: a combo request is
+ * priced per attempt and each attempt's cost belongs to its own model, so cost
+ * partitions across models rather than being counted once per participant. A
+ * single-target request contributes its whole cost to the entry's own model.
+ */
+function dayAttributionCosts(entry: PersistedUsageEntry): Map<string, number> {
+  const costs = new Map<string, number>();
+  const tier = serviceTierContext(entry);
+  const estimate = entry.attempts?.length
+    ? estimateComboCost(entry.attempts, undefined, tier)
+    : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
+  if (!estimate) return costs;
+  const add = (provider: string, model: string, amount: number): void => {
+    const key = usageModelKey(baseProviderLabel(provider), antigravityUsageModel(provider, model));
+    costs.set(key, (costs.get(key) ?? 0) + amount);
+  };
+  if (entry.attempts?.length && estimate.attempts) {
+    for (const attempt of estimate.attempts) add(attempt.provider, attempt.model, attempt.cost.total);
+  } else {
+    add(entry.provider, entry.model, estimate.cost.total);
+  }
+  return costs;
+}
+
 function buildDayGrid(range: UsageRange, since: number | null, now: number, entries: PersistedUsageEntry[]): UsageDay[] {
   const window = rangeWindow(range, now);
   const days = range === "all" ? dayCountForAllRange(entries, now) : window.days;
@@ -343,14 +412,14 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
   // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
   const dayModels = new Map<string, Map<string, UsageDayModel>>();
   const dayModelRequests = new Map<string, Set<string>>();
-  const bumpDayModel = (dayKey: string, attribution: UsageAttribution): void => {
+  const bumpDayModel = (dayKey: string, attribution: UsageAttribution, costUsd: number): void => {
     let models = dayModels.get(dayKey);
     if (!models) { models = new Map(); dayModels.set(dayKey, models); }
     const providerKey = baseProviderLabel(attribution.provider);
     const mKey = usageModelKey(providerKey, attribution.model);
     let m = models.get(mKey);
     if (!m) {
-      m = { model: attribution.model, provider: providerKey, requests: 0, attemptCount: 0, totalTokens: 0 };
+      m = { model: attribution.model, provider: providerKey, requests: 0, attemptCount: 0, totalTokens: 0, estimatedCostUsd: 0 };
       models.set(mKey, m);
     }
     const requestKey = `${dayKey}\0${mKey}`;
@@ -360,26 +429,44 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     m.requests = requests.size;
     m.attemptCount += 1;
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
+    m.estimatedCostUsd += costUsd;
   };
   const startOfToday = startOfLocalDay(now);
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(startOfToday);
     d.setDate(d.getDate() - i);
     const key = localDateKey(d.getTime());
-    grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
+    grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, estimatedCostUsd: 0, models: [] });
   }
   for (const entry of entries) {
     const key = localDateKey(entry.timestamp);
     let day = grid.get(key);
     if (!day) {
-      day = { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] };
+      day = { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, estimatedCostUsd: 0, models: [] };
       grid.set(key, day);
     }
     day.requests += 1;
     if (isMeasuredStatus(entry.usageStatus)) day.measuredRequests += 1;
     if (entry.usageStatus === "reported") day.reportedRequests += 1;
     day.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
-    for (const attribution of usageAttributions(entry)) bumpDayModel(key, attribution);
+    // Price through the same seam buildModels uses: combo attempts are priced
+    // per attempt and attributed to their own model, everything else to the
+    // entry's model. Re-deriving a price here would make days[] disagree with
+    // models[] for exactly the combo traffic where nobody would notice.
+    const attributionCosts = dayAttributionCosts(entry);
+    for (const attribution of usageAttributions(entry)) {
+      const attributionKey = usageModelKey(baseProviderLabel(attribution.provider), attribution.model);
+      // Spend each key's cost ONCE. `attributionCosts` already holds the SUM of every
+      // attempt that shares a provider/model key, while `usageAttributions` yields one
+      // entry per attempt — so a retry onto the same model would otherwise add that
+      // pair's total twice and double the day against `summary.estimatedCostUsd`.
+      // Deleting on read keeps the first attribution carrying the group's cost and gives
+      // its siblings zero, which is what `buildModels` already does per attempt.
+      const costUsd = attributionCosts.get(attributionKey) ?? 0;
+      attributionCosts.delete(attributionKey);
+      bumpDayModel(key, attribution, costUsd);
+      day.estimatedCostUsd += costUsd;
+    }
   }
   void since;
   const out = [...grid.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -391,13 +478,15 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
         const requests = new Set<string>();
         let attemptCount = 0;
         let totalTokens = 0;
+        let estimatedCostUsd = 0;
         for (const model of overflow) {
           attemptCount += model.attemptCount;
           totalTokens += model.totalTokens;
+          estimatedCostUsd += model.estimatedCostUsd;
           const requestKey = `${day.date}\0${usageModelKey(model.provider, model.model)}`;
           for (const requestId of dayModelRequests.get(requestKey) ?? []) requests.add(requestId);
         }
-        return { model: "other", provider: "other", requests: requests.size, attemptCount, totalTokens };
+        return { model: "other", provider: "other", requests: requests.size, attemptCount, totalTokens, estimatedCostUsd };
       });
     }
   }
@@ -749,5 +838,109 @@ export function summarizeUsage(
     models: buildModels(filteredEntries, totals.totalTokens),
     providers: buildProviders(filteredEntries, totals.totalTokens),
     accounts: buildAccounts(filteredEntries),
+  };
+}
+
+function normalizeFilterValue(input: string | null | undefined): string | null {
+  const trimmed = typeof input === "string" ? input.trim() : "";
+  return trimmed === "" ? null : trimmed.toLowerCase();
+}
+
+/**
+ * Narrow an already-summarised window to one provider and/or model.
+ *
+ * Deliberately a projection over a finished summary rather than a parameter to
+ * {@link summarizeUsage}. The management route caches summaries under
+ * `range:surface` and warms that key space as a cross-product; a filtered
+ * summary that reached either would be served to the next UNFILTERED caller,
+ * the dashboard included. Keeping the filter outside the producer makes that
+ * mistake unrepresentable rather than merely discouraged.
+ *
+ * Totals are recomputed from the retained rows. For combo traffic a request is
+ * counted once per participating model, so a filtered request count can exceed
+ * the number of distinct requests; `comboOverlap` reports when that is
+ * possible. Cost is unaffected — combo cost is attributed per attempt, so it
+ * partitions across models rather than repeating.
+ *
+ * `accounts` is emptied whenever a filter is active: account rows are not
+ * provider-partitioned in a way this projection could honestly re-derive, and
+ * unfiltered account totals sitting beside filtered model totals would invite
+ * exactly the wrong reading.
+ */
+export function projectUsageSummary<T extends UsageSummary>(
+  summary: T,
+  filter: { provider?: string | null; model?: string | null },
+  entries?: PersistedUsageEntry[],
+): T & { filter?: UsageFilterEcho } {
+  const provider = normalizeFilterValue(filter.provider);
+  const model = normalizeFilterValue(filter.model);
+  if (provider === null && model === null) return summary;
+
+  // Re-summarise from the entries the summary was built from, rather than
+  // projecting over its rows.
+  //
+  // Projecting rows looked cheaper and was wrong in three ways that only show
+  // up together: breakdown rows past MAX_USAGE_MODEL_BREAKDOWN_ROWS are
+  // collapsed into a synthetic "other" row, so a provider living only in that
+  // tail is unfindable and reports matched:false despite real usage; a
+  // provider row is a whole-provider aggregate, so a model filter kept the
+  // provider's OTHER models in providers[] while models[] and the totals
+  // excluded them, contradicting itself inside one response; and a model row
+  // carries a single optional cost, so priced/unpriced/unmetered counts could
+  // only be guessed per model rather than counted per request.
+  //
+  // The entries are already in hand on every path that filters, so the honest
+  // computation is also the simple one.
+  const matches = (rowProvider: string, rowModel: string): boolean => {
+    if (provider !== null && baseProviderLabel(rowProvider).toLowerCase() !== provider) return false;
+    if (model !== null && rowModel.toLowerCase() !== model) return false;
+    return true;
+  };
+
+  // Narrow to matching ATTRIBUTIONS, not matching entries.
+  //
+  // Keeping a whole combo entry because one of its attempts matched drags the
+  // other attempts' tokens and cost into the filtered totals: a two-attempt
+  // combo filtered to its cheap model reported the expensive model's spend
+  // too. Rewriting the entry down to its matching attempts is what makes the
+  // filtered numbers mean what the flag says.
+  const source = entries ?? [];
+  let comboOverlap = false;
+  const filtered: PersistedUsageEntry[] = [];
+  for (const entry of source) {
+    if (!entry.attempts?.length) {
+      if (matches(entry.provider, antigravityUsageModel(entry.provider, entry.model))) filtered.push(entry);
+      continue;
+    }
+    const attempts = entry.attempts.filter(a => matches(a.provider, antigravityUsageModel(a.provider, a.model)));
+    if (attempts.length === 0) continue;
+    // A combo is still counted once per participating model, so a filtered
+    // request count can exceed the number of distinct requests. That is the
+    // documented overlap, and it is why comboOverlap exists.
+    if (entry.attempts.length > 1) comboOverlap = true;
+    filtered.push({ ...entry, attempts });
+  }
+
+  const projected = summarizeUsage(filtered, summary.range, summary.generatedAt, summary.surface);
+  // matched reflects usage inside the requested WINDOW, not anywhere in the
+  // log: summarizeUsage applies the range and surface predicates, and the CLI
+  // uses this flag to decide between a table and "no usage recorded".
+  const matched = projected.summary.requests > 0;
+  // A combo entry survives the entry filter as a whole, so its non-matching
+  // attributions can still appear as rows. Drop those so every row in the
+  // response satisfies the filter the caller asked for.
+  const models = projected.models.filter(row => matches(row.provider, row.model));
+  const retainedProviders = new Set(models.map(row => row.provider));
+  return {
+    ...summary,
+    summary: projected.summary,
+    days: projected.days.map(day => ({ ...day, models: day.models.filter(row => matches(row.provider, row.model)) })),
+    models,
+    providers: projected.providers.filter(row => retainedProviders.has(row.provider)),
+    // Account rows are not provider-partitioned in a way this projection could
+    // honestly re-derive, and unfiltered account totals sitting beside filtered
+    // model totals would invite exactly the wrong reading.
+    accounts: [],
+    filter: { provider, model, matched, comboOverlap },
   };
 }

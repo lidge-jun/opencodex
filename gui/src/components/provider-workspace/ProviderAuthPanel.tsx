@@ -18,9 +18,9 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
-import { LoginUrlBlock } from "../login-url-block";
+import { LoginHint as LoginHintView } from "../login-url-block";
+import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import QuotaBars from "../QuotaBars";
-import { useCopyFeedback } from "../use-copy-feedback";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import { Switch } from "../../ui";
 import type {
@@ -192,7 +192,10 @@ export default function ProviderAuthPanel({
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
   const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
-  const deviceCodeCopy = useCopyFeedback<string>();
+  const [manualCode, setManualCode] = useState("");
+  const [manualCodeBusy, setManualCodeBusy] = useState(false);
+  const [manualCodeMsg, setManualCodeMsg] = useState("");
+  const [manualCodeOk, setManualCodeOk] = useState(true);
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -240,13 +243,36 @@ export default function ProviderAuthPanel({
   if (!surface || !authHandlers) return null;
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
-  const deviceCode = hintForThis?.deviceCode ?? "";
-  const deviceCodeOutcome = deviceCodeCopy.outcomeFor(deviceCode);
-  const deviceCodeCopyLabel = deviceCodeOutcome === "copied"
-    ? t("prov.codeCopied")
-    : deviceCodeOutcome === "unavailable"
-      ? t("prov.linkCopyUnavailable")
-      : t("prov.copyCode");
+  // Paste fallback for when the browser cannot reach the loopback callback
+  // (remote dashboard, SSH, blocked localhost). A rejected paste reports why and
+  // leaves the flow running, so the user can correct it and try again.
+  const submitManualCode = async () => {
+    const input = manualCode.trim();
+    if (!input || manualCodeBusy) return;
+    setManualCodeBusy(true);
+    setManualCodeMsg("");
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: item.name, input }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setManualCodeOk(false);
+        setManualCodeMsg(t("prov.pasteFail", { error: data.error || res.statusText }));
+        return;
+      }
+      setManualCode("");
+      setManualCodeOk(true);
+      setManualCodeMsg(t("prov.pasteOk"));
+    } catch {
+      setManualCodeOk(false);
+      setManualCodeMsg(t("modal.networkError"));
+    } finally {
+      setManualCodeBusy(false);
+    }
+  };
   const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
   const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
   const activeNeedsReauth = Boolean(activeReauthAccount);
@@ -384,22 +410,27 @@ export default function ProviderAuthPanel({
                 )}
               </span>
             </div>
+            {!busy && <OpenBrowserPrefToggle />}
             {busy && hintForThis && (
               <div className="pwi-auth-wait">
                 <span className="pwi-spin-inline" aria-hidden="true" />
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
-                  {hintForThis.deviceCode && (
-                    <div className="pwi-device-code-wrap">
-                      <span>{t("prov.deviceCode")}</span>
-                      <code className="pwi-device-code">{hintForThis.deviceCode}</code>
-                      <button type="button" className="btn btn-primary btn-sm"
-                        onClick={() => deviceCodeCopy.copy(deviceCode, deviceCode)}>
-                        <span aria-live="polite">{deviceCodeCopyLabel}</span>
-                      </button>
-                    </div>
-                  )}
-                  <LoginUrlBlock url={hintForThis.url ?? ""} />
+                  <LoginHintView
+                    hint={{
+                      url: hintForThis.url,
+                      deviceCode: hintForThis.deviceCode,
+                      instructions: hintForThis.instructions,
+                    }}
+                    paste={{
+                      value: manualCode,
+                      busy: manualCodeBusy,
+                      message: manualCodeMsg,
+                      ok: manualCodeOk,
+                      onChange: setManualCode,
+                      onSubmit: () => { void submitManualCode(); },
+                    }}
+                  />
                   {authHandlers.onCancelLogin && (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
                       {t("common.cancel")}

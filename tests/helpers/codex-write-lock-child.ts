@@ -11,7 +11,7 @@
  */
 import { withCodexWriteLock } from "../../src/codex/codex-write-lock";
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 
 const payload = JSON.parse(process.env.OCX_LOCK_CHILD_PAYLOAD ?? "{}") as {
   timeoutMs?: number;
@@ -31,12 +31,12 @@ const result = await withCodexWriteLock(
   ctx => {
     if (payload.holdMarker) {
       // Tell the parent the lock is HELD, then block this thread so it stays
-      // held. The callback is synchronous by contract, so a sleep here is a busy
-      // wait on purpose: awaiting would release nothing and violate the contract.
+      // held. The callback is synchronous by contract, so awaiting here would
+      // release nothing and violate the contract.
       //
       // The write must be SYNCHRONOUS for the same reason. `Bun.write` returns a
       // promise whose file write only lands on a later event-loop turn, and the
-      // busy wait below yields no turn -- so the marker appeared ~3s late, AFTER
+      // blocking loop below yields no event-loop turn -- so the marker appeared ~3s late, AFTER
       // the hold had already ended. The parent then started its contender against
       // an unheld lock and saw `acquired` where the test demands `busy`, which
       // reads exactly like a broken exclusion invariant rather than a late marker.
@@ -47,8 +47,10 @@ const result = await withCodexWriteLock(
       // releases first and the parent sees `acquired` where it demands `busy`, which reads as
       // a broken exclusion invariant rather than as a hold that expired too early (#2152).
       const until = Date.now() + (payload.holdMs ?? 3_000);
+      const waiter = new Int32Array(new SharedArrayBuffer(4));
       while (Date.now() < until) {
-        if (payload.releaseMarker && Bun.file(payload.releaseMarker).size > 0) break;
+        if (payload.releaseMarker && existsSync(payload.releaseMarker)) break;
+        Atomics.wait(waiter, 0, 0, 20);
       }
     }
     // ALWAYS publishes. The lock verifies the row before it will commit, so a
@@ -77,5 +79,5 @@ console.log(JSON.stringify({
   status: result.status,
   ...(result.status === "acquired" ? { value: result.value, lockId: result.lockId } : {}),
   ...(result.status === "busy" ? { reason: result.reason, lockId: result.lockId } : {}),
-  ...(result.status === "refused" ? { reason: result.reason } : {}),
+  ...(result.status === "refused" ? { reason: result.reason, message: result.message } : {}),
 }));

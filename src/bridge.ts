@@ -8,6 +8,7 @@ import type {
 } from "./types";
 import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
+import { repairFreeformToolInput } from "./responses/apply-patch-envelope";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { isTruncatedStopReason, truncationReasonFor } from "./responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
@@ -18,6 +19,7 @@ import {
   awaitThoughtSignatureDurability,
 } from "./responses/thought-signature-replay";
 import { resolveStallTimeoutSec } from "./stall-timeout";
+import { normalizeDeclaredToolName } from "./types";
 import { usageDisplayTotalTokens } from "./usage/totals";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "./web-search/sources";
 import {
@@ -230,12 +232,12 @@ export function bridgeToResponsesSSE(
   const replayCacheScope = options?.replayCacheScope;
   const setBeatInterval = options?.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearBeatInterval = options?.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
-  // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
-  // function with `{input:string}`, so unwrap it here when relaying back as a custom_tool_call.
-  const freeformInput = (args: string): string => {
-    try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
-    return args;
-  };
+  // Freeform/custom tools (apply_patch, code-mode exec) carry their body in `input`; the
+  // model is given a function with `{input:string}`, so unwrap it here when relaying back
+  // as a custom_tool_call. Decorated apply_patch envelopes are repaired at this boundary.
+  const freeformInput = (args: string, toolName: string, namespace?: string): string => (
+    repairFreeformToolInput(args, toolName, namespace)
+  );
   // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
   // (`response.custom_tool_call_input.delta` — codex-rs uses it for UI preview only;
   // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
@@ -626,6 +628,7 @@ export function bridgeToResponsesSSE(
         const argsStr = coerceIntegerToolArguments(
           currentToolCall.args || "{}",
           options?.toolParameterSchemas?.get(currentToolCall.name),
+          currentToolCall.namespace === undefined ? currentToolCall.name : undefined,
         );
         // Finalize streamed function-call arguments so Codex commits the call (incl. MCP / computer_use).
         if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
@@ -636,7 +639,8 @@ export function bridgeToResponsesSSE(
         if (currentToolCall.freeform) {
           emit("response.custom_tool_call_input.done", {
             item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
-            input: freeformInput(currentToolCall.args),
+            ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+            input: freeformInput(currentToolCall.args, currentToolCall.name, currentToolCall.namespace),
           });
         }
         // Freeform tools serialize as custom_tool_call without extra_content; remember the
@@ -652,7 +656,8 @@ export function bridgeToResponsesSSE(
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
               call_id: currentToolCall.callId, name: currentToolCall.name,
-              input: freeformInput(currentToolCall.args), status: "completed",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+              input: freeformInput(currentToolCall.args, currentToolCall.name, currentToolCall.namespace), status: "completed",
             }
           : {
               type: "function_call", id: currentToolCall.itemId,
@@ -691,7 +696,8 @@ export function bridgeToResponsesSSE(
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
               call_id: currentToolCall.callId, name: currentToolCall.name,
-              input: freeformInput(currentToolCall.args), status: "incomplete",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+              input: freeformInput(currentToolCall.args, currentToolCall.name, currentToolCall.namespace), status: "incomplete",
             }
           : {
               type: "function_call", id: currentToolCall.itemId,
@@ -1036,13 +1042,14 @@ export function bridgeToResponsesSSE(
                 rememberReasoningForCall(event.id, rawReasoningForNextToolCall, replayCacheScope);
               }
               if (currentToolCall) closeCurrentToolCall();
-              const mapped = toolNsMap?.get(event.name);
-              const realName = mapped?.name ?? event.name;
-              if (options?.declaredToolNames && !options.declaredToolNames.has(event.name)) {
+              const effectiveName = normalizeDeclaredToolName(event.name, options?.declaredToolNames);
+              const mapped = toolNsMap?.get(effectiveName);
+              const realName = mapped?.name ?? effectiveName;
+              if (options?.declaredToolNames && !options.declaredToolNames.has(effectiveName)) {
                 const failure = responseError(
                   502,
                   "upstream_error",
-                  `routed provider emitted undeclared client tool "${event.name}"; only request-declared tools may be called`,
+                  `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
                 );
                 emit("response.failed", {
                   response: {
@@ -1064,7 +1071,7 @@ export function bridgeToResponsesSSE(
               const item = toolSearch
                 ? { type: "tool_search_call", id: itemId, call_id: event.id, execution: "client", arguments: {}, status: "in_progress" }
                 : freeform
-                ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
+                ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, ...(ns ? { namespace: ns } : {}), input: "", status: "in_progress" }
                 : { type: "function_call", id: itemId, call_id: event.id, name: realName, arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}) };
               emit("response.output_item.added", { output_index: outputIndex, item });
               currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch, providerMetadata: event.providerMetadata };
@@ -1567,10 +1574,9 @@ function buildResponseJSONWithBudget(
   // Web-search citations awaiting the next assistant message (attached as url_citation annotations).
   let pendingWebSources: { url: string; title?: string }[] = [];
 
-  const freeformInput = (args: string): string => {
-    try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
-    return args;
-  };
+  const freeformInput = (args: string, toolName: string, namespace?: string): string => (
+    repairFreeformToolInput(args, toolName, namespace)
+  );
   const parseArgsObj = (args: string): Record<string, unknown> => {
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
@@ -1656,6 +1662,7 @@ function buildResponseJSONWithBudget(
     const coercedArgs = coerceIntegerToolArguments(
       currentToolCallArgs,
       options?.toolParameterSchemas?.get(currentToolCallName),
+      ns === undefined ? realName : undefined,
     );
     // Freeform tools serialize as custom_tool_call without extra_content; remember the
     // signature server-side regardless so the replayed call can be re-signed (#1735).
@@ -1670,7 +1677,8 @@ function buildResponseJSONWithBudget(
       pushOutput({
         type: "custom_tool_call", id: `ctc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
-        input: freeformInput(currentToolCallArgs), status,
+        ...(ns ? { namespace: ns } : {}),
+        input: freeformInput(currentToolCallArgs, realName, ns), status,
       });
     } else {
       pushOutput({
@@ -1777,7 +1785,7 @@ function buildResponseJSONWithBudget(
           ));
         }
         break;
-      case "tool_call_start":
+      case "tool_call_start": {
         if (currentText) flushText("commentary");
         if (currentSummaryReasoning) flushSummaryReasoning();
         if (currentRawReasoning) flushRawReasoning();
@@ -1785,10 +1793,11 @@ function buildResponseJSONWithBudget(
           rememberReasoningForCall(e.id, rawReasoningForNextToolCall, replayCacheScope);
         }
         flushToolCall();
-        if (options?.declaredToolNames && !options.declaredToolNames.has(e.name)) {
+        const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames);
+        if (options?.declaredToolNames && !options.declaredToolNames.has(effectiveName)) {
           errorEvent = {
             type: "error",
-            message: `routed provider emitted undeclared client tool "${e.name}"; only request-declared tools may be called`,
+            message: `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
             status: 502,
             errorType: "upstream_error",
           };
@@ -1796,11 +1805,12 @@ function buildResponseJSONWithBudget(
         }
         currentToolCallId = e.id;
         budget?.openCall(e.id);
-        currentToolCallName = e.name;
+        currentToolCallName = effectiveName;
         currentToolCallArgs = "";
         currentToolCallArgsBytes = 0;
         currentToolCallProviderMetadata = e.providerMetadata;
         break;
+      }
       case "tool_call_delta":
         {
           ({ value: currentToolCallArgs, bytes: currentToolCallArgsBytes } = appendBatchString(

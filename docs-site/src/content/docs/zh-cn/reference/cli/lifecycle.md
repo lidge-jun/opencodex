@@ -47,9 +47,11 @@ ocx restore back
 ocx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
+### `ocx recover-history --legacy-openai --yes`
 
 为更早期的开发构建提供显式恢复，这些构建在可逆备份支持存在之前就重映射了 Codex App 历史记录。如果其历史数据库已被锁定，请先关闭 Codex。
+
+这是范围很广且具有破坏性的重标记：所有包含用户消息且当前标记为 `opencodex` 的线程都会改标为 `openai`，`exec` 会规范化为 `cli`，并设置事件标记。正常的专用提供方历史记录也在范围内。请先备份状态，并且仅在确实需要这一完整范围时执行。
 
 ### `ocx uninstall` · `ocx remove`
 
@@ -147,15 +149,16 @@ ocx status --json
 
 ## 后台服务
 
-### `ocx service [install|repair|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 将 opencodex 作为登录管理的后台服务运行（macOS **launchd**、Linux **systemd user unit**、Windows **Task Scheduler**），在登录时自动启动，在崩溃时自动重启。服务运行会设置 `OCX_SERVICE=1`，因此重启时不会反复改动 Codex 配置。
 
 | 子命令 | 操作 |
 | --- | --- |
-| none | 创建/更新并启动服务。 |
+| none | 服务不存在时安装并启动；已存在时不重新注册，直接刷新并重启。 |
 | `install` | 创建并启动服务。 |
 | `repair` | 就地刷新已安装的服务并重启，不重新注册。 |
+| `restart` | `repair` 的别名。 |
 | `start` | 启动已安装的服务。 |
 | `stop` | 停止服务并恢复原生 Codex。 |
 | `status` | 报告服务和代理诊断信息及日志路径。 |
@@ -166,9 +169,12 @@ ocx status --json
 ocx service
 ocx service install
 ocx service repair
+ocx service restart
 ocx service status
 ocx service uninstall
 ```
+
+在 Windows 上，bare `ocx service` 只有在 Task Scheduler 和 WinSW 两者的缺失都得到证实后才会走安装路径。如果任一状态查询结果不确定，它会拒绝任何注册并提示运行 `ocx service status`；只有在确认缺失之后才使用显式的 `ocx service install`。
 
 在 Windows 上，`ocx service status` 会单独报告 Task Scheduler 注册状态和已身份验证的 OpenCodex 代理可达性。它不会打印本地化的 `schtasks` 表格，因此在不同 Windows 代码页下摘要仍然可读。
 

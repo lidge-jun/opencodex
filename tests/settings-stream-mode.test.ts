@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
+import { USAGE_RANGES, USAGE_SURFACES } from "../src/usage/summary";
 import type { OcxConfig } from "../src/types";
 import {
   appOwnedBytesSnapshot,
@@ -210,13 +211,17 @@ describe("usage summary retained-store accounting", () => {
       const req = new Request(`http://127.0.0.1:10100/api/usage?range=${range}`);
       expect((await handleManagementAPI(req, new URL(req.url), baseConfig()))!.status).toBe(200);
     }
+    // Derived, not hardcoded: one usage request warms the whole
+    // range x surface cross-product, so a literal here turns any future range
+    // into a failure in a file about stream mode.
+    const warmedEntries = USAGE_RANGES.length * USAGE_SURFACES.length;
     const before = usageSummaryRetainedStoreSnapshot();
-    expect(before.count).toBe(12);
+    expect(before.count).toBe(warmedEntries);
     expect(before.bytes).toBeGreaterThan(0);
     const released = evictOldestUsageSummaryForBudget();
     const after = usageSummaryRetainedStoreSnapshot();
     expect(released).toBeGreaterThan(0);
-    expect(after.count).toBe(11);
+    expect(after.count).toBe(warmedEntries - 1);
     expect(after.bytes).toBe(before.bytes - released);
   });
 
@@ -240,14 +245,15 @@ describe("usage summary retained-store accounting", () => {
       revisionReadAt: Date.now() + 10_000,
       summary: { ...seed!.summary, generatedAt: 1 },
     });
+    const warmedEntries = USAGE_RANGES.length * USAGE_SURFACES.length;
     const before = usageSummaryRetainedStoreSnapshot();
-    expect(before.count).toBe(13);
+    expect(before.count).toBe(warmedEntries + 1);
     // The slow-read entry has the minimum generatedAt; a generatedAt-keyed
     // implementation would evict it first. Completion order must win instead.
     const released = evictOldestUsageSummaryForBudget();
     expect(released).toBeGreaterThan(0);
     expect(getUsageSummaryCacheEntry("slow:stale-generated")).toBeDefined();
-    expect(usageSummaryRetainedStoreSnapshot().count).toBe(12);
+    expect(usageSummaryRetainedStoreSnapshot().count).toBe(warmedEntries);
   });
 });
 

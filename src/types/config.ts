@@ -130,7 +130,7 @@ export interface OcxClaudeCodeConfig {
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
   webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
-  visionSidecar?: { backend?: "openai" | "anthropic"; model?: string };
+  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
@@ -243,10 +243,21 @@ export interface OcxConfig {
   port: number;
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
+  /**
+   * Whether a login may open a browser on the machine running the proxy.
+   *
+   * Absent and `true` both mean "open", which is what every existing install
+   * already does. Only an explicit `false` declines — for an operator who wants
+   * to paste the authorization URL into a different browser profile, or who is
+   * driving the dashboard from a different machine than the proxy.
+   *
+   * Deliberately a boolean and not an "auto" mode: inferring headlessness from
+   * SSH_CONNECTION or a missing DISPLAY breaks a working login silently when
+   * the guess is wrong.
+   */
+  oauthOpenBrowser?: boolean;
   /** Maximum usage-log bytes read for one management snapshot. */
   managementUsageMaxReadBytes?: number;
-  /** Disable management API token authentication requirement. */
-  disableAdminAuth?: boolean;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -267,7 +278,6 @@ export interface OcxConfig {
    * into a selector-qualified group; Codex still advertises only the first 5 visible rows.
    */
   subagentModels?: string[];
-  favorites?: string[];
   /**
    * Optional full picker ordering for the Codex model catalog, independent of the
    * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
@@ -777,8 +787,14 @@ export interface OcxSearchConfig {
 export interface OcxVisionSidecarConfig {
   /** Master switch. Default: enabled when the selected backend has a usable credential. */
   enabled?: boolean;
-  /** Description backend. Unset prefers a usable stored Anthropic OAuth credential, else OpenAI. */
-  backend?: "openai" | "anthropic";
+  /**
+   * Description backend. Unset prefers a usable stored Anthropic OAuth credential, else OpenAI —
+   * the historical default order, deliberately unchanged by the union widening (#2188 roadmap
+   * 170/180 revised): "routed" describes through the proxy's OWN routing (loopback
+   * /v1/chat/completions) with a NAMESPACED "provider/model" describer, is explicit-only, and is
+   * never auto-selected from credential availability.
+   */
+  backend?: "openai" | "anthropic" | "routed";
   /** Vision model that describes images. */
   model?: string;
   /** Max description cache misses admitted in one main-model turn. Zero disables description calls. */

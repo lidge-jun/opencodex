@@ -1,5 +1,5 @@
 import { useT } from "../i18n/shared";
-import { LoginUrlBlock } from "./login-url-block";
+import { LoginHint } from "./login-url-block";
 import type { StatusTone } from "./add-codex-account-reducer";
 
 export function AddCodexAccountWaitingStep({
@@ -35,38 +35,22 @@ export function AddCodexAccountWaitingStep({
     <>
       <h3 style={{ marginBottom: 4 }}>{reauthAccountId ? t("codexAuth.reauthenticate") : t("codexAuth.oauthLogin")}</h3>
       <p className="modal-desc">{t("codexAuth.oauthWaiting")}</p>
-      <LoginUrlBlock url={authUrl} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
-        <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            value={manualCode}
-            onChange={e => onManualCodeChange(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                onSubmitManualCode();
-              }
-            }}
-            placeholder={t("prov.pasteRedirect")}
-            aria-label={t("prov.pasteRedirect")}
-            disabled={manualCodeBusy || manualCodeWaiting}
-            className="input text-label"
-            style={{ flex: 1 }}
-          />
-          <button
-            className="btn btn-ghost"
-            type="button"
-            disabled={manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId}
-            onClick={onSubmitManualCode}
-          >
-            {manualCodeBusy ? t("codexAuth.oauthSubmittingCode") : t("prov.pasteSubmit")}
-          </button>
-        </div>
-      </div>
+      <LoginHint
+        hint={{ url: authUrl }}
+        paste={{
+          value: manualCode,
+          busy: manualCodeBusy,
+          // The submit stays gated while a prior code is still settling, or before
+          // the flow id arrives — but the field itself is only disabled while a
+          // submission is actually in flight.
+          disabled: manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId,
+          submittingLabel: t("codexAuth.oauthSubmittingCode"),
+          message: "",
+          ok: true,
+          onChange: onManualCodeChange,
+          onSubmit: onSubmitManualCode,
+        }}
+      />
       {statusNotice && (
         <div
           className={statusTone === "warn" ? "notice-warn" : "notice notice-ok"}

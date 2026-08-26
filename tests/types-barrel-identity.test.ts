@@ -25,6 +25,7 @@ describe("types barrel re-exports the leaves by identity, not by copy", () => {
   test.each([
     "namespacedToolName",
     "toolChoiceAliases",
+    "createToolChoiceResolver",
     "toolChoiceCandidates",
     "toolAllowedByChoice",
     "resolveToolChoiceWireName",

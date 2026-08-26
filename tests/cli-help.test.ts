@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Database } from "bun:sqlite";
 import { EXPORT_CLIENT_IDS } from "../src/clients/config-export";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
@@ -173,6 +174,11 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).toContain("Service:");
       expect(result.stdout).toContain(join(opencodexHome, "service.log"));
       expect(result.stdout).toContain("Codex autostart shim");
+      // #2411: status must name the routing kind it already computes. The
+      // proxy is down in this fixture, so the unused-proxy warning must stay
+      // quiet — that warning is for a LIVE proxy nothing routes through.
+      expect(result.stdout).toContain("routing=");
+      expect(result.stdout).not.toContain("the running proxy is unused");
     } finally {
       rmSync(opencodexHome, { recursive: true, force: true });
     }
@@ -257,12 +263,59 @@ describe("CLI subcommand help", () => {
 
       expectSpawnFinished(result, "ocx recover-history --help");
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Usage: ocx recover-history --legacy-openai");
-      expect(result.stdout).toContain("Explicitly recover pre-backup syncResumeHistory rows.");
+      expect(result.stdout).toContain("Usage: ocx recover-history --legacy-openai --yes");
+      expect(result.stdout).toContain("Force all user-message opencodex rows to OpenAI");
       expect(result.stdout).not.toContain("Recovered");
       expect(result.stderr).toBe("");
       expect(existsSync(statePath)).toBe(false);
     } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  test("recover-history requires exact confirmation before mutating history", () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "ocx-recover-confirm-"));
+    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-recover-confirm-state-"));
+    try {
+      const rollout = join(codexHome, "rollout.jsonl");
+      writeFileSync(rollout, `${JSON.stringify({
+        type: "session_meta",
+        payload: { id: "thread-1", model_provider: "opencodex", source: "exec" },
+      })}\n`);
+      const statePath = join(codexHome, "state_5.sqlite");
+      const db = new Database(statePath, { create: true });
+      db.exec(`CREATE TABLE threads (
+        id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT,
+        source TEXT, has_user_event INTEGER, first_user_message TEXT
+      )`);
+      db.run("INSERT INTO threads VALUES ('thread-1', ?, 'opencodex', 'exec', 1, 'legacy')", [rollout]);
+      db.close();
+      const databaseBefore = readFileSync(statePath);
+      const rolloutBefore = readFileSync(rollout);
+      const env = { CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome };
+
+      for (const command of [
+        ["recover-history", "--legacy-openai"],
+        ["recover-history", "--legacy-openai", "--yes", "--extra"],
+      ]) {
+        const refused = runCli(command, env);
+        expectSpawnFinished(refused, `ocx ${command.join(" ")}`);
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain("--legacy-openai --yes");
+        expect(readFileSync(statePath).equals(databaseBefore)).toBe(true);
+        expect(readFileSync(rollout).equals(rolloutBefore)).toBe(true);
+      }
+
+      const confirmed = runCli(["recover-history", "--legacy-openai", "--yes"], env);
+      expectSpawnFinished(confirmed, "ocx recover-history --legacy-openai --yes");
+      expect(confirmed.status).toBe(0);
+      expect(confirmed.stdout).toContain("Recovered 1 legacy thread(s)");
+      const restored = new Database(statePath, { readonly: true });
+      expect(restored.query("SELECT model_provider, source FROM threads WHERE id = 'thread-1'").get())
+        .toEqual({ model_provider: "openai", source: "cli" });
+      restored.close();
+    } finally {
+      rmSync(opencodexHome, { recursive: true, force: true });
       rmSync(codexHome, { recursive: true, force: true });
     }
   });
@@ -293,7 +346,7 @@ describe("CLI subcommand help", () => {
 
   test("invalid service and codex-shim usage include remove alias", () => {
     const cases = [
-      { args: ["service", "nope"], expected: "Usage: ocx service [install|repair|start|stop|status|uninstall|remove]" },
+      { args: ["service", "nope"], expected: "Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove]" },
       { args: ["codex-shim", "nope"], expected: "Usage: ocx codex-shim <install|status|uninstall|remove>" },
     ];
 

@@ -5,7 +5,12 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
-import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import {
+  canonicalizeReasoningEfforts,
+  configuredReasoningEfforts,
+  isDeclaredReasoningEffort,
+  modelRecordValue,
+} from "../reasoning-effort";
 import { encodedModelIdCollides, routedSlug, slugEquals } from "../providers/slug-codec";
 import { knownModelIdsForProvider } from "../router";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -91,7 +96,6 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
     const seen = new Set<string>();
     const contextWindows = prov.modelContextWindows ?? {};
     const inputModalities = prov.modelInputModalities ?? {};
-    const reasoningEfforts = prov.modelReasoningEfforts ?? {};
     const globalContext = prov.contextWindow ?? null;
 
     const addModel = (model: string, isDefault: boolean) => {
@@ -107,7 +111,13 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       // an exact `gpt-oss:120b` entry that lists "image", and the proxy rejects the image.
       const noVision = modelInList(prov.noVisionModels, model);
       const modalities = noVision ? ["text"] : (modelRecordValue(inputModalities, model) ?? null);
-      const efforts = modelRecordValue(reasoningEfforts, model) ?? prov.reasoningEfforts ?? null;
+      // Same reason, for the ladder: `configuredReasoningEfforts` is what the catalog
+      // (`provider-fetch`) and the effort cap (`effort-policy`) resolve through, and it
+      // does three things this expression did not — it returns [] for a noReasoningModels
+      // match, drops levels Codex does not declare, and re-adds tiers the wire map proves
+      // the model emits. Restating two of its five lines here reported a ladder the proxy
+      // strips, and unsanitized junk as a supported level.
+      const efforts = configuredReasoningEfforts(prov, model) ?? null;
 
       entries.push({
         provider: provName,

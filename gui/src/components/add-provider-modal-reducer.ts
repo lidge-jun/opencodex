@@ -14,6 +14,10 @@ export type AddProviderModalState = {
   oauthMsgTone: "ok" | "warn";
   /** Authorization URL for the in-flight OAuth login, so the pane can offer copy/open. */
   oauthUrl: string;
+  /** User code for a device-flow login; the pane renders it beside the URL. */
+  oauthDeviceCode: string;
+  /** Provider-supplied prose for the in-flight login. */
+  oauthInstructions: string;
   /** Provider the pending `oauthUrl` belongs to; a late response for a switched-away provider must not render. */
   oauthUrlProvider: string | null;
   manualCode: string;
@@ -34,7 +38,7 @@ export type AddProviderModalAction =
   | { type: "set-oauth-busy"; busy: boolean }
   | { type: "set-oauth-msg"; msg: string; tone?: "ok" | "warn" }
   | { type: "set-oauth-tone"; tone: "ok" | "warn" }
-  | { type: "set-oauth-url"; url: string; providerId: string }
+  | { type: "set-oauth-url"; url: string; providerId: string; deviceCode?: string; instructions?: string }
   | { type: "set-manual-code"; code: string }
   | { type: "set-manual-code-busy"; busy: boolean }
   | { type: "set-manual-code-msg"; msg: string; ok?: boolean }
@@ -64,6 +68,8 @@ export function createInitialAddProviderState(
     oauthMsg: "",
     oauthMsgTone: "ok",
     oauthUrl: "",
+    oauthDeviceCode: "",
+    oauthInstructions: "",
     oauthUrlProvider: null,
     manualCode: "",
     manualCodeBusy: false,
@@ -89,6 +95,8 @@ export function addProviderModalReducer(
         oauthMsg: "",
         oauthMsgTone: "ok",
         oauthUrl: "",
+        oauthDeviceCode: "",
+        oauthInstructions: "",
         oauthUrlProvider: null,
         oauthBusy: false,
         manualCode: "",
@@ -105,6 +113,8 @@ export function addProviderModalReducer(
         oauthMsg: "",
         oauthMsgTone: "ok",
         oauthUrl: "",
+        oauthDeviceCode: "",
+        oauthInstructions: "",
         oauthUrlProvider: null,
         oauthBusy: false,
         manualCode: "",
@@ -129,7 +139,13 @@ export function addProviderModalReducer(
       // A login response for a provider the user already switched away from must
       // neither render under the new provider nor clobber its URL.
       if (state.preset?.oauthProvider !== action.providerId) return state;
-      return { ...state, oauthUrl: action.url, oauthUrlProvider: action.providerId };
+      return {
+        ...state,
+        oauthUrl: action.url,
+        oauthDeviceCode: action.deviceCode ?? "",
+        oauthInstructions: action.instructions ?? "",
+        oauthUrlProvider: action.providerId,
+      };
     case "set-manual-code":
       return { ...state, manualCode: action.code };
     case "set-manual-code-busy":
@@ -139,7 +155,7 @@ export function addProviderModalReducer(
     case "set-oauth-tos-pending":
       return { ...state, oauthTosPending: action.providerId };
     case "use-oauth-login":
-      return { ...state, form: action.form, error: "", oauthUrl: "", oauthUrlProvider: null };
+      return { ...state, form: action.form, error: "", oauthUrl: "", oauthDeviceCode: "", oauthInstructions: "", oauthUrlProvider: null };
     case "use-api-key-instead":
       return {
         ...state,
@@ -147,6 +163,8 @@ export function addProviderModalReducer(
         oauthMsg: "",
         oauthMsgTone: "ok",
         oauthUrl: "",
+        oauthDeviceCode: "",
+        oauthInstructions: "",
         oauthUrlProvider: null,
         oauthBusy: false,
         manualCode: "",

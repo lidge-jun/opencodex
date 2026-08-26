@@ -129,7 +129,7 @@ ocx logout <saglayici>
 
 | Sağlayıcı | Adaptör | Temel URL | Notlar |
 | --- | --- | --- | --- |
-| `xai` | `openai-chat` | `https://api.x.ai/v1` | Canlı öncelikli Grok kataloğu; `grok-4.5` geri dönüş varsayılanıdır. |
+| `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth ayrı Grok CLI abonelik ağ geçidini kullanır. API anahtarı geçersiz kılması `https://api.x.ai/v1` kullanır ve Priority Processing ekleyebilir. Canlı öncelikli Grok kataloğu; `grok-4.5` geri dönüş varsayılanıdır. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude modelleri; canlı model listesi `/v1/models` üzerinden getirilir. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 kodlama modelleri. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research abonelik ağ geçidi (Hermes Agent'ın kullandığı aynı arka uç). `portal.nousresearch.com`'a karşı cihaz yetkilendirmesi girişi; erişim belirteci istek başına çıkarım JWT'sidir. Oturum açmış hesaptan canlı olarak keşfedilen karışık ücretli + `:free` model kataloğu (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...). Yenileme belirteçleri tek kullanımlıktır ve her yenilemede döndürülür. |

@@ -57,6 +57,32 @@ describe("Cursor OAuth core flow", () => {
     await expect(pollCursorAuth("uuid", "ver", ctrl.signal, 1)).rejects.toThrow(/cancel/i);
   });
 
+  test("pollCursorAuth fails on the FIRST terminal status without retrying (T07)", async () => {
+    for (const status of [400, 401, 403, 410]) {
+      let calls = 0;
+      globalThis.fetch = (async () => {
+        calls++;
+        return new Response("", { status });
+      }) as typeof fetch;
+      const err = await pollCursorAuth("uuid", "ver", undefined, 1).catch((e: unknown) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain(String(status));
+      expect((err as Error).message).toMatch(/new login/i);
+      expect(calls).toBe(1);
+    }
+  });
+
+  test("pollCursorAuth keeps the 3-strike retry for server errors (500)", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response("", { status: 500 });
+    }) as typeof fetch;
+    const err = await pollCursorAuth("uuid", "ver", undefined, 1).catch((e: unknown) => e as Error);
+    expect((err as Error).message).toMatch(/consecutive errors/i);
+    expect(calls).toBe(3);
+  });
+
   test("refreshCursorToken posts the refresh token as a Bearer and returns new creds", async () => {
     let seenAuth = "";
     globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {

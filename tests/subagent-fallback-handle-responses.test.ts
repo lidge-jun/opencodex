@@ -27,7 +27,7 @@ import {
   resetSubagentModelFallbackStateForTests,
   setSubagentQuotaPrimeForTests,
 } from "../src/codex/subagent-model-fallback";
-import type { CodexAuthContext } from "../src/codex/auth-context";
+import { resolveCodexAuthContext, type CodexAuthContext } from "../src/codex/auth-context";
 import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
@@ -670,6 +670,111 @@ describe("subagent fallback final-route normalization", () => {
 });
 
 describe("native fallback account preview", () => {
+  test("Desktop fallback affinity drives the subagent preview and final native account", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      subagentModelFallback: ["gpt-5.6-terra"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const desktopHeaders = {
+      "session-id": "desktop-session-private",
+      "thread-id": "desktop-thread-private",
+    };
+    const bound = await resolveCodexAuthContext(new Headers(desktopHeaders), cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (bound.kind !== "pool") throw new Error("expected pool context");
+    cfg.activeCodexAccountId = "pool-b";
+    // The binding above was made under codexQuotaScopeForModel("gpt-5.6-sol") === "shared".
+    // The preview inside handleResponses must derive the SAME scope from the route model —
+    // an undefined scope reads the "legacy" slot and would miss the binding entirely.
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, "shared")).toBe("pool-a");
+    // With no binding in the legacy slot the preview falls through to rotation/active selection,
+    // so it returns a DIFFERENT account than the affinity-bound one — that divergence is exactly
+    // what the route-model scope derivation inside handleResponses prevents.
+    expect(previewCodexAccountForRequest(bound.affinityKey ?? null, cfg, now, undefined)).not.toBe("pool-a");
+
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("xai/grok-4.5", "429", cfg);
+    noteSubagentModelFailure("grok-4.5", "429", cfg);
+
+    let finalAuth: CodexAuthContext | undefined;
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "xai/grok-4.5", input: readableAgentInput(), stream: false },
+      { onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; } },
+      { model: "", provider: "" },
+      desktopHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    expect(capture.urls.some((url) => url.includes("chatgpt.com/backend-api/codex"))).toBe(true);
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(capture.auths.some((auth) => auth?.includes("pool-a_token"))).toBe(true);
+  });
+
+  test("subagent preview reads the route-model quota scope, not the legacy slot", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    installPoolCredential("pool-b", "pool_acc_b", now);
+    const cfg = poolNativePlusRoutedConfig({
+      defaultProvider: "xai",
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      subagentModelFallback: ["gpt-5.6-terra"],
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    });
+    const desktopHeaders = {
+      "session-id": "scope-session-private",
+      "thread-id": "scope-thread-private",
+    };
+    const bound = await resolveCodexAuthContext(new Headers(desktopHeaders), cfg, "pool", {
+      modelId: "gpt-5.6-sol",
+    });
+    expect(bound).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    cfg.activeCodexAccountId = "pool-b";
+    const { noteSubagentModelFailure } = await import("../src/codex/subagent-model-fallback");
+    noteSubagentModelFailure("xai/grok-4.5", "429", cfg);
+    noteSubagentModelFailure("grok-4.5", "429", cfg);
+
+    let finalAuth: CodexAuthContext | undefined;
+    const capture = { urls: [] as string[], bodies: [] as string[], auths: [] as Array<string | null> };
+    mockUpstream(capture);
+
+    const response = await postSpawn(
+      cfg,
+      { model: "xai/grok-4.5", input: readableAgentInput(), stream: false },
+      { onCodexAuthContextResolved: (ctx) => { finalAuth = ctx; } },
+      { model: "", provider: "" },
+      desktopHeaders,
+    );
+
+    // The preview inside handleResponses derives its quota scope from the route model, so the
+    // affinity binding made under "shared" is found and the fallback authenticates pool-a —
+    // the same account that bound the thread — even though the active account is now pool-b.
+    expect(response.status).toBe(200);
+    expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-a" });
+  });
+
   test("uses healthier pool account B when active A is above threshold", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;

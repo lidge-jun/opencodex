@@ -41,7 +41,7 @@ import {
 } from "../model-entitlements";
 
 
-import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readCodexCatalogPathForHome, readNativeBaseline } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { accountBoundNativeOpenAiSlugs, accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, nativeContextLimits, observedAccountBoundNativeEntries, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry, type NativeContextLimitsInput } from "./metadata";
 import {
@@ -543,7 +543,6 @@ export function buildCatalogEntriesFromObservedState({
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
-  const featuredLen = featured ? featured.length : 0;
   for (const slug of gptSlugs) {
     const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap);
     if (rank.has(slug)) native.priority = rank.get(slug)!;
@@ -609,12 +608,11 @@ export function buildCatalogEntriesFromObservedState({
     }
     // Provider rows use the one-slash slug codec; combo aliases intentionally override that
     // public slug and may be bare.
-    const defaultPriority = featuredLen > 0 ? featuredLen + 100 + 5 : 5;
     const e = deriveEntry(
       template,
       slug,
       `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`,
-      defaultPriority,
+      5,
       m,
       exactComboSlugs,
     );
@@ -1160,7 +1158,7 @@ export function mergeCatalogEntriesForSync(
       isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
     )),
   ),
-  openaiContextCap?: number,
+  openaiContextCap?: NativeContextLimitsInput,
   keepNativeChatGptOnV1 = false,
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must
@@ -1444,7 +1442,7 @@ function writeRetainedCatalogSync({
   // Hide disabled models from Codex, then feature the chosen subagent models (native OR routed)
   // by giving them the lowest priority — see buildCatalogEntries for why priority, not array order.
   const enabledGo = filterCatalogVisibleModels(goModels, config);
-  const featured = getFeaturedModels(config);
+  const featured = config.subagentModels ?? [];
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
   const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
@@ -1834,11 +1832,12 @@ export function invalidateCodexModelsCacheWithPermit(
     // The catalog-only sync override applies here too so an explicit refresh
     // keeps the cache consistent with the catalog it just wrote.
     if (!shouldSyncCodexOnStart(loadConfig()) && options?.allowWhenDesiredDisabled !== true) return false;
-    const catalogPath = readCodexCatalogPath();
+    const catalogPath = readCodexCatalogPathForHome(owningCodexHome);
+    const cachePath = join(owningCodexHome, "models_cache.json");
     if (!existsSync(catalogPath)) return false;
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const models = catalog.models ?? catalog;
-    const currentCache = readCatalog(activeCodexModelsCachePath());
+    const currentCache = readCatalog(cachePath);
     const existingSlugs = new Set(models.flatMap((entry: RawEntry) =>
       typeof entry.slug === "string" ? [entry.slug] : []));
     const currentConfig = loadConfig();
@@ -1866,7 +1865,7 @@ export function invalidateCodexModelsCacheWithPermit(
       models: [...models, ...observedAccountModels],
     };
     replaceCodexModelsCache(permit, owningCodexHome, {
-      path: activeCodexModelsCachePath(),
+      path: cachePath,
       content: `${JSON.stringify(wrapper, null, 2)}\n`,
     });
     return true;
@@ -1882,13 +1881,4 @@ export function invalidateCodexModelsCache(options?: CodexCatalogSyncOptions): b
     permit => invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, options),
   );
   return outcome.kind === "completed" && outcome.value;
-}
-
-export function getFeaturedModels(config: { favorites?: string[]; subagentModels?: string[] }): string[] {
-  const favorites = config.favorites ?? [];
-  const subagentModels = config.subagentModels ?? [];
-  if (favorites.length === 0) return subagentModels;
-  const set = new Set(favorites);
-  const remainder = subagentModels.filter(m => !set.has(m));
-  return [...favorites, ...remainder];
 }

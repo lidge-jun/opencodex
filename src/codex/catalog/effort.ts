@@ -13,6 +13,7 @@ import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, r
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
+import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
@@ -128,9 +129,23 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
   if (typeof resolvedContext === "number" && resolvedContext > 0) {
     entry.context_window = resolvedContext;
     entry.max_context_window = resolvedContext;
-    entry.auto_compact_token_limit = Math.min(
-      Math.floor(resolvedContext * 0.9),
-      model.maxInputTokens ?? Number.POSITIVE_INFINITY,
+    entry.auto_compact_token_limit = clampAutoCompactTokenLimit(
+      resolvedContext,
+      model.maxInputTokens,
+      model.autoCompactTokenLimit,
+    );
+  } else if (
+    typeof entry.context_window === "number"
+    && entry.context_window > 0
+    && typeof model.maxInputTokens === "number"
+    && model.maxInputTokens > 0
+  ) {
+    // A conservative routed fallback is not evidence for applying the optional soft policy,
+    // but a measured/configured input ceiling is still a hard bound. Compact before that
+    // ceiling even when the provider supplied no authoritative context window.
+    entry.auto_compact_token_limit = clampAutoCompactTokenLimit(
+      entry.context_window,
+      model.maxInputTokens,
     );
   }
   if (Array.isArray(model.inputModalities) && model.inputModalities.length > 0) {
@@ -147,7 +162,7 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.service_tiers = [{
       id: "priority",
       name: "Fast",
-      description: "1.5x speed, increased usage",
+      description: model.fastTierDescription ?? "1.5x speed, increased usage",
     }];
     entry.additional_speed_tiers = ["fast"];
   }

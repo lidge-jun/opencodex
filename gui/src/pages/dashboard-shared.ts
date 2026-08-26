@@ -47,6 +47,8 @@ export interface ProviderInfo { name: string; adapter: string; baseUrl: string; 
 export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string; reasoningEfforts?: string[] }
 export interface SettingsData {
   codexAutoStart: boolean;
+  /** Whether a login may open a browser on the machine running the proxy. */
+  oauthOpenBrowser?: boolean;
   port: number;
   hostname: string;
   /** IANA zone of the machine running the proxy, used to render log timestamps (#725). */
@@ -60,9 +62,18 @@ export interface SettingsData {
   };
 }
 export type SidecarBackend = "openai" | "anthropic";
+/**
+ * Vision's union is wider than web-search's legacy pair but different from its
+ * executor set (web has xai/gemini/exa; vision's third arm is "routed" — the
+ * proxy's own router describing through any provider). Server provenance is
+ * authoritative; this type exists so a routed option row round-trips without
+ * being collapsed to a legacy backend.
+ */
+export type VisionBackend = SidecarBackend | "routed";
 export type VisionReasoning = "low" | "medium" | "high" | "xhigh" | "max";
 export interface SidecarSetting {
-  backend?: SidecarBackend;
+  // Shared by the web-search and vision cards; vision may carry "routed".
+  backend?: VisionBackend;
   model: string;
   reasoning?: VisionReasoning;
   streamRoutedModelOutput?: boolean;
@@ -70,7 +81,7 @@ export interface SidecarSetting {
   maxDescriptionsPerTurn?: number;
   timeoutMs?: number;
 }
-export interface VisionModelOption { value: string; label: string; backend: SidecarBackend; baseline?: boolean }
+export interface VisionModelOption { value: string; label: string; backend: VisionBackend; baseline?: boolean }
 export interface WebSearchModelOption {
   value: string;
   label: string;
@@ -99,7 +110,7 @@ export interface SidecarData {
 export interface SidecarPatch {
   webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
   vision?: {
-    backend?: SidecarBackend | null;
+    backend?: VisionBackend | null;
     model?: string;
     reasoning?: VisionReasoning;
     enabled?: boolean;
@@ -189,7 +200,7 @@ export function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string
 export function mergeSidecarSetting(
   current: SidecarSetting,
   update?: {
-    backend?: SidecarBackend | null;
+    backend?: VisionBackend | null;
     model?: string;
     reasoning?: VisionReasoning;
     streamRoutedModelOutput?: boolean;
@@ -357,8 +368,8 @@ export function visionModelOptions(
   serverOptions: VisionModelOption[] | undefined,
   models: ModelInfo[],
   current: string | undefined,
-  currentBackend?: SidecarBackend,
-): Array<{ value: string; label: string; backend?: SidecarBackend }> {
+  currentBackend?: VisionBackend,
+): Array<{ value: string; label: string; backend?: VisionBackend }> {
   const options = serverOptions
     ? serverOptions.map(option => ({ value: option.value, label: option.label, backend: option.backend }))
     : sidecarModelOptions(models);
@@ -392,13 +403,22 @@ export function webSearchSidecarSelectionForModel(
   };
 }
 
-/** Server eligibility is authoritative; catalog inference only supports legacy picker entries. */
+/**
+ * Server eligibility is authoritative; catalog inference only supports legacy
+ * picker entries. A namespaced value ("provider/model") is the routed-backend
+ * option shape and must never collapse to a legacy backend — the openai
+ * executor would POST the namespaced string verbatim (the failure the file
+ * comment above warns about, in the other direction).
+ */
 export function visionSidecarBackendForModel(
   models: ModelInfo[],
-  options: Array<{ value: string; backend?: SidecarBackend }>,
+  options: Array<{ value: string; backend?: VisionBackend }>,
   modelId: string,
-): SidecarBackend {
-  return options.find(option => option.value === modelId)?.backend ?? sidecarBackendForModel(models, modelId);
+): VisionBackend {
+  const fromServer = options.find(option => option.value === modelId)?.backend;
+  if (fromServer) return fromServer;
+  if (modelId.includes("/")) return "routed";
+  return sidecarBackendForModel(models, modelId);
 }
 
 let lastInputWasKeyboard = false;

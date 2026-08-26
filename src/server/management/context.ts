@@ -8,7 +8,7 @@ import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
 import type { injectGrokConfig } from "../../grok/inject";
 import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
-import type { RuntimePortState } from "../../config";
+import type { RuntimePortState } from "../../config/process-state";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
 import type {
   performCodexRestart,

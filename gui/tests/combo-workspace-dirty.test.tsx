@@ -88,6 +88,7 @@ test("Strict Mode: edit, revert, and unsaved navigation keep dirty state coheren
         <LanguageProvider>
           <ComboWorkspace
             combos={combos}
+            providerQuotaStates={{ openai: "available" }}
             providers={[{ name: "openai" }]}
             models={[{ provider: "openai", id: "gpt-5" }]}
             loading={false}
@@ -168,5 +169,49 @@ test("Strict Mode: edit, revert, and unsaved navigation keep dirty state coheren
   await act(async () => {
     root.unmount();
   });
+  container.remove();
+});
+
+test("dirty Save disables for exhausted targets and re-enables on quota recovery", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  const render = (quotaState: "available" | "exhausted") => (
+    <LanguageProvider>
+      <ComboWorkspace
+        combos={combos}
+        providerQuotaStates={{ openai: quotaState }}
+        providers={[{ name: "openai" }]}
+        models={[{ provider: "openai", id: "gpt-5" }]}
+        loading={false}
+        onRefresh={() => {}}
+        onSave={async () => ({ ok: true })}
+        onRemove={async () => ({ ok: true })}
+        onAdd={() => {}}
+        adding={false}
+        onCloseAdd={() => {}}
+        onCreated={() => {}}
+      />
+    </LanguageProvider>
+  );
+
+  await act(async () => { root.render(render("exhausted")); });
+  await flushTimers();
+  await act(async () => { railButton(container, "combo/alpha").click(); });
+  await flushTimers();
+  await act(async () => {
+    setInputValue(container.querySelector<HTMLInputElement>("#cwi-edit-alias")!, "dirty");
+  });
+
+  expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+  expect(container.textContent).toContain("All enabled targets are out of quota");
+
+  await act(async () => { root.render(render("available")); });
+  expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(false);
+  expect(container.textContent).not.toContain("All enabled targets are out of quota");
+
+  await act(async () => { root.unmount(); });
   container.remove();
 });

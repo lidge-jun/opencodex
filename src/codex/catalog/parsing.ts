@@ -31,7 +31,8 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, isNativeOpenAiCapabilityAliasModel, nativeMultiAgentVersion, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "./metadata";
+import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, isNativeOpenAiCapabilityAliasModel, nativeMultiAgentVersion, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "./metadata";
+import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 
@@ -111,6 +112,8 @@ export interface CatalogModel {
   defaultReasoningEffort?: string;
   contextWindow?: number;
   maxInputTokens?: number;
+  /** Soft client compaction threshold; hard context/input limits remain authoritative. */
+  autoCompactTokenLimit?: number;
   contextCap?: number;
   contextCapped?: boolean;
   inputModalities?: string[];
@@ -125,6 +128,8 @@ export interface CatalogModel {
   supportsVerbosity?: boolean;
   /** Whether this exact routed model has a verified OpenAI-compatible service tier. */
   supportsServiceTier?: boolean;
+  /** Optional provider-specific copy for the advertised Fast tier. */
+  fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;
   /**
    * Codex tool calling mode for this routed model.
@@ -147,6 +152,9 @@ export const JAWCODE_CATALOG_AUGMENT_PROVIDERS = new Set(["opencode-go", "deepse
 export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
   // Issue #82: Zen Go /models advertises HY3, but Console Go rejects it as outside the lite list.
   "opencode-go/hy3-preview",
+  // Issue #2330: OpenCode Go models absent from current documentation or returning terminal HTTP 400 errors.
+  "opencode-go/mimo-v2-omni",
+  "opencode-go/mimo-v2-pro",
 ]);
 
 export function isRoutedModelCompatibilityExcluded(slug: string): boolean {
@@ -189,6 +197,8 @@ export function shouldExposeRoutedModel(model: CatalogModel): boolean {
 }
 
 export function readCodexCatalogPath(): string {
+  const home = activeCodexHome();
+  if (home) return readCodexCatalogPathForHome(home);
   try {
     const configPath = activeCodexConfigPath();
     if (existsSync(configPath)) {
@@ -198,6 +208,19 @@ export function readCodexCatalogPath(): string {
     }
   } catch { /* ignore */ }
   return activeDefaultCatalogPath();
+}
+
+/** Resolve the configured catalog without consulting ambient CODEX_HOME again. */
+export function readCodexCatalogPathForHome(codexHome: string): string {
+  try {
+    const configPath = join(codexHome, "config.toml");
+    if (existsSync(configPath)) {
+      const toml = readFileSync(configPath, "utf-8");
+      const path = readRootTomlString(toml, "model_catalog_json");
+      if (path) return resolve(codexHome, path);
+    }
+  } catch { /* ignore */ }
+  return join(codexHome, "opencodex-catalog.json");
 }
 
 export function parseCatalogJson(raw: string): RawCatalog | null {
@@ -273,22 +296,6 @@ export function isNativeOpenAiEntry(entry: RawEntry): boolean {
 }
 
 /**
- * Auto-compaction threshold for a native row.
- *
- * The usual rule is 90% of the window, but a row whose input ceiling sits below that has to
- * clamp to the ceiling instead — otherwise the client keeps filling until upstream answers
- * `context_length_exceeded` and compaction never gets a chance to run. Native GPT-5.6 no
- * longer trips this (922,000 window, 829,800 at 90%), but the routed and API-key rows carry
- * the same family at a 1,050,000 window where 90% would be 945,000 — past the ceiling.
- */
-function nativeAutoCompactLimit(contextWindow: number, maxInputTokens: number | undefined, contextCap?: number): number {
-  const ninety = Math.floor(contextWindow * 0.9);
-  if (typeof maxInputTokens !== "number" || maxInputTokens <= 0) return ninety;
-  const cappedMaxInput = applyProviderContextCap(maxInputTokens, contextCap) ?? maxInputTokens;
-  return Math.min(ninety, cappedMaxInput, contextWindow);
-}
-
-/**
  * Narrow any already-resolved native window by the user levers.
  *
  * Used for the fields the accessors do not own (`max_context_window`, and preserved rows
@@ -313,6 +320,9 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     ?? (isNativeOpenAiEntry(entry) ? entry.slug as string : undefined);
   if (!nativeSlug) return;
   const override = NATIVE_OPENAI_CONTEXT_OVERRIDES[nativeSlug];
+  // Captured before any override/cap rewrites the row: a retained compaction threshold only
+  // describes the window it arrived with.
+  const incomingContextWindow = typeof entry.context_window === "number" ? entry.context_window : undefined;
   if (override) {
     // Read the effective values through the accessors rather than re-deriving them from the
     // static table: this function used to apply only the provider cap, so a per-model window
@@ -320,11 +330,6 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     if (typeof override.contextWindow === "number") {
       const contextWindow = nativeOpenAiContextWindow(nativeSlug, limits) ?? override.contextWindow;
       entry.context_window = contextWindow;
-      entry.auto_compact_token_limit = nativeAutoCompactLimit(
-        contextWindow,
-        nativeOpenAiMaxInputTokens(nativeSlug, limits) ?? override.maxInputTokens,
-        undefined,
-      );
     }
     if (typeof override.maxContextWindow === "number") {
       const maxContextWindow = narrowNativeMaxContextWindow(nativeSlug, override.maxContextWindow, limits);
@@ -339,16 +344,42 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
   const cappedContext = narrowNativeMaxContextWindow(nativeSlug, currentContext, limits);
   if (cappedContext !== currentContext && typeof cappedContext === "number") {
     entry.context_window = cappedContext;
-    entry.auto_compact_token_limit = nativeAutoCompactLimit(
-      cappedContext,
-      nativeOpenAiMaxInputTokens(nativeSlug, limits) ?? override?.maxInputTokens,
-      undefined,
-    );
   }
   const currentMax = typeof entry.max_context_window === "number" ? entry.max_context_window : undefined;
   const cappedMax = narrowNativeMaxContextWindow(nativeSlug, currentMax, limits);
   if (cappedMax !== currentMax) {
     entry.max_context_window = cappedMax;
+  }
+  const effectiveContext = typeof entry.context_window === "number" && entry.context_window > 0
+    ? entry.context_window
+    : undefined;
+  if (effectiveContext !== undefined) {
+    const derivedAutoCompactTokenLimit = nativeOpenAiAutoCompactTokenLimit(nativeSlug, limits);
+    // Only trust a retained threshold that still describes THIS window. When sync corrects the
+    // window, the old number is an artifact of the old one: a 115_200 limit retained from a
+    // 128k row would pin a corrected 272k model to 42% of its real window and compact every
+    // long turn early. Lower-is-policy still holds whenever the window is unchanged.
+    const retainedDescribesCurrentContext = incomingContextWindow === undefined
+      || incomingContextWindow === effectiveContext;
+    const retainedAutoCompactTokenLimit = retainedDescribesCurrentContext
+      && isNativeOpenAiEntry(entry)
+      && typeof entry.auto_compact_token_limit === "number"
+      && Number.isSafeInteger(entry.auto_compact_token_limit)
+      && entry.auto_compact_token_limit > 0
+      ? entry.auto_compact_token_limit
+      : undefined;
+    // A smaller threshold retained from Codex is policy evidence too. Configuration may
+    // lower it further, but catalog sync must never replace it with a larger default.
+    const loweringAutoCompactTokenLimit = retainedAutoCompactTokenLimit === undefined
+      ? derivedAutoCompactTokenLimit
+      : derivedAutoCompactTokenLimit === undefined
+        ? retainedAutoCompactTokenLimit
+        : Math.min(retainedAutoCompactTokenLimit, derivedAutoCompactTokenLimit);
+    entry.auto_compact_token_limit = clampAutoCompactTokenLimit(
+      effectiveContext,
+      nativeOpenAiMaxInputTokens(nativeSlug, limits) ?? override?.maxInputTokens,
+      loweringAutoCompactTokenLimit,
+    );
   }
 }
 

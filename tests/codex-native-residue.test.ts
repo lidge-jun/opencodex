@@ -30,6 +30,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import type { OcxConfig } from "../src/types";
+import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "./helpers/codex-history-manifest-fixtures";
 
 let codexHome = "";
 let opencodexHome = "";
@@ -167,11 +168,6 @@ const residueFixtures: Array<{
     })),
   },
   {
-    name: "history database row",
-    surface: "history",
-    arrange: () => createHistoryDatabase("opencodex"),
-  },
-  {
     name: "history backup entry",
     surface: "history-backup",
     arrange: () => {
@@ -202,6 +198,16 @@ for (const fixture of residueFixtures) {
     });
   });
 }
+
+test("a bare routed history row and its matching rollout are not managed residue", () => {
+  createHistoryDatabase("opencodex");
+
+  expect(classifyNativeRoutedResidue()).toEqual({ kind: "clean" });
+  expect(readCodexTransitionState()).toMatchObject({
+    kind: "ready",
+    state: { nativeGeneration: 0, currentTxId: null },
+  });
+});
 
 test("an OpenCodex atomic-write artifact is indeterminate", () => {
   writeFileSync(pathInCodexHome("config.toml.ocx.123.1.tmp"), "partial");
@@ -519,7 +525,6 @@ test("every non-string TOML type for model_catalog_json is indeterminate", () =>
     ["boolean", "true"],
     ["array", '["custom.json"]'],
     ["inline table", '{ path = "custom.json" }'],
-    ["datetime", "1979-05-27T07:32:00Z"],
   ] as const;
 
   for (const [type, value] of nonStringTomlValues) {
@@ -530,6 +535,31 @@ test("every non-string TOML type for model_catalog_json is indeterminate", () =>
       path: canonicalPathInCodexHome("config.toml"),
     });
   }
+});
+
+// TOML datetime is deliberately not in the list above: which SURFACE reports the
+// problem is runtime-dependent, and neither answer is a defect.
+//
+// Bun 1.3.14 has no datetime support, so the document fails to parse and the
+// config surface reports it. Bun 1.4 added datetime and yields a string, so
+// `model_catalog_json` becomes a syntactically valid path, the classifier
+// resolves it like any other, and the CATALOG surface reports it as absent.
+// Pinning `surface: "config"` for both fails on 1.4 for a reason unrelated to
+// this repository — found during Bun 1.4 canary qualification (#1691).
+//
+// The property worth pinning survives both: a datetime literal is never
+// accepted as a usable catalog. It is either unparseable config or a path that
+// does not exist, and `indeterminate` is what refuses coordinator
+// initialization in both cases.
+test("a TOML datetime for model_catalog_json is never accepted as a usable catalog", () => {
+  writeFileSync(pathInCodexHome("config.toml"), "model_catalog_json = 1979-05-27T07:32:00Z\n");
+  const classification = classifyNativeRoutedResidue();
+
+  expect(classification.kind).toBe("indeterminate");
+  // 1.3.14 blames the unreadable config; 1.4 blames the catalog path it parsed.
+  expect(["config", "catalog"]).toContain(
+    (classification as { surface: string }).surface,
+  );
 });
 
 test("duplicate configured catalog paths are indeterminate", () => {
@@ -805,6 +835,51 @@ test("a missing manifest-referenced rollout is indeterminate", () => {
     path: pathInCodexHome("missing-rollout.jsonl"),
   });
 });
+
+test("history backup schema diagnostics preserve entry shape and provenance distinctions", () => {
+  const stateDbPath = join(realpathSync.native(codexHome), "state_5.sqlite");
+  const rolloutPath = pathInCodexHome("rollout.jsonl");
+  writeFileSync(historyBackupPath(), JSON.stringify({
+    version: 1,
+    stateDbPath,
+    entries: { "thread-1": null },
+  }));
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history-backup",
+    reason: "history backup entry has an unknown shape",
+  });
+
+  const invalidProvenance = validHistoryBackupFixture(stateDbPath, rolloutPath);
+  invalidProvenance.entries["thread-1"].id = "thread-2";
+  writeFileSync(historyBackupPath(), JSON.stringify(invalidProvenance));
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history-backup",
+    reason: "history backup entry has invalid provenance metadata",
+  });
+});
+
+for (const fixture of INVALID_HISTORY_BACKUP_FIXTURES) {
+  test(`a history backup with ${fixture.name} is indeterminate and not adopted`, () => {
+    writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "opencodex") + "\n");
+    const manifest = validHistoryBackupFixture(
+      join(realpathSync.native(codexHome), "state_5.sqlite"),
+      pathInCodexHome("rollout.jsonl"),
+    );
+    fixture.mutate(manifest);
+    writeFileSync(historyBackupPath(), JSON.stringify(manifest));
+
+    expect(classifyNativeRoutedResidue()).toMatchObject({
+      kind: "indeterminate",
+      surface: "history-backup",
+    });
+    expect(readCodexTransitionState()).toEqual({
+      kind: "legacy-ambiguous",
+      message: "A missing coordinator row cannot be initialized while native Codex routing residue exists.",
+    });
+  });
+}
 
 const indeterminateFixtures: Array<{
   name: string;

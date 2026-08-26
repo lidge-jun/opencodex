@@ -112,11 +112,20 @@ function config(): OcxConfig {
 }
 
 function request(provider = "first", threadId = "thread-opaque-recovery"): Request {
+  return requestWithIdentityHeaders(provider, {
+    "x-codex-parent-thread-id": threadId,
+  });
+}
+
+function requestWithIdentityHeaders(
+  provider = "first",
+  identityHeaders: Record<string, string> = {},
+): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-codex-parent-thread-id": threadId,
+      ...identityHeaders,
     },
     body: JSON.stringify({
       model: `${provider}/model-a`,
@@ -363,6 +372,15 @@ describe("opaque blob recovery through /v1/responses", () => {
       adapter.buildRequest = async (parsed, incoming) => {
         const built = await buildRequest(parsed, incoming);
         buildCount += 1;
+        const body = JSON.parse(built.body) as Record<string, unknown>;
+        built.body = JSON.stringify({
+          ...body,
+          tools: [{
+            type: "function",
+            name: buildCount === 1 ? "stale_catalog__read" : "fresh_catalog__read",
+            parameters: { type: "object" },
+          }],
+        });
         built.convertedRoutedNamespaceToolAliases = buildCount === 1
           ? new Map([["stale_catalog__read", { namespace: "stale_catalog", name: "read" }]])
           : new Map([["fresh_catalog__read", { namespace: "fresh_catalog", name: "read" }]]);
@@ -413,6 +431,8 @@ describe("opaque blob recovery through /v1/responses", () => {
       expect(response.status).toBe(200);
       expect(buildCount).toBe(2);
       expect(outbound).toHaveLength(2);
+      expect((outbound[0]!.tools as Array<Record<string, unknown>>)[0]?.name).toBe("stale_catalog__read");
+      expect((outbound[1]!.tools as Array<Record<string, unknown>>)[0]?.name).toBe("fresh_catalog__read");
       expect(body.output[0]).toMatchObject({
         type: "function_call",
         namespace: "fresh_catalog",
@@ -508,6 +528,310 @@ describe("opaque blob recovery through /v1/responses", () => {
 });
 
 describe("reasoning replay serving identity commit through /v1/responses", () => {
+  test("a stable session identity records and detects a serving-identity change without a parent-thread header", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    for (const provider of ["first", "second"]) {
+      const response = await handleResponses(
+        requestWithIdentityHeaders(provider, { session_id: "session-without-parent-thread" }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(2);
+    expect(hasBlob(outbound[0]!)).toBe(true);
+    expect(hasBlob(outbound[1]!)).toBe(false);
+  });
+
+  test("foreign blobs recover once, then the same destination strips pre-flight on later headerless turns", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    const turns: RequestLogContext[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      outbound.push(body);
+      if (hasBlob(body)) return rejection(XAI_DECODE_ERROR);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    for (let turn = 0; turn < 3; turn++) {
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      turns.push(logCtx);
+      const response = await handleResponses(
+        requestWithIdentityHeaders("first", { session_id: "three-turn-headerless-session" }),
+        config(),
+        logCtx,
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(4);
+    expect(outbound.map(hasBlob)).toEqual([true, false, false, false]);
+    expect(turns.map(turn => turn.activeAttempt?.sendCount)).toEqual([2, 1, 1]);
+    expect(turns.map(turn => turn.activeAttempt?.recoveryKinds)).toEqual([
+      ["opaque-blob-rejection"],
+      [],
+      [],
+    ]);
+  });
+
+  test("a destination rejection memo does not keep stripping after switching back to the blob-minting destination", async () => {
+    const outbound = new Map<string, Array<Record<string, unknown>>>([
+      ["first", []],
+      ["second", []],
+    ]);
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const provider = String(input).includes("first.example.test") ? "first" : "second";
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      outbound.get(provider)!.push(body);
+      if (provider === "first" && hasBlob(body)) return rejection(XAI_DECODE_ERROR);
+      return success(`resp-${provider}-${outbound.get(provider)!.length}`);
+    }) as typeof fetch;
+
+    for (const provider of ["first", "second", "second"]) {
+      const response = await handleResponses(
+        requestWithIdentityHeaders(provider, { session_id: "switch-back-identity-session" }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound.get("first")!.map(hasBlob)).toEqual([true, false]);
+    // The first switch-back turn is still stripped by the unchanged deterministic serving record.
+    // Once that record commits `second`, `first`'s memo must not suppress `second`'s own good blob.
+    expect(outbound.get("second")!.map(hasBlob)).toEqual([false, true]);
+  });
+
+  test("a failed blobless resend records no memo, so the next turn tries the blob again", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    const turns: RequestLogContext[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      outbound.push(body);
+      if (hasBlob(body)) return rejection(XAI_DECODE_ERROR);
+      return new Response(JSON.stringify({
+        error: { type: "invalid_request_error", code: "unknown_parameter", message: "retry also failed" },
+      }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    for (let turn = 0; turn < 2; turn++) {
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      turns.push(logCtx);
+      const response = await handleResponses(
+        requestWithIdentityHeaders("first", { session_id: "failed-resend-session" }),
+        config(),
+        logCtx,
+      );
+      expect(response.status).toBe(400);
+      await response.text();
+    }
+
+    expect(outbound.map(hasBlob)).toEqual([true, false, true, false]);
+    expect(turns.map(turn => turn.activeAttempt?.sendCount)).toEqual([2, 2]);
+    expect(turns.map(turn => turn.activeAttempt?.recoveryKinds)).toEqual([
+      ["opaque-blob-rejection"],
+      ["opaque-blob-rejection"],
+    ]);
+  });
+
+  test("an expired rejection memo rechecks once, then settles back to one send", async () => {
+    let clock = 1_000;
+    clearReasoningReplayCacheForTests(() => clock);
+    const outbound: Array<Record<string, unknown>> = [];
+    const turns: RequestLogContext[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      outbound.push(body);
+      return hasBlob(body) ? rejection(XAI_DECODE_ERROR) : success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    for (let turn = 0; turn < 4; turn++) {
+      if (turn === 2) clock += 5 * 60 * 1000 + 1;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      turns.push(logCtx);
+      const response = await handleResponses(
+        requestWithIdentityHeaders("first", { session_id: "memo-expiry-session" }),
+        config(),
+        logCtx,
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound.map(hasBlob)).toEqual([true, false, false, true, false, false]);
+    expect(turns.map(turn => turn.activeAttempt?.sendCount)).toEqual([2, 1, 2, 1]);
+    expect(turns.map(turn => turn.activeAttempt?.recoveryKinds)).toEqual([
+      ["opaque-blob-rejection"],
+      [],
+      ["opaque-blob-rejection"],
+      [],
+    ]);
+  });
+
+  test("a stable conversation without a rejection memo remains unchanged", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    const turns: RequestLogContext[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    for (let turn = 0; turn < 3; turn++) {
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      turns.push(logCtx);
+      const response = await handleResponses(
+        requestWithIdentityHeaders("first", { session_id: "no-rejection-memo-session" }),
+        config(),
+        logCtx,
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound.map(hasBlob)).toEqual([true, true, true]);
+    expect(turns.map(turn => turn.activeAttempt?.sendCount)).toEqual([1, 1, 1]);
+    expect(turns.map(turn => turn.activeAttempt?.recoveryKinds)).toEqual([[], [], []]);
+  });
+
+  test("the parent-thread header remains authoritative over fallback identities", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    const cases = [
+      ["first", "parent-thread-a", "shared-session"],
+      ["second", "parent-thread-a", "different-session"],
+      ["second", "parent-thread-b", "shared-session"],
+    ] as const;
+    for (const [provider, parentThreadId, sessionId] of cases) {
+      const response = await handleResponses(requestWithIdentityHeaders(provider, {
+        "x-codex-parent-thread-id": parentThreadId,
+        session_id: sessionId,
+      }), config(), { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(3);
+    expect(outbound.map(hasBlob)).toEqual([true, false, true]);
+  });
+
+  test("a later session_id fallback continues the same raw parent-thread conversation", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    const identity = "mixed-header-conversation";
+    const first = await handleResponses(
+      requestWithIdentityHeaders("first", { "x-codex-parent-thread-id": identity }),
+      config(),
+      { model: "", provider: "" },
+    );
+    expect(first.status).toBe(200);
+    await first.text();
+    const second = await handleResponses(
+      requestWithIdentityHeaders("second", { session_id: identity }),
+      config(),
+      { model: "", provider: "" },
+    );
+    expect(second.status).toBe(200);
+    await second.text();
+
+    expect(outbound).toHaveLength(2);
+    expect(outbound.map(hasBlob)).toEqual([true, false]);
+  });
+
+  test("a shared session_id does not coalesce distinct thread-id conversations", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    const cases = [
+      ["first", "thread-a"],
+      ["second", "thread-b"],
+    ] as const;
+    for (const [provider, threadId] of cases) {
+      const response = await handleResponses(
+        requestWithIdentityHeaders(provider, {
+          "thread-id": threadId,
+          session_id: "shared-cache-session",
+        }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(2);
+    expect(outbound.map(hasBlob)).toEqual([true, true]);
+  });
+
+  test("requests without any usable conversation identity keep blobs and record nothing", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    for (const provider of ["first", "second"]) {
+      const response = await handleResponses(
+        requestWithIdentityHeaders(provider),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(2);
+    expect(outbound.map(hasBlob)).toEqual([true, true]);
+  });
+
+  test("distinct fallback conversation identities never share a serving record", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success(`resp-${outbound.length}`);
+    }) as typeof fetch;
+
+    const cases = [
+      ["first", "conversation-a"],
+      ["second", "conversation-b"],
+      ["second", "conversation-a"],
+    ] as const;
+    for (const [provider, sessionId] of cases) {
+      const response = await handleResponses(
+        requestWithIdentityHeaders(provider, { session_id: sessionId }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(outbound).toHaveLength(3);
+    expect(outbound.map(hasBlob)).toEqual([true, true, false]);
+  });
+
   test("a failed A-to-B turn does not commit B, so the next B retry still strips A-minted blobs", async () => {
     const outbound: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

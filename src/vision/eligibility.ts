@@ -26,15 +26,27 @@ import { nativeInputModalities } from "../codex/catalog/metadata";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import { enrichProviderFromRegistry } from "../providers/derive";
 
-/** The two wire protocols `planVisionSidecar` can actually dispatch to. */
-export type VisionSidecarBackend = "openai" | "anthropic";
+/**
+ * The wire protocols `planVisionSidecar` can dispatch to (#2188 roadmap 170
+ * REVISED). "routed" describes through the proxy's OWN router via loopback —
+ * one executor for every non-forward, non-OAuth-Anthropic provider row.
+ */
+export type VisionSidecarBackend = "openai" | "anthropic" | "routed";
+
+/** The two sides every deployment has; also the empty-auth fallback set. */
+export type UniversalVisionBackend = "openai" | "anthropic";
 
 /**
  * Default entry per backend: cheap, image-capable, and present in every deployment. Offered
  * whenever its side is enabled, and withheld only when that provider explicitly lists it as a
  * model the sidecar describes FOR — never merely because a metadata table stayed silent.
+ *
+ * Keyed by the UNIVERSAL subset on purpose (roadmap 170, audit blocker A):
+ * xai/gemini are auth-gated sides whose catalogs are present whenever the side
+ * is, so they carry no baseline, and a narrow-key total record documents that
+ * without sprinkling non-null assertions at the consumers.
  */
-export const BASELINE_VISION_MODELS: Record<VisionSidecarBackend, string> = {
+export const BASELINE_VISION_MODELS: Record<UniversalVisionBackend, string> = {
   openai: "gpt-5.6-luna",
   anthropic: "claude-haiku-4-5",
 };
@@ -146,7 +158,7 @@ function isVisionEligibleModelWithCache(
   return modelAcceptsImageInputWithCache(config, candidate, cache) !== false;
 }
 
-/** Which executor can describe through this row, or undefined when neither can. */
+/** Which executor can describe through this row. */
 export function visionBackendForCandidate(
   config: Pick<OcxConfig, "providers">,
   candidate: VisionCandidateModel,
@@ -158,17 +170,17 @@ export function visionBackendForCandidate(
   // Messages wire is not enough: a key-auth row of the same adapter is unreachable, and an
   // option that cannot be dispatched is worse than a missing one, because selecting it fails
   // at describe time rather than at pick time.
-  //
-  // So the executor's name is REQUIRED for an Anthropic suggestion. When the caller has no
-  // executor to name, no catalog row qualifies; the side's baseline is added separately and
-  // keeps the picker populated. Narrowing here never widens the write gate, which is a
-  // different predicate (`modelAcceptsImageInput`) and still treats unknown as allowed.
-  if (anthropicProviderName === undefined) return undefined;
-  return candidate.provider === anthropicProviderName ? "anthropic" : undefined;
+  if (anthropicProviderName !== undefined && candidate.provider === anthropicProviderName) {
+    return "anthropic";
+  }
+  // EVERY other provider row describes through the proxy's own router
+  // (roadmap 170 revised): the loopback executor covers all provider wires,
+  // so no row is left without an executor.
+  return "routed";
 }
 
 function baselineCandidate(
-  backend: VisionSidecarBackend,
+  backend: UniversalVisionBackend,
   anthropicProviderName: string | undefined,
 ): VisionCandidateModel {
   return {
@@ -181,12 +193,13 @@ function baselineCandidate(
 }
 
 /**
- * The picker's option list: every eligible row reachable by one of the two
- * executors, plus each enabled side's baseline unless that baseline is explicitly
- * excluded, de-duplicated and stably ordered (openai side first, baselines first
- * within a side). Anthropic rows must belong to the OAuth provider that would
- * actually execute them, so `anthropicProviderName` is what makes that side's
- * catalog rows eligible at all.
+ * The picker's option list: every eligible row reachable by an enabled
+ * executor, plus each enabled universal side's baseline unless that baseline
+ * is explicitly excluded, de-duplicated and stably ordered (side rank order,
+ * baselines first within a side). Anthropic rows must belong to the OAuth
+ * provider that would actually execute them, so `anthropicProviderName` is
+ * what makes that side's catalog rows eligible at all; xai/gemini rows map by
+ * provider identity and appear only when the caller enabled those backends.
  *
  * This is the SUGGESTION list (narrow): it emits only rows an executor can reach
  * and some source has heard of. It is deliberately NOT the same set as the write
@@ -208,7 +221,7 @@ export function visionEligibleModelOptions(
   const byValue = new Map<string, VisionModelOption>();
   const enrichedProviders: EnrichedProviderCache = new Map();
 
-  for (const backend of ["openai", "anthropic"] as const) {
+  for (const backend of Object.keys(BASELINE_VISION_MODELS) as UniversalVisionBackend[]) {
     if (!enabled.has(backend)) continue;
     const candidate = baselineCandidate(backend, anthropicProviderName);
     if (!isVisionEligibleModelWithCache(config, candidate, enrichedProviders)) continue;
@@ -219,11 +232,19 @@ export function visionEligibleModelOptions(
     const backend = visionBackendForCandidate(config, candidate, anthropicProviderName);
     if (!backend || !enabled.has(backend)) continue;
     if (!isVisionEligibleModelWithCache(config, candidate, enrichedProviders)) continue;
-    if (byValue.has(candidate.id)) continue;
-    byValue.set(candidate.id, { value: candidate.id, label: candidate.id, backend });
+    // Routed rows carry NAMESPACED values ("provider/model") so the loopback
+    // dispatch is unambiguous under routeModel; the legacy sides keep bare ids
+    // (GUI current-value compatibility, and the forward/OAuth executors POST
+    // the string verbatim). De-dup stays keyed by the emitted value.
+    const value = backend === "routed" ? `${candidate.provider}/${candidate.id}` : candidate.id;
+    if (byValue.has(value)) continue;
+    byValue.set(value, { value, label: value, backend });
   }
 
+  // Two slots per side (baseline first), ranked openai < anthropic < routed
+  // so widening the union appends rather than interleaves (roadmap 170).
+  const sideRank: Record<VisionSidecarBackend, number> = { openai: 0, anthropic: 2, routed: 4 };
   const order = (option: VisionModelOption) =>
-    (option.backend === "openai" ? 0 : 2) + (option.baseline ? 0 : 1);
+    sideRank[option.backend] + (option.baseline ? 0 : 1);
   return [...byValue.values()].sort((a, b) => order(a) - order(b) || a.value.localeCompare(b.value));
 }

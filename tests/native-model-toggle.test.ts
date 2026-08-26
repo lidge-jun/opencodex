@@ -123,16 +123,55 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(nativeModelRows(both).find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(350_000);
   });
 
+  test("a per-model soft budget lowers compaction without changing native hard limits", () => {
+    const configured = {
+      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.6-sol": 120_000 } } },
+    } as never;
+    const row = nativeModelRows(configured).find(item => item.slug === "gpt-5.6-sol");
+    expect(row).toMatchObject({
+      contextWindow: 272_000,
+      maxInputTokens: 272_000,
+      autoCompactTokenLimit: 120_000,
+    });
+
+    const oversized = {
+      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.6-sol": 2_000_000 } } },
+    } as never;
+    expect(nativeModelRows(oversized).find(item => item.slug === "gpt-5.6-sol"))
+      .toMatchObject({ contextWindow: 272_000, maxInputTokens: 272_000, autoCompactTokenLimit: 244_800 });
+  });
+
   test("the on-disk catalog entry lands at the same width as the dashboard row", () => {
     // Regression: applyNativeOpenAiContextOverride used to re-read the static table and apply
     // only the cap, so a saved per-model window showed up in /api/models and was written back
     // at 922,000 in the Codex catalog.
-    const limits = { providers: { openai: { modelContextWindows: { "gpt-5.6-sol": 500_000 } } } } as never;
+    const limits = { providers: { openai: {
+      modelContextWindows: { "gpt-5.6-sol": 500_000 },
+      modelAutoCompactTokenLimits: { "gpt-5.6-sol": 120_000 },
+    } } } as never;
     const entry: Record<string, unknown> = { slug: "gpt-5.6-sol", context_window: 922_000, max_context_window: 922_000 };
     applyNativeOpenAiContextOverride(entry as never, nativeContextLimits(limits));
     expect(entry.context_window).toBe(500_000);
     expect(entry.max_context_window).toBe(500_000);
-    expect(entry.auto_compact_token_limit).toBe(450_000); // 90% of the narrowed window
+    expect(entry.auto_compact_token_limit).toBe(120_000);
+  });
+
+  test("the on-disk catalog preserves a lower retained native compaction threshold", () => {
+    const retained = {
+      slug: "gpt-5.4-mini",
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 100_000,
+    };
+    applyNativeOpenAiContextOverride(retained as never, nativeContextLimits({}));
+    expect(retained.auto_compact_token_limit).toBe(100_000);
+
+    const configured = {
+      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.4-mini": 80_000 } } },
+    } as never;
+    const lowered = { ...retained };
+    applyNativeOpenAiContextOverride(lowered as never, nativeContextLimits(configured));
+    expect(lowered.auto_compact_token_limit).toBe(80_000);
   });
 
   test("the advertised native window stays inside the measured ceiling after Codex spends 95% of it", () => {

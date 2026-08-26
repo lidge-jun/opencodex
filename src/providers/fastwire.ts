@@ -33,6 +33,7 @@ export interface FastPolicyAuthority {
   readonly providerAdapter: string;
   readonly providerAuthMode?: ProviderAuthKind;
   readonly fastWireDeclaration: FastWire | null | undefined;
+  readonly fastTierDescription?: string;
   readonly modelWireOverrideAllowed: boolean;
   readonly authTransport: FastPolicyAuthTransport;
   readonly capability: {
@@ -55,6 +56,7 @@ export interface ResolvedFastPolicy {
     | "pin-unavailable";
   readonly adapter: string;
   readonly fastWire: FastWire | null;
+  readonly fastTierDescription?: string;
   readonly forwardCallerTier: boolean;
 }
 
@@ -222,7 +224,16 @@ export function resolveFastPolicy(
   else if (capability === undefined) eligibility = "unclassified";
   else eligibility = "eligible";
 
-  return { capability, eligibility, adapter, fastWire, forwardCallerTier };
+  return {
+    capability,
+    eligibility,
+    adapter,
+    fastWire,
+    ...(authority.fastTierDescription !== undefined
+      ? { fastTierDescription: authority.fastTierDescription }
+      : {}),
+    forwardCallerTier,
+  };
 }
 
 export function canonicalFastTierMarker(callerTier: string | undefined): "priority" | undefined {

@@ -15,6 +15,13 @@
  *           bun scripts/release.ts 0.1.0 --publish  # actually publish 0.1.0
  *
  * Requires: gh CLI (authed). Publishing is tokenless via Trusted Publishing (OIDC) — no NPM_TOKEN.
+ *
+ * Protected-branch push: `main` and `preview` carry rulesets that require a pull request, and the
+ * admin bypass is `bypass_mode: "pull_request"` — enough to merge a PR, not enough to push. Set
+ * `OCX_RELEASE_SSH_KEY` to the private key of the dedicated write deploy key registered as a
+ * `DeployKey` bypass actor on those rulesets, and the version-bump push (and only that push) uses
+ * it. Override the SSH remote with `OCX_RELEASE_SSH_REPO` when releasing a fork. Unset, the push
+ * behaves exactly as before.
  */
 import { commandInvocation } from "../src/lib/win-exec";
 
@@ -86,12 +93,13 @@ async function capture(command: string[]): Promise<string> {
 }
 
 /** Run a command with its output attached to this terminal; abort on failure. */
-async function runLoud(command: string[]): Promise<void> {
+async function runLoud(command: string[], env?: Record<string, string>): Promise<void> {
   const [bin, ...rest] = command;
   const invocation = commandInvocation(bin ?? "", rest);
   const proc = Bun.spawn([invocation.file, ...invocation.args], {
     stdout: "inherit",
     stderr: "inherit",
+    ...(env ? { env: { ...process.env, ...env } } : {}),
     ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   const exitCode = await proc.exited;
@@ -99,6 +107,142 @@ async function runLoud(command: string[]): Promise<void> {
     console.error(`✗ ${command.join(" ")} failed (exit ${exitCode})`);
     process.exit(1);
   }
+}
+
+/**
+ * Release-key push target for a protected branch.
+ *
+ * `main` and `preview` are covered by branch-protection rulesets that require a pull request,
+ * so the maintainer's own credential cannot push the version-bump commit even with admin rights:
+ * the admin bypass is `bypass_mode: "pull_request"`, which permits merging a PR but not a direct
+ * push. The v2.29.0 release died exactly there.
+ *
+ * The carve-out is a dedicated write deploy key registered as a `DeployKey` bypass actor on both
+ * rulesets. It is deliberately NOT a runtime toggle of the ruleset itself: flipping protection off
+ * around the push and back on afterwards is crash-open — a SIGKILL, a lost network, or a hung push
+ * between the two calls leaves the branch unprotected with no lease to expire it, and while the
+ * window is open the bypass applies to every holder of the admin role, not just this release. A
+ * key fails closed instead: if the process dies, protection was never weakened, and revoking one
+ * credential closes the carve-out without touching repository configuration.
+ *
+ * Opt-in by path: without `OCX_RELEASE_SSH_KEY` the push runs exactly as before over the configured
+ * remote, so a contributor or CI clone is unaffected. The key is used for this one push and nothing
+ * else; ordinary git operations keep the maintainer's normal credential.
+ */
+/**
+ * Quote one argument for `GIT_SSH_COMMAND`.
+ *
+ * Git does not exec this variable directly — it parses it with shell-style word splitting, so a
+ * bare interpolation breaks on any key path containing a space (`C:\Users\Jun Kim\.ssh\key` splits
+ * into two words and ssh reads `Kim...` as its next flag). Double quotes are the form both POSIX
+ * shells and Git's own Windows parser accept, and unlike single quotes they do not mangle a
+ * backslash path. Escape the characters that stay special inside double quotes so a path can never
+ * introduce a second word or a substitution.
+ */
+function quoteSshArgument(value: string): string {
+  return `"${value.replace(/(["\\`$])/g, "\\$1")}"`;
+}
+
+/**
+ * Derive the SSH push target from the configured `origin` URL.
+ *
+ * Deliberately derived rather than hardcoded: a hardcoded `git@host:owner/repo.git` literal is
+ * indistinguishable from an email address to `privacy:scan`, and it would also silently push a
+ * fork's release to the upstream repository. `OCX_RELEASE_SSH_REPO` still wins when a maintainer
+ * needs an explicit target.
+ */
+function sshTargetFromOrigin(originUrl: string): string | undefined {
+  const trimmed = originUrl.trim();
+  if (!trimmed) return undefined;
+  // Reject a credential-bearing remote outright rather than transplanting it. A URL like
+  // https://user:TOKEN@host/o/r.git would otherwise fold the userinfo into the SSH target, and
+  // runLoud() prints the failing command — putting the token on the terminal and in the release
+  // log. The host capture below therefore excludes '@' as well as '/'.
+  const https = /^https?:\/\/([^/@]+)\/(.+?)(?:\.git)?\/?$/.exec(trimmed);
+  if (https) return `${SSH_USER}@${https[1]}:${https[2]}.git`;
+  if (/^https?:\/\//.test(trimmed)) {
+    console.error("✗ origin carries credentials in its URL; refusing to build a release push target from it.");
+    process.exit(1);
+  }
+  // Already an SSH remote (either scp-like or ssh://): reuse it verbatim.
+  if (isSshRemote(trimmed)) return trimmed;
+  return undefined;
+}
+
+/**
+ * `ssh://host/owner/repo` or the scp-like `user@host:owner/repo`.
+ *
+ * This check is also a log boundary: the accepted value is printed before the push and appears in
+ * the failure command. Parse URL userinfo instead of treating any `ssh://` string as safe, and
+ * reject the scp-like `user:password@host:path` lookalike before either sink can observe it.
+ */
+function isSshRemote(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || /[\u0000-\u001f\u007f]/.test(trimmed)) return false;
+
+  if (trimmed.startsWith("ssh://")) {
+    // WHATWG URL collapses an empty password ("git:@host" -> password ""), so the parsed fields
+    // cannot distinguish it from a credential-free principal. Reject any ':' in the raw userinfo
+    // segment instead: a colon there is always credential-shaped.
+    const authority = trimmed.slice("ssh://".length);
+    const userinfoEnd = authority.indexOf("@");
+    if (userinfoEnd !== -1 && authority.slice(0, userinfoEnd).includes(":")) return false;
+    try {
+      const parsed = new URL(trimmed);
+      let decodedUsername: string;
+      try {
+        decodedUsername = decodeURIComponent(parsed.username);
+      } catch {
+        return false;
+      }
+      return parsed.protocol === "ssh:"
+        && parsed.hostname.length > 0
+        && parsed.pathname.length > 1
+        && parsed.password === ""
+        // The release deploy key uses GitHub's fixed SSH principal. Treat any other userinfo as
+        // credential-shaped rather than trying to distinguish a harmless username from a token.
+        && (decodedUsername === "" || decodedUsername === SSH_USER)
+        && parsed.search === ""
+        && parsed.hash === "";
+    } catch {
+      return false;
+    }
+  }
+
+  // scp-like syntax has no parser-level query/fragment boundary. Reject those delimiters and any
+  // second '@' in the host segment rather than allowing a credential-shaped suffix to reach the
+  // target log or failed-command output.
+  return /^git@[^:@\s/?#]+:[^?#]+$/.test(trimmed);
+}
+
+/** Split out so the scp-like SSH target is assembled rather than written as an address literal. */
+const SSH_USER = "git";
+
+async function releasePushCommand(branch: string): Promise<{ command: string[]; env?: Record<string, string> }> {
+  const keyPath = process.env.OCX_RELEASE_SSH_KEY?.trim();
+  if (!keyPath) return { command: ["git", "push", "origin", branch] };
+  const configured = process.env.OCX_RELEASE_SSH_REPO?.trim();
+  // An unvalidated override outranking origin means a stale exported value from a fork session can
+  // silently retarget a production release. Check the shape, and print the resolved target either
+  // way so the destination is visible before the push rather than inferred afterwards.
+  if (configured && !isSshRemote(configured)) {
+    console.error("✗ OCX_RELEASE_SSH_REPO is not a credential-free ssh:// or git@host:owner/repo remote; refusing to push.");
+    process.exit(1);
+  }
+  const slug = configured || sshTargetFromOrigin(await capture(["git", "remote", "get-url", "origin"]));
+  if (!slug) {
+    console.error("✗ OCX_RELEASE_SSH_KEY is set but no SSH push target could be derived from origin; set OCX_RELEASE_SSH_REPO.");
+    process.exit(1);
+  }
+  console.log(`→ release push target: ${slug}`);
+  return {
+    // Push to the SSH URL explicitly rather than rewriting the `origin` remote: the remote stays
+    // HTTPS for every other command, so nothing outside this call inherits the key.
+    command: ["git", "push", slug, `HEAD:${branch}`],
+    // IdentitiesOnly stops ssh from offering the agent's other keys first, which would authenticate
+    // as the maintainer and get rejected by the ruleset again.
+    env: { GIT_SSH_COMMAND: `ssh -i ${quoteSshArgument(keyPath)} -o IdentitiesOnly=yes` },
+  };
 }
 
 async function readPackageName(): Promise<string> {
@@ -375,7 +519,40 @@ await runLoud(["bun", "run", "audit:high"]);
 console.log("→ typecheck");
 await runLoud(["bun", "x", "tsc", "--noEmit"]);
 console.log("→ test suite");
-await runLoud(["bun", "test", "--isolate", "tests"]);
+// Match CI's isolation policy instead of inventing a second one. `ci.yml` runs
+// the storage-policy and api-usage harnesses in DEDICATED jobs and excludes them
+// from the general shards (`scripts/ci/run-bun-test-batches.sh`
+// `is_general_test_file`), because those Worker-heavy files corrupt the isolate
+// state around them.
+//
+// This preflight used to run `bun test --isolate tests` — the whole directory in
+// one process — so it exercised a grouping CI never runs. The result was a
+// release gate that failed on `api-usage` while every CI job for the same commit
+// was green: the worst kind of gate, one that blocks a good release and teaches
+// you to distrust it. Same files and same coverage as before (915), now in the
+// same groups CI uses.
+// Every command here stays a `bun` invocation. The release-helper suite shims
+// exactly `bun`, `gh`, `git` and `npm` onto a scratch PATH to record calls
+// without executing them; a `bash` step would miss that shim, escape into the
+// real suite, and fail the helper tests with exit 127.
+const ISOLATED_TEST_FILES = [
+  "./tests/api-storage-policy-already-running.test.ts",
+  "./tests/api-storage-policy-mutation-busy.test.ts",
+  "./tests/api-storage-policy-put-race.test.ts",
+  "./tests/api-storage-policy-run.test.ts",
+  "./tests/api-storage-policy.test.ts",
+  "./tests/api-storage.test.ts",
+  "./tests/api-usage.test.ts",
+];
+await runLoud([
+  "bun", "test", "--isolate", "tests",
+  "--path-ignore-patterns=**/api-storage-policy*.test.ts",
+  "--path-ignore-patterns=**/api-storage.test.ts",
+  "--path-ignore-patterns=**/api-usage.test.ts",
+]);
+for (const isolated of ISOLATED_TEST_FILES) {
+  await runLoud(["bun", "test", "--isolate", isolated]);
+}
 console.log("→ privacy scan");
 await runLoud(["bun", "run", "privacy:scan"]);
 
@@ -406,7 +583,9 @@ if (pendingBump) {
 const releaseSha = await capture(["git", "rev-parse", "HEAD"]);
 if (pendingBump) {
   console.log(`→ push origin ${branch}`);
-  await runLoud(["git", "push", "origin", branch]);
+  const push = await releasePushCommand(branch);
+  if (push.env) console.log("→ using the release deploy key for the protected push");
+  await runLoud(push.command, push.env);
 } else {
   console.log(`→ release commit ${releaseSha.slice(0, 9)} already pushed; reusing it`);
 }

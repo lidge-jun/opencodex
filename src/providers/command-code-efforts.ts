@@ -9,6 +9,13 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
   },
+  // Ox Alpha (stealth preview, added in Command Code v1.31.0): free 1M-context
+  // reasoning model on every plan. The profile does not publish an effort ladder,
+  // so mirror the OpenRouter contract (reasoning mandatory; max/high/low).
+  "stealth/ox-alpha": {
+    efforts: ["low", "high", "max"],
+    profileUrl: "https://commandcode.ai/models/ox-alpha",
+  },
   // Keys must match the EXACT upstream /provider/v1/models ids (GLM ships as
   // `zai-org/GLM-5.3`, not `zai-org/glm-5.3`). The table doubles as the router's
   // known-ids decode source (via `knownModelIdsForProvider`), so a case mismatch

@@ -7,15 +7,22 @@
  * ever receiving an injection (PR #860 family).
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyProviderConfigHints } from "../src/codex/catalog";
+import { applyProviderConfigHints, buildCatalogEntries, gatherRoutedModels } from "../src/codex/catalog";
 import { applyCatalogModelMetadata } from "../src/codex/catalog/effort";
 import type { RawEntry } from "../src/codex/catalog/parsing";
 import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { decideTier } from "../src/providers/fastwire";
 import type { RequestLogContext } from "../src/server/request-log";
 import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
-import { canForwardServiceTierForModel, serviceTierSupportForModel, supportsServiceTierForModel } from "../src/providers/service-tier";
-import { serviceTierAdapterForModel } from "../src/providers/service-tier";
+import {
+  canForwardServiceTierForModel,
+  fastPolicyForModel,
+  serviceTierAdapterForModel,
+  serviceTierSupportForModel,
+  serviceTierSupportFromPolicy,
+  supportsServiceTierForModel,
+} from "../src/providers/service-tier";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
 import { resolveProductionBehaviorValues } from "../src/routing/compatibility/behavior";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -71,6 +78,92 @@ describe("registry capability reaches saved configs without overriding them", ()
     enrichProviderFromRegistry("openrouter", provider);
     expect(provider.modelSupportsServiceTier).toBeUndefined();
     expect(supportsServiceTierForModel(provider, "openai/gpt-5.6-sol")).toBeUndefined();
+  });
+});
+
+describe("xAI Fast capability follows the captured authentication transport", () => {
+  function xaiProvider(
+    authMode: "key" | "oauth",
+    overrides: Partial<OcxProviderConfig> = {},
+  ): OcxProviderConfig {
+    return {
+      ...providerConfigSeed(getProviderRegistryEntry("xai")!),
+      authMode,
+      apiKey: authMode === "key" ? "xai-test-key" : "oauth-test-token",
+      liveModels: false,
+      models: ["grok-4.6"],
+      ...overrides,
+    };
+  }
+
+  async function catalogEntry(provider: OcxProviderConfig) {
+    const models = await gatherRoutedModels({
+      providers: { xai: provider },
+    } as unknown as OcxConfig);
+    return buildCatalogEntries(null, [], models)
+      .find(entry => entry.slug === "xai/grok-4.6");
+  }
+
+  test("registry declares a key-auth overlay without classifying OAuth", () => {
+    const entry = getProviderRegistryEntry("xai")!;
+    expect(entry.keyAuthServiceTier).toEqual({
+      supportsServiceTier: true,
+      chatServiceTier: true,
+    });
+    expect(entry.supportsServiceTier).toBeUndefined();
+    expect(entry.chatServiceTier).toBeUndefined();
+
+    const keyPolicy = fastPolicyForModel(xaiProvider("key"), "grok-4.6", "xai");
+    expect(keyPolicy).toMatchObject({
+      capability: true,
+      eligibility: "eligible",
+      forwardCallerTier: true,
+      fastTierDescription: "Priority processing, 2x token price",
+    });
+
+    const oauthPolicy = fastPolicyForModel(xaiProvider("oauth"), "grok-4.6", "xai");
+    expect(oauthPolicy.capability).toBeUndefined();
+    expect(oauthPolicy.eligibility).toBe("unclassified");
+    expect(oauthPolicy.forwardCallerTier).toBe(false);
+  });
+
+  test("catalog and runtime publish the same key/OAuth conclusion", async () => {
+    const keyProvider = xaiProvider("key");
+    const keyPolicy = fastPolicyForModel(keyProvider, "grok-4.6", "xai");
+    const keyCatalog = await catalogEntry(keyProvider);
+    expect(serviceTierSupportFromPolicy(keyPolicy)).toBe(true);
+    expect(keyCatalog?.service_tiers).toEqual([{
+      id: "priority",
+      name: "Fast",
+      description: "Priority processing, 2x token price",
+    }]);
+    expect(keyCatalog?.additional_speed_tiers).toEqual(["fast"]);
+    expect(decideTier(keyPolicy, true, undefined)).toEqual({ kind: "set", value: "priority" });
+
+    const oauthProvider = xaiProvider("oauth");
+    const oauthPolicy = fastPolicyForModel(oauthProvider, "grok-4.6", "xai");
+    const oauthCatalog = await catalogEntry(oauthProvider);
+    expect(serviceTierSupportFromPolicy(oauthPolicy)).toBe(false);
+    expect(oauthCatalog).not.toHaveProperty("service_tiers");
+    expect(oauthCatalog).not.toHaveProperty("additional_speed_tiers");
+    expect(decideTier(oauthPolicy, true, undefined)).toEqual({ kind: "drop" });
+  });
+
+  test("explicit supportsServiceTier=false wins in policy and catalog for both transports", async () => {
+    for (const authMode of ["key", "oauth"] as const) {
+      const provider = xaiProvider(authMode, { supportsServiceTier: false });
+      const policy = fastPolicyForModel(
+        provider,
+        "grok-4.6",
+        "xai",
+      );
+      expect(policy.capability).toBe(false);
+      expect(policy.eligibility).toBe("capability-unsupported");
+      expect(decideTier(policy, true, undefined)).toEqual({ kind: "drop" });
+      const catalog = await catalogEntry(provider);
+      expect(catalog).not.toHaveProperty("service_tiers");
+      expect(catalog).not.toHaveProperty("additional_speed_tiers");
+    }
   });
 });
 
@@ -264,6 +357,16 @@ describe("the gate fires on the live handleResponses path", () => {
     ({ ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" });
   const openAiKeyProvider = (): OcxProviderConfig =>
     ({ ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!), apiKey: "sk-test" });
+  const xaiKeyProvider = (): OcxProviderConfig => ({
+    ...providerConfigSeed(getProviderRegistryEntry("xai")!),
+    authMode: "key",
+    apiKey: "xai-test-key",
+  });
+  const xaiOAuthProvider = (): OcxProviderConfig => ({
+    ...providerConfigSeed(getProviderRegistryEntry("xai")!),
+    authMode: "oauth",
+    apiKey: "xai-oauth-test-token",
+  });
   const openRouterProvider = (overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig => {
     const provider: OcxProviderConfig = {
       ...providerConfigSeed(getProviderRegistryEntry("openrouter")!),
@@ -319,6 +422,23 @@ describe("the gate fires on the live handleResponses path", () => {
   test("canonical OpenAI preserves a caller value when fastMode is unset", async () => {
     const body = await drive("openai-apikey", openAiKeyProvider(), "gpt-5.5", { service_tier: "flex" });
     expect(body.service_tier).toBe("flex");
+  });
+
+  test("xAI API-key runtime injects priority while OAuth does not", async () => {
+    const keyBody = await drive("xai", xaiKeyProvider(), "grok-4.6", {}, true);
+    expect(keyBody.service_tier).toBe("priority");
+    const oauthBody = await drive("xai", xaiOAuthProvider(), "grok-4.6", {}, true);
+    expect(oauthBody).not.toHaveProperty("service_tier");
+    for (const provider of [xaiKeyProvider(), xaiOAuthProvider()]) {
+      const optedOut = await drive(
+        "xai",
+        { ...provider, supportsServiceTier: false },
+        "grok-4.6",
+        {},
+        true,
+      );
+      expect(optedOut).not.toHaveProperty("service_tier");
+    }
   });
 
   test("an unclassified custom Responses provider keeps caller values; only explicit false strips", async () => {

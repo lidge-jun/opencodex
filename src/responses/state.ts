@@ -18,6 +18,12 @@ import {
 const MAX_STORED_RESPONSES = 1_000;
 const RESPONSE_TTL_MS = 60 * 60 * 1_000;
 const SNAPSHOT_DEBOUNCE_MS = 2_000;
+/** Snapshot size below which the debounce stays at its base value. */
+const SNAPSHOT_DEBOUNCE_SCALE_FROM_BYTES = 1 * 1024 * 1024;
+/** Ceiling for the stretched debounce. Continuation state is only read after a
+ *  restart, and a graceful shutdown flushes, so the exposure a longer debounce adds
+ *  is bounded by a hard kill — paid against rewriting the whole snapshot every 2 s. */
+const SNAPSHOT_DEBOUNCE_MAX_MS = 30_000;
 /** In-memory high-water byte cap across all entries. Forced store:false retention (kiro/cursor
  * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
  * so a count cap alone cannot bound memory. Oldest-first eviction applies past this mark. */
@@ -90,6 +96,43 @@ let oldestResidentId: string | undefined;
 let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
 let stateRevision = 0;
+/** Byte length and digest of the last snapshot actually written, for the
+ *  identical-payload skip and the size-scaled debounce. The payload itself is not
+ *  retained: at the 24 MiB bound that would double the snapshot's memory cost. */
+let lastSnapshotBytes = 0;
+let lastSnapshotDigest: string | null = null;
+// The resolved file the digest above describes. Keeping it means a config-dir
+// change or a retargeted symlink is a miss rather than a false "unchanged".
+let lastSnapshotTarget: string | null = null;
+
+/**
+ * Is the snapshot on disk still byte-for-byte what we last wrote?
+ *
+ * The cached digest proves what this process wrote, not what is there now. Size is
+ * checked first so the common mismatch costs a `stat`, and the content comparison
+ * only runs when the size already agrees. Any read failure answers "no" and the
+ * caller rewrites — the safe direction.
+ */
+async function snapshotOnDiskMatches(path: string, payload: string, payloadBytes: number): Promise<boolean> {
+  try {
+    const file = Bun.file(path);
+    if (file.size !== payloadBytes) return false;
+    if (await file.text() !== payload) return false;
+    // Content matching is not the whole invariant. This file holds persisted request
+    // and response bodies, and `atomicWriteFileAsync` writes it owner-only; the
+    // unconditional rewrite used to restore that on every mutation. Skipping without
+    // checking would let a broadened mode persist indefinitely, so treat a widened
+    // file as "does not match" and let the caller rewrite it through the hardening
+    // path. POSIX only — Windows ACLs are re-applied by that same write path.
+    if (process.platform !== "win32") {
+      const mode = statSync(path).mode & 0o777;
+      if (mode !== 0o600) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
 /**
  * Admission-boundary observability (test-visible). directSpills: oversized
@@ -788,9 +831,38 @@ async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome>
         entries.push(persistEntry);
       }
       entries.reverse();
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
-      await atomicWriteFileAsync(path, JSON.stringify({ version: 2, states: entries }));
+      const payload = JSON.stringify({ version: 2, states: entries });
+      const payloadBytes = Buffer.byteLength(payload, "utf8");
+      const payloadDigest = Bun.hash(payload).toString(36);
+      // A mutation does not always change what gets persisted: entries past the
+      // per-entry or total byte bound are dropped from the selection, and spill
+      // demotion moves bytes out of it. Re-writing a byte-identical 24 MiB file
+      // buys nothing, so compare first — but the cached digest describes what THIS
+      // process last wrote, which is not the same claim as "that is what is on disk
+      // now". A second proxy sharing the home, or anything that rewrites the file
+      // in place, leaves the digest describing bytes that are gone. Before every
+      // release-of-a-write, the previous behaviour rewrote unconditionally and so
+      // repaired that silently; skipping without checking would turn a repaired
+      // snapshot into a lost one at the next restart.
+      //
+      // Verify against the file itself, keyed to the resolved target so a retargeted
+      // symlink is also a miss. Reading back a matching-size file costs far less
+      // than the atomic replace it avoids, and only happens when the digest already
+      // matched — the amplification this fixes is the repeated WRITE, not the read.
+      const unchanged = lastSnapshotDigest !== null
+        && payloadDigest === lastSnapshotDigest
+        && payloadBytes === lastSnapshotBytes
+        && lastSnapshotTarget === resolveWriteTarget(path)
+        && existsSync(path)
+        && await snapshotOnDiskMatches(path, payload, payloadBytes);
+      if (!unchanged) {
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
+        await atomicWriteFileAsync(path, payload);
+        lastSnapshotDigest = payloadDigest;
+        lastSnapshotBytes = payloadBytes;
+        lastSnapshotTarget = resolveWriteTarget(path);
+      }
       persistAttemptHookForTests?.();
       if (revision === stateRevision) return "stable";
     }
@@ -809,11 +881,26 @@ function drainPendingSpillUnlinks(): void {
   }
 }
 
+/**
+ * Debounce scaled by the size of the last snapshot written.
+ *
+ * The whole snapshot is re-serialized and atomically replaced on every flush, so at
+ * the 24 MiB bound a fixed 2 s debounce is up to ~12 MB/s of write amplification for
+ * state nothing reads until the next start (#2460). Small snapshots keep the base
+ * cadence; the stretch is linear in size and clamped, so the write rate is roughly
+ * flat instead of growing with the file.
+ */
+function snapshotDebounceMs(): number {
+  if (lastSnapshotBytes <= SNAPSHOT_DEBOUNCE_SCALE_FROM_BYTES) return SNAPSHOT_DEBOUNCE_MS;
+  const scaled = Math.round(SNAPSHOT_DEBOUNCE_MS * (lastSnapshotBytes / SNAPSHOT_DEBOUNCE_SCALE_FROM_BYTES));
+  return Math.min(scaled, SNAPSHOT_DEBOUNCE_MAX_MS);
+}
+
 function schedulePersistAt(path: string, replace = false): void {
   if (persistTimer && !replace) return;
   if (persistTimer) clearTimeout(persistTimer);
   pendingPersistPath = path;
-  persistTimer = setTimeout(() => { void persistNow(path); }, SNAPSHOT_DEBOUNCE_MS);
+  persistTimer = setTimeout(() => { void persistNow(path); }, snapshotDebounceMs());
   (persistTimer as { unref?: () => void }).unref?.();
 }
 
@@ -1418,6 +1505,9 @@ export function clearResponseStateMemoryForTests(): void {
   replayScopeMismatchDrops = 0;
   replayOverlapSkips = 0;
   persistAttemptHookForTests = null;
+  lastSnapshotBytes = 0;
+  lastSnapshotDigest = null;
+  lastSnapshotTarget = null;
   loaded = false;
 }
 

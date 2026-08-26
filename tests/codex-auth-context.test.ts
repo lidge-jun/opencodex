@@ -497,6 +497,187 @@ describe("Codex auth context", () => {
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
   });
 
+  test("Desktop session and thread headers derive one opaque reconnect affinity", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 0;
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+    const headers = new Headers({
+      "session-id": "desktop-session-private",
+      "thread-id": "desktop-thread-private",
+    });
+
+    const first = await resolveCodexAuthContext(headers, cfg, "pool");
+    expect(first).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(first.kind).toBe("pool");
+    if (first.kind !== "pool") throw new Error("expected pool context");
+    expect(first.affinityKey?.startsWith("app:")).toBe(true);
+    expect(first.affinityKey?.includes("desktop-session-private")).toBe(false);
+    expect(first.affinityKey?.includes("desktop-thread-private")).toBe(false);
+
+    cfg.activeCodexAccountId = "pool-b";
+    const reconnect = await resolveCodexAuthContext(headers, cfg, "pool");
+    expect(reconnect).toMatchObject({
+      kind: "pool",
+      accountId: "pool-a",
+      affinityKey: first.affinityKey,
+    });
+  });
+
+  test("the canonical parent-thread affinity stays authoritative over Desktop fallback headers", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 0;
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    const headers = new Headers({
+      "x-codex-parent-thread-id": "  canonical-parent-thread  ",
+      "session-id": "desktop-session-private",
+      "thread-id": "desktop-thread-private",
+    });
+
+    const resolved = await resolveCodexAuthContext(headers, cfg, "pool");
+    expect(resolved).toMatchObject({
+      kind: "pool",
+      accountId: "pool-a",
+      affinityKey: "canonical-parent-thread",
+    });
+  });
+
+  test("an oversized parent-thread id falls back to the bounded Desktop pair", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 0;
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    const headers = new Headers({
+      "x-codex-parent-thread-id": "p".repeat(513),
+      "session-id": "desktop-session-private",
+      "thread-id": "desktop-thread-private",
+    });
+
+    const resolved = await resolveCodexAuthContext(headers, cfg, "pool");
+    expect(resolved).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(resolved.kind).toBe("pool");
+    if (resolved.kind !== "pool") throw new Error("expected pool context");
+    expect(resolved.affinityKey?.startsWith("app:")).toBe(true);
+    expect(resolved.affinityKey).not.toContain("desktop-session-private");
+    expect(resolved.affinityKey).not.toContain("desktop-thread-private");
+  });
+
+  test("incomplete or oversized Desktop affinity headers remain unbound", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 0;
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    for (const id of ["pool-a", "pool-b"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `${id}_token`,
+        refreshToken: `${id}_refresh`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `${id}_acc`,
+      });
+    }
+
+    for (const headers of [
+      new Headers({ "session-id": "session-only" }),
+      new Headers({ "thread-id": "thread-only" }),
+      new Headers({ "session-id": "s".repeat(513), "thread-id": "bounded-thread" }),
+    ]) {
+      clearThreadAccountMap();
+      cfg.activeCodexAccountId = "pool-a";
+      const first = await resolveCodexAuthContext(headers, cfg, "pool");
+      expect(first).toMatchObject({ kind: "pool", accountId: "pool-a" });
+      expect(first.kind === "pool" ? first.affinityKey : undefined).toBeUndefined();
+
+      cfg.activeCodexAccountId = "pool-b";
+      await expect(resolveCodexAuthContext(headers, cfg, "pool"))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+    }
+  });
+
+  test("exact account selection does not create Desktop Pool affinity", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 0;
+    cfg.activeCodexAccountId = "pool-b";
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    for (const id of ["pool-a", "pool-b"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `${id}_token`,
+        refreshToken: `${id}_refresh`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `${id}_acc`,
+      });
+    }
+    const headers = new Headers({
+      "session-id": "exact-desktop-session",
+      "thread-id": "exact-desktop-thread",
+    });
+
+    const exact = await resolveCodexAuthContext(headers, cfg, "pool", { accountId: "pool-a" });
+    expect(exact).toMatchObject({ kind: "pool", accountId: "pool-a", fixedAccount: true });
+    expect(exact.kind === "pool" ? exact.affinityKey : undefined).toBeUndefined();
+
+    await expect(resolveCodexAuthContext(headers, cfg, "pool"))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+  });
+
+  test("late transient failure cannot delete a newer Desktop affinity binding", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 0;
+    cfg.upstreamFailoverThreshold = 3;
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    for (const id of ["pool-a", "pool-b"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `${id}_token`,
+        refreshToken: `${id}_refresh`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `${id}_acc`,
+      });
+    }
+    const headers = new Headers({
+      "session-id": "failure-desktop-session",
+      "thread-id": "failure-desktop-thread",
+    });
+    const first = await resolveCodexAuthContext(headers, cfg, "pool");
+    if (first.kind !== "pool") throw new Error("expected pool context");
+    expect(first.accountId).toBe("pool-a");
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      recordCodexUpstreamOutcome(cfg, "pool-a", 500, {
+        now: 1_800_000_000_000 + attempt,
+        threadId: first.affinityKey,
+      });
+    }
+    const rebound = await resolveCodexAuthContext(headers, cfg, "pool");
+    expect(rebound).toMatchObject({ kind: "pool", accountId: "pool-b" });
+
+    recordCodexUpstreamOutcome(cfg, "pool-a", 500, {
+      now: 1_800_000_000_100,
+      threadId: first.affinityKey,
+    });
+    clearCodexUpstreamHealth();
+    cfg.activeCodexAccountId = "pool-a";
+    await expect(resolveCodexAuthContext(headers, cfg, "pool"))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+  });
+
   test("selection order never bypasses an exact account selector", async () => {
     // Regression: `codexAccountPriorities` narrows the pool to the highest tier, but it
     // is an ordering boundary over the pool path only. A request that names an account

@@ -34,13 +34,15 @@ import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, r
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
-  serviceTierSupportForModel,
+  fastPolicyForModel,
+  serviceTierSupportFromPolicy,
 } from "../../providers/service-tier";
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
-import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
+import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
+import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -74,7 +76,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -570,6 +572,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     ctx: prov.contextWindow ?? null,
     ctxW: prov.modelContextWindows ?? null,
     maxIn: prov.modelMaxInputTokens ?? null,
+    autoCompact: prov.modelAutoCompactTokenLimits ?? null,
     inMod: prov.modelInputModalities ?? null,
     re: prov.modelReasoningEfforts ?? null,
     defRe: prov.modelDefaultReasoningEfforts ?? null,
@@ -624,6 +627,17 @@ export function configuredMaxInputTokens(prov: OcxProviderConfig, id: string): n
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
+export function configuredAutoCompactTokenLimit(
+  prov: OcxProviderConfig | undefined,
+  id: string,
+): number | undefined {
+  if (!prov) return undefined;
+  const configured = modelRecordValue(prov.modelAutoCompactTokenLimits, id);
+  return typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : undefined;
+}
+
 function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, id: string): boolean | undefined {
   if (!prov) return undefined;
   const explicit = modelRecordValue(prov.modelSupportsReasoningSummaries, id);
@@ -635,6 +649,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   void name;
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
+  const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
   let inputModalities = configuredInputModalities(prov, model.id);
   // Vision-sidecar coverage: `noVisionModels` marks models whose images the PROXY describes
   // (src/vision/index.ts). The catalog must still advertise image input for them — the Codex app
@@ -647,8 +662,13 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
-  const supportsServiceTier = serviceTierSupportForModel(prov, model.id, name);
-  const { supportsServiceTier: _staleServiceTier, ...modelWithoutServiceTier } = model;
+  const fastPolicy = fastPolicyForModel(prov, model.id, name);
+  const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
+  const {
+    supportsServiceTier: _staleServiceTier,
+    fastTierDescription: _staleFastTierDescription,
+    ...modelWithoutServiceTier
+  } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
@@ -671,6 +691,9 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+    ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
+      ? { fastTierDescription: fastPolicy.fastTierDescription }
+      : {}),
     ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),
     // Default-on for openai-chat providers (explicit false opts out); other adapters
     // advertise only on explicit opt-in.
@@ -680,10 +703,31 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ...(prov.codexToolMode !== undefined ? { codexToolMode: prov.codexToolMode } : {}),
   };
   const capped = applyProviderContextCap(hinted.contextWindow, providerCap);
-  if (providerCap !== undefined && capped !== hinted.contextWindow) {
-    return { ...hinted, contextWindow: capped, contextCap: providerCap, contextCapped: true };
-  }
-  return providerCap !== undefined ? { ...hinted, contextCap: providerCap, contextCapped: false } : hinted;
+  const withCap = providerCap !== undefined
+    ? capped !== hinted.contextWindow
+      ? { ...hinted, contextWindow: capped, contextCap: providerCap, contextCapped: true }
+      : { ...hinted, contextCap: providerCap, contextCapped: false }
+    : hinted;
+  const contextWindow = typeof withCap.contextWindow === "number" && withCap.contextWindow > 0
+    ? withCap.contextWindow
+    : undefined;
+  const boundedMaxInput = typeof withCap.maxInputTokens === "number" && withCap.maxInputTokens > 0
+    ? (contextWindow !== undefined ? Math.min(withCap.maxInputTokens, contextWindow) : withCap.maxInputTokens)
+    : undefined;
+  const withHardBounds = boundedMaxInput !== undefined && boundedMaxInput !== withCap.maxInputTokens
+    ? { ...withCap, maxInputTokens: boundedMaxInput }
+    : withCap;
+  const softCandidates = [model.autoCompactTokenLimit, configuredAutoCompact]
+    .filter((value): value is number => typeof value === "number" && value > 0);
+  if (contextWindow === undefined || softCandidates.length === 0) return withHardBounds;
+  return {
+    ...withHardBounds,
+    autoCompactTokenLimit: clampAutoCompactTokenLimit(
+      contextWindow,
+      boundedMaxInput,
+      Math.min(...softCandidates),
+    ),
+  };
 }
 
 export function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string, contextCap?: number): Partial<CatalogModel> {
@@ -710,6 +754,7 @@ interface ComboCatalogMemberFallback {
   readonly contextWindow?: number;
   /** Input ceiling when it is lower than the window (native GPT-5.6: 922k under 1.05M). */
   readonly maxInputTokens?: number;
+  readonly autoCompactTokenLimit?: number;
   readonly inputModalities?: readonly string[];
   readonly reasoningEfforts?: readonly string[];
 }
@@ -738,26 +783,33 @@ export function resolveComboCatalogMember(
   if (prov?.disabled === true) return undefined;
 
   const withFallbackMetadata = (member: CatalogModel): CatalogModel => {
-    if (!fallback) return member;
     const contextWindow = typeof member.contextWindow === "number" && member.contextWindow > 0
       ? member.contextWindow
       : undefined;
-    const addMaxInput = contextWindow !== undefined
+    const addMaxInput = fallback !== undefined && contextWindow !== undefined
       && !(typeof member.maxInputTokens === "number" && member.maxInputTokens > 0);
+    const effectiveMaxInput = addMaxInput
+      ? Math.min(fallback?.maxInputTokens ?? contextWindow!, contextWindow!)
+      : member.maxInputTokens;
+    const softCandidates = [member.autoCompactTokenLimit, fallback?.autoCompactTokenLimit]
+      .filter((value): value is number => typeof value === "number" && value > 0);
+    const autoCompactTokenLimit = contextWindow !== undefined && softCandidates.length > 0
+      ? clampAutoCompactTokenLimit(contextWindow, effectiveMaxInput, Math.min(...softCandidates))
+      : member.autoCompactTokenLimit;
+    const adjustAutoCompact = autoCompactTokenLimit !== member.autoCompactTokenLimit;
     const addModalities = (!Array.isArray(member.inputModalities) || member.inputModalities.length === 0)
-      && fallback.inputModalities !== undefined;
+      && fallback?.inputModalities !== undefined;
     const addReasoning = member.reasoningEfforts === undefined
-      && fallback.reasoningEfforts !== undefined;
-    if (!addMaxInput && !addModalities && !addReasoning) return member;
+      && fallback?.reasoningEfforts !== undefined;
+    if (!addMaxInput && !adjustAutoCompact && !addModalities && !addReasoning) return member;
     return {
       ...member,
       // Never claim a larger input budget than the window, and prefer the model's own
       // measured ceiling when the fallback carries one.
-      ...(addMaxInput
-        ? { maxInputTokens: Math.min(fallback.maxInputTokens ?? contextWindow!, contextWindow!) }
-        : {}),
-      ...(addModalities ? { inputModalities: [...fallback.inputModalities!] } : {}),
-      ...(addReasoning ? { reasoningEfforts: [...fallback.reasoningEfforts!] } : {}),
+      ...(addMaxInput ? { maxInputTokens: effectiveMaxInput } : {}),
+      ...(adjustAutoCompact && autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
+      ...(addModalities ? { inputModalities: [...fallback!.inputModalities!] } : {}),
+      ...(addReasoning ? { reasoningEfforts: [...fallback!.reasoningEfforts!] } : {}),
     };
   };
 
@@ -838,6 +890,20 @@ export function resolveComboCatalogMember(
   const maxInputTokens = effectiveMaxInput !== undefined
     ? Math.min(effectiveMaxInput, contextWindow)
     : contextWindow;
+  const softCandidates = [
+    hinted.autoCompactTokenLimit,
+    base.autoCompactTokenLimit,
+    fallback?.autoCompactTokenLimit,
+    configuredAutoCompactTokenLimit(prov, target.model),
+  ].filter((value): value is number => typeof value === "number" && value > 0);
+  // A generic 128k synthesis is a catalog compatibility fallback, not evidence
+  // that a configured soft policy has an authoritative window to clamp against.
+  const hasAuthoritativeAutoCompactBasis = hintedContext !== undefined
+    || fallbackContext !== undefined
+    || contextCap !== undefined;
+  const autoCompactTokenLimit = hasAuthoritativeAutoCompactBasis && softCandidates.length > 0
+    ? clampAutoCompactTokenLimit(contextWindow, maxInputTokens, Math.min(...softCandidates))
+    : undefined;
 
   return {
     ...hinted,
@@ -845,6 +911,7 @@ export function resolveComboCatalogMember(
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     contextWindow,
     maxInputTokens,
+    ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
     ...(fallbackCapped ? { contextCap, contextCapped: true as const } : {}),
   };
 }
@@ -1551,7 +1618,24 @@ export function filterCatalogVisibleModels(
   const allowByProvider = new Map<string, Set<string>>();
   for (const [name, prov] of Object.entries(config.providers)) {
     const sel = prov.selectedModels;
-    if (Array.isArray(sel) && sel.length > 0) allowByProvider.set(name, new Set(sel));
+    // Keyed the way `sync.ts` keys the same list, so a slash-bearing native id and
+    // the encoded slug the Codex picker displays are one entry rather than two. A
+    // bare `Set(sel)` matched only the native form, so an allowlist written from the
+    // displayed slug — which `ocx models remove` also accepts — hid every model it
+    // was meant to keep.
+    //
+    // The key is deliberately lossy: `p/a/b` and `p/a-b` collapse to one entry, so a
+    // provider publishing both spellings has them selected together. That is a real
+    // limitation, pinned by the tests below and tracked as a follow-up; it is NOT
+    // fixed here. Resolving selections against the current roster instead was tried
+    // and rejected — the roster is an incomplete dictionary (live discovery can omit
+    // a published id), so it produces the same over-grant while additionally
+    // disagreeing with the `slugEquivalenceKey` contract `sync.ts` uses at merge time.
+    // Two catalog stages with different equivalence relations is the exact bug class
+    // this change exists to remove.
+    if (Array.isArray(sel) && sel.length > 0) {
+      allowByProvider.set(name, new Set(sel.map(model => slugEquivalenceKey(routedSlug(name, model)))));
+    }
   }
   return models.filter(m => {
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
@@ -1563,7 +1647,7 @@ export function filterCatalogVisibleModels(
       if (slugEquals(stored, m.provider, m.id)) return false;
     }
     const allow = allowByProvider.get(m.provider);
-    return !allow || allow.has(m.id);
+    return !allow || allow.has(slugEquivalenceKey(routedSlug(m.provider, m.id)));
   });
 }
 
@@ -1748,6 +1832,7 @@ async function gatherRoutedModelsUncached(
         // stay separate fields because routed/API rows of the same family run a wider window.
         // Falls back to the window for slugs with no separate ceiling.
         maxInputTokens: Math.min(nativeOpenAiMaxInputTokens(slug, openaiContextCap) ?? contextWindow, contextWindow),
+        autoCompactTokenLimit: nativeOpenAiAutoCompactTokenLimit(slug, openaiContextCap),
         inputModalities: nativeInputModalities(slug),
         reasoningEfforts: nativeReasoningEfforts(slug),
         ...(nativeParallelToolCalls(slug) ? { parallelToolCalls: true } : {}),
@@ -1764,18 +1849,23 @@ async function gatherRoutedModelsUncached(
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
+    const comboNativeLimits = nativeContextLimits(config);
     const nativeContextWindow = combo.nativeAlias && combo.alias
-      ? nativeOpenAiContextWindow(combo.alias, nativeContextLimits(config))
+      ? nativeOpenAiContextWindow(combo.alias, comboNativeLimits)
       : undefined;
     const nativeAliasMaxInput = combo.nativeAlias && combo.alias
       ? (combo.alias.startsWith("gpt-5.6-") || combo.alias.includes("daybreak")
         ? NATIVE_GPT56_MAX_INPUT_TOKENS
         : nativeOpenAiMaxInputTokens(combo.alias) ?? nativeOpenAiContextWindow(combo.alias))
       : undefined;
+    const nativeAliasAutoCompact = combo.nativeAlias && combo.alias
+      ? nativeOpenAiAutoCompactTokenLimit(combo.alias, comboNativeLimits)
+      : undefined;
     const nativeAliasFallback = combo.nativeAlias && combo.alias && nativeContextWindow !== undefined
       ? {
         contextWindow: nativeContextWindow,
         ...(nativeAliasMaxInput !== undefined ? { maxInputTokens: nativeAliasMaxInput } : {}),
+        ...(nativeAliasAutoCompact !== undefined ? { autoCompactTokenLimit: nativeAliasAutoCompact } : {}),
         inputModalities: nativeInputModalities(combo.alias),
         reasoningEfforts: nativeReasoningEfforts(combo.alias),
       }
@@ -1838,15 +1928,32 @@ async function gatherRoutedModelsUncached(
     const nativeAliasMaxInputTokens = codexForwardNativeCapabilityAlias
       ? nativeOpenAiMaxInputTokens(cm.modelId, customNativeLimits)
       : undefined;
-    const customMaxInputTokens = nativeAliasMaxInputTokens !== undefined && customContextWindow !== undefined
-      ? Math.min(nativeAliasMaxInputTokens, customContextWindow)
-      : nativeAliasMaxInputTokens;
+    const configuredMaxInput = rawProvider
+      ? configuredMaxInputTokens(rawProvider, cm.modelId)
+      : undefined;
+    const hardMaxCandidates = [nativeAliasMaxInputTokens, configuredMaxInput]
+      .filter((value): value is number => typeof value === "number" && value > 0);
+    const customMaxInputTokens = hardMaxCandidates.length > 0
+      ? Math.min(
+        ...hardMaxCandidates,
+        ...(customContextWindow !== undefined ? [customContextWindow] : []),
+      )
+      : undefined;
+    const configuredAutoCompact = configuredAutoCompactTokenLimit(rawProvider, cm.modelId);
+    const customAutoCompactTokenLimit = codexForwardNativeCapabilityAlias
+      ? nativeOpenAiAutoCompactTokenLimit(cm.modelId, customNativeLimits)
+      : customContextWindow !== undefined && configuredAutoCompact !== undefined
+        ? clampAutoCompactTokenLimit(customContextWindow, customMaxInputTokens, configuredAutoCompact)
+        : undefined;
     const nativeAliasDefaultEffort = codexForwardNativeCapabilityAlias
       ? nativeDefaultReasoningEffort(cm.modelId)
       : undefined;
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
-    const supportsServiceTier = effectiveProvider
-      ? serviceTierSupportForModel(effectiveProvider, cm.modelId, cm.provider)
+    const fastPolicy = effectiveProvider
+      ? fastPolicyForModel(effectiveProvider, cm.modelId, cm.provider)
+      : undefined;
+    const supportsServiceTier = fastPolicy
+      ? serviceTierSupportFromPolicy(fastPolicy)
       : undefined;
     const base: CatalogModel = {
       id: cm.modelId,
@@ -1858,6 +1965,7 @@ async function gatherRoutedModelsUncached(
         : codexForwardNativeCapabilityAlias ? { displayName: "Daybreak Blue" } : {}),
       ...(customContextWindow !== undefined ? { contextWindow: customContextWindow } : {}),
       ...(customMaxInputTokens !== undefined ? { maxInputTokens: customMaxInputTokens } : {}),
+      ...(customAutoCompactTokenLimit !== undefined ? { autoCompactTokenLimit: customAutoCompactTokenLimit } : {}),
       ...(cm.inputModalities
         ? { inputModalities: cm.inputModalities }
         : codexForwardNativeCapabilityAlias ? { inputModalities: nativeInputModalities(cm.modelId) } : {}),
@@ -1883,6 +1991,9 @@ async function gatherRoutedModelsUncached(
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
       ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+      ...(supportsServiceTier === true && fastPolicy?.fastTierDescription !== undefined
+        ? { fastTierDescription: fastPolicy.fastTierDescription }
+        : {}),
       ...(cm.codexToolMode !== undefined
         ? { codexToolMode: cm.codexToolMode }
         : effectiveProvider?.codexToolMode !== undefined
@@ -1900,10 +2011,18 @@ async function gatherRoutedModelsUncached(
     // along when it is actually a member — otherwise a provider default like "xhigh" would
     // re-apply onto a narrower custom ladder and override the fallback in applyReasoningLevels.
     const effectiveLadder = base.reasoningEfforts ?? replaced?.reasoningEfforts;
+    const mergedMaxInputCandidates = [base.maxInputTokens, replaced?.maxInputTokens]
+      .filter((value): value is number => typeof value === "number" && value > 0);
+    const mergedMaxInput = mergedMaxInputCandidates.length > 0
+      ? Math.min(...mergedMaxInputCandidates)
+      : undefined;
     const merged: CatalogModel = replaced ? {
       ...base,
       ...(base.contextWindow === undefined && replaced.contextWindow !== undefined ? { contextWindow: replaced.contextWindow } : {}),
-      ...(base.maxInputTokens === undefined && replaced.maxInputTokens !== undefined ? { maxInputTokens: replaced.maxInputTokens } : {}),
+      ...(mergedMaxInput !== undefined ? { maxInputTokens: mergedMaxInput } : {}),
+      ...(base.autoCompactTokenLimit === undefined && replaced.autoCompactTokenLimit !== undefined
+        ? { autoCompactTokenLimit: replaced.autoCompactTokenLimit }
+        : {}),
       ...(base.inputModalities === undefined && replaced.inputModalities !== undefined ? { inputModalities: replaced.inputModalities } : {}),
       ...(base.reasoningEfforts === undefined && replaced.reasoningEfforts !== undefined ? { reasoningEfforts: replaced.reasoningEfforts } : {}),
       ...(base.defaultReasoningEffort === undefined && replaced.defaultReasoningEffort !== undefined
@@ -1920,14 +2039,36 @@ async function gatherRoutedModelsUncached(
     // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
     // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
     // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
+    const mergedContext = typeof merged.contextWindow === "number" && merged.contextWindow > 0
+      ? merged.contextWindow
+      : undefined;
+    const boundedMergedMaxInput = typeof merged.maxInputTokens === "number" && merged.maxInputTokens > 0
+      ? (mergedContext !== undefined ? Math.min(merged.maxInputTokens, mergedContext) : merged.maxInputTokens)
+      : undefined;
+    const mergedWithHardBounds = boundedMergedMaxInput !== undefined
+      && boundedMergedMaxInput !== merged.maxInputTokens
+      ? { ...merged, maxInputTokens: boundedMergedMaxInput }
+      : merged;
+    const mergedSoftCandidates = [mergedWithHardBounds.autoCompactTokenLimit, configuredAutoCompact]
+      .filter((value): value is number => typeof value === "number" && value > 0);
+    const mergedWithAutoCompact: CatalogModel = mergedContext !== undefined && mergedSoftCandidates.length > 0
+      ? {
+        ...mergedWithHardBounds,
+        autoCompactTokenLimit: clampAutoCompactTokenLimit(
+          mergedContext,
+          boundedMergedMaxInput,
+          Math.min(...mergedSoftCandidates),
+        ),
+      }
+      : mergedWithHardBounds;
     const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
-    if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, merged.id)) {
-      const current = merged.inputModalities ?? ["text"];
+    if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, mergedWithAutoCompact.id)) {
+      const current = mergedWithAutoCompact.inputModalities ?? ["text"];
       if (!current.includes("image")) {
-        return { ...merged, inputModalities: [...current, "image"] };
+        return { ...mergedWithAutoCompact, inputModalities: [...current, "image"] };
       }
     }
-    return merged;
+    return mergedWithAutoCompact;
   });
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
@@ -1983,7 +2124,15 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
       ? Math.min(officialContext, userContext ?? officialContext, providerCap ?? officialContext)
       : undefined;
     const maxInputTokens = typeof officialMaxInput === "number"
-      ? Math.min(officialMaxInput, userMaxInput ?? officialMaxInput)
+      ? Math.min(
+        officialMaxInput,
+        userMaxInput ?? officialMaxInput,
+        contextWindow ?? officialMaxInput,
+      )
+      : undefined;
+    const configuredAutoCompact = configuredAutoCompactTokenLimit(configured, id);
+    const autoCompactTokenLimit = contextWindow !== undefined && configuredAutoCompact !== undefined
+      ? clampAutoCompactTokenLimit(contextWindow, maxInputTokens, configuredAutoCompact)
       : undefined;
     return {
       provider: OPENAI_API_PROVIDER_ID,
@@ -1991,6 +2140,7 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
       owned_by: OPENAI_API_PROVIDER_ID,
       ...(contextWindow ? { contextWindow } : {}),
       ...(maxInputTokens ? { maxInputTokens } : {}),
+      ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
       ...(policy.modelInputModalities?.[id] ? { inputModalities: [...policy.modelInputModalities[id]!] } : {}),
       ...(policy.modelReasoningEfforts?.[id] ? { reasoningEfforts: [...policy.modelReasoningEfforts[id]!] } : {}),
     };

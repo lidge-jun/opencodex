@@ -302,7 +302,7 @@ describe("Cursor request builder", () => {
     ]);
   });
 
-  test("uses an explicit image placeholder for unsupported image parts", () => {
+  test("omits image parts from text — they ride SelectedImage, not markers", () => {
     const request = createCursorRequest({
       ...base,
       context: {
@@ -320,13 +320,58 @@ describe("Cursor request builder", () => {
     });
 
     expect(request.messages[0]?.content).toContain("see");
-    // A USER-message image is still flattened here (this path builds the plain-text prompt).
-    // The tool-result ENCODER does build real McpImageContent, so the placeholder no longer
-    // claims the encoder as a whole is unable to send images. (Neither kind reaches Cursor in
-    // production today: every Cursor model is in noVisionModels, so the vision sidecar runs
-    // first — see devlog/_plan/260817_cursor_toolcall_decode/020_*.md.)
-    expect(request.messages[0]?.content).toContain("image omitted from this Cursor text prompt");
-    expect(request.messages[0]?.content).toContain("high");
+    expect(request.messages[0]?.content).not.toContain("image input unsupported");
+    expect(request.messages[0]?.content).not.toContain("data:image/png");
+  });
+
+  test("preserves image-only user turns as empty-string active messages", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "high" }],
+            timestamp: 1,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([{ role: "user", content: "" }]);
+    expect(request.rawMessages?.length).toBe(1);
+  });
+
+  test("preserves image-only active user turn after assistant reply", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "high" }],
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            model: "cursor/composer-2.5",
+            content: [{ type: "text", text: "ack" }],
+            timestamp: 2,
+          },
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,def", detail: "high" }],
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([
+      { role: "user", content: "" },
+      { role: "assistant", content: "ack" },
+      { role: "user", content: "" },
+    ]);
   });
 
   test("preserves Responses tools and tool choice for Cursor request context", () => {

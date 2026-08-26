@@ -209,7 +209,15 @@ async function pollForToken(deviceCode: string, intervalMs: number, expiresInMs:
 
 export async function loginKimi(ctrl: OAuthController): Promise<OAuthCredentials> {
   const device = await requestDeviceAuthorization();
-  ctrl.onAuth?.({ url: device.verificationUriComplete, instructions: `Enter code: ${device.userCode}` });
+  // `deviceCode` carries the human-typed user code, matching the other device
+  // providers. It is also what tells the management login route this is a device
+  // flow, so a provider-supplied verification URI is no longer handed to a local
+  // browser spawn — the URL stays visible and copyable in every login surface.
+  ctrl.onAuth?.({
+    url: device.verificationUriComplete,
+    instructions: `Enter code: ${device.userCode}`,
+    deviceCode: device.userCode,
+  });
   return pollForToken(device.deviceCode, device.intervalMs, device.expiresInMs, ctrl.signal);
 }
 

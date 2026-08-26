@@ -103,6 +103,28 @@ export const CURSOR_ROUTER_MODEL_IDS = [
   ...CURSOR_ROUTING_LEVELS.map(level => `${CURSOR_AUTO_MODEL_ID}-${level}`),
 ] as const;
 
+/**
+ * Cursor models that cannot see images natively. OpenCodex routes them through the vision
+ * sidecar (the catalog still advertises image so Codex can attach). Evidence:
+ * - Composer family: Cursor staff — text-only; "Model does not support images"
+ * - Auto / router modes: Cursor docs omit Images for Auto Cost; staff — pick Claude/GPT for images
+ * - glm-5.2: Cursor docs omit Images; Z.ai GLM-5.2 is text-only (vision is GLM-5V)
+ * - glm-5.3: same family; seeded as text-only ahead of Cursor's lineup update
+ *
+ * Composer ids are enumerated explicitly — prefix wildcard matching is deliberately out of
+ * scope here; a live-discovered new Composer slug stays native-path until curated. Everyone
+ * else in the static seed (Claude, Gemini, GPT, Kimi, Grok) takes SelectedImage. Other
+ * live-discovered ids stay unclassified (native path) until curated.
+ */
+export const CURSOR_NO_VISION_MODELS = [
+  ...CURSOR_ROUTER_MODEL_IDS,
+  "composer-1",
+  "composer-2.5",
+  "composer-2.5-fast",
+  "glm-5.2",
+  "glm-5.3",
+] as const;
+
 /** Wire id Cursor Connect expects for the auto-router (GetUsableModels returns `default`, not `auto`). */
 export const CURSOR_AUTO_WIRE_MODEL_ID = "default";
 
@@ -214,10 +236,15 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "claude-4.6-opus", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-4.6-sonnet", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-4-7", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  // opus-4-7-fast: effort-suffix tiers unverified -> no tier picker; sent bare like live-only ids.
-  { id: "claude-opus-4-7-fast", contextWindow: CONTEXT_200K },
+  // Opus Fast families: live GetUsableModels (260822) lists ONLY effort-suffixed wire ids
+  // ({base-without-fast}-{effort}-fast; the bare id returns not_found), so every entry
+  // carries a tier picker. Live-verified: claude-opus-4-8-high-fast completed a turn.
+  // Tiers per the 260822 dump (devlog 260822_senpi_cursor_transfer/300).
+  { id: "claude-opus-4-7-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-opus-4-8-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-4-8", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-opus-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-opus-5-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
   { id: "claude-fable-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
 
   { id: "composer-1", contextWindow: CONTEXT_200K },

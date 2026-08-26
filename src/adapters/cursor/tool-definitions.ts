@@ -336,6 +336,26 @@ export function normalizeCursorWireName(name: string): string {
   return name.startsWith(CURSOR_MCP_DISPLAY_PREFIX) ? name.slice(CURSOR_MCP_DISPLAY_PREFIX.length) : name;
 }
 
+/**
+ * #2305: some models emit a TEXTUAL pseudo tool call ("[TOOL_CALL]name[ARGS]{...}")
+ * instead of a real frame, using Cursor's display alias as the name. Text-mode clients
+ * (Pi) parse that text and then cannot dispatch the undeclared display name. Rewrite the
+ * display alias to the advertised wire name ONLY inside the marker pair — prose that
+ * merely mentions the alias stays untouched, and the scope guard is the exact
+ * `mcp_${OCX_RESPONSES_TOOL_PROVIDER}_` prefix, never generic `mcp_`.
+ * Known limit (recorded in devlog 230): a marker split across two streaming deltas is
+ * not rewritten; tail-buffering is deferred until a live trace shows split markers.
+ */
+const CURSOR_TEXT_TOOL_MARKER = new RegExp(
+  String.raw`\[TOOL_CALL\](${CURSOR_MCP_DISPLAY_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\[\]]+)\[ARGS\]`,
+  "g",
+);
+
+export function normalizeCursorTextToolMarkers(text: string): string {
+  if (!text.includes(CURSOR_MCP_DISPLAY_PREFIX)) return text;
+  return text.replace(CURSOR_TEXT_TOOL_MARKER, (_match, name: string) => `[TOOL_CALL]${normalizeCursorWireName(name)}[ARGS]`);
+}
+
 export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?: ReadonlyMap<string, string>): string {
   const normalized = normalizeCursorWireName(name);
   if (!cursorToolNameMap) return normalized;
@@ -631,7 +651,7 @@ export function buildCursorToolGuidanceSystemNote(
     // Code mode: shell/edit/MCP live inside freeform `exec` as nested helpers. Without this the
     // model probes for a top-level shell tool that is not there.
     codeMode
-      ? `\`${CODEX_UNIFIED_EXEC_TOOL}\` is Codex code mode: its body is JavaScript evaluated in a V8 isolate, not a shell command and not Node. Shell, file edits, and MCP are nested helpers called INSIDE that body as \`await tools.<name>(...)\`, for example \`await tools.exec_command({cmd: \"ls\"})\`. Read the tool description and the isolate global \`ALL_TOOLS\` (not \`tools.ALL_TOOLS\`) for helpers this turn provides; absence from the top-level catalog or from \`exec\`'s description is not absence. Those nested helpers are not themselves top-level tools, so do not call \`exec_command\` or \`shell_command\` at the top level here${codeModeOtherTopLevelNames.length > 0 ? `; every other tool this turn lists, including ${quotedNames(codeModeOtherTopLevelNames)}, remains callable at the top level as usual` : ""}.`
+      ? `\`${CODEX_UNIFIED_EXEC_TOOL}\` is Codex code mode: its body is JavaScript evaluated in a V8 isolate, not a shell command and not Node. Shell, file edits, and MCP are nested helpers called INSIDE that body as \`await tools.<name>(...)\`, for example \`await tools.exec_command({cmd: \"ls\"})\`. Read the tool description and the isolate global \`ALL_TOOLS\` (not \`tools.ALL_TOOLS\`) for helpers this turn provides; absence from the top-level catalog or from \`exec\`'s description is not absence. Those nested helpers are not themselves top-level tools, so do not call \`exec_command\` or \`shell_command\` at the top level here${codeModeOtherTopLevelNames.length > 0 ? `; every other tool this turn lists, including ${quotedNames(codeModeOtherTopLevelNames)}, remains callable at the top level as usual` : ""}. Nested \`tools.apply_patch(input)\` is host-executed: the string must begin exactly with \`*** Begin Patch\` and end with \`*** End Patch\` (no trailing \`***\` on those lines). OpenCodex does not rewrite JavaScript inside exec, so a decorated \`*** Begin Patch ***\` envelope is rejected by Codex before the file is touched.`
       : undefined,
     codeMode
       ? "In code mode the isolate returns nothing on its own: call `text(...)` (or `notify(...)`) on any value you need to see, or the call completes with empty output. There is no `require`, no `module`, and no filesystem or network globals; reach the host only through the nested helpers."

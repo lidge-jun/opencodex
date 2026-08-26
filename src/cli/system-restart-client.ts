@@ -1,4 +1,4 @@
-import { readRuntimePort } from "../config";
+import { readRuntimePort } from "../config/process-state";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,

@@ -275,6 +275,11 @@ export interface OcxProviderConfig {
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   /**
+   * Per-model soft compaction budgets. Values may only lower the effective
+   * context/max-input envelope; they never raise hard admission limits.
+   */
+  modelAutoCompactTokenLimits?: Record<string, number>;
+  /**
    * Provider-wide fallback for chat-completions `max_tokens` when the caller omits
    * Responses `max_output_tokens`. Adapters still let an explicit request win.
    */
@@ -352,6 +357,12 @@ export interface OcxProviderConfig {
    * passthrough compatibility for OpenAI and unclassified gateways.
    */
   supportsOpenAiWebSearchToolFields?: boolean;
+  /**
+   * Whether the Responses upstream accepts native custom tools and custom_tool_call items.
+   * Set false only for a provider whose native contract rejects them; absence preserves
+   * apply_patch passthrough compatibility for OpenAI and unclassified gateways.
+   */
+  supportsResponsesCustomTools?: boolean;
   /**
    * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
    * fields or closing events (#893). Disabled by default and applied only to client-facing

@@ -12,6 +12,7 @@ import { saveCredential } from "../src/oauth/store";
 import { normalizeKiroModelId } from "../src/providers/kiro-models";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../src/reasoning-effort";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 const origHome = process.env.HOME;
@@ -723,6 +724,41 @@ describe("kiro adapter — buildRequest", () => {
     expect(current.content).toContain("Omitted and unavailable this turn");
   });
 
+  test("large catalogs prioritize tool-search discoveries and the search gateway", async () => {
+    const ordinaryTools = Array.from({ length: MAX_KIRO_TOOL_COUNT + 20 }, (_, index) => ({
+      name: `ordinary_tool_${String(index).padStart(3, "0")}`,
+      description: `Ordinary tool ${index}`,
+      parameters: { type: "object" },
+    }));
+    const searchGateway = {
+      name: "tool_search",
+      description: "Search deferred tools",
+      parameters: { type: "object" },
+      toolSearch: true,
+    };
+    const loadedTool = {
+      name: "codex_app__send_message_to_thread",
+      description: "Send a message to a task",
+      parameters: { type: "object" },
+      loadedFromToolSearch: true,
+    };
+    const tools = [...ordinaryTools, searchGateway, loadedTool];
+
+    const current = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], tools),
+    )).body).conversationState.currentMessage.userInputMessage;
+    const ordinary = current.userInputMessageContext.tools.slice(0, -1);
+    const names = ordinary.map((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name);
+    const omissionNotice = current.content.split("\n\n", 1)[0];
+
+    expect(ordinary).toHaveLength(MAX_KIRO_TOOL_COUNT);
+    expect(names.slice(0, 2)).toEqual([loadedTool.name, searchGateway.name]);
+    expect(names.slice(2)).toEqual(ordinaryTools.slice(0, MAX_KIRO_TOOL_COUNT - 2).map(tool => tool.name));
+    expect(omissionNotice).toContain("ordinary_tool_046");
+    expect(omissionNotice).not.toContain(loadedTool.name);
+    expect(omissionNotice).not.toContain(searchGateway.name);
+  });
+
   test("large catalogs retain the declared prefix within Kiro's serialized byte budget", async () => {
     // Top-level descriptions stay small, so existing description truncation cannot make this pass.
     // The repeated schema descriptions instead make the aggregate converted catalog exceed 96 KiB.
@@ -835,7 +871,6 @@ describe("kiro adapter — buildRequest", () => {
     for (const options of [
       { toolChoice: "required" },
       { toolChoice: { name: "bash" } },
-      { parallelToolCalls: true },
       { serviceTier: "priority" },
     ]) {
       await expect(createKiroAdapter(provider).buildRequest({
@@ -852,6 +887,48 @@ describe("kiro adapter — buildRequest", () => {
     const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as OcxParsedRequest;
     const current = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body).conversationState.currentMessage.userInputMessage;
     expect(current.userInputMessageContext?.tools).toBeUndefined();
+  });
+
+  test("accepts Codex's permissive parallel-tool hint while keeping the Kiro wire serialized", async () => {
+    const parsed = parseRequest({
+      model: "kiro/claude-haiku-4.5",
+      input: "test",
+      stream: true,
+      parallel_tool_calls: true,
+      tools: [{
+        type: "function",
+        name: "bash",
+        description: "Run a shell command",
+        parameters: { type: "object" },
+      }],
+    });
+    expect(parsed.options.parallelToolCalls).toBe(true);
+
+    const payload = JSON.parse((await createKiroAdapter(provider).buildRequest(parsed)).body) as {
+      parallel_tool_calls?: boolean;
+      parallelToolCalls?: boolean;
+      conversationState: {
+        parallel_tool_calls?: boolean;
+        parallelToolCalls?: boolean;
+        currentMessage: {
+          userInputMessage: {
+            userInputMessageContext?: {
+              parallel_tool_calls?: boolean;
+              parallelToolCalls?: boolean;
+              tools?: Array<{ toolSpecification?: { name?: string } }>;
+            };
+          };
+        };
+      };
+    };
+    const context = payload.conversationState.currentMessage.userInputMessage.userInputMessageContext;
+    expect(context?.tools?.some(tool => tool.toolSpecification?.name === "bash")).toBe(true);
+    expect(payload.parallel_tool_calls).toBeUndefined();
+    expect(payload.parallelToolCalls).toBeUndefined();
+    expect(payload.conversationState.parallel_tool_calls).toBeUndefined();
+    expect(payload.conversationState.parallelToolCalls).toBeUndefined();
+    expect(context?.parallel_tool_calls).toBeUndefined();
+    expect(context?.parallelToolCalls).toBeUndefined();
   });
 });
 

@@ -8,7 +8,8 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
+import { apiKeyTransportConfigError } from "../config/provider-validation";
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";

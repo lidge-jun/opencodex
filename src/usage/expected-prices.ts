@@ -182,6 +182,30 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
 ];
 
 /**
+ * Exact official corrections for stale nonzero catalog rows. These are intentionally separate
+ * from fallback overlays: they win over the bundled row only for the declared provider/model and
+ * therefore cannot reprice routed resellers that reuse the same model slug.
+ */
+export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
+  {
+    provider: "xai",
+    modelId: "grok-4.6",
+    cost4: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    source: "https://docs.x.ai/developers/pricing",
+    verifiedAt: "2026-08-18",
+    status: "verified",
+  },
+];
+
+export function findVerifiedPriceOverride(
+  provider: string,
+  modelId: string,
+  overrides: readonly ExpectedPriceOverlay[] = VERIFIED_PRICE_OVERRIDES,
+): ExpectedPriceOverlay | undefined {
+  return overrides.find(row => row.provider === provider && row.modelId === modelId);
+}
+
+/**
  * Exact-key overlay lookup. Returns verified first, then verified-derived.
  * NEVER returns "unverified" rows — fail-closed is enforced in code, not just docs.
  * No fuzzy / case-fold / wire-model fallback.
@@ -196,12 +220,7 @@ export function findExpectedPriceOverlay(
     ?? exact.find(row => row.status === "verified-derived");
 }
 
-/**
- * OpenAI Fast mode (`service_tier=priority`) price multipliers by model slug.
- * Source: https://openai.com/api-fast-mode/ (2026-07-31).
- * Fast pricing applies uniformly to all token types (input, output, cache).
- * Models not listed here fall back to 1× (no multiplier).
- */
+/** OpenAI Fast price multipliers retained as a compatibility export. */
 export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
   "gpt-5.6-sol": 2,
   // Post-price-cut Fast tables (https://openai.com/api-fast-mode/, 2026-08-05):
@@ -217,6 +236,52 @@ export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
 /** Returns the priority-tier price multiplier for a model (1 if not listed). */
 export function resolvePriorityMultiplier(modelId: string): number {
   return PRIORITY_MULTIPLIERS[modelId] ?? 1;
+}
+
+export interface PriorityPricingRule {
+  provider: string;
+  modelId: string;
+  multiplier: number;
+  /** Apply the premium only after the upstream response confirms this tier. */
+  requiresResponseConfirmation?: true;
+  source: string;
+  verifiedAt: string;
+}
+
+const OPENAI_FAST_PRICING = "https://openai.com/api-fast-mode/";
+const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/priority-processing";
+
+/**
+ * Exact provider/model priority premiums. Routed resellers never inherit a vendor rule merely
+ * because they reuse its model slug. Multipliers apply uniformly after cache discounts.
+ */
+export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
+  ...["openai", "openai-apikey"].flatMap(provider =>
+    Object.entries(PRIORITY_MULTIPLIERS).map(([modelId, multiplier]): PriorityPricingRule => ({
+      provider,
+      modelId,
+      multiplier,
+      source: OPENAI_FAST_PRICING,
+      verifiedAt: "2026-08-05",
+    })),
+  ),
+  ...["grok-4.5", "grok-4.6"].map((modelId): PriorityPricingRule => ({
+    provider: "xai",
+    modelId,
+    multiplier: 2,
+    requiresResponseConfirmation: true,
+    source: XAI_PRIORITY_PRICING,
+    verifiedAt: "2026-08-18",
+  })),
+];
+
+/** Exact provider/model priority-pricing lookup. */
+export function findPriorityPricingRule(
+  provider: string,
+  modelId: string,
+  rules: readonly PriorityPricingRule[] = PRIORITY_PRICING_RULES,
+): PriorityPricingRule | undefined {
+  return rules.find(rule => rule.provider === provider && rule.modelId === modelId);
 }
 
 /**
@@ -244,6 +309,8 @@ export interface ContextTier {
   inclusive: boolean;
   /** Per-field factor from the short rate to the published long rate. */
   multiplier: Cost4;
+  /** Published relationship between confirmed priority and long-context bands. */
+  confirmedPriorityRelation?: "exclusive" | "lower-bound";
   source: string;
   verifiedAt: string;
 }
@@ -277,6 +344,7 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
       thresholdInputTokens: 272_000,
       inclusive: false,
       multiplier: OPENAI_LONG_CONTEXT,
+      confirmedPriorityRelation: "exclusive",
       source: OPENAI_PRICING_DOC,
       verifiedAt: "2026-08-03",
     })),
@@ -287,19 +355,21 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
     thresholdInputTokens: 200_000,
     inclusive: true,
     multiplier: UNIFORM_DOUBLE,
+    confirmedPriorityRelation: "lower-bound",
     source: "https://docs.x.ai/developers/pricing",
     verifiedAt: "2026-08-03",
   },
   {
-    // 260813: grok-4.6 long-context tier mirrored from grok-4.5; the official pricing row
-    // was not yet published when the model page went up, so treat as provisional.
+    // xAI publishes the whole-request >=200k band for grok-4.6. Its combination with
+    // Priority Processing is not published, so confirmed priority uses this row as a lower bound.
     provider: "xai",
     modelId: "grok-4.6",
     thresholdInputTokens: 200_000,
     inclusive: true,
     multiplier: UNIFORM_DOUBLE,
+    confirmedPriorityRelation: "lower-bound",
     source: "https://docs.x.ai/developers/pricing",
-    verifiedAt: "2026-08-13",
+    verifiedAt: "2026-08-18",
   },
   {
     // daybreak-blue-latest aliases gpt-5.6-sol, which publishes the full long-context row

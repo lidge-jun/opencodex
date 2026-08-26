@@ -101,6 +101,19 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Terminal poll statuses (T07, senpi PR #905): the login is denied/expired — retrying cannot succeed. */
+const POLL_TERMINAL_STATUSES = new Set([400, 401, 403, 410]);
+
+export class CursorAuthTerminalError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`Cursor login rejected by the auth server (HTTP ${status}); start a new login`);
+    this.name = "CursorAuthTerminalError";
+    this.status = status;
+  }
+}
+
 /**
  * Poll cursor.com for login completion. 404 = still pending (back off), 200 = tokens.
  * `baseDelayMs` is injectable so tests can avoid the real 1s cadence; production uses the default.
@@ -135,9 +148,17 @@ export async function pollCursorAuth(
         return { accessToken: data.accessToken, refreshToken: data.refreshToken };
       }
 
+      // T07: a terminal auth status means the login attempt itself is dead (denied,
+      // expired, revoked). Fail on the FIRST such response instead of burning the
+      // 3-strike retry budget and masking the reason behind a generic error.
+      if (POLL_TERMINAL_STATUSES.has(response.status)) {
+        throw new CursorAuthTerminalError(response.status);
+      }
+
       throw new Error(`Cursor auth poll failed: ${response.status}`);
     } catch (err) {
       if (signal?.aborted) throw err instanceof Error ? err : new Error("Cursor login cancelled");
+      if (err instanceof CursorAuthTerminalError) throw err;
       consecutiveErrors++;
       if (consecutiveErrors >= 3) {
         throw new Error("Too many consecutive errors during Cursor auth polling");

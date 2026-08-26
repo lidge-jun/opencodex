@@ -47,9 +47,11 @@ ocx restore back
 ocx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
+### `ocx recover-history --legacy-openai --yes`
 
 可逆バックアップ サポートが存在する前に Codex App 履歴を再マップした古い開発ビルドの明示的なリカバリ。履歴データベースがロックされている場合は、まず Codex を閉じてください。
+
+これは広範囲で破壊的な再ラベル付けです。ユーザーメッセージを持ち、現在 `opencodex` とタグ付けされているすべてのスレッドを `openai` に変更し、`exec` を `cli` に正規化してイベントマーカーを設定します。正当な専用プロバイダー履歴も対象です。状態をバックアップし、この全範囲を意図する場合にのみ実行してください。
 
 ### `ocx uninstall`・`ocx remove`
 
@@ -150,15 +152,16 @@ Codex のローカル モデル ピッカー キャッシュを無効にし、�
 
 ## バックグラウンドサービス
 
-### `ocx service [install|repair|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 opencodex を、ログイン時に自動起動し、クラッシュ時に自動再起動するログイン管理バックグラウンド サービス (macOS **launchd**、Linux **systemd ユーザー ユニット**、Windows **タスク スケジューラ**) として実行します。サービスは `OCX_SERVICE=1` を設定して実行されるため、再起動によって Codex 設定が変更されることはありません。
 
 |サブコマンド |アクション |
 | --- | --- |
-|なし |サービスを作成/更新して開始します。 |
+|なし |未インストールなら作成して開始し、既存なら再登録せずに更新して再起動します。 |
 | `install` |サービスを作成して開始します。 |
 | `repair` | 既存のサービスを再登録せずに更新して再起動します。 |
+| `restart` | `repair` の別名です。 |
 | `start` |インストールされているサービスを開始します。 |
 | `stop` |サービスを停止し、ネイティブ Codex を復元します。 |
 | `status` |サービスとプロキシの診断とログ パスをレポートします。 |
@@ -169,9 +172,12 @@ opencodex を、ログイン時に自動起動し、クラッシュ時に自動�
 ocx service
 ocx service install
 ocx service repair
+ocx service restart
 ocx service status
 ocx service uninstall
 ```
+
+Windows では、bare `ocx service` は、タスク スケジューラと WinSW の両方について不在が確認された後にのみ、インストール パスを実行します。どちらかのステータス照会が不確実な場合、何も登録せず、`ocx service status` の実行を案内します。不在を確認した後にのみ、明示的な `ocx service install` を使用してください。
 
 Windows では、`ocx service status` は、ID 検証済みの OpenCodex プロキシの到達可能性とは別に、タスク スケジューラの登録を報告します。ローカライズされた `schtasks` テーブルは出力されないため、概要は Windows コード ページ間で読み取れるままです。
 

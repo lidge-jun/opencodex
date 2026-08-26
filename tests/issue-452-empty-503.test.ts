@@ -6,10 +6,12 @@ import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { saveConfig } from "../src/config";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 import { setDraining } from "../src/server/lifecycle";
 import { startServer } from "../src/server";
+import { readDisplaySafeErrorText } from "../src/server/responses/core";
 import { formatPassthroughUpstreamError } from "../src/server/responses/passthrough-error";
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -116,6 +118,73 @@ describe("formatPassthroughUpstreamError (#452)", () => {
   });
 });
 
+describe("bounded passthrough error bodies", () => {
+  test("preserves complete safe bodies, including an intentionally empty body", async () => {
+    const signal = new AbortController().signal;
+    expect(await readDisplaySafeErrorText(new Response("upstream detail"), signal, "fallback"))
+      .toBe("upstream detail");
+    expect(await readDisplaySafeErrorText(new Response(null), signal, "fallback")).toBe("");
+  });
+
+  test("drops an oversized prefix, cancels once, and does not drain the tail", async () => {
+    let pullCount = 0;
+    let cancelCount = 0;
+    let tailPulled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount === 1) {
+          controller.enqueue(new Uint8Array(BOUNDED_BODY_MAX_BYTES).fill(0x61));
+        } else if (pullCount === 2) {
+          controller.enqueue(new Uint8Array([0x62]));
+        } else {
+          tailPulled = true;
+          controller.enqueue(new Uint8Array([0x63]));
+        }
+      },
+      cancel() { cancelCount += 1; },
+    }, { highWaterMark: 0 });
+
+    const text = await readDisplaySafeErrorText(
+      new Response(body),
+      new AbortController().signal,
+      "status only",
+    );
+    await Promise.resolve();
+
+    expect(text).toBe("status only");
+    expect(cancelCount).toBe(1);
+    expect(tailPulled).toBe(false);
+    expect(body.locked).toBe(false);
+  });
+
+  test("uses the fallback after a read rejection or caller abort", async () => {
+    const failing = new ReadableStream<Uint8Array>({
+      pull() { throw new Error("upstream reset"); },
+    });
+    expect(await readDisplaySafeErrorText(
+      new Response(failing),
+      new AbortController().signal,
+      "fallback",
+    )).toBe("fallback");
+    expect(failing.locked).toBe(false);
+
+    let cancelReason: unknown;
+    const pending = new ReadableStream<Uint8Array>({
+      pull() { return new Promise<never>(() => {}); },
+      cancel(reason) { cancelReason = reason; },
+    }, { highWaterMark: 0 });
+    const controller = new AbortController();
+    const reason = { code: "caller-abort" };
+    const reading = readDisplaySafeErrorText(new Response(pending), controller.signal, "fallback");
+    controller.abort(reason);
+    expect(await reading).toBe("fallback");
+    await Promise.resolve();
+    expect(cancelReason).toBe(reason);
+    expect(pending.locked).toBe(false);
+  });
+});
+
 async function withPoolPassthrough(
   reply: (request: Request) => Response | Promise<Response>,
   run: (serverUrl: string) => Promise<void>,
@@ -189,6 +258,33 @@ describe("passthrough empty 503 (#452)", () => {
         expect(typeof json.error?.message).toBe("string");
         expect(json.error!.message!.trim().length).toBeGreaterThan(0);
         expect(json.error!.message!.toLowerCase()).not.toBe("unknown error");
+      },
+    );
+  });
+
+  test("oversized passthrough errors become bounded status-only JSON", async () => {
+    const hostilePrefix = "do-not-relay-this-prefix";
+    const body = hostilePrefix + "x".repeat(BOUNDED_BODY_MAX_BYTES + 1);
+    await withPoolPassthrough(
+      () => new Response(body, {
+        status: 418,
+        statusText: "Upstream Teapot",
+        headers: { "content-type": "text/plain", "retry-after": "4" },
+      }),
+      async (serverUrl) => {
+        const response = await originalGlobalFetch(new URL("/v1/responses", serverUrl), {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: false }),
+        });
+        expect(response.status).toBe(418);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        expect(response.headers.get("retry-after")).toBe("4");
+        const text = await response.text();
+        expect(text.length).toBeLessThan(1_024);
+        expect(text).not.toContain(hostilePrefix);
+        const json = JSON.parse(text) as { error?: { message?: string } };
+        expect(json.error?.message).toContain("418");
       },
     );
   });

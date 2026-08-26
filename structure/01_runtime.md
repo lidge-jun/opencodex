@@ -9,7 +9,10 @@
 | `src/cli/index.ts` | `ocx` / `opencodex` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, service, update. Configuration: provider, account, models, combo/route, access, integrations, v2. Client launchers: Claude, OpenCode, MiniMax Code, and MiniMax CLI text. The MMX launcher owns a child-lifetime loopback path bridge from the client's hard-coded `/anthropic/v1/messages` path to the canonical `/v1/messages` data plane; the server does not expose an extra auth surface. Diagnostics: doctor, debug, observe, health. Windows adds tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
 | `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing (compact handled before generic Responses), exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, the Anthropic-shaped `/v1/messages` and OpenAI-shaped `/v1/chat/completions` compatibility surfaces, the Live/Realtime surface, the hosted-search relay, artifact serving, `/healthz`, the `/api/*` auth gate, the `/v1/*` JSON 404 guard, GUI fallback, and facade re-exports for split server modules. |
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
-| `src/config.ts` | `~/.opencodex/config.json`, defaults, PID path, env-value resolution, `websocketsEnabled()`. |
+| `src/config.ts` | Persisted `~/.opencodex/config.json` schema, defaults, migrations, transactions, and compatibility re-exports for split config modules. |
+| `src/config/paths.ts` | Resolves `OPENCODEX_HOME`, `config.json`, and owner-only directory hardening. |
+| `src/config/atomic-write.ts` | Shared synchronous/asynchronous temp-harden-rename writer and residual-temp failure contract. |
+| `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
@@ -25,12 +28,15 @@ there. Feature code is grouped by responsibility:
 | Data plane | `src/adapters/`, `src/responses/`, `src/chat/`, `src/claude/`, `src/grok/`, `src/images/`, `src/vision/`, `src/web-search/` |
 | Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
+| Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/` |
 
 `src/generated/` is build output committed for the runtime; it is not edited by hand.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and route ordering;
 `responses.ts` owns Responses handling and compaction; `images.ts` owns the standalone Images relay;
+`responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping,
+while account selection, credential materialization, logging, and transport stay in their existing handlers;
 `management-api.ts` owns `/api/*`;
 `lifecycle.ts`, `request-log.ts`, `relay.ts` (incl. the shared `createSseInspector` SSE inspection
 factory), `relay-eager.ts` (#314 gated eager bounded passthrough relay), `memory-watchdog.ts`
@@ -41,10 +47,26 @@ their own files.
 
 ## Lifecycle
 
-`ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid`, syncs Codex
-config/catalog, then serves until shutdown. Normal shutdown restores native Codex. Service mode sets
+`ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
+`runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
+until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+
+The process-state boundary deliberately exposes two PID checks. `readAlivePid()` is the cheap
+non-destructive probe used by liveness polling. `readPid()` and `verifyPidIdentity()` include the
+fixed-path command-line check required before stop, kill, port reclaim, or stale-state deletion.
+Callers must not replace the latter with the former merely to avoid the Windows WMIC/PowerShell
+probe. Expected-PID and snapshot removal helpers are the TOCTOU boundary when a replacement proxy
+can write new state during a probe.
+
+[Decision Log]
+- 목적과 의도: Separate proxy process ownership from persisted configuration without changing lifecycle behavior.
+- 기존 구현 및 제약 조건: `src/config.ts` mixed config transactions with cross-platform PID identity, runtime-port attestation, and stale-state cleanup; process writes still require the same config-home and atomic-write protections.
+- 검토한 주요 대안: Keep the mixed module; create a process-state module that imports `config.ts`; duplicate atomic writes inside the new module; split the minimal path and atomic-write foundations first.
+- 선택한 방식: `paths.ts` and `atomic-write.ts` are dependency leaves, `process-state.ts` depends only on those leaves, and `config.ts` remains a compatibility facade.
+- 다른 대안 대신 이 방식을 선택한 이유: Importing the facade would create a cycle, while duplicated writes could drift on ACL, symlink, residual-secret, and atomic-sequence behavior.
+- 장점, 단점 및 영향: Lifecycle callers have a narrow owner and behavior remains characterized; the temporary facade and three small config modules add files but preserve downstream imports.
 
 An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
 bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and

@@ -394,6 +394,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         busy={busy}
         addModalAccountRows={addModalAccountRows}
         accountLoginStatus={accountLoginStatus}
+        accountLoginHint={loginInfo}
         removeConfirmName={removeConfirmName}
         removeDefaultProvider={removeConfirmName === config.defaultProvider
           ? Object.entries(config.providers).find(([name, provider]) => name !== removeConfirmName && provider.disabled !== true)?.[0] ?? null

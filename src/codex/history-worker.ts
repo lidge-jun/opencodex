@@ -4,8 +4,8 @@
  * Everything mutable about history happens here, behind H: the SQLite rows, the
  * backup manifest, and every rollout patch. Those three do not share a
  * transaction — sync writes the manifest before its database transaction, and
- * restore writes rollouts, then the database, then the manifest
- * (`src/codex/history-provider.ts:606-648,656-698`) — so a busy timeout only
+ * restore preflights every rollout, applies database CAS before rollout changes inside one
+ * SQLite transaction, then consumes the manifest after exact readback — so a busy timeout only
  * ever serialized a third of a state transition. Holding H across the whole unit
  * is what stops an opposite-direction process overtaking through the other two.
  *
@@ -74,7 +74,8 @@ export type HistoryWorkerResult =
   | { readonly type: "blocked"; readonly requestId: string; readonly jobId: string;
       readonly reason: "busy" | "database" | "unsafe-path" | "desired_disabled" | "desired_enabled" }
   | { readonly type: "error"; readonly requestId: string; readonly jobId: string;
-      readonly message: string; readonly reason?: CodexHistoryFailureReason };
+      readonly message: string; readonly reason?: CodexHistoryFailureReason;
+      readonly rows?: number; readonly files?: number };
 
 const OPERATIONS: ReadonlySet<string> = new Set<CodexHistoryWorkerOperation>([
   "skip",
@@ -142,8 +143,9 @@ export function runHistoryUnitUnderLock(
         const proof = snapshotCodexHistoryNoop(message.canonicalStateDbPath, message.canonicalBackupPath);
         if (proof.kind === "verified-noop") return { verifiedNoop: proof } as const;
       }
-      // apply-opencodex routes history to opencodex; migrate/restore return it to
-      // native. The provider is derived from the operation, never from a caller.
+      // apply-opencodex routes history to opencodex; migrate/restore recover only
+      // manifest-backed original metadata. The provider is derived from the operation,
+      // never from a caller; only recover-legacy-openai force-labels bare routed rows.
       const provider = operation === "apply-opencodex" ? "opencodex" : "openai";
       return writeHistoryProviderTransition(permit, target, provider);
     },
@@ -179,6 +181,7 @@ export function runHistoryUnitUnderLock(
       jobId,
       message: "history_transition_failed",
       ...(result.failureReason ? { reason: result.failureReason } : {}),
+      ...(result.rows > 0 || result.files > 0 ? { rows: result.rows, files: result.files } : {}),
     };
   }
   return {

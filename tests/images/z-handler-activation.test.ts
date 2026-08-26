@@ -28,6 +28,8 @@ const PREV_HOME = process.env.OPENCODEX_HOME;
 
 // --- Activation spies, flipped by the stubbed runners ---
 let imageBridgeRun = false;
+let imageBridgeToolNames: string[] = [];
+let imageBridgeToolChoice: unknown;
 let webSearchRun = false;
 /** Whether the stubbed adapter should expose runTurn (simulates Cursor-style adapters). */
 let useRunTurnAdapter = false;
@@ -71,8 +73,13 @@ beforeAll(async () => {
   const actualLoop = await import("../../src/images/loop");
   mock.module("../../src/images/loop", () => ({
     ...actualLoop,
-    runWithImageBridge: async () => {
+    runWithImageBridge: async (args: {
+      parsed: { options: { toolChoice?: unknown } };
+      plan: { toolNames: Set<string> };
+    }) => {
       imageBridgeRun = true;
+      imageBridgeToolNames = [...args.plan.toolNames].sort();
+      imageBridgeToolChoice = args.parsed.options.toolChoice;
       return new Response("data: {\"type\":\"done\"}\n\n", {
         status: 200, headers: { "content-type": "text/event-stream" },
       });
@@ -123,12 +130,18 @@ function makeConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-function post(stream: boolean, tools: unknown[]): Promise<Response> {
+function post(stream: boolean, tools: unknown[], toolChoice?: unknown): Promise<Response> {
   return handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "fixture/model", input: "hello", stream, tools }),
+      body: JSON.stringify({
+        model: "fixture/model",
+        input: "hello",
+        stream,
+        tools,
+        ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+      }),
     }),
     makeConfig(),
     { model: "", provider: "" } as never,
@@ -141,6 +154,27 @@ describe("image bridge dispatch priority (handler activation)", () => {
     imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
     const res = await post(true, [{ type: "image_generation" }]);
     expect(imageBridgeRun).toBe(true);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+  });
+
+  test("alias-only image tool_choice keeps canonical bridge interception armed", async () => {
+    imageBridgeRun = false;
+    imageBridgeToolNames = [];
+    imageBridgeToolChoice = undefined;
+    webSearchRun = false;
+    mockWsPlan = undefined;
+    const res = await post(
+      true,
+      [
+        { type: "image_generation" },
+        { type: "function", name: "generate_image", parameters: { type: "object" } },
+      ],
+      { type: "function", name: "generate_image" },
+    );
+    expect(imageBridgeRun).toBe(true);
+    expect(imageBridgeToolChoice).toEqual({ name: "image_gen" });
+    expect(imageBridgeToolNames).toContain("generate_image");
+    expect(imageBridgeToolNames).toContain("image_gen");
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 

@@ -1,11 +1,11 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { historyBackupPathFor, setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
+import { historyBackupPathFor, setBeforeHistoryBackupConsumeForTests, setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
 import {
   isHistoryWorkerRunMessage,
   runHistoryUnitUnderLock,
@@ -22,6 +22,7 @@ const sandboxes: string[] = [];
 const backupArtifacts: string[] = [];
 
 afterEach(() => {
+  setBeforeHistoryBackupConsumeForTests(undefined);
   for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
   for (const path of backupArtifacts.splice(0)) rmSync(path, { force: true });
 });
@@ -154,10 +155,8 @@ test("migrate-openai returns a verified no-op only after entering H", () => {
   const fixture = makeFixture("ocx-history-worker-noop-");
   const backup = historyBackupPathFor(fixture.stateDb);
   backupArtifacts.push(backup);
-  const db = new Database(fixture.stateDb);
-  db.run("UPDATE threads SET model_provider = 'openai', source = 'cli' WHERE id = 'thread-1'");
-  db.close();
-  const before = readFileSync(fixture.rollout, "utf8");
+  const databaseBefore = readFileSync(fixture.stateDb);
+  const rolloutBefore = readFileSync(fixture.rollout);
 
   const result = runHistoryUnitUnderLock(runMessage(fixture, {
     operation: "migrate-openai",
@@ -179,8 +178,142 @@ test("migrate-openai returns a verified no-op only after entering H", () => {
       backupPresent: false,
     },
   });
-  expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+  expect(readFileSync(fixture.stateDb).equals(databaseBefore)).toBe(true);
+  expect(readFileSync(fixture.rollout).equals(rolloutBefore)).toBe(true);
   expect(existsSync(backup)).toBe(false);
+});
+
+test("restore-openai leaves bare routed history byte-identical", () => {
+  const fixture = makeFixture("ocx-history-worker-restore-noop-");
+  const databaseBefore = readFileSync(fixture.stateDb);
+  const rolloutBefore = readFileSync(fixture.rollout);
+
+  const result = runHistoryUnitUnderLock(runMessage(fixture, { operation: "restore-openai" }));
+
+  expect(result).toMatchObject({ type: "done", outcome: "converged", rows: 0, files: 0 });
+  expect(readFileSync(fixture.stateDb).equals(databaseBefore)).toBe(true);
+  expect(readFileSync(fixture.rollout).equals(rolloutBefore)).toBe(true);
+  expect(existsSync(fixture.backup)).toBe(false);
+});
+
+test("manifest-backed restore preserves routed provenance and the next migrate is a verified no-op", () => {
+  const fixture = makeFixture("ocx-history-worker-exact-");
+  const backup = historyBackupPathFor(fixture.stateDb);
+  backupArtifacts.push(backup);
+  mkdirSync(dirname(backup), { recursive: true });
+  const db = new Database(fixture.stateDb);
+  db.run("UPDATE threads SET source = 'cli', has_user_event = 1 WHERE id = 'thread-1'");
+  db.close();
+  appendFileSync(fixture.rollout, `${JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-08-05T00:00:00.000Z",
+    payload: { id: "thread-1", model_provider: "opencodex", source: "cli" },
+  })}\n`);
+  writeFileSync(backup, JSON.stringify({
+    version: 1,
+    stateDbPath: fixture.stateDb,
+    entries: {
+      "thread-1": {
+        id: "thread-1",
+        rolloutPath: fixture.rollout,
+        modelProvider: "opencodex",
+        source: "exec",
+        hasUserEvent: 0,
+      },
+    },
+  }));
+
+  const restored = runHistoryUnitUnderLock(runMessage(fixture, {
+    operation: "restore-openai",
+    canonicalBackupPath: backup,
+  }));
+  expect(restored).toMatchObject({ type: "done", outcome: "converged", rows: 1, files: 1 });
+  const restoredDb = new Database(fixture.stateDb, { readonly: true });
+  expect(restoredDb.query("SELECT model_provider, source, has_user_event FROM threads WHERE id = 'thread-1'").get())
+    .toEqual({ model_provider: "opencodex", source: "exec", has_user_event: 0 });
+  restoredDb.close();
+  expect(JSON.parse(readFileSync(fixture.rollout, "utf8").trim().split("\n").at(-1)!).payload)
+    .toMatchObject({ id: "thread-1", model_provider: "opencodex", source: "exec" });
+  expect(existsSync(backup)).toBe(false);
+
+  const again = runHistoryUnitUnderLock(runMessage(fixture, {
+    operation: "migrate-openai",
+    canonicalBackupPath: backup,
+  }));
+  expect(again).toMatchObject({
+    type: "done",
+    outcome: "converged",
+    rows: 0,
+    files: 0,
+    proof: { kind: "verified-noop", pendingRows: 0, backupEntries: 0 },
+  });
+});
+
+test("a late permission failure reports already-applied row and file progress", () => {
+  const fixture = makeFixture("ocx-history-worker-partial-");
+  const backup = historyBackupPathFor(fixture.stateDb);
+  backupArtifacts.push(backup);
+  mkdirSync(dirname(backup), { recursive: true });
+  const db = new Database(fixture.stateDb);
+  db.run("UPDATE threads SET source = 'cli', has_user_event = 1 WHERE id = 'thread-1'");
+  db.close();
+  appendFileSync(fixture.rollout, `${JSON.stringify({
+    type: "session_meta",
+    timestamp: "2026-08-05T00:00:00.000Z",
+    payload: { id: "thread-1", model_provider: "opencodex", source: "cli" },
+  })}\n`);
+  writeFileSync(backup, JSON.stringify({
+    version: 1,
+    stateDbPath: fixture.stateDb,
+    entries: {
+      "thread-1": {
+        id: "thread-1",
+        rolloutPath: fixture.rollout,
+        modelProvider: "opencodex",
+        source: "exec",
+        hasUserEvent: 0,
+      },
+    },
+  }));
+  setBeforeHistoryBackupConsumeForTests(() => {
+    throw Object.assign(new Error("manifest finalization denied"), { code: "EPERM" });
+  });
+
+  const result = runHistoryUnitUnderLock(runMessage(fixture, {
+    operation: "restore-openai",
+    canonicalBackupPath: backup,
+  }));
+
+  expect(result).toMatchObject({
+    type: "error",
+    reason: "permission",
+    rows: 1,
+    files: 1,
+  });
+  expect(existsSync(backup)).toBe(true);
+});
+
+test("malformed manifest blocks restore without changing the database, rollout, or manifest", () => {
+  const fixture = makeFixture("ocx-history-worker-malformed-");
+  const backup = historyBackupPathFor(fixture.stateDb);
+  backupArtifacts.push(backup);
+  mkdirSync(dirname(backup), { recursive: true });
+  writeFileSync(backup, JSON.stringify({
+    version: 1,
+    stateDbPath: fixture.stateDb,
+    entries: { "thread-1": { id: "thread-1", rolloutPath: fixture.rollout } },
+  }));
+  const databaseBefore = readFileSync(fixture.stateDb);
+  const rolloutBefore = readFileSync(fixture.rollout);
+  const manifestBefore = readFileSync(backup);
+
+  expect(runHistoryUnitUnderLock(runMessage(fixture, {
+    operation: "restore-openai",
+    canonicalBackupPath: backup,
+  }))).toMatchObject({ type: "error", reason: "integrity" });
+  expect(readFileSync(fixture.stateDb).equals(databaseBefore)).toBe(true);
+  expect(readFileSync(fixture.rollout).equals(rolloutBefore)).toBe(true);
+  expect(readFileSync(backup).equals(manifestBefore)).toBe(true);
 });
 
 /**

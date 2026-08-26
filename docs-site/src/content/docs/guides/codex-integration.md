@@ -179,9 +179,14 @@ HTTP/SSE.
 ## Thread identity and history
 
 The default loopback form keeps new threads tagged with Codex's native `openai` provider, so normal
-resume history needs no remapping. On first sync it also migrates threads tagged by older opencodex
-builds back to `openai`. Non-loopback dedicated-provider mode still mirrors history under the
-`opencodex` provider while active and restores the backed-up metadata on exit. Set
+resume history needs no remapping. Sync and restore apply only a matching backup manifest and
+restore each thread's exact original provider, source, and event marker. A bare `opencodex` row with
+no manifest is left unchanged; use `ocx recover-history --legacy-openai --yes` only when you explicitly
+intend to force that legacy relabel. The command is intentionally broad: it rewrites every thread
+with a user message currently tagged `opencodex` to `openai`, normalizes `exec` to `cli`, and sets
+the event marker—including legitimate dedicated-provider history. Back up the state and use it only
+when that full scope is intended. Non-loopback dedicated-provider mode still mirrors history
+under the `opencodex` provider while active and restores the backed-up metadata on exit. Set
 `syncResumeHistory: false` to leave history untouched.
 
 ## Model catalog sync
@@ -202,6 +207,31 @@ start and on `ocx sync`, opencodex:
 Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
+
+### Coordinator diagnosis and recovery
+
+Native config/history writes use a per-user SQLite coordinator keyed by the canonical `CODEX_HOME`.
+If a process terminates in SQLite's initial creation window, a zero-byte coordinator can remain even
+though it contains no authoritative transition row. `ocx doctor` reports the exact coordinator path
+and distinguishes zero-byte, unversioned, rowless, valid, unsafe, and unreadable states without
+creating SQLite sidecars. Automatic sync tolerates only an identity-stable zero-byte file that has
+settled for at least one second and whose immutable SQLite snapshot has version zero with no tables;
+a newly created zero-byte file remains on the locked coordinator path.
+
+For a state that doctor proves is a zero-byte creation remnant, stop the OpenCodex proxy/service
+and run:
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+Recovery moves the still-identical zero-byte file to a same-directory `.zero-byte-backup-*` path;
+it does not delete the evidence or adopt legacy routed state. It refuses a running proxy, lock
+contention, symlinks/reparse points, foreign ownership, changed files, every non-empty database,
+and any coordinator that already has an authoritative row. Desktop renderer filtering is a
+separate layer: a correct catalog and coordinator do not by themselves bypass the Codex App model
+allowlist.
 
 ### Routed local tools
 
@@ -268,7 +298,7 @@ name.
 
 If `config.toml` already selects a provider other than `openai` or `opencodex`, OpenCodex leaves the
 file unchanged and skips profile writes, catalog/cache refresh, and both immediate and background
-Codex history migration. Tools that manage a custom provider often tag existing sessions with that
+Codex history metadata restoration. Tools that manage a custom provider often tag existing sessions with that
 provider id; replacing the active id can make those intact sessions disappear from Codex's history
 view. The same protection applies to an external provider selected by a legacy root profile.
 

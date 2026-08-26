@@ -75,6 +75,26 @@ describe("the result validator", () => {
     expect(isPlausibleWorkerResultForTests(
       { requestId: "r", jobId: "OTHER", type: "done", outcome: "converged", rows: 3, files: 1 }, "r", "j",
     )).toBe(false);
+    expect(isPlausibleWorkerResultForTests(
+      { requestId: "r", jobId: "j", type: "error", message: "history_transition_failed", reason: "integrity" },
+      "r", "j",
+    )).toBe(true);
+    expect(isPlausibleWorkerResultForTests(
+      { requestId: "r", jobId: "j", type: "error", message: "history_transition_failed", reason: "integrity", rows: 1, files: 2 },
+      "r", "j",
+    )).toBe(true);
+    expect(isPlausibleWorkerResultForTests(
+      { requestId: "r", jobId: "j", type: "error", message: "history_transition_failed", reason: "integrity", rows: 1 },
+      "r", "j",
+    )).toBe(false);
+    expect(isPlausibleWorkerResultForTests(
+      { requestId: "r", jobId: "j", type: "error", message: "history_transition_failed", reason: "integrity", rows: -1, files: 0 },
+      "r", "j",
+    )).toBe(false);
+    expect(isPlausibleWorkerResultForTests(
+      { requestId: "r", jobId: "j", type: "error", message: "history_transition_failed", reason: "invented" },
+      "r", "j",
+    )).toBe(false);
     const target = {
       canonicalStateDbPath: "/state/state_5.sqlite",
       canonicalBackupPath: "/state/state_5.sqlite.ocx-backup.json",
@@ -119,5 +139,25 @@ describe("the result validator", () => {
     expect(isPlausibleWorkerResultForTests(
       { requestId: "r", jobId: "j", type: "blocked", reason: "invented" }, "r", "j",
     )).toBe(false);
+  });
+
+  test("the parent preserves partial progress from a valid worker error", async () => {
+    const { classifyWorkerResultForTests } = await import("../src/codex/history-job");
+    expect(classifyWorkerResultForTests({
+      requestId: "r",
+      jobId: "j",
+      type: "error",
+      message: "history_transition_failed",
+      reason: "integrity",
+      rows: 1,
+      files: 2,
+    })).toEqual({
+      kind: "failed",
+      reason: "worker-error",
+      message: "history_transition_failed",
+      historyFailureReason: "integrity",
+      rows: 1,
+      files: 2,
+    });
   });
 });

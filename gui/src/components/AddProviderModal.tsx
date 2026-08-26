@@ -14,6 +14,7 @@ import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import type { AccountLoginRow, AccountLoginStatus } from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
+import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
 import { AddProviderFormPane } from "./add-provider-form-pane";
@@ -29,7 +30,8 @@ type Preset = CatalogPreset;
 
 export default function AddProviderModal({
   apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
-  accountRows, accountStatus, accountBusy, onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  accountRows, accountStatus, accountBusy, accountLoginHint = null,
+  onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
 }: {
   apiBase: string;
   existingNames: string[];
@@ -40,6 +42,8 @@ export default function AddProviderModal({
   accountRows?: AccountLoginRow[];
   accountStatus?: Record<string, AccountLoginStatus>;
   accountBusy?: string | null;
+  /** Login hint for an Accounts-tab login in flight, owned by the providers page. */
+  accountLoginHint?: CatalogLoginHint | null;
   onAccountLogin?: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin?: (provider: string) => void;
   onAccountLogout?: (provider: string) => void;
@@ -96,6 +100,7 @@ export default function AddProviderModal({
   const usageRank = Object.fromEntries((usagePoll.data?.providers ?? []).map(row => [row.provider, row.requests]));
   const {
     preset, form, saving, error, oauthBusy, oauthMsg, oauthMsgTone, oauthUrl, oauthUrlProvider,
+    oauthDeviceCode, oauthInstructions,
     manualCode, manualCodeBusy, manualCodeMsg, manualCodeOk, endpointChoice, oauthTosPending,
   } = state;
 
@@ -198,7 +203,8 @@ export default function AddProviderModal({
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),
     setOauthMsg: (msg: string) => dispatch({ type: "set-oauth-msg", msg }),
     setOauthMsgTone: (tone: "ok" | "warn") => dispatch({ type: "set-oauth-tone", tone }),
-    setOauthUrl: (url: string, providerId: string) => dispatch({ type: "set-oauth-url", url, providerId }),
+    setOauthUrl: (url: string, providerId: string, deviceCode?: string, instructions?: string) =>
+      dispatch({ type: "set-oauth-url", url, providerId, deviceCode, instructions }),
     setManualCode: (code: string) => dispatch({ type: "set-manual-code", code }),
     setManualCodeMsg: (msg: string) => dispatch({ type: "set-manual-code-msg", msg }),
     setManualCodeOk: (ok: boolean) => dispatch({ type: "set-manual-code-msg", msg: manualCodeMsg, ok }),
@@ -255,6 +261,15 @@ export default function AddProviderModal({
             onCancelLogin={onAccountCancelLogin}
             onLogout={onAccountLogout}
             onManage={onAccountManage}
+            loginHint={accountLoginHint}
+            paste={{
+              value: manualCode,
+              busy: manualCodeBusy,
+              message: manualCodeMsg,
+              ok: manualCodeOk,
+              onChange: code => dispatch({ type: "set-manual-code", code }),
+              onSubmit: providerId => { void submitManualCode(providerId); },
+            }}
           />
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (
@@ -265,6 +280,8 @@ export default function AddProviderModal({
               oauthMsg={oauthMsg}
               oauthMsgTone={oauthMsgTone}
               oauthUrl={oauthUrlProvider === preset.oauthProvider ? oauthUrl : ""}
+              oauthDeviceCode={oauthUrlProvider === preset.oauthProvider ? oauthDeviceCode : ""}
+              oauthInstructions={oauthUrlProvider === preset.oauthProvider ? oauthInstructions : ""}
               manualCode={manualCode}
               manualCodeBusy={manualCodeBusy}
               manualCodeMsg={manualCodeMsg}

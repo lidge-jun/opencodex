@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
@@ -97,10 +98,10 @@ test("the failure wording names the real reason instead of always blaming the Co
     message: "database is locked",
     historyFailureReason: "busy",
   } as const;
-  expect(describeHistoryJobFailure(workerBusy, "apply", false)).toContain("history DB is locked");
+  expect(describeHistoryJobFailure(workerBusy, "apply", false)).toContain("history state is busy");
   expect(describeHistoryJobFailure(workerBusy, "apply", false)).toContain("retried automatically");
-  expect(describeHistoryJobFailure(workerBusy, "restore")).toContain("holding the history database");
-  expect(describeHistoryJobFailure(workerBusy, "recover-legacy")).toContain("locked");
+  expect(describeHistoryJobFailure(workerBusy, "restore")).not.toContain("holding the history database");
+  expect(describeHistoryJobFailure(workerBusy, "recover-legacy")).toContain("history state is busy");
 
   const unsafe = { kind: "blocked", reason: "unsafe-path" } as const;
   const unsafeText = describeHistoryJobFailure(unsafe, "apply");
@@ -118,6 +119,25 @@ test("the failure wording names the real reason instead of always blaming the Co
   } as const;
   expect(describeHistoryJobFailure(permission, "apply")).toContain("permission was denied");
   expect(describeHistoryJobFailure(permission, "apply")).toContain("'ocx doctor'");
+
+  const integrity = {
+    kind: "failed",
+    reason: "worker-error",
+    message: "history_transition_failed",
+    historyFailureReason: "integrity",
+  } as const;
+  expect(describeHistoryJobFailure(integrity, "restore")).toContain("failed integrity checks");
+  expect(describeHistoryJobFailure(integrity, "restore")).not.toContain("holding the history database");
+  const partialIntegrity = { ...integrity, rows: 1, files: 1 } as const;
+  expect(describeHistoryJobFailure(partialIntegrity, "restore")).toContain("partial restore");
+  expect(describeHistoryJobFailure(partialIntegrity, "restore")).toContain("manifest was retained");
+
+  const partialPermission = { ...permission, rows: 1, files: 1 } as const;
+  expect(describeHistoryJobFailure(partialPermission, "apply")).toContain("changed but did not converge");
+  expect(describeHistoryJobFailure(partialPermission, "apply")).toContain("manifest was retained");
+  const partialBusy = { ...workerBusy, rows: 1, files: 1 } as const;
+  expect(describeHistoryJobFailure(partialBusy, "restore")).toContain("changed but did not converge");
+  expect(describeHistoryJobFailure(partialBusy, "restore")).toContain("manifest was retained");
 
   const workerError = { kind: "failed", reason: "worker-error", message: "unable to open database file" } as const;
   expect(describeHistoryJobFailure(workerError, "apply")).toContain("unable to open database file");
@@ -252,8 +272,8 @@ test("a hard history error reaches the caller with its real message", async () =
  * Proven by BEHAVIOR in a child process. The provider resolves its state
  * database from a module-load constant, so the fixture `CODEX_HOME` must be in
  * the environment before the module loads — a spawned child gives exactly that.
- * The fixture DB holds a restorable opencodex-tagged row; `skipHistory: true`
- * must leave it tagged, and the default must restore it.
+ * The fixture DB holds a manifest-backed OpenCodex post-image; `skipHistory: true`
+ * must leave it tagged, and the default must restore its exact original tuple.
  */
 test("the synchronous restore body is gated on skipHistory", () => {
   const repoRoot = join(import.meta.dir, "..");
@@ -276,6 +296,22 @@ test("the synchronous restore body is gated on skipHistory", () => {
       source TEXT NOT NULL, first_user_message TEXT NOT NULL, has_user_event INTEGER NOT NULL DEFAULT 0)`);
     db.run(`INSERT INTO threads VALUES ('thread-1', ?, 'opencodex', 'cli', 'hello', 1)`, rollout);
     db.close();
+    const canonicalDbPath = join(realpathSync.native(fixtureCodexHome), "state_5.sqlite");
+    const normalizedDb = process.platform === "win32" ? resolve(canonicalDbPath).toLowerCase() : resolve(canonicalDbPath);
+    const backupId = createHash("sha256").update(normalizedDb).digest("hex").slice(0, 16);
+    writeFileSync(join(fixtureOcxHome, `codex-history-backup-${backupId}.json`), JSON.stringify({
+      version: 1,
+      stateDbPath: canonicalDbPath,
+      entries: {
+        "thread-1": {
+          id: "thread-1",
+          rolloutPath: rollout,
+          modelProvider: "openai",
+          source: "cli",
+          hasUserEvent: 1,
+        },
+      },
+    }));
 
     const runRestore = (optionsLiteral: string) => spawnSync(process.execPath, ["--eval", [
       'const { restoreNativeCodex } = require("./src/codex/inject");',
@@ -309,4 +345,4 @@ test("the synchronous restore body is gated on skipHistory", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, 30_000);

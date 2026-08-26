@@ -113,8 +113,14 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   // Match the runtime's one selected Anthropic executor for both backend fallback
   // and catalog reachability; resolving it once prevents the two projections drifting.
   const anthropicSidecar = findAnthropicVisionProvider(config);
-  const backend = resolveVisionBackend(vs.backend, anthropicSidecar);
-  const model = resolveEffectiveVisionModel(config, backend);
+  // The routed backend reports its own namespaced model verbatim: it is the
+  // dispatched value, and collapsing it through the legacy resolver would
+  // display a describer the runtime is not using (roadmap 190).
+  const routedActive = vs.backend === "routed" && !!vs.model && vs.model.includes("/");
+  const backend = routedActive ? "routed" as const : resolveVisionBackend(vs.backend, anthropicSidecar);
+  const model = routedActive && vs.model
+    ? vs.model
+    : resolveEffectiveVisionModel(config, backend === "routed" ? resolveVisionBackend(undefined, anthropicSidecar) : backend);
   const reasoning = normalizeVisionReasoningForModel(model, vs.reasoning) ?? "low";
   const models = await visionModelOptionsFor(config, anthropicSidecar);
   // Display-only grandfather: a persisted id stays selectable, but the write gate
@@ -292,6 +298,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
+      // Absent means the historical auto-open, so the GUI can render the toggle
+      // without having to know that `undefined` and `true` mean the same thing.
+      oauthOpenBrowser: config.oauthOpenBrowser !== false,
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -376,15 +385,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode?: unknown;
       appOwnedMemoryBudgetMb?: unknown;
       codexAccountPickerEnabled?: unknown;
+      oauthOpenBrowser?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
       && body.appOwnedMemoryBudgetMb === undefined
-      && body.codexAccountPickerEnabled === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, or codexAccountPickerEnabled" }, 400);
+      && body.codexAccountPickerEnabled === undefined
+      && body.oauthOpenBrowser === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, or oauthOpenBrowser" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
+    }
+    if (body.oauthOpenBrowser !== undefined && typeof body.oauthOpenBrowser !== "boolean") {
+      return jsonResponse({ error: "oauthOpenBrowser boolean is required" }, 400);
     }
     if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
       return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
@@ -412,6 +426,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexAccountNamespaces: Object.hasOwn(config, "codexAccountNamespaces"),
       codexAccountPickerEnabled: config.codexAccountPickerEnabled,
       hasCodexAccountPickerEnabled: Object.hasOwn(config, "codexAccountPickerEnabled"),
+      oauthOpenBrowser: config.oauthOpenBrowser,
+      hasOauthOpenBrowser: Object.hasOwn(config, "oauthOpenBrowser"),
     };
     const pickerWasEnabled = codexAccountPickerEnabled(config);
     let pickerIsEnabled = pickerWasEnabled;
@@ -435,6 +451,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       } else if (body.codexAccountPickerEnabled === false) {
         config.codexAccountPickerEnabled = false;
       }
+      if (typeof body.oauthOpenBrowser === "boolean") {
+        config.oauthOpenBrowser = body.oauthOpenBrowser;
+      }
       pickerIsEnabled = codexAccountPickerEnabled(config);
       (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     } catch (error) {
@@ -451,6 +470,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexAccountPickerEnabled) {
         config.codexAccountPickerEnabled = previousSettings.codexAccountPickerEnabled;
       } else delete config.codexAccountPickerEnabled;
+      if (previousSettings.hasOauthOpenBrowser) {
+        config.oauthOpenBrowser = previousSettings.oauthOpenBrowser;
+      } else delete config.oauthOpenBrowser;
       throw error;
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
@@ -470,6 +492,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
+      oauthOpenBrowser: config.oauthOpenBrowser !== false,
       catalogRefreshPending,
       startupHealth: await readStartupHealth(config),
     });
@@ -484,7 +507,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../../codex/sync");
     const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
-    const { readRuntimePort, loadConfig } = await import("../../config");
+    const [{ readRuntimePort }, { loadConfig }] = await Promise.all([
+      import("../../config/process-state"),
+      import("../../config"),
+    ]);
     // Never use the server-captured startup object for a durable integration
     // decision. A toggle may have persisted while this process was gathering.
     const runtime = readRuntimePort(process.pid);
@@ -592,8 +618,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
     }
     if (body.vision && body.vision.backend !== undefined
-      && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic") {
-      return jsonResponse({ error: "vision.backend must be openai, anthropic, or null" }, 400);
+      && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic"
+      && body.vision.backend !== "routed") {
+      return jsonResponse({ error: "vision.backend must be openai, anthropic, routed, or null" }, 400);
     }
     if (body.vision && body.vision.maxDescriptionsPerTurn !== undefined
       && (typeof body.vision.maxDescriptionsPerTurn !== "number"
@@ -621,8 +648,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       const requested = body.vision.model;
       const candidates = await visionCandidateRows(config);
       const hint = body.vision.backend === "anthropic" || body.vision.backend === "openai"
+        || body.vision.backend === "routed"
         ? body.vision.backend
         : config.visionSidecar?.backend;
+      // Coherence (roadmap 170 r2): the forward/OAuth executors POST the model
+      // string VERBATIM, so a namespaced id on those backends persists a wire
+      // id they cannot run; and "routed" without a namespace cannot route.
+      const effectiveBackend = hint ?? "openai";
+      const namespaced = requested.includes("/");
+      if (namespaced && effectiveBackend !== "routed") {
+        return jsonResponse({ error: `vision.model "${requested}" is provider-namespaced; it requires vision.backend "routed"` }, 400);
+      }
+      if (!namespaced && effectiveBackend === "routed") {
+        return jsonResponse({ error: `vision.backend "routed" requires a provider-namespaced vision.model ("provider/model"); got "${requested}"` }, 400);
+      }
       if (visionDescriberIsProvablyBlind(config, requested, candidates, hint)) {
         return jsonResponse(visionDescriberRejection("vision.model", requested, config, candidates), 400);
       }
@@ -643,9 +682,18 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
-      const effectiveBackend = body.webSearch.backend === "anthropic"
-        ? "anthropic"
-        : body.webSearch.backend === "openai" || body.webSearch.backend === null
+      // Validate against the backend the caller SUBMITTED, across the whole
+      // union — not just openai/anthropic (#2457). The union check above has
+      // already refused unknown literals, so a surviving string is a member;
+      // Array.includes does not narrow, hence the cast. Falling back to the
+      // stored backend for xai/gemini/exa both rejected legal pairs and
+      // accepted illegal ones: a submitted gemini was checked against a stored
+      // openai. null means "unset the backend", and unset resolves to openai.
+      const submittedBackend = body.webSearch.backend;
+      const effectiveBackend = typeof submittedBackend === "string"
+        && WEB_SEARCH_BACKENDS_UNION.includes(submittedBackend as never)
+        ? submittedBackend as typeof WEB_SEARCH_BACKENDS_UNION[number]
+        : submittedBackend === null
           ? "openai"
           : config.webSearchSidecar?.backend ?? "openai";
       const effectiveModel = typeof body.webSearch.model === "string"
@@ -736,7 +784,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else config.visionSidecar.model = body.vision.model;
       }
       if (body.vision.backend === null) delete config.visionSidecar.backend;
-      else if (body.vision.backend === "openai" || body.vision.backend === "anthropic") {
+      else if (body.vision.backend === "openai" || body.vision.backend === "anthropic"
+        || body.vision.backend === "routed") {
         config.visionSidecar.backend = body.vision.backend;
       }
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {
@@ -811,132 +860,5 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       sourceModels: shadowSourceModels(sci.sourceModels),
     });
   }
-
-  if (url.pathname === "/api/orchestration" && req.method === "GET") {
-    const { join } = await import("node:path");
-    // The v2 configure_orchestration.py script persists roles as standalone custom
-    // agents under <codex-home>/agents, not as [agents.*] config.toml sections.
-    const readAgentModel = (fileName: string): string | null => {
-      try {
-        const text = readFileSync(join(resolveCodexHomeDir(), "agents", fileName), "utf-8");
-        return text.match(/model\s*=\s*"([^"]+)"/)?.[1] ?? null;
-      } catch {
-        return null;
-      }
-    };
-    return jsonResponse({
-      planner: "root",
-      executor: readAgentModel("codex-orchestration-executor.toml") ?? "github-copilot/gpt-4.1-mini",
-      judge: readAgentModel("codex-orchestration-advisor.toml") ?? "anthropic/claude-opus-5",
-    });
-  }
-
-  if (url.pathname === "/api/orchestration" && req.method === "PUT") {
-    let raw: any;
-    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const { planner, executor, judge } = raw;
-
-    const fs = await import("node:fs");
-    const pathLib = await import("node:path");
-    const homeDir = resolveCodexHomeDir().replace(/\\/g, "/");
-    const pluginsDir = `${homeDir}/plugins/cache/codex-orchestration/codex-orchestration`;
-    let scriptPath = "";
-    try {
-      const versions = fs.readdirSync(pluginsDir);
-      if (versions.length > 0) {
-        const latestVersion = versions[0];
-        scriptPath = pathLib.join(pluginsDir, latestVersion, "skills/codex-orchestration/scripts/configure_orchestration.py");
-      }
-    } catch {}
-    if (!scriptPath) {
-      scriptPath = `${homeDir}/plugins/cache/codex-orchestration/codex-orchestration/0.9.3/skills/codex-orchestration/scripts/configure_orchestration.py`;
-    }
-
-    const candidates = ["python", "py", "python3"];
-    if (process.platform === "win32") {
-      const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? pathLib.join(process.env.USERPROFILE, "AppData", "Local") : null);
-      if (localAppData) {
-        candidates.push(pathLib.join(localAppData, "Python", "bin", "python.exe"));
-        const programsPythonDir = pathLib.join(localAppData, "Programs", "Python");
-        try {
-          if (fs.existsSync(programsPythonDir)) {
-            const pyDirs = fs.readdirSync(programsPythonDir);
-            for (const dir of pyDirs) {
-              candidates.push(pathLib.join(programsPythonDir, dir, "python.exe"));
-            }
-          }
-        } catch {}
-      }
-    }
-
-    let lastError: any = new Error("No python executable found");
-    let spawned = false;
-    let stdout = "";
-    let stderr = "";
-    let exitCode = 0;
-
-    for (const pythonCmd of candidates) {
-      const args = [pythonCmd, scriptPath];
-      // Persist roles under the user's Codex home, never under the process cwd
-      // (the app can be launched with cwd C:\Windows\System32, which is not writable).
-      args.push("--scope", "personal");
-      args.push("--codex-home", homeDir);
-      args.push("--executor-model", executor || "github-copilot/gpt-4.1-mini");
-      args.push("--executor-effort", "low");
-      if (judge && judge !== "none") {
-        args.push("--advisor-model", judge);
-        args.push("--advisor-effort", "high");
-      } else {
-        args.push("--remove-advisor");
-      }
-      args.push("--confirm-unlisted-models");
-      args.push("--apply");
-
-      try {
-        const proc = (globalThis as any).Bun.spawn(args, {
-          cwd: process.cwd()
-        });
-        stdout = await new Response(proc.stdout).text();
-        stderr = await new Response(proc.stderr).text();
-        exitCode = await proc.exited;
-        spawned = true;
-        break;
-      } catch (e: any) {
-        lastError = e;
-        if (e.code === "ENOENT" || e.message?.includes("ENOENT")) {
-          continue;
-        }
-        break;
-      }
-    }
-
-    if (!spawned) {
-      return jsonResponse({ error: `Failed to execute python: ${lastError.message}` }, 500);
-    }
-    if (exitCode !== 0) {
-      return jsonResponse({ error: `Script exit ${exitCode}: ${stderr || stdout}` }, 500);
-    }
-    return jsonResponse({ ok: true, output: stdout });
-  }
-
-  if (url.pathname === "/api/favorites" && req.method === "GET") {
-    return jsonResponse({
-      models: config.favorites ?? []
-    });
-  }
-
-  if (url.pathname === "/api/favorites" && req.method === "PUT") {
-    let raw: any;
-    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const { models } = raw;
-    if (!Array.isArray(models)) {
-      return jsonResponse({ error: "models must be an array of strings" }, 400);
-    }
-    config.favorites = models;
-    saveConfigPreservingClaudeCode(config);
-    await convergeCodexCatalog();
-    return jsonResponse({ ok: true, models: config.favorites });
-  }
-
   return null;
 }

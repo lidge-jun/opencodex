@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { deriveStartupHealth, startupHealthSummary } from "../src/codex/autostart-health";
+import { deriveStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../src/codex/autostart-health";
+import { unusedProxyWarningLines } from "../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../src/codex/inject";
 import { handleManagementAPI } from "../src/server/management-api";
 import { invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../src/server/startup-health-cache";
@@ -231,3 +232,36 @@ describe("Codex startup health", () => {
   }, 40_000);
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
+
+describe("routing visibility (#2411)", () => {
+  test("formatStartupRoutingDetail renders the token doctor already prints", () => {
+    expect(formatStartupRoutingDetail(deriveStartupHealth({ ...base, routingKind: "native" })))
+      .toBe("routing=native, service=absent, shim=absent");
+    expect(formatStartupRoutingDetail(deriveStartupHealth({
+      ...base,
+      serviceInstalled: true,
+      serviceViable: true,
+      shimInstalled: true,
+      shimHealthy: true,
+    }))).toBe("routing=opencodex-local, service=viable, shim=healthy");
+    expect(formatStartupRoutingDetail(deriveStartupHealth({ ...base, serviceInstalled: true })))
+      .toBe("routing=opencodex-local, service=installed-but-unhealthy, shim=absent");
+    expect(formatStartupRoutingDetail(deriveStartupHealth({ ...base, shimInstalled: true })))
+      .toBe("routing=opencodex-local, service=absent, shim=stale");
+  });
+
+  // A healthy proxy paired with native routing is the state #2411 reports: the
+  // process answers /healthz truthfully while no Codex request reaches it.
+  // custom-local and unknown stay silent on purpose — startupHealthSummary
+  // already renders both as AT RISK with a remedy, so a second warning would
+  // train operators to ignore this one.
+  test("unusedProxyWarningLines fires only for a live proxy on native routing", () => {
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "native" }).length).toBeGreaterThan(0);
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "native" }).join(" ")).toContain("unused");
+    expect(unusedProxyWarningLines({ proxyUp: false, routingKind: "native" })).toEqual([]);
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "opencodex-local" })).toEqual([]);
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-remote" })).toEqual([]);
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-local" })).toEqual([]);
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "unknown" })).toEqual([]);
+  });
+});

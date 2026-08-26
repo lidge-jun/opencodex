@@ -118,17 +118,24 @@ export function buildClaudeContextWindows(
     put(desktop3pAlias("native", slug), window);
     put(aliasForNative(slug), window);
   }
+  // Anthropic passthrough guard (audit 021 #3): canonical claude ids ride the
+  // subscription passthrough — marking a sub-1M one would strap [1m]/1M-beta onto
+  // a model that cannot host it. Register anthropic rows only at >=1M.
+  const registrable = routedModels.filter(
+    m =>
+      typeof m.contextWindow === "number" &&
+      m.contextWindow > 0 &&
+      !(m.provider === "anthropic" && m.contextWindow < ONE_MILLION),
+  );
   // Bare routed ids are registered only when unambiguous across providers (audit
-  // 021 #5) — natives are registered first, so a native slug always wins the bare key.
+  // 021 #5) — natives are registered first, so a native slug always wins the bare
+  // key. Counted over the rows that can actually claim the key: a row this loop
+  // skips contributes no window, so letting it veto the bare key withholds an
+  // answer that was never in doubt.
   const bareCounts = new Map<string, number>();
-  for (const m of routedModels) bareCounts.set(m.id, (bareCounts.get(m.id) ?? 0) + 1);
-  for (const m of routedModels) {
-    const window = m.contextWindow;
-    if (typeof window !== "number" || window <= 0) continue;
-    // Anthropic passthrough guard (audit 021 #3): canonical claude ids ride the
-    // subscription passthrough — marking a sub-1M one would strap [1m]/1M-beta onto
-    // a model that cannot host it. Register anthropic rows only at >=1M.
-    if (m.provider === "anthropic" && window < ONE_MILLION) continue;
+  for (const m of registrable) bareCounts.set(m.id, (bareCounts.get(m.id) ?? 0) + 1);
+  for (const m of registrable) {
+    const window = m.contextWindow as number;
     put(`${m.provider}/${m.id}`, window);
     put(desktop3pAlias(m.provider, m.id), window);
     put(aliasForRoute(m.provider, m.id), window);

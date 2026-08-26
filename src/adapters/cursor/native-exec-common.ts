@@ -1,6 +1,7 @@
 import { create, toBinary } from "@bufbuild/protobuf";
 import {
   AgentClientMessageSchema,
+  ExecClientThrowSchema,
   ExecClientControlMessageSchema,
   ExecClientMessageSchema,
   ExecClientStreamCloseSchema,
@@ -44,6 +45,22 @@ export function execStreamCloseBytes(execMsg: ExecServerMessage): Uint8Array {
       case: "execClientControlMessage",
       value: create(ExecClientControlMessageSchema, {
         message: { case: "streamClose", value: create(ExecClientStreamCloseSchema, { id: execMsg.id }) },
+      }),
+    },
+  });
+}
+
+/**
+ * Exec-channel typed throw (`execClientControlMessage.throw`). senpi's contract (T05):
+ * a frame that cannot be answered at all must get an explicit error reply + stream-close
+ * so the server unblocks with a known failure, instead of waiting forever on silence.
+ */
+export function execThrowBytes(execMsg: ExecServerMessage, error: string): Uint8Array {
+  return clientBytes({
+    message: {
+      case: "execClientControlMessage",
+      value: create(ExecClientControlMessageSchema, {
+        message: { case: "throw", value: create(ExecClientThrowSchema, { id: execMsg.id, error }) },
       }),
     },
   });

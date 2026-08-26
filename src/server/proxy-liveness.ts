@@ -9,7 +9,8 @@
  *
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
-import { loadConfig, readAlivePid, readRuntimePort, verifyPidIdentity } from "../config";
+import { loadConfig } from "../config";
+import { readAlivePid, readRuntimePort, verifyPidIdentity } from "../config/process-state";
 import { directLocalHttpFetch } from "./direct-local-http";
 
 export interface HealthzIdentity {

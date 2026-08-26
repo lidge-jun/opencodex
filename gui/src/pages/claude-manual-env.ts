@@ -6,7 +6,9 @@
 import { AUTO_COMPACT_WINDOW_DEFAULT } from "./claude-code-types";
 
 export type SidecarBackend = "openai" | "anthropic";
-export interface SidecarOverride { backend?: SidecarBackend; model?: string }
+/** Vision override may carry "routed" (proxy-router describer, #2188). */
+export type VisionOverrideBackend = SidecarBackend | "routed";
+export interface SidecarOverride { backend?: VisionOverrideBackend; model?: string }
 
 export interface ClaudeManualEnvState {
   /**

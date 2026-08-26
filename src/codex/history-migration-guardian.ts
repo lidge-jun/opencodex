@@ -2,11 +2,11 @@ import { migrateHistoryToOpenai } from "./history-provider";
 import { resolveCodexHistoryJobTarget, runCodexHistoryJob } from "./history-job";
 
 /**
- * Daemon-side retry for the one-time Design-B history migration.
+ * Daemon-side retry for the one-time Design-B history metadata restoration.
  *
  * Most upgrades run `ocx start` while the Codex app still holds `state_5.sqlite`,
- * so the inject-time migration often fails on the FIRST start — exactly the moment
- * every legacy thread is still tagged `opencodex` and invisible to the app. Instead
+ * so the inject-time restore can fail on the FIRST start while manifest-backed original
+ * metadata is still pending. Instead
  * of asking the user to close the app and rerun start, this guardian keeps retrying
  * in the background until the migration lands.
  *
@@ -77,7 +77,7 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
       if (!result.failed) {
         const moved = result.rows + ((result as { ejectedRows?: number }).ejectedRows ?? 0);
         if (moved > 0) {
-          log.log(`🩹 history-migration: ${moved} legacy opencodex thread(s) migrated back to openai.`);
+          log.log(`🩹 history-migration: restored original provider metadata for ${moved} manifest-backed thread(s).`);
         }
         // Zero mutations are authoritative only when the worker verified the
         // exact DB/manifest state while H was held.
@@ -92,7 +92,7 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
     }
     if (ticks >= maxTicks) {
       stopped = true;
-      log.log("⚠️ history-migration: Could not verify that legacy threads were migrated; the history database may be busy, unavailable, or not yet ready. Run 'ocx sync' (or check 'ocx doctor').");
+      log.log("⚠️ history-migration: Could not verify that backed-up provider metadata was restored; the history database may be busy, unavailable, or not yet ready. Run 'ocx sync' (or check 'ocx doctor').");
       return;
     }
     schedule();

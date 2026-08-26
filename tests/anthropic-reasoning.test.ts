@@ -40,6 +40,28 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.top_p).toBe(0.8);
   });
 
+  test("modelDefaultReasoningEfforts supplies reasoning when caller omits it", async () => {
+    const b = await bodyOf(parsed(undefined, { temperature: 0.5, topP: 0.8 }, "always-thinking-model"), {
+      ...provider,
+      modelDefaultReasoningEfforts: { "always-thinking-model": "high" },
+    });
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(typeof thinking?.budget_tokens).toBe("number");
+    expect(b.temperature).toBeUndefined();
+    expect(b.top_p).toBeUndefined();
+  });
+
+  test("explicit reasoning overrides modelDefaultReasoningEfforts", async () => {
+    const b = await bodyOf(parsed("low", {}, "always-thinking-model"), {
+      ...provider,
+      modelDefaultReasoningEfforts: { "always-thinking-model": "high" },
+    });
+    const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
+    expect(thinking?.type).toBe("enabled");
+    expect(thinking?.budget_tokens).toBe(4096);
+  });
+
   test("reasoning 'high' enables thinking and drops sampling (extended-thinking rule)", async () => {
     const b = await bodyOf(parsed("high", { temperature: 0.3, topP: 0.9 }));
     const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
@@ -57,6 +79,23 @@ describe("anthropic extended-thinking gate", () => {
     "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
+    // Vendor ids may be capitalized and/or use a dotted minor; the family parser must
+    // still classify them as adaptive or the legacy thinking.enabled wire shape goes
+    // out to a model that rejects it with a 400 (Bedrock ValidationException).
+    "Claude-Opus-4.8-joybuilder",
+    "claude-opus-4.8-joybuilder",
+    // The separator and the capitalization are independent axes, and the PR changed
+    // both at once ([.-] plus the /i flag). Cover the whole 2x2 so a later regex edit
+    // that repairs one axis while breaking the other cannot pass: dashed-capitalized
+    // and dotted-lowercase are exactly the cells the original two cases leave open.
+    "Claude-Opus-4-8",
+    "Claude-Opus-4.8",
+    "claude-opus-4.8",
+    // A dotted SUFFIX after a dashed minor is not a dotted minor. Widening the tail to
+    // (?![\d.]) to stop "4.20250514" also rejected "4-8.1", silently demoting an id the
+    // old regex classified correctly — a regression inside the fix for the opposite bug.
+    // The tail must reject a longer NUMBER, not any dot.
+    "claude-opus-4-8.1",
   ])("adaptive-thinking model %s sends thinking.adaptive + output_config.effort", async (modelId) => {
     const b = await bodyOf(parsed("xhigh", { temperature: 0.3, topP: 0.9 }, modelId));
     expect(b.thinking).toEqual({ type: "adaptive" });
@@ -68,6 +107,7 @@ describe("anthropic extended-thinking gate", () => {
   test("adaptive-thinking model maps unsupported 'minimal' effort to 'low'", async () => {
     const b = await bodyOf(parsed("minimal", {}, "claude-fable-5"));
     expect(b.output_config).toEqual({ effort: "low" });
+    expect(b.max_tokens).toBe(12_288);
   });
 
   test("forwards Responses JSON Schema output format to Anthropic", async () => {
@@ -274,6 +314,15 @@ describe("anthropic extended-thinking gate", () => {
     "claude-sonnet-4-5",
     "claude-opus-4-6",
     "claude-opus-4-20250514",
+    // Capitalized/dotted ids below the adaptive threshold must stay on the legacy
+    // wire shape (guard against over-broad family parsing).
+    "Claude-Opus-4.6-joybuilder",
+    // The date-pinned guard is the reason the minor group is bounded to {1,2} with a
+    // (?!\d) tail. A capitalized date-pinned id never matched the old lowercase regex
+    // at all, so it reached this branch by failing to parse rather than by parsing
+    // correctly — the same observable outcome for two opposite reasons. Now that /i
+    // makes it parse, assert it still reads as minor 0 and stays legacy.
+    "Claude-Opus-4-20250514",
   ])("budget-thinking model %s keeps thinking.enabled with budget_tokens", async (modelId) => {
     const b = await bodyOf(parsed("high", {}, modelId));
     const thinking = b.thinking as { type: string; budget_tokens: number } | undefined;
@@ -318,6 +367,14 @@ describe("anthropic extended-thinking gate", () => {
     // The slash can also carry a vendor SUFFIX rather than a routing prefix, so the family
     // segment is not reliably first or last. Both directions are real routed shapes.
     "claude-sonnet-5/variant",
+    // claudeFamilyVersion() has TWO callers through meetsFamilyMinimum():
+    // usesAdaptiveThinking() and supportsExplicitThinkingDisable(). Every case above
+    // reaches only the first one, so a capitalization regression in the parser would
+    // silently drop the explicit disable while the adaptive matrix stayed green.
+    // A missed disable is invisible in the wire shape: the request simply goes out
+    // without the field and the model thinks anyway, on a 64-token budget it shares
+    // with generation (#545).
+    "Claude-Sonnet-5",
   ])("%s + reasoning 'none' sends an explicit thinking disable (#545)", async (modelId) => {
     const b = await bodyOf(parsed("none", { maxOutputTokens: 64, stopSequences: ["</block>"] }, modelId));
     expect(b.thinking).toEqual({ type: "disabled" });
@@ -428,5 +485,45 @@ describe("Claude Desktop classifier round trip (#545)", () => {
     expect(body.thinking).toEqual({ type: "disabled" });
     expect(body.max_tokens).toBe(64);
     expect(body.stop_sequences).toEqual(["</block>"]);
+  });
+});
+
+describe("provider default reasoning effort (#2494)", () => {
+  const withDefault = (model: string, effort: string) => ({
+    ...(provider as unknown as Record<string, unknown>),
+    modelDefaultReasoningEfforts: { [model]: effort },
+  } as unknown as OcxProviderConfig);
+
+  test("a configured default applies when the caller omits reasoning", async () => {
+    const model = "anthropic/claude-sonnet-4.5";
+    const b = await bodyOf(parsed(undefined, {}, model), withDefault(model, "high"));
+    expect((b.thinking as { type?: string } | undefined)?.type).toBe("enabled");
+    expect((b.thinking as { budget_tokens?: number }).budget_tokens).toBe(16384);
+  });
+
+  test("an explicit caller effort still wins over the configured default", async () => {
+    const model = "anthropic/claude-sonnet-4.5";
+    const b = await bodyOf(parsed("none", {}, model), withDefault(model, "high"));
+    expect(b.thinking).toBeUndefined();
+  });
+
+  // The sentinel means "send no reasoning field". Treating it as an effort put
+  // output_config.effort: "__omit__" on the wire for adaptive models and turned
+  // budget thinking ON for the rest — the opposite of the request.
+  test("the __omit__ sentinel never becomes an effort value", async () => {
+    const adaptive = "anthropic/claude-fable-5";
+    const a = await bodyOf(parsed(undefined, {}, adaptive), withDefault(adaptive, "__omit__"));
+    expect(a.output_config).toBeUndefined();
+    expect(a.thinking).toBeUndefined();
+
+    const budget = "anthropic/claude-sonnet-4.5";
+    const b = await bodyOf(parsed(undefined, {}, budget), withDefault(budget, "__omit__"));
+    expect(b.thinking).toBeUndefined();
+  });
+
+  test("a blank default is ignored rather than treated as an effort", async () => {
+    const model = "anthropic/claude-sonnet-4.5";
+    const b = await bodyOf(parsed(undefined, {}, model), withDefault(model, "   "));
+    expect(b.thinking).toBeUndefined();
   });
 });

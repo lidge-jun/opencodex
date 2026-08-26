@@ -33,7 +33,7 @@ import {
   stopServerListener,
 } from "../lifecycle";
 import { isServiceViable } from "../../service";
-import { readRuntimePort } from "../../config";
+import { readRuntimePort } from "../../config/process-state";
 import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
 import {

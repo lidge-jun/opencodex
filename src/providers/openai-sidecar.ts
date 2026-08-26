@@ -169,6 +169,7 @@ export async function resolveFirstUsableOpenAiSidecar(
             authContext.accountId,
             outcome,
             {
+              threadId: authContext.affinityKey,
               probeLeaseId: authContext.probeLeaseId,
               writerGeneration: authContext.writerGeneration,
             },

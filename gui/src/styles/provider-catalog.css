@@ -60,6 +60,32 @@
   text-overflow: ellipsis;
 }
 
+/* An account row is normally one horizontal line (`.list-row` is a row flex).
+   While a login for that row is in flight it grows a second line for the
+   authorization URL, device code, and paste field, so the head keeps the
+   original layout and the hint sits underneath it rather than being squeezed
+   into the badge strip. A row with no login in flight is untouched. */
+.provider-catalog-account-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+/* Specificity, not source order: this file is @imported at the TOP of
+   styles.css while `.list-row` is declared far below it, so a bare
+   `.provider-catalog-account-row--waiting` would lose `align-items` and
+   `cursor` to the later equal-specificity `.list-row` and the hint would
+   render as a shrink-wrapped centered column instead of a full-width second
+   line. Qualifying with `.list-row` wins the cascade regardless of order. */
+.list-row.provider-catalog-account-row--waiting {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  cursor: default;
+}
+
 .provider-catalog-footer {
   display: flex;
   gap: 8px;

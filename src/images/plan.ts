@@ -48,11 +48,12 @@ export async function planImageBridge(
   if (config.images?.bridgeEnabled !== true) return undefined;
   if (!parsed._imageGeneration) return undefined;
   const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
-  const toolNames = new Set(
-    [...parsed._imageGeneration.toolNames, IMAGE_GEN_TOOL_NAME]
-      .filter(name => toolAllowed({ name })),
-  );
+  const toolNames = new Set([...parsed._imageGeneration.toolNames].filter(name => toolAllowed({ name })));
+  if (toolAllowed({ name: IMAGE_GEN_TOOL_NAME })) toolNames.add(IMAGE_GEN_TOOL_NAME);
   if (toolNames.size === 0) return undefined;
+  // Responses advertises and rewrites authorized aliases to this synthetic name, so the loop
+  // must always intercept it once any image-generation name has armed the bridge.
+  toolNames.add(IMAGE_GEN_TOOL_NAME);
   // Don't intercept for OpenAI native passthrough
   const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
   if (host === "api.openai.com") return undefined;

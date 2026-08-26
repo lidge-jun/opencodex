@@ -49,6 +49,63 @@ describe("parseCallbackInput kinds", () => {
   test("raw authorization code -> kind raw", () => {
     expect(parseCallbackInput("  raw-auth-code  ")).toEqual({ kind: "raw", code: "raw-auth-code", state: undefined });
   });
+
+  test("code#state in a raw paste keeps the state alongside the code", () => {
+    // Supported since the branch was written, never asserted.
+    expect(parseCallbackInput("raw-auth-code#xyz")).toEqual({ kind: "raw", code: "raw-auth-code", state: "xyz" });
+  });
+
+  test("a redirect URL carrying code/state in the FRAGMENT is read, not rejected", () => {
+    // Defensive: no provider configured here returns a fragment response. A full
+    // URL with hash parameters is nonetheless a valid URL with no query code,
+    // and used to come back as "no authorization code found in input".
+    expect(parseCallbackInput("http://127.0.0.1:56121/callback#code=abc&state=xyz")).toEqual({
+      kind: "url", code: "abc", state: "xyz",
+    });
+  });
+
+  test("the query wins when both query and fragment carry a code", () => {
+    // The query is the authorization-code response location, so no paste that
+    // works today changes meaning.
+    expect(parseCallbackInput("http://127.0.0.1:56121/callback?code=q&state=qs#code=f&state=fs")).toEqual({
+      kind: "url", code: "q", state: "qs",
+    });
+  });
+
+  test("code and state are never mixed across the query and the fragment", () => {
+    // `?state=<expected>#code=<other>` used to parse as one response assembled
+    // from two collections: a state the user's own login supplied, paired with
+    // a code from somewhere else. PKCE limits what that buys an attacker, but
+    // pairing them at all defeats the check state exists to perform.
+    //
+    // The query wins as a WHOLE or not at all. Here it carries no code, so the
+    // fragment is the response — and it brought no state, which
+    // submitManualLoginCode then rejects.
+    expect(parseCallbackInput("http://127.0.0.1:56121/callback?state=expected#code=other")).toEqual({
+      kind: "url", code: "other", state: undefined,
+    });
+    // The mirror image: the query owns the response, so a fragment state is
+    // never borrowed to complete it.
+    expect(parseCallbackInput("http://127.0.0.1:56121/callback?code=q#state=borrowed")).toEqual({
+      kind: "url", code: "q", state: undefined,
+    });
+  });
+
+  test("a fragment code without state stays kind url, so state stays mandatory", () => {
+    // kind must NOT degrade to raw: that is what would exempt it from the CSRF
+    // check and turn a convenience into a hole.
+    expect(parseCallbackInput("http://127.0.0.1:56121/callback#code=abc")).toEqual({
+      kind: "url", code: "abc", state: undefined,
+    });
+  });
+
+  test("a token fragment is not an authorization response", () => {
+    // This repo does not implement the implicit grant, and a paste field must
+    // not become the place it appears.
+    expect(parseCallbackInput("http://127.0.0.1:56121/callback#access_token=t&token_type=bearer")).toEqual({
+      kind: "url", code: undefined, state: undefined,
+    });
+  });
 });
 
 describe("OAuth manual login code fallback", () => {
@@ -155,6 +212,16 @@ describe("OAuth manual login code fallback", () => {
       const missingState = submitManualLoginCode("xai", `${redirectUri}?code=abc`);
       expect(missingState.ok).toBe(false);
       if (!missingState.ok) expect(missingState.error).toContain("missing the state");
+
+      // A FRAGMENT-carried response gets the same CSRF treatment: reading the
+      // fragment must not have opened a hole beside the query it copies.
+      const fragmentMismatch = submitManualLoginCode("xai", `${redirectUri}#code=evil&state=WRONG`);
+      expect(fragmentMismatch.ok).toBe(false);
+      if (!fragmentMismatch.ok) expect(fragmentMismatch.error).toContain("state mismatch");
+
+      const fragmentNoState = submitManualLoginCode("xai", `${redirectUri}#code=abc`);
+      expect(fragmentNoState.ok).toBe(false);
+      if (!fragmentNoState.ok) expect(fragmentNoState.error).toContain("missing the state");
 
       // Correct paste: matching state completes the login via the original verifier.
       const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-auth-code&state=${state}`);

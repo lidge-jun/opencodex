@@ -36,6 +36,7 @@ test("an empty combo list renders the first-combo editor inline", () => {
     <LanguageProvider>
       <ComboWorkspace
         combos={[]}
+        providerQuotaStates={{}}
         providers={[{ name: "openai" }]}
         models={[{ provider: "openai", id: "gpt-5" }]}
         loading={false}
@@ -72,6 +73,7 @@ test("an empty combo list creates the first combo and shows confirmation", async
       <LanguageProvider>
         <ComboWorkspace
           combos={[]}
+          providerQuotaStates={{ openai: "available" }}
           providers={[{ name: "openai" }]}
           models={[{ provider: "openai", id: "gpt-5" }]}
           loading={false}
@@ -124,4 +126,51 @@ test("an empty combo list creates the first combo and shows confirmation", async
   await act(async () => {
     root.unmount();
   });
+});
+
+test("first-combo Create disables only while every usable target is known exhausted", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  const render = (quotaState: "available" | "exhausted") => (
+    <LanguageProvider>
+      <ComboWorkspace
+        combos={[]}
+        providerQuotaStates={{ openai: quotaState }}
+        providers={[{ name: "openai" }]}
+        models={[{ provider: "openai", id: "gpt-5" }]}
+        loading={false}
+        onRefresh={() => {}}
+        onSave={async () => ({ ok: true })}
+        onRemove={async () => ({ ok: true })}
+        onAdd={() => {}}
+        adding={false}
+        onCloseAdd={() => {}}
+        onCreated={() => {}}
+      />
+    </LanguageProvider>
+  );
+
+  await act(async () => { root.render(render("exhausted")); });
+  await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+
+  const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
+      .set!.call(providerSelect, "openai");
+    providerSelect.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+
+  const createButton = container.querySelector<HTMLButtonElement>("#cwi-edit-create")!;
+  expect(createButton.disabled).toBe(true);
+  expect(container.textContent).toContain("All enabled targets are out of quota");
+
+  await act(async () => { root.render(render("available")); });
+  expect(container.querySelector<HTMLButtonElement>("#cwi-edit-create")!.disabled).toBe(false);
+  expect(container.textContent).not.toContain("All enabled targets are out of quota");
+
+  await act(async () => { root.unmount(); });
+  container.remove();
 });

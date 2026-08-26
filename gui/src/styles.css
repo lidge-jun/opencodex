@@ -1732,7 +1732,8 @@ dialog.modal-overlay::backdrop {
 .account-pool-strategy-card > strong { display: block; margin: 0; }
 .account-pool-strategy-card > .card-sub,
 .account-pool-strategy-controls > .card-sub,
-.account-pool-strategy-controls .field .card-sub {
+.account-pool-strategy-controls .field .card-sub,
+.anthropic-pool-card__field .card-sub {
   /* Already inside the padded card — don't double-indent like account-card subs. */
   margin: 0;
   padding: 0;
@@ -1754,6 +1755,30 @@ dialog.modal-overlay::backdrop {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/*
+ * Claude account-pool card — the same inset `.account-pool-strategy-card` above already
+ * fixes, on the card that still had it. `.card` has no padding, so each child brings its
+ * own 16px: `.card-row`, `.card-sub` and `.setting-row` do, the warning box and the
+ * threshold field do not, so those two rendered flush against the card border.
+ *
+ * The warning takes margin, not padding: it is a bordered box, so its own padding insets
+ * the text and leaves the border itself on the card edge. The field takes padding — the
+ * `.input` inside is full-width, so the field owns the inset for the whole group.
+ */
+.anthropic-pool-card { margin-top: 12px; }
+.anthropic-pool-card__notice {
+  margin: 10px 16px 0;
+  padding: 10px 16px;
+  border: 1px solid var(--border, #c9a227);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn, #c9a227) 12%, transparent);
+}
+.anthropic-pool-card__field {
+  display: block;
+  margin-top: 12px;
+  padding: 0 16px;
 }
 .api-active-keys-skeleton {
   min-height: 96px;

@@ -70,10 +70,12 @@ export interface AdapterRequest {
     body: string;
     /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
+    /** Native custom-tool wire names authorized for representation-only response repair. */
+    routedCustomToolRepairNames?: ReadonlySet<string>;
     /** Client tool-search names actually lowered to upstream function calls for this request. */
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Upstream-only aliases for namespace tools flattened in this request. */
-    convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string }>;
+    convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string; kind: "function" | "custom" }>;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */

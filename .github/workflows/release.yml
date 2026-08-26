@@ -97,10 +97,8 @@ jobs:
           fi
 
       # opencodex is bun-native (the prepublishOnly audit, GUI build, and typecheck run under bun).
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       # node + npm perform the actual publish. registry-url points npm at the public registry.
       - name: Setup Node

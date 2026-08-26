@@ -7,6 +7,7 @@ import type {
 } from "./add-codex-account-reducer";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { startVisibilityPoll } from "../visibility-poll";
 import {
   codexAccountMutationCompletion,
@@ -137,11 +138,12 @@ export function useAddCodexAccountOAuth({
         signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          reauthAccountId
+        body: JSON.stringify({
+          ...openBrowserRequestField(),
+          ...(reauthAccountId
             ? { id: reauthAccountId, reauth: true }
-            : (accountId ? { id: accountId } : {}),
-        ),
+            : (accountId ? { id: accountId } : {})),
+        }),
       });
       type LoginResponse = { url?: string; flowId?: string; error?: string; status?: string };
       let resp = await requestLogin();

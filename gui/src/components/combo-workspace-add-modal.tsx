@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ComboItem,
+  type ProviderQuotaStates,
+  comboQuotaState,
   comboPublicModelId,
   emptyDraft,
   intersectComboEfforts,
@@ -17,6 +19,7 @@ export function AddComboModal({
   existingIds,
   existingAliases,
   providerMap,
+  providerQuotaStates,
   providers,
   models,
   onClose,
@@ -25,6 +28,7 @@ export function AddComboModal({
   existingIds: string[];
   existingAliases: string[];
   providerMap: Readonly<Record<string, { disabled?: boolean }>>;
+  providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
   onClose: () => void;
@@ -46,6 +50,7 @@ export function AddComboModal({
     () => intersectComboEfforts(draft.targets, effortMap),
     [draft.targets, effortMap],
   );
+  const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -104,6 +109,11 @@ export function AddComboModal({
         </div>
         <p className="muted" style={{ marginTop: 0, maxWidth: "62ch", overflowWrap: "anywhere" }}>{t("cws.addSubtitle")}</p>
         {error && <Notice tone="err">{error}</Notice>}
+        {allTargetsExhausted && (
+          <div className="cwi-quota-banner" role="status" aria-live="polite">
+            {t("cws.quota.allExhausted")}
+          </div>
+        )}
         <div className="cwi-modal-form">
           <div className="cwi-field">
             <label htmlFor="cwi-new-id">{t("cws.field.id")}</label>
@@ -198,6 +208,7 @@ export function AddComboModal({
               strategy={draft.strategy}
               providers={providers}
               models={models}
+              providerQuotaStates={providerQuotaStates}
               onChange={(targets) => setDraft((d) => ({ ...d, targets }))}
             />
             <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
@@ -214,7 +225,7 @@ export function AddComboModal({
         </div>
         <div className="cwi-modal-actions">
           <button type="button" className="btn btn-ghost" onClick={requestClose} disabled={busy}>{t("common.cancel")}</button>
-          <button type="button" className="btn btn-primary" onClick={() => { void submit(); }} disabled={busy}>
+          <button type="button" className="btn btn-primary" onClick={() => { void submit(); }} disabled={busy || allTargetsExhausted}>
             {busy ? t("common.saving") : t("cws.create")}
           </button>
         </div>

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction, stripOpenAiOnlyWebSearchFields } from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { resolveProviderTransport } from "../src/providers/xai-transport";
 import { routedProviderConfig } from "../src/router";
 import type { OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -23,6 +24,8 @@ function buildWebSearchBody(provider: OcxProviderConfig): Record<string, unknown
         external_web_access: true,
         search_context_size: "medium",
         user_location: { type: "approximate" },
+        search_content_types: ["text"],
+        filters: { allowed_domains: ["x.ai"] },
       }],
     },
   }, { headers: new Headers() });
@@ -50,6 +53,32 @@ describe("stripOpenAiOnlyWebSearchFields", () => {
     const clean = { model: "m", tools: [{ type: "web_search" }] };
     expect(stripOpenAiOnlyWebSearchFields(clean)).toBe(clean);
   });
+
+  test("strips a nested cached declaration even when no top-level tools exist", () => {
+    const body = {
+      model: "m",
+      input: [{
+        type: "additional_tools",
+        tools: [{
+          type: "web_search",
+          external_web_access: false,
+          search_context_size: "low",
+          filters: { allowed_domains: ["example.com"] },
+        }],
+      }],
+    };
+
+    expect(stripOpenAiOnlyWebSearchFields(body)).toEqual({
+      model: "m",
+      input: [{
+        type: "additional_tools",
+        tools: [{
+          type: "web_search",
+          filters: { allowed_domains: ["example.com"] },
+        }],
+      }],
+    });
+  });
 });
 
 describe("Responses buildRequest web_search capability", () => {
@@ -66,10 +95,12 @@ describe("Responses buildRequest web_search capability", () => {
       external_web_access: true,
       search_context_size: "medium",
       user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
     }]);
   });
 
-  test("registry xAI traffic strips fields its Responses API rejects", () => {
+  test("registry xAI traffic keeps accepted fields on the public api.x.ai Responses API", () => {
     const entry = getProviderRegistryEntry("xai");
     if (!entry) throw new Error("xAI registry entry missing");
     const provider = { ...providerConfigSeed(entry), adapter: "openai-responses" };
@@ -79,7 +110,64 @@ describe("Responses buildRequest web_search capability", () => {
     expect(body.tools).toEqual([{
       type: "web_search",
       user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
     }]);
+  });
+
+  test("non-xAI classified gateways use generic field stripping, not xAI cached-search policy", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://responses.example.com/v1",
+      authMode: "key",
+      apiKey: "test-gateway-key",
+      supportsOpenAiWebSearchToolFields: false,
+    };
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "test-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "test-model",
+        input: [{
+          type: "additional_tools",
+          role: "developer",
+          tools: [{
+            type: "web_search",
+            external_web_access: false,
+            search_context_size: "low",
+            user_location: { type: "approximate", country: "KR" },
+            filters: { excluded_domains: ["blocked.example"] },
+          }],
+        }],
+        tools: [{
+          type: "web_search",
+          external_web_access: false,
+          search_context_size: "medium",
+          user_location: { type: "approximate" },
+          filters: { allowed_domains: ["example.com"] },
+        }],
+        tool_choice: { type: "web_search" },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      user_location: { type: "approximate" },
+      filters: { allowed_domains: ["example.com"] },
+    }]);
+    expect(body.input).toEqual([{
+      type: "additional_tools",
+      role: "developer",
+      tools: [{
+        type: "web_search",
+        user_location: { type: "approximate", country: "KR" },
+        filters: { excluded_domains: ["blocked.example"] },
+      }],
+    }]);
+    expect(body.tool_choice).toEqual({ type: "web_search" });
   });
 });
 
@@ -106,18 +194,46 @@ describe("routedProviderConfig web_search capability backfill", () => {
     expect(routed.supportsOpenAiWebSearchToolFields).toBe(false);
   });
 
-  test("the routed row actually strips the fatal fields at the adapter", () => {
+  test("the registry-classified OAuth row strips only fatal fields at the CLI adapter", () => {
     const routed = routedProviderConfig("xai", {
       adapter: "openai-chat",
       baseUrl: "https://api.x.ai/v1",
       authMode: "oauth",
       modelAdapters: { "grok-4.6": "openai-responses" },
     });
+    const transport = resolveProviderTransport("xai", routed);
 
-    const body = buildWebSearchBody({ ...routed, adapter: "openai-responses" });
+    expect(transport.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    const body = buildWebSearchBody({ ...transport, adapter: "openai-responses" });
     expect(body.tools).toEqual([{
       type: "web_search",
       user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
+    }]);
+  });
+
+  test("an equivalent unclassified OAuth row retains fatal fields at the CLI adapter", () => {
+    const routed = routedProviderConfig("xai", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "oauth",
+      modelAdapters: { "grok-4.6": "openai-responses" },
+    });
+    const unclassified = { ...routed };
+    delete unclassified.supportsOpenAiWebSearchToolFields;
+    const transport = resolveProviderTransport("xai", unclassified);
+
+    expect(transport.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    expect(transport.supportsOpenAiWebSearchToolFields).toBeUndefined();
+    const body = buildWebSearchBody({ ...transport, adapter: "openai-responses" });
+    expect(body.tools).toEqual([{
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: "medium",
+      user_location: { type: "approximate" },
+      search_content_types: ["text"],
+      filters: { allowed_domains: ["x.ai"] },
     }]);
   });
 

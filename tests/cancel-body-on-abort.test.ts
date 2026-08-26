@@ -82,12 +82,16 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     expect(source).toContain("detachBodyGuard()");
   });
 
-  test("the passthrough error branch attaches the body guard before consuming it", async () => {
+  test("the bounded reader exclusively owns all non-combo Responses error bodies", async () => {
     const source = await Bun.file(new URL("../src/server/responses/core.ts", import.meta.url)).text();
 
-    const guardAt = source.indexOf("cancelBodyOnAbort(upstreamResponse.body, upstream.signal)");
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(source).toContain("detachPassthroughErrorGuard");
+    expect(source.match(/\breadDisplaySafeErrorText\(/g)).toHaveLength(4);
+    expect(source).not.toContain("detachPassthroughErrorGuard");
+    expect(source).not.toContain("detachErrorBodyGuard");
+    expect(source).not.toContain("detachContinuationErrorGuard");
+    expect(source).not.toContain("upstreamResponse.text().catch(() => \"\")");
+    expect(source).not.toContain("upstreamResponse.text().catch(() => \"unknown error\")");
+    expect(source).not.toContain("response.text().catch(() => \"unknown error\")");
   });
 
   // The combo branches are deliberately NOT guarded: consumeComboFailure ->

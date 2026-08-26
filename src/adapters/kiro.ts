@@ -318,9 +318,6 @@ function validateKiroCapabilities(parsed: OcxParsedRequest): void {
   if (choice !== undefined && choice !== "auto" && choice !== "none") {
     throw new Error("Kiro supports only automatic tool choice or tool_choice:none");
   }
-  if (parsed.options.parallelToolCalls === true) {
-    throw new Error("Kiro does not support parallel tool calls");
-  }
   if (parsed.options.serviceTier !== undefined) {
     throw new Error("Kiro does not support service tiers");
   }

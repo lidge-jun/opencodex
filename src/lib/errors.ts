@@ -162,10 +162,15 @@ export function classifyError(status: number, type: string, message: string): Oc
     return { message, type: "invalid_request_error", code: "context_length_exceeded" };
   }
   // "Cursor resource limit exceeded" is emitted only for explicit request-size overflow
-  // details (isCursorRequestTooLargeDetail in cursor-errors.ts); quota-style resource
-  // exhaustion arrives as "Cursor rate limit exceeded" and falls through to 429 below.
+  // details (isCursorRequestTooLargeDetail in cursor-errors.ts); "Cursor context limit
+  // exceeded" is the bare payload-overflow shape (isCursorZeroTokenResourceExhausted);
+  // quota-style resource exhaustion arrives as "Cursor rate limit exceeded" and falls
+  // through to 429 below.
   if (text.includes("cursor resource limit exceeded")) {
     return { message, type: "invalid_request_error", code: "tool_catalog_too_large" };
+  }
+  if (text.includes("cursor context limit exceeded")) {
+    return { message, type: "invalid_request_error", code: "context_length_exceeded" };
   }
   // The Cursor adapter's classified rate-limit prefix is authoritative: its DETAIL may echo
   // quota wording ("... quota exhausted") that would otherwise hit the insufficient_quota
@@ -306,6 +311,7 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
   // See classifyError: this prefix now only means explicit request-size overflow (400);
   // quota-style Cursor resource exhaustion carries the rate-limit prefix and maps to 429.
   if (lower.includes("cursor resource limit exceeded")) return 400;
+  if (lower.includes("cursor context limit exceeded")) return 400;
   if (
     lower.includes("resource_exhausted") ||
     lower.includes("resource exhausted") ||

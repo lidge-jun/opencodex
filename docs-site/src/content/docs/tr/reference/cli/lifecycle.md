@@ -74,11 +74,16 @@ ocx restore back
 ocx eject back
 ```
 
-### `ocx recover-history --legacy-openai`
+### `ocx recover-history --legacy-openai --yes`
 
 Tersine çevrilebilir yedekleme desteği var olmadan önce Codex App geçmişini
 yeniden eşleyen eski geliştirme derlemeleri için açık kurtarma. Geçmiş
 veritabanı kilitliyse önce Codex'i kapatın.
+
+Bu, geniş kapsamlı ve yıkıcı bir yeniden etiketlemedir: kullanıcı iletisi bulunan ve şu anda
+`opencodex` olarak etiketlenmiş her thread `openai` olarak değiştirilir, `exec` değeri `cli`
+olarak normalleştirilir ve event marker ayarlanır. Geçerli dedicated-provider geçmişi de kapsama
+dahildir. Durumu yedekleyin ve yalnızca bu kapsamın tamamını istiyorsanız çalıştırın.
 
 ### `ocx uninstall` · `ocx remove`
 
@@ -232,7 +237,7 @@ ve isteğe bağlı `--restart-codex` davranışı geçerlidir.
 
 ## Arka plan servisi
 
-### `ocx service [install|repair|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 opencodex'i oturum açmada otomatik başlayan ve çökmede otomatik yeniden başlayan
 oturumla yönetilen bir arka plan servisi (macOS **launchd**, Linux **systemd
@@ -242,9 +247,10 @@ yapılandırmasını dalgalandırmaz.
 
 | Alt komut | Eylem |
 | --- | --- |
-| none | Servisi oluşturun/güncelleyin ve başlatın. |
+| none | Servis yoksa kurup başlatın; varsa yeniden kaydetmeden yenileyip yeniden başlatın. |
 | `install` | Servisi oluşturun ve başlatın. Kaydeder, bu da Windows'ta yükseltme gerektirir. |
 | `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden kaydetmeden yeniden başlatın. |
+| `restart` | `repair` komutunun takma adıdır. |
 | `start` | Kurulu bir servisi başlatın. |
 | `stop` | Servisi durdurun ve yerel Codex'i geri yükleyin. |
 | `status` | Servis ve proxy tanılamalarını artı günlük yollarını bildirin. |
@@ -255,9 +261,12 @@ yapılandırmasını dalgalandırmaz.
 ocx service
 ocx service install
 ocx service repair
+ocx service restart
 ocx service status
 ocx service uninstall
 ```
+
+Windows'ta bare `ocx service`, yükleme yolunu ancak Task Scheduler ve WinSW'nin her ikisinin de yok olduğu kanıtlandıktan sonra çalıştırır. Durum sorgularından herhangi biri belirsizse hiçbir şey kaydetmeyi reddeder ve `ocx service status` çalıştırmanızı ister; yalnızca yokluk doğrulandıktan sonra açık `ocx service install` kullanın.
 
 `install`, `start` ve `repair`, başarı bildirmeden önce kurulu servise
 yerleştirilmiş portta bir proxy'nin gerçekten yanıt verdiğini onaylar — her üç
@@ -435,5 +444,3 @@ ocx update --tag preview
 Yeni sürümler, [Sürüm iş
 akışı](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
 bunları npm'de yayınladığında kullanılabilir hale gelir.
-
-

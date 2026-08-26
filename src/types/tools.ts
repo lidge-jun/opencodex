@@ -31,6 +31,33 @@ export function namespacedToolName(namespace: string | undefined, name: string):
   return namespace ? `${namespace}__${name}` : name;
 }
 
+/**
+ * Codex 0.149 unified-exec name normalization.
+ *
+ * Codex's code-mode shell tool is declared as `exec` (a freeform custom tool whose own
+ * description mentions the nested `await tools.exec_command(...)` helper). Routed models —
+ * DeepSeek in particular — sometimes echo that helper name as the tool-call name, emitting
+ * `exec_command` instead of the declared `exec`. Accept the legacy shell bridge names only
+ * when the request catalog actually declares `exec` and does not itself declare the legacy
+ * name (an MCP server may legitimately advertise `exec_command` under its own namespace).
+ */
+const LEGACY_SHELL_BRIDGE_TOOL_NAMES = ["exec_command", "shell_command"] as const;
+
+export function normalizeDeclaredToolName(
+  name: string,
+  declared: ReadonlySet<string> | undefined,
+): string {
+  if (!declared || !declared.has("exec")) return name;
+  if (declared.has(name)) return name;
+  // When the catalog explicitly declares any legacy shell bridge name, the environment
+  // genuinely exposes that tool — turn normalization off so a call is never mis-routed
+  // to `exec`.
+  if ((LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy))) {
+    return name;
+  }
+  return (LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).includes(name) ? "exec" : name;
+}
+
 export function toolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): string[] {
   const wireName = namespacedToolName(tool.namespace, tool.name);
   return tool.namespace ? [wireName, `${tool.namespace}.${tool.name}`] : [wireName];
@@ -43,6 +70,74 @@ function sameToolIdentity(
   return left.namespace === right.namespace && left.name === right.name;
 }
 
+type ToolIdentity = Readonly<Pick<OcxTool, "namespace" | "name">>;
+
+function snapshotToolIdentity(tool: Pick<OcxTool, "namespace" | "name">): ToolIdentity {
+  return Object.freeze({
+    name: tool.name,
+    ...(tool.namespace === undefined ? {} : { namespace: tool.namespace }),
+  });
+}
+
+function buildToolChoiceCatalog(
+  tools: readonly ToolIdentity[],
+): {
+  candidatesByName: ReadonlyMap<string, readonly ToolIdentity[]>;
+  sourceCandidatesByName: ReadonlyMap<string, readonly ToolIdentity[]>;
+  identitiesByTool: WeakMap<object, ToolIdentity>;
+} {
+  const index = new Map<string, ToolIdentity[]>();
+  const sourceIndex = new Map<string, ToolIdentity[]>();
+  const identities = new Map<string, Set<string>>();
+  const identitiesByTool = new WeakMap<object, ToolIdentity>();
+  for (const tool of tools) {
+    const snapshot = snapshotToolIdentity(tool);
+    identitiesByTool.set(tool, snapshot);
+    const identity = JSON.stringify([snapshot.namespace ?? null, snapshot.name]);
+    for (const selector of [...toolChoiceAliases(snapshot), snapshot.name]) {
+      const candidates = index.get(selector);
+      if (!candidates) {
+        index.set(selector, [snapshot]);
+        sourceIndex.set(selector, [tool]);
+        identities.set(selector, new Set([identity]));
+      } else if (!identities.get(selector)!.has(identity)) {
+        candidates.push(snapshot);
+        sourceIndex.get(selector)!.push(tool);
+        identities.get(selector)!.add(identity);
+      }
+    }
+  }
+  return { candidatesByName: index, sourceCandidatesByName: sourceIndex, identitiesByTool };
+}
+
+/** Compile one immutable view of a request's tool catalog for repeated policy checks. */
+export function createToolChoiceResolver(tools: readonly ToolIdentity[] | undefined) {
+  const compiled = tools ? buildToolChoiceCatalog(tools) : undefined;
+  const candidatesByName = compiled?.candidatesByName;
+  const snapshotFor = (tool: ToolIdentity): ToolIdentity | undefined => {
+    const snapshot = compiled?.identitiesByTool.get(tool);
+    return snapshot && sameToolIdentity(snapshot, tool) ? snapshot : undefined;
+  };
+  return {
+    candidates(name: string): ToolIdentity[] {
+      return (candidatesByName?.get(name) ?? []).map(candidate => ({ ...candidate }));
+    },
+    candidateCount(name: string): number {
+      return candidatesByName?.get(name)?.length ?? 0;
+    },
+    allows(tool: ToolIdentity, allowedTools: ReadonlySet<string>): boolean {
+      if (!candidatesByName) return toolChoiceAliases(tool).some(name => allowedTools.has(name));
+      const snapshot = snapshotFor(tool);
+      return snapshot ? toolAllowedByChoiceFromIndex(snapshot, allowedTools, candidatesByName) : false;
+    },
+    selects(tool: ToolIdentity, name: string): boolean {
+      const snapshot = snapshotFor(tool);
+      const candidates = candidatesByName?.get(name);
+      return !!snapshot && candidates?.length === 1 && sameToolIdentity(candidates[0], snapshot);
+    },
+  };
+}
+
 /**
  * All tools that could be selected by one client-facing name. Bare logical names are included
  * here because they are a compatibility selector for namespaced tools, while wire and dotted
@@ -53,12 +148,7 @@ export function toolChoiceCandidates(
   name: string,
 ): Pick<OcxTool, "namespace" | "name">[] {
   if (!tools) return [];
-  const candidates: Pick<OcxTool, "namespace" | "name">[] = [];
-  for (const tool of tools) {
-    if (tool.name !== name && !toolChoiceAliases(tool).includes(name)) continue;
-    if (!candidates.some(candidate => sameToolIdentity(candidate, tool))) candidates.push(tool);
-  }
-  return candidates;
+  return [...(buildToolChoiceCatalog(tools).sourceCandidatesByName.get(name) ?? [])];
 }
 
 /**
@@ -72,10 +162,22 @@ export function toolAllowedByChoice(
   tools?: readonly Pick<OcxTool, "namespace" | "name">[],
 ): boolean {
   if (!tools) return toolChoiceAliases(tool).some(name => allowedTools.has(name));
+  return toolAllowedByChoiceFromIndex(
+    snapshotToolIdentity(tool),
+    allowedTools,
+    buildToolChoiceCatalog(tools).candidatesByName,
+  );
+}
+
+function toolAllowedByChoiceFromIndex(
+  tool: ToolIdentity,
+  allowedTools: ReadonlySet<string>,
+  candidatesByName: ReadonlyMap<string, readonly ToolIdentity[]>,
+): boolean {
   for (const name of [...toolChoiceAliases(tool), tool.name]) {
     if (!allowedTools.has(name)) continue;
-    const candidates = toolChoiceCandidates(tools, name);
-    if (candidates.length === 1 && sameToolIdentity(candidates[0], tool)) return true;
+    const candidates = candidatesByName.get(name);
+    if (candidates?.length === 1 && sameToolIdentity(candidates[0], tool)) return true;
   }
   return false;
 }
@@ -123,9 +225,10 @@ export function toolChoiceToolPredicate(
   if (choice === "none") return () => false;
   if (isAllowedToolChoice(choice)) {
     const allowed = new Set(choice.allowedTools);
-    return tool => toolAllowedByChoice(tool, allowed, tools);
+    const resolver = createToolChoiceResolver(tools);
+    return tool => resolver.allows(tool, allowed);
   }
   if (!tools) return tool => toolChoiceAliases(tool).includes(choice.name);
-  const candidates = toolChoiceCandidates(tools, choice.name);
-  return tool => candidates.length === 1 && sameToolIdentity(candidates[0], tool);
+  const resolver = createToolChoiceResolver(tools);
+  return tool => resolver.selects(tool, choice.name);
 }

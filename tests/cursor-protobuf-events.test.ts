@@ -8,6 +8,7 @@ import {
   McpArgsSchema,
   McpToolCallSchema,
   PartialToolCallUpdateSchema,
+  TextDeltaUpdateSchema,
   TokenDeltaUpdateSchema,
   ToolCallCompletedUpdateSchema,
   ToolCallSchema,
@@ -1100,5 +1101,41 @@ describe("request-local input estimate (#373)", () => {
     const usage = done?.type === "done" ? done.usage : undefined;
 
     expect(usage?.inputTokens).toBe(0);
+  });
+});
+
+describe("textual pseudo tool-call marker normalization (#2305)", () => {
+  function textDelta(text: string) {
+    return interaction({ case: "textDelta", value: create(TextDeltaUpdateSchema, { text }) });
+  }
+
+  test("display alias inside [TOOL_CALL]...[ARGS] markers folds to the wire name", () => {
+    const state = createCursorProtobufEventState();
+    const events = mapCursorProtobufServerMessage(
+      textDelta('[TOOL_CALL]mcp_opencodex-responses_grep[ARGS]{"pattern":"OpenCodex"}'),
+      state,
+    );
+    expect(events).toEqual([{ type: "text", text: '[TOOL_CALL]grep[ARGS]{"pattern":"OpenCodex"}' }]);
+  });
+
+  test("prose mentioning the display alias without markers stays untouched", () => {
+    const state = createCursorProtobufEventState();
+    const prose = "You could call mcp_opencodex-responses_grep here.";
+    const events = mapCursorProtobufServerMessage(textDelta(prose), state);
+    expect(events).toEqual([{ type: "text", text: prose }]);
+  });
+
+  test("markers with a non-opencodex provider prefix are not rewritten", () => {
+    const state = createCursorProtobufEventState();
+    const other = "[TOOL_CALL]mcp_other-provider_grep[ARGS]{}";
+    const events = mapCursorProtobufServerMessage(textDelta(other), state);
+    expect(events).toEqual([{ type: "text", text: other }]);
+  });
+
+  test("already-short names inside markers pass through unchanged", () => {
+    const state = createCursorProtobufEventState();
+    const short = "[TOOL_CALL]grep[ARGS]{}";
+    const events = mapCursorProtobufServerMessage(textDelta(short), state);
+    expect(events).toEqual([{ type: "text", text: short }]);
   });
 });

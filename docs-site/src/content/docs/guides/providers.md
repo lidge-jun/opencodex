@@ -110,7 +110,7 @@ ocx logout <provider>
 
 | Provider | Adapter | Base URL | Notes |
 | --- | --- | --- | --- |
-| `xai` | `openai-chat` | `https://api.x.ai/v1` | Live-first Grok catalog; `grok-4.5` is the fallback default. |
+| `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth uses the separate Grok CLI subscription gateway. The API-key override uses `https://api.x.ai/v1` and may inject Priority Processing. Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 coding models. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
@@ -129,6 +129,39 @@ field, opencodex does not strip it and retry or mutate saved configuration. Othe
 deny-by-default.
 
 You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
+
+### Logging in from another browser profile, or another machine
+
+When a login starts, the proxy opens the authorization URL on **its own** machine, using the OS
+default browser — and therefore the default profile. That is the right behavior for a local
+desktop and the wrong one in two common cases: you need a different browser profile (a work
+identity, a second account), or the dashboard is open against a proxy running somewhere else.
+
+Every login surface shows the authorization URL with a copy button, the device code when the
+provider issues one, and a field to paste the redirect URL or authorization code back. So you can
+always finish a login by hand.
+
+To stop the proxy from opening a browser at all, tick **Don't open a browser on the proxy machine**
+beside the login button, or set it permanently:
+
+```json
+{ "oauthOpenBrowser": false }
+```
+
+Absent and `true` both open, so nothing changes for an existing install; only an explicit
+`false` declines. `POST /api/oauth/login` and `POST /api/codex-auth/login` also accept a
+per-request `openBrowser` boolean that overrides the stored setting for that login.
+
+Two cases behave differently, and it is worth knowing which you are in:
+
+- **A different browser profile on the same machine** works with the copied link alone. The
+  loopback callback on `127.0.0.1` still completes the flow.
+- **A browser on a different machine** also needs the paste fallback, because the redirect URI is
+  still `http://127.0.0.1:<port>/callback` on the proxy's host. Finish the login there, then paste
+  the redirect URL (or just the code) back into the dashboard or `ocx account code`.
+
+Device-code providers never open a browser from the proxy in either case: they show a code and a
+verification URL to open wherever you are signed in.
 
 ### Multiple OAuth accounts
 
@@ -585,3 +618,15 @@ does not follow redirects. The response's rolling, weekly, and monthly `percent`
 already-consumed utilization: rolling maps to the 5-hour bar, while weekly and monthly keep
 their matching bars. OpenCodex does not reconstruct dollar caps from local usage logs, and a
 provider using a non-canonical `baseUrl` is never sent the key for this probe.
+
+**Z.AI GLM Coding Plan quota.** The `zai`, `glm`, `glm-cn`, and `zhipu-bigmodel-coding`
+presets read `GET /api/monitor/usage/quota/limit` with the configured key as a Bearer token
+and do not follow redirects. The probe runs against the region the provider points at:
+`api.z.ai` (bare or `/api/coding/paas/v4`) or `open.bigmodel.cn` (bare,
+`/api/coding/paas/v4`, or the OpenAI Responses endpoint `/api/v1`). The response's `limits`
+rows fill the utilization bars: `TOKENS_LIMIT` / `CREDIT_LIMIT` rows with `unit` 3 /
+`number` 5 fill the 5-hour bar and `unit` 6 / `number` 1 the weekly bar, while
+`TIME_LIMIT` rows fill the monthly MCP bar. The v2 coding-plan protocol reports the
+monthly MCP row; the newer protocol does not, so the monthly bar renders only when that
+row is present. A provider using a non-canonical `baseUrl` is never sent the key for this
+probe.

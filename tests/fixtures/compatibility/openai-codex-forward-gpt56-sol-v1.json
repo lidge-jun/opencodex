@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "id": "openai-codex-forward-gpt56-sol-v1",
+  "manifestId": "openai.codex-forward.gpt-5-6-sol.responses",
+  "cases": [
+    {
+      "id": "field-contract",
+      "incomingHeaders": {
+        "authorization": "Bearer caller-stale-token",
+        "chatgpt-account-id": "caller-stale-account",
+        "openai-beta": "responses=experimental",
+        "originator": "codex_cli_rs",
+        "session_id": "fixture-session",
+        "x-not-forwarded": "must-not-cross"
+      },
+      "request": {
+        "model": "gpt-5.6-sol",
+        "input": "ping",
+        "previous_response_id": "resp_fixture",
+        "stream": true,
+        "store": false,
+        "max_output_tokens": 32000,
+        "metadata": { "fixture": "not-forwarded" },
+        "reasoning": { "effort": "low" },
+        "prompt_cache_key": "project-cache-v1",
+        "prompt_cache_retention": "24h",
+        "tools": [
+          {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": { "type": "grammar", "syntax": "lark" }
+          }
+        ]
+      },
+      "assertions": [
+        { "id": "canonical-url", "operator": "equals", "path": "/url", "expected": "https://chatgpt.com/backend-api/codex/responses" },
+        { "id": "selected-authorization", "operator": "equals", "path": "/headers/authorization", "expected": "Bearer fixture-runtime-token" },
+        { "id": "selected-account", "operator": "equals", "path": "/headers/chatgpt-account-id", "expected": "fixture-account" },
+        { "id": "openai-beta-preserved", "operator": "equals", "path": "/headers/openai-beta", "expected": "responses=experimental" },
+        { "id": "originator-preserved", "operator": "equals", "path": "/headers/originator", "expected": "codex_cli_rs" },
+        { "id": "session-id-preserved", "operator": "equals", "path": "/headers/session_id", "expected": "fixture-session" },
+        { "id": "unrelated-header-removed", "operator": "absent", "path": "/headers/x-not-forwarded" },
+        {
+          "id": "custom-tool-preserved",
+          "operator": "equals",
+          "path": "/body/tools/0",
+          "expected": {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": { "type": "grammar", "syntax": "lark" }
+          }
+        },
+        { "id": "max-output-tokens-removed", "operator": "absent", "path": "/body/max_output_tokens" },
+        { "id": "metadata-removed", "operator": "absent", "path": "/body/metadata" },
+        { "id": "previous-response-id-removed", "operator": "absent", "path": "/body/previous_response_id" },
+        { "id": "prompt-cache-key-preserved", "operator": "equals", "path": "/body/prompt_cache_key", "expected": "project-cache-v1" },
+        { "id": "prompt-cache-retention-removed", "operator": "absent", "path": "/body/prompt_cache_retention" }
+      ]
+    },
+    {
+      "id": "orphan-tool-output",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "input": [
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_fixture",
+            "output": "fixture output"
+          }
+        ],
+        "previous_response_id": "resp_missing",
+        "stream": true
+      },
+      "assertions": [
+        {
+          "id": "orphan-output-converted",
+          "operator": "equals",
+          "path": "/body/input/0",
+          "expected": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "[tool output for call_fixture]\nfixture output"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -288,6 +288,7 @@ describe("resolveFastPolicy matrix", () => {
         settledCallerTier: undefined,
       },
       {
+        // B2: key-auth Chat Completions is a documented Priority Processing transport.
         name: "xAI API-key default",
         providerName: "xai",
         modelIds: ["grok-4.6", "grok-4.5"],
@@ -297,7 +298,7 @@ describe("resolveFastPolicy matrix", () => {
           authMode: "key" as const,
         },
         adapter: "openai-chat",
-        forwardCallerTier: false,
+        forwardCallerTier: true,
         callerTier: undefined,
         settledCallerTier: undefined,
       },

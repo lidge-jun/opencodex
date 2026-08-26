@@ -10,7 +10,8 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "../config";
+import { getConfigDir, getConfigPath, readConfigDiagnostics, resolveEnvValue } from "../config";
+import { readPid } from "../config/process-state";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
@@ -26,6 +27,11 @@ import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-mode
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import {
+  inspectCodexCoordinator,
+  recoverZeroByteCodexCoordinator,
+  type CodexCoordinatorDiagnostic,
+} from "../codex/coordinator-doctor";
+import {
   inspectAbandonedResponseStateTemps,
   reclaimAbandonedResponseStateTemps,
   type ResponseStateTempRecoveryResult,
@@ -36,7 +42,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../codex/user-identity";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
-import { collectStartupHealth, startupHealthSummary } from "../codex/autostart-health";
+import { collectStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import {
   displayCodexRuntimePath,
   loadLastEffortClamp,
@@ -684,6 +690,7 @@ export async function fetchServiceMemory(
 const mb = (bytes: number): string => `${Math.round(bytes / (1024 * 1024))}MB`;
 
 export const RECLAIM_RESPONSE_TEMPS_FLAG = "--reclaim-response-temps";
+export const RECOVER_ZERO_BYTE_COORDINATOR_FLAG = "--recover-zero-byte-coordinator";
 /** Matches the dry run's entry bound so report and reclaim agree on a large backlog. */
 const RESPONSE_TEMP_RECLAIM_MAX_CLEANUPS = 4_096;
 /** Names the subsystem: other components mint temps with the same shape and are not covered. */
@@ -732,6 +739,60 @@ export function formatResponseTempLines(
   // operator size the problem from a truncated count.
   if (result.truncated) lines.push("      Scan stopped at its entry budget; the real total is higher.");
   return lines;
+}
+
+export function formatCoordinatorDoctorLines(diagnostic: CodexCoordinatorDiagnostic): string[] {
+  const pathLine = diagnostic.path ? [`       path: ${diagnostic.path}`] : [];
+  const evidenceLines = "evidence" in diagnostic && diagnostic.evidence
+    ? [
+      `       size: ${diagnostic.evidence.sizeBytes} bytes; user_version: ${diagnostic.evidence.schemaVersion}`,
+      `       tables: ${diagnostic.evidence.tables.length === 0 ? "none" : diagnostic.evidence.tables.join(", ")}`,
+      `       transition rows: ${diagnostic.evidence.transitionRows ?? "not inspected"}; singleton=1 rows: ${diagnostic.evidence.singletonRows ?? "not inspected"}`,
+    ]
+    : [];
+  switch (diagnostic.kind) {
+    case "absent":
+      return ["  ok     native-write coordinator not created yet", ...pathLine];
+    case "ready":
+      return ["  ok     native-write coordinator has an authoritative transition row", ...pathLine, ...evidenceLines];
+    case "zero-byte":
+      return [
+        "  !!     native-write coordinator is a zero-byte remnant and has no authority",
+        ...pathLine,
+        ...evidenceLines,
+        `       Action: stop the OpenCodex proxy/service, then run ocx doctor ${RECOVER_ZERO_BYTE_COORDINATOR_FLAG} --yes`,
+      ];
+    case "unversioned-empty":
+      return [
+        "  !!     native-write coordinator is a non-empty unversioned database; automatic recovery is refused",
+        ...pathLine,
+        ...evidenceLines,
+      ];
+    case "rowless":
+      return [
+        "  !!     native-write coordinator has schema version 1 but no authoritative row; automatic recovery is refused",
+        ...pathLine,
+        ...evidenceLines,
+      ];
+    case "unversioned-nonempty":
+      return [
+        "  !!     native-write coordinator is unversioned and contains unknown tables; automatic recovery is refused",
+        ...pathLine,
+        ...evidenceLines,
+      ];
+    case "unsupported":
+      return [
+        `  !!     native-write coordinator schema version ${diagnostic.version} is unsupported; automatic recovery is refused`,
+        ...pathLine,
+        ...evidenceLines,
+      ];
+    case "changed":
+      return ["  --     native-write coordinator changed during diagnosis; re-run ocx doctor", ...pathLine];
+    case "unsafe":
+      return [`  !!     native-write coordinator path is unsafe: ${diagnostic.reason}`, ...pathLine];
+    case "unreadable":
+      return [`  !!     native-write coordinator is unreadable: ${diagnostic.reason}`, ...pathLine, ...evidenceLines];
+  }
 }
 
 /** Render the doctor "Memory / runtime" section lines (testable without console capture). */
@@ -846,6 +907,33 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     return;
   }
 
+  if (args.includes(RECOVER_ZERO_BYTE_COORDINATOR_FLAG)) {
+    if (!args.includes("--yes")) {
+      console.log(`Recovery is explicit and creates a same-directory backup. Re-run: ocx doctor ${RECOVER_ZERO_BYTE_COORDINATOR_FLAG} --yes`);
+      process.exitCode = 1;
+      return;
+    }
+    const diagnostics = readConfigDiagnostics().config;
+    const live = await findLiveProxy({
+      configFn: () => ({ port: diagnostics.port, hostname: diagnostics.hostname }),
+    });
+    if (live) {
+      console.log(`Recovery refused: OpenCodex proxy pid ${live.pid} is still running. Stop the proxy/service and retry.`);
+      process.exitCode = 1;
+      return;
+    }
+    const recovered = recoverZeroByteCodexCoordinator();
+    if (!recovered.ok) {
+      console.log(`Recovery refused: ${recovered.reason}.`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Moved the non-authoritative coordinator to ${recovered.backupPath}`);
+    console.log("Run `ocx sync` to retry Codex config injection. The backup was preserved and no Codex config/catalog file was changed by recovery.");
+    process.exitCode = 0;
+    return;
+  }
+
   console.log("opencodex doctor\n");
 
   // Ordering note: the memory/runtime section renders after "Running proxy
@@ -895,7 +983,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const startup = collectStartupHealth(doctorConfig);
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
-  console.log(`       routing=${startup.routingKind}, service=${startup.serviceViable ? "viable" : startup.serviceInstalled ? "installed-but-unhealthy" : "absent"}, shim=${startup.shimHealthy ? "healthy" : startup.shimInstalled ? "stale" : "absent"}`);
+  console.log(`       ${formatStartupRoutingDetail(startup)}`);
 
   console.log("\nCodex runtime selection");
   {
@@ -985,10 +1073,10 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   console.log(`  ${probe.ok ? "ok " : "-- "} ${WHAM_USAGE_URL}`);
   console.log(`       ${detail}, ${probe.durationMs}ms, ${probe.authenticated ? "authenticated" : "unauthenticated"}`);
 
-  // Design B upgrade visibility: threads still tagged opencodex are invisible to the native
-  // Codex app until the one-time migration lands. Read-only probe (readonly sqlite, 100ms
-  // busy timeout) — reports state, never mutates.
-  console.log("\nCodex history migration");
+  // Design B upgrade visibility: only the backup manifest authorizes restoring provider
+  // metadata. Bare routed rows have unknown provenance and remain unchanged. This read-only
+  // probe reports manifest work and database readability; it never mutates.
+  console.log("\nCodex history metadata restore");
   // The history failure messages point here; make the visit worthwhile by
   // probing the coordinator namespace the locks live in. The probe exercises
   // identity, runtime-root, and permission checks without taking any lock or
@@ -1005,13 +1093,21 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     const reason = cause instanceof CodexUserIdentityRefusal ? cause.message : String(cause);
     console.log(`  --     history coordinator namespace refused: ${reason}`);
   }
+  console.log("\nCodex native-write coordinator");
+  for (const line of formatCoordinatorDoctorLines(inspectCodexCoordinator())) console.log(line);
   const pending = countPendingOpencodexHistory();
   if (pending.failed) {
-    console.log("  --     state DB locked or unreadable (Codex app open?) — migration state unknown");
+    if (pending.failureReason === "busy") {
+      console.log("  --     history database, backup manifest, or rollout file is busy — exact metadata restore is pending");
+    } else if (pending.failureReason === "permission") {
+      console.log("  --     state DB or backup manifest access was denied — restore state unknown");
+    } else {
+      console.log("  --     backup manifest or restore target failed integrity checks — manual review required");
+    }
   } else if (pending.pendingRows === 0 && pending.backupEntries === 0) {
-    console.log("  ok     no legacy opencodex-tagged threads pending");
+    console.log("  ok     no manifest-backed provider metadata pending; untracked routed history is unchanged");
   } else {
-    console.log(`  --     ${pending.pendingRows} thread(s) still tagged opencodex, ${pending.backupEntries} backup manifest entr${pending.backupEntries === 1 ? "y" : "ies"}`);
+    console.log(`  --     ${pending.backupEntries} backup manifest entr${pending.backupEntries === 1 ? "y" : "ies"} pending exact metadata restore`);
   }
 
   console.log("\nProject Codex configs");
@@ -1059,7 +1155,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const { collectCodexAppServerCatalogState } = await import("../codex/app-server-processes");
   const catalogState = collectCodexAppServerCatalogState();
   if (catalogState.state === "stale") {
-    console.log(`  [WARN] Codex app-server (PID(s): ${catalogState.processes.map(p => p.pid).join(", ")}) started before the on-disk catalog changed; its in-memory model list disagrees with ocx. Action: restart Codex (or run \`ocx sync --restart-codex\`)`);
+    console.log(`  [WARN] Codex app-server (PID(s): ${catalogState.processes.map(p => p.pid).join(", ")}) started before the on-disk catalog changed; its in-memory model list disagrees with ocx. Action: restart Codex (or run \`ocx sync --restart-codex\`; on Windows the desktop app may need \`ocx sync --restart-desktop-app\`)`);
   } else if (catalogState.state === "unknown") {
     console.log("  [WARN] Could not verify whether the running Codex app-server's model catalog is current (start time or catalog unreadable). Action: if the model list looks stale, restart Codex");
   } else if (catalogState.state === "fresh") {
@@ -1096,8 +1192,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       }
     }
   }
-  if (pending.failed || pending.pendingRows > 0 || pending.backupEntries > 0) {
-    hints.push("Legacy chat threads are still tagged opencodex (or the DB was locked). The running proxy retries the migration automatically; to force it now, close the Codex app and run 'ocx sync'.");
+  if (pending.failed && pending.failureReason === "busy") {
+    hints.push("Backed-up history metadata is pending or its state is unreadable. The running proxy retries exact restoration automatically; to force it now, close the Codex app and run 'ocx sync'. Untracked routed history is not relabeled.");
+  } else if (pending.failed && pending.failureReason === "permission") {
+    hints.push("Backed-up history metadata could not be inspected because access was denied. Fix access to the reported Codex history paths, then run 'ocx sync'; repeated retries do not repair permissions.");
+  } else if (pending.failed) {
+    hints.push("The history manifest or its target is invalid or changed. Preserve both, inspect the manifest/database/rollout identity, and do not repeatedly run 'ocx sync' until the mismatch is understood. Untracked routed history is not relabeled.");
+  } else if (pending.backupEntries > 0) {
+    hints.push("Backed-up history metadata is pending. The running proxy retries exact restoration automatically; to force it now, close the Codex app and run 'ocx sync'. Untracked routed history is not relabeled.");
   }
   if (dual.dualInstall && !dual.effectiveIsWindowsMount) {
     hints.push(`Codex is installed on BOTH WSL and Windows. Each side keeps its own ~/.codex (logins, config, catalog are separate); ocx here manages the Linux one. To share a single home, set CODEX_HOME=${dual.windowsCodexHomes[0] ?? `${dual.automountRoot}/c/Users/<you>/.codex`} in WSL (drvfs file locking is less reliable).`);

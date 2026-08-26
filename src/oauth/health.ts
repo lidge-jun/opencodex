@@ -3,7 +3,7 @@ import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
-import { readRuntimePort } from "../config";
+import { readRuntimePort } from "../config/process-state";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { maskAccountId } from "../lib/privacy";
 import { findLiveProxy } from "../server/proxy-liveness";

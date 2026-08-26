@@ -603,6 +603,47 @@ function backupPathFor(path: string): string {
   return ext ? `${path.slice(0, -ext.length)}.opencodex-real${ext}` : `${path}.opencodex-real`;
 }
 
+/**
+ * True when a Codex binary lives inside a version manager's install tree.
+ *
+ * These trees are rewritten in place on upgrade, which destroys both the shim
+ * and the sibling .opencodex-real backup it restores from (#2412). The tempting
+ * repair — adopt the newly installed binary as a fresh original — is wrong
+ * twice: it records a provenance that never happened, and the next upgrade wipes
+ * it again, so the repair silently un-repairs on the version manager's schedule.
+ *
+ * Scope is the three managers named in the report. nvm/fnm/npm-prefix are
+ * deliberately excluded: a false positive here refuses a restore that would
+ * otherwise be correct.
+ */
+export function isVersionManagerOwnedCodexPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/").toLowerCase();
+  return normalized.includes("/mise/installs/")
+    || normalized.includes("/mise/shims/")
+    || normalized.includes("/.asdf/installs/")
+    || normalized.includes("/.asdf/shims/")
+    || normalized.includes("/.volta/");
+}
+
+/**
+ * Why auto-restore refused, in the operator's own terms. Auto-restore used to
+ * return a bare `{ status: "ineligible" }`, and the CLI warns only when a
+ * message is present, so `ocx start`, `ocx ensure`, and `ocx service repair` all
+ * reported success while routing quietly stayed native (#2412, the cause behind
+ * the misleading green status in #2411).
+ */
+function destroyedShimMessage(file: ShimFileState): string {
+  const wrapper = existsSync(file.wrapperPath)
+    ? isShim(file.wrapperPath) ? "present but unusable" : "present but not an opencodex shim"
+    : "missing";
+  const backup = existsSync(file.backupPath) ? "present" : "missing";
+  const base = `Codex autostart shim not restored: wrapper ${wrapper} at ${file.wrapperPath}; original backup ${backup} at ${file.backupPath}.`;
+  if (!isVersionManagerOwnedCodexPath(file.wrapperPath)) {
+    return `${base} Re-run 'ocx codex-shim install' once the Codex binary is stable.`;
+  }
+  return `${base} This Codex binary is owned by a version manager (mise/asdf/volta), so opencodex will not wrap it as a new original — the next upgrade would overwrite the shim and its backup again. Route through Codex instead with 'ocx start', and use 'ocx service install' for autostart.`;
+}
+
 function shQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -2039,20 +2080,32 @@ export function autoRestoreCodexShim(options: {
     if (seen.has(file.wrapperPath)) return { status: "ineligible" };
     seen.add(file.wrapperPath);
     if (file.preserveOnly) {
-      if (!existsSync(file.backupPath) || existsSync(file.originalPath)) return { status: "ineligible" };
+      if (!existsSync(file.backupPath) || existsSync(file.originalPath)) {
+        return { status: "ineligible", message: destroyedShimMessage(file) };
+      }
       continue;
     }
-    if (!existsSync(file.wrapperPath) || !hasUsableBackingPath(file)) return { status: "ineligible" };
+    if (!existsSync(file.wrapperPath) || !hasUsableBackingPath(file)) {
+      return { status: "ineligible", message: destroyedShimMessage(file) };
+    }
     const probe = stableShimPathProbe(file.wrapperPath);
     if (!probe) return { status: "deferred" };
     if (probe.prefix.includes(SHIM_MARKER)) {
-      if (!isHealthyShimProbe(probe, state.platform)) return { status: "ineligible" };
+      if (!isHealthyShimProbe(probe, state.platform)) {
+        return { status: "ineligible", message: destroyedShimMessage(file) };
+      }
       if (state.platform !== "win32" && !isCurrentUnixShimProbe(probe)) {
         obsoleteShimProbes.set(file.wrapperPath, probe);
         continue;
       }
       healthyCount += 1;
       continue;
+    }
+    // A surviving backup would otherwise let the replacement path below wrap the
+    // version manager's NEW binary as a fresh original — the same adoption the
+    // missing-backup case refuses, arriving through the back door.
+    if (isVersionManagerOwnedCodexPath(file.wrapperPath)) {
+      return { status: "ineligible", message: destroyedShimMessage(file) };
     }
     replacementProbes.set(file.wrapperPath, probe);
   }

@@ -11,7 +11,14 @@ describe("Codex auth modal status feedback", () => {
     expect(reducer).toContain('manualCodeState: "idle"');
     expect(oauth).toContain('statusNotice: t("codexAuth.oauthCodeSubmitted")');
     expect(oauth).toContain('statusNotice: t("codexAuth.oauthStatusRetrying")');
-    expect(waiting).toContain("disabled={manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId}");
+    // The paste control now comes from the shared LoginHint component, so this
+    // guard is a prop rather than a JSX attribute. The condition itself is
+    // unchanged: a submit stays blocked while a code is in flight, while a
+    // previous one is still settling, when the field is empty, and before the
+    // flow id arrives.
+    expect(waiting).toContain("disabled: manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId");
+    // The distinct "submitting" copy must survive the move to a shared control.
+    expect(waiting).toContain('submittingLabel: t("codexAuth.oauthSubmittingCode")');
     expect(waiting).toContain('aria-live="polite"');
   });
 

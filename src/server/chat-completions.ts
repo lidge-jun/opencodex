@@ -258,6 +258,10 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    // Terminal vision-describe marker (roadmap 180): the bridge rebuilds
+    // headers from the FORWARD_HEADERS allowlist, which would drop the raw
+    // header — so the fact is detected here and carried as an option flag.
+    ...(req.headers.get("x-opencodex-vision-describe") === "1" ? { visionDescribeTerminal: true } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),

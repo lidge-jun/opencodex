@@ -3,6 +3,7 @@ import {
   type ComboItem,
   COMBO_EFFORTS,
   buildComboAttention,
+  comboQuotaState,
   comboPublicModelId,
   draftEquals,
   emptyDraft,
@@ -11,6 +12,7 @@ import {
   intersectComboEfforts,
   isValidComboId,
   parseComboList,
+  providerQuotaStatesFromReports,
   toPutBody,
   updateComboAliasDraft,
   validateComboDraft,
@@ -24,6 +26,21 @@ const configuredProviders = {
   openai: {},
   disabled: { disabled: true },
 } as const;
+
+const QUOTA_NOW = Date.UTC(2026, 7, 24, 12);
+
+function quotaReport(
+  provider: string,
+  quota: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    provider,
+    updatedAt: QUOTA_NOW,
+    quota: { updatedAt: QUOTA_NOW, ...quota },
+    ...overrides,
+  };
+}
 
 function combo(overrides: Partial<ComboItem> = {}): ComboItem {
   return {
@@ -233,6 +250,124 @@ describe("combo-workspace-data", () => {
       { id: "missing", model: "combo/missing", reason: "catalog-omitted" },
       { id: "empty", model: "combo/empty", reason: "empty-targets" },
     ]);
+  });
+
+  test("derives exhausted state from USD, percentage, and custom-window evidence", () => {
+    expect(providerQuotaStatesFromReports([
+      quotaReport("usd", {
+        creditsUsd: { used: 10, limit: 10, remaining: 0, percent: 100 },
+      }),
+      quotaReport("percent", { fiveHourPercent: 100 }),
+      quotaReport("custom", { customWindows: [{ label: "Daily", percent: 101 }] }),
+    ], QUOTA_NOW)).toEqual({
+      usd: "exhausted",
+      percent: "exhausted",
+      custom: "exhausted",
+    });
+  });
+
+  test("keeps unlimited credits available and stale or malformed evidence unknown", () => {
+    expect(providerQuotaStatesFromReports([
+      quotaReport("unlimited", {
+        creditsUsd: { used: 0, limit: 0, remaining: 0, percent: 0, unlimited: true },
+      }),
+      quotaReport("stale", { weeklyPercent: 100 }, { updatedAt: QUOTA_NOW - 30 * 60_000 }),
+      quotaReport("malformed", { fiveHourPercent: "100" }),
+      quotaReport("missing", {}),
+    ], QUOTA_NOW)).toEqual({
+      unlimited: "available",
+      stale: "unknown",
+      malformed: "unknown",
+      missing: "unknown",
+    });
+  });
+
+  test("trims provider ids and rejects incomplete aggregate quota evidence", () => {
+    expect(providerQuotaStatesFromReports([
+      quotaReport("  openai  ", { weeklyPercent: 75 }),
+      quotaReport("pool", { weeklyPercent: 100 }, {
+        aggregation: {
+          kind: "capacity-weighted-v1",
+          scope: "routable-known",
+          presentation: "aggregate",
+          incomplete: true,
+          excludedAccounts: 1,
+          unknownPlanAccounts: 0,
+          partialWindowAccounts: 0,
+        },
+      }),
+      quotaReport("malformed-pool", { weeklyPercent: 100 }, {
+        aggregation: {
+          kind: "capacity-weighted-v1",
+          scope: "routable-known",
+          presentation: "aggregate",
+          incomplete: false,
+        },
+      }),
+      quotaReport("complete-pool", { weeklyPercent: 100 }, {
+        aggregation: {
+          kind: "capacity-weighted-v1",
+          scope: "routable-known",
+          presentation: "aggregate",
+          incomplete: false,
+          includedAccounts: 2,
+          excludedAccounts: 0,
+          unknownPlanAccounts: 0,
+          missingQuotaAccounts: 0,
+          pausedAccounts: 0,
+          reauthAccounts: 0,
+          staleQuotaAccounts: 0,
+          partialWindowAccounts: 0,
+          weekly: {
+            usedPercent: 100,
+            includedAccounts: 2,
+            excludedAccounts: 0,
+            incomplete: false,
+            updatedAt: QUOTA_NOW,
+          },
+        },
+      }),
+    ], QUOTA_NOW)).toEqual({
+      openai: "available",
+      pool: "unknown",
+      "malformed-pool": "unknown",
+      "complete-pool": "exhausted",
+    });
+  });
+
+  test("combo quota excludes disabled targets and disables only when every usable target is exhausted", () => {
+    const states = { a: "exhausted", b: "available", disabled: "available" } as const;
+    expect(comboQuotaState(combo().targets, states, configuredProviders)).toBe("available");
+    expect(comboQuotaState([
+      { provider: " a ", model: "m1" },
+      { provider: "disabled", model: "m2" },
+    ], states, configuredProviders)).toBe("exhausted");
+    expect(comboQuotaState([
+      { provider: "a", model: "m1" },
+      { provider: "missing", model: "m2" },
+    ], states, configuredProviders)).toBe("exhausted");
+    expect(comboQuotaState([
+      { provider: "disabled", model: "m1" },
+    ], states, configuredProviders)).toBe("unknown");
+    expect(comboQuotaState(combo().targets, { a: "exhausted" }, configuredProviders)).toBe("unknown");
+  });
+
+  test("combo quota recovers as soon as live provider evidence becomes available", () => {
+    const targets = [{ provider: "a", model: "m1" }];
+    expect(comboQuotaState(targets, { a: "exhausted" }, configuredProviders)).toBe("exhausted");
+    expect(comboQuotaState(targets, { a: "available" }, configuredProviders)).toBe("available");
+    expect(comboQuotaState(targets, { a: "unknown" }, configuredProviders)).toBe("unknown");
+  });
+
+  test("attention includes combos whose usable targets are all exhausted", () => {
+    expect(buildComboAttention([combo()], {
+      providerQuotaStates: { a: "exhausted", b: "exhausted" },
+      providers: configuredProviders,
+    })).toContainEqual({
+      id: "free",
+      model: "combo/free",
+      reason: "all-targets-exhausted",
+    });
   });
 
   test("validates combo id boundaries and duplicate ids on create and rename", () => {

@@ -15,6 +15,7 @@ import {
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
+import { buildSelectedContext, CURSOR_VISION_IMAGE_HISTORY_MARKER } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import { parseDataUrl } from "../image";
 import {
@@ -187,10 +188,12 @@ function assistantRootText(
 }
 
 // Cursor builds the actual model prompt from rootPromptMessagesJson (turns[] is UI/display metadata),
-// so prior history — including assistant tool calls and tool results — must be replayed here or a
-// ResumeAction has nothing model-visible to continue from. The active user message is excluded
-// because it travels in the action. Tool results are assistant-role text with a [Tool Result]
-// or [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Each entry is a SHA-256 blob ID.
+// so prior history must be replayed here or a ResumeAction has nothing model-visible to continue from.
+// The active user message is excluded because it travels in the action. When the continuation cannot
+// rely on native MCP turn state, tool results stay assistant-role text with a [Tool Result] /
+// [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Native resume models
+// already carry the paired MCP result on turns[], so that marker is omitted from root replay — Auto
+// few-shot-mimics it as chat text otherwise. Each entry is a SHA-256 blob ID.
 function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobRequestScopeToken): {
   ids: Uint8Array[];
   byteLength: number;
@@ -211,6 +214,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
   }
 
   const externalModel = isCursorExternalWireModel(request.modelId);
+  const echoToolResultInRoot = cursorNeedsExternalToolContinuation(request.modelId);
   const lastRawIsToolResult = messages.at(-1)?.role === "toolResult";
   const activeUserIndex = lastRawIsToolResult ? -1 : lastActionIndex(messages);
 
@@ -219,7 +223,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {
-      const text = contentText(message).trim();
+      const text = historyContentText(message).trim();
       // Cursor root replay expects OpenAI-style content parts for historical user messages.
       // A bare string survives blob hydration but external workers reject the completed replay
       // before tokenization (`usedTokens: 0`, then invalid_argument).
@@ -242,6 +246,10 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       }
       // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
     } else if (message.role === "toolResult") {
+      // Native resume models already receive the paired MCP result through turns[]. Replaying
+      // the same payload as assistant-role "[Tool Result]" / "[tool_result]" text teaches Auto
+      // to echo that envelope as chat instead of continuing from the structured result.
+      if (!echoToolResultInRoot) continue;
       // #1920: the prefix must reflect the NORMALIZED error state (an empty
       // node_repl result is an error even when the runtime said isError=false).
       const prefix = normalizedToolResult(message, contentToText(message.content)).isError ? "[Tool Error]" : "[Tool Result]";
@@ -336,7 +344,7 @@ function contentText(message: OcxMessage): string {
     .map(part => {
       if (part.type === "text") return part.text;
       if (part.type === "thinking") return part.thinking;
-      if (part.type === "image") return `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`;
+      if (part.type === "image") return undefined;
       return undefined;
     })
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -346,7 +354,26 @@ function contentText(message: OcxMessage): string {
 function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
-    .map(part => part.type === "text" ? part.text : `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`)
+    .map(part => {
+      if (part.type === "text") return part.text;
+      if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+}
+
+/** History serializer. Replayed turns are text-only; never embed image bytes. */
+function historyContentText(message: OcxMessage): string {
+  if (message.role === "toolResult" || typeof message.content === "string") return contentText(message);
+  return message.content
+    .map(part => {
+      if (part.type === "text") return part.text;
+      if (part.type === "thinking") return part.thinking;
+      if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
 }
 
@@ -721,8 +748,10 @@ function conversationTurns(
     flush();
     current = {
       userMessage: storeCursorBlob(toBinary(UserMessageSchema, create(UserMessageSchema, {
-        text: contentText(message),
+        text: historyContentText(message),
         messageId: crypto.randomUUID(),
+        selectedContext: buildSelectedContext([], requestScope),
+        mode: 1,
       })), requestScope),
       steps: [],
     };
@@ -792,6 +821,7 @@ function buildPreparedCursorRunRequest(
     ? appendCursorGenericToolUseHint(request.tools, rawText)
     : rawText;
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
+  const selectedImages = request.selectedImages ?? [];
   // Native models resume the remembered Cursor conversation. External wire
   // models continue as userMessageAction so history-blob tool results stay
   // visible without a ResumeAction. Some native composer ids are also routed
@@ -799,7 +829,11 @@ function buildPreparedCursorRunRequest(
   // because a bare resumeAction makes them continue exploring with native tools
   // instead of answering (observed on composer-2.5; see discovery.ts).
   const externalToolContinuation = lastRawIsToolResult && cursorNeedsExternalToolContinuation(request.modelId);
-  const actionCase = (externalToolContinuation || (!lastRawIsToolResult && text.trim().length > 0))
+  // Image-only active turns (including soft-omitted images) stay userMessageAction.
+  const actionCase = (
+    externalToolContinuation
+    || (!lastRawIsToolResult && (text.trim().length > 0 || selectedImages.length > 0))
+  )
     ? "userMessageAction"
     : "resumeAction";
   const actionText = externalToolContinuation
@@ -813,6 +847,9 @@ function buildPreparedCursorRunRequest(
             userMessage: create(UserMessageSchema, {
               text: actionText,
               messageId: crypto.randomUUID(),
+              selectedContext: buildSelectedContext(selectedImages, requestScope),
+              // OmniRoute / cursor-agent always send mode=1 on UserMessage.
+              mode: 1,
             }),
             requestContext: buildRequestContext(),
           }),

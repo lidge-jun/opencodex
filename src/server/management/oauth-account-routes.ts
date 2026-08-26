@@ -136,7 +136,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
@@ -167,9 +167,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           reconcileLiveStateStores();
         },
       });
-      if (authUrl && !deviceCode) {
-        // Open the browser server-side (the proxy runs on the user's machine) — the GUI's
-        // window.open is popup-blocked because it runs after an await, not a direct click.
+      // Open the browser server-side (the proxy runs on the user's machine) — the GUI's
+      // window.open is popup-blocked because it runs after an await, not a direct click.
+      //
+      // The operator can decline, which is the only way to finish a login in a
+      // browser profile other than the OS default, or on a different machine
+      // than the proxy. Declining changes nothing else: the URL is still
+      // returned below and every login surface renders it with a copy button.
+      const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      if (authUrl && !deviceCode && shouldOpenBrowserForLogin(body.openBrowser, config)) {
         const { openUrl } = await import("../../lib/open-url");
         openUrl(authUrl);
       }

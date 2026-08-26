@@ -227,11 +227,90 @@ function runNpmSelfUpdate() {
     } catch { /* keep default */ }
   }
 
+  const launcher = fileURLToPath(import.meta.url);
+
+  function startProxyDirectly() {
+    if (!existsSync(launcher)) {
+      console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
+      return;
+    }
+    const env = { ...process.env };
+    delete env.OCX_SERVICE;
+    console.log(`Attempting to restart the proxy on port ${bakePort}.`);
+    const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env,
+    });
+    child.on("error", error => {
+      console.error(`opencodex: direct proxy restart failed: ${error.message}`);
+    });
+    child.unref();
+  }
+
+  function refreshBackgroundServiceOrStartDirect() {
+    const prevBake = process.env.OCX_BAKE_PORT;
+    process.env.OCX_BAKE_PORT = String(bakePort);
+    try {
+      let svc = spawnSync(process.execPath, serviceRefreshArgs(), { stdio: "inherit", windowsHide: true });
+      // `serviceWasInstalled` is inferred from service-state.json alone, which can be
+      // STALE — present while the registration is gone. Repair refuses that case by
+      // design, and its thrown Error is indistinguishable from any other failure at
+      // this layer (plain Error, inherited stdio, generic exit status). So ask for
+      // structured state instead of parsing the failure: install only when the
+      // diagnostic says the service is genuinely absent. Installing after ANY repair
+      // failure would resurrect the elevation prompt this change exists to avoid, and
+      // could re-register a service the user just uninstalled.
+      if (svc.status !== 0 && readServiceInstalledFromStatus(launcher) === false) {
+        console.log("No registered service found — installing it instead.");
+        svc = spawnSync(process.execPath, serviceInstallArgs(), { stdio: "inherit", windowsHide: true });
+      }
+      let needDirectStart = svc.status !== 0;
+      if (!needDirectStart) {
+        // Exit 0 can still leave stale/missing assets that never bring the proxy
+        // back — match the GUI/CLI fallthrough so /healthz is not left dead.
+        try {
+          const st = spawnSync(process.execPath, [launcher, "status", "--json"], {
+            encoding: "utf8",
+            timeout: 20_000,
+            windowsHide: true,
+          });
+          if (st.status === 0 && typeof st.stdout === "string" && st.stdout.trim()) {
+            const parsed = JSON.parse(st.stdout);
+            const proxyUp = parsed?.proxy?.running === true || parsed?.proxy?.health?.ok === true;
+            const viable = parsed?.startup?.serviceViable === true;
+            if (!proxyUp && !viable) needDirectStart = true;
+          } else {
+            // status failed or empty — fail closed to direct start (match CLI).
+            needDirectStart = true;
+          }
+        } catch {
+          needDirectStart = true;
+        }
+      }
+      if (needDirectStart) {
+        // A repair needs no elevation, but it can still fail — or exit 0 while leaving
+        // a non-viable manager. Fall back to a direct detached proxy start so the
+        // update never leaves the user without a running proxy.
+        console.warn(
+          svc.status === 0
+            ? "opencodex: service refresh left a non-viable manager — starting the proxy directly instead."
+            : "opencodex: service refresh failed — starting the proxy directly instead.",
+        );
+        console.warn("  Run 'ocx service repair' to see why the background service could not restart.");
+        startProxyDirectly();
+      }
+    } finally {
+      if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+      else process.env.OCX_BAKE_PORT = prevBake;
+    }
+  }
+
   // Never replace package files under a live proxy — stop it first (full `ocx stop`
   // semantics: graceful drain, service stop, native Codex restore). Gate on the service
   // and the runtime-port record too: a service-managed or orphaned proxy can be live
   // while ocx.pid is stale/missing.
-  const launcher = fileURLToPath(import.meta.url);
   if (trayBeforeUpdate.stopBeforeReplacement) {
     console.log("⏹  Handing off the Windows tray before updating...");
     try {
@@ -249,6 +328,17 @@ function runNpmSelfUpdate() {
   }
   const hasRuntimeState =
     existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
+
+  function recoverStoppedRuntimeAfterFailure() {
+    if (serviceWasInstalled) {
+      console.warn("opencodex: update failed after stopping the proxy — restoring the previous background service.");
+      refreshBackgroundServiceOrStartDirect();
+    } else if (hasRuntimeState) {
+      console.warn("opencodex: update failed after stopping the proxy — restarting the previous version directly.");
+      startProxyDirectly();
+    }
+  }
+
   if (serviceWasInstalled || hasRuntimeState) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
@@ -261,9 +351,9 @@ function runNpmSelfUpdate() {
     }
     if (historyRestoreIncomplete()) {
       console.warn(
-        "opencodex: WARNING — Codex resume history was NOT restored (history DB locked; Codex app/IDE open?).\n" +
-        "  Routed threads stay hidden in the native Codex app until restored.\n" +
-        "  After the update: close the Codex app, then run 'ocx stop' once to restore.",
+        "opencodex: WARNING — Codex resume-history metadata restore is incomplete (a backup manifest remains).\n" +
+        "  The DB may be busy or the manifest/target may need review; untracked routed history is intentionally unchanged.\n" +
+        "  After the update: close the Codex app, run 'ocx doctor', then run 'ocx stop' once to retry.",
       );
     }
   }
@@ -309,7 +399,8 @@ function runNpmSelfUpdate() {
     // it recreates the #1849 destruction path. Report and stop; the boot probe and the
     // recovery marker cover the swap-window states.
     console.error(`opencodex: transactional update failed unexpectedly (${error?.message ?? error}). ` +
-      "The live install was not knowingly modified; run 'ocx update' again or reinstall with npm install -g.");
+      `The live install was not knowingly modified; run 'ocx update' again or reinstall with ` +
+      `npm install -g --allow-scripts=bun ${PKG}@${tag}.`);
     res = { status: 1 };
   }
   if (res.status === 0) {
@@ -329,77 +420,15 @@ function runNpmSelfUpdate() {
     // launcher so the new files write the baked paths and the service restarts.
     if (serviceWasInstalled) {
       console.log("Refreshing the background service with the updated files...");
-      const prevBake = process.env.OCX_BAKE_PORT;
-      process.env.OCX_BAKE_PORT = String(bakePort);
-      try {
-        let svc = spawnSync(process.execPath, serviceRefreshArgs(), { stdio: "inherit", windowsHide: true });
-        // `serviceWasInstalled` is inferred from service-state.json alone, which can be
-        // STALE — present while the registration is gone. Repair refuses that case by
-        // design, and its thrown Error is indistinguishable from any other failure at
-        // this layer (plain Error, inherited stdio, generic exit status). So ask for
-        // structured state instead of parsing the failure: install only when the
-        // diagnostic says the service is genuinely absent. Installing after ANY repair
-        // failure would resurrect the elevation prompt this change exists to avoid, and
-        // could re-register a service the user just uninstalled.
-        if (svc.status !== 0 && readServiceInstalledFromStatus(launcher) === false) {
-          console.log("No registered service found — installing it instead.");
-          svc = spawnSync(process.execPath, serviceInstallArgs(), { stdio: "inherit", windowsHide: true });
-        }
-        let needDirectStart = svc.status !== 0;
-        if (!needDirectStart) {
-          // Exit 0 can still leave stale/missing assets that never bring the proxy
-          // back — match the GUI/CLI fallthrough so /healthz is not left dead.
-          try {
-            const st = spawnSync(process.execPath, [launcher, "status", "--json"], {
-              encoding: "utf8",
-              timeout: 20_000,
-              windowsHide: true,
-            });
-            if (st.status === 0 && typeof st.stdout === "string" && st.stdout.trim()) {
-              const parsed = JSON.parse(st.stdout);
-              const proxyUp = parsed?.proxy?.running === true || parsed?.proxy?.health?.ok === true;
-              const viable = parsed?.startup?.serviceViable === true;
-              if (!proxyUp && !viable) needDirectStart = true;
-            } else {
-              // status failed or empty — fail closed to direct start (match CLI).
-              needDirectStart = true;
-            }
-          } catch {
-            needDirectStart = true;
-          }
-        }
-        if (needDirectStart) {
-          // A repair needs no elevation, but it can still fail — or exit 0 while leaving
-          // a non-viable manager. Fall back to a direct detached proxy start so the
-          // update never leaves the user without a running proxy.
-          console.warn(
-            svc.status === 0
-              ? "opencodex: service refresh left a non-viable manager — starting the proxy directly instead."
-              : "opencodex: service refresh failed — starting the proxy directly instead.",
-          );
-          console.warn("  Run 'ocx service repair' to see why the background service could not restart.");
-          const env = { ...process.env };
-          delete env.OCX_SERVICE;
-          const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-            env,
-          });
-          child.unref();
-          console.log(`Proxy starting on port ${bakePort}.`);
-        }
-      } finally {
-        if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
-        else process.env.OCX_BAKE_PORT = prevBake;
-      }
+      refreshBackgroundServiceOrStartDirect();
     } else {
       console.log("Restart the proxy:  ocx start");
     }
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-  console.error(`\nUpdate failed (npm exit ${res.status ?? "?"}). Try manually:  npm install -g ${PKG}@${tag}`);
+  recoverStoppedRuntimeAfterFailure();
+  console.error(`\nUpdate failed (npm exit ${res.status ?? "?"}). Try manually:  npm install -g --allow-scripts=bun ${PKG}@${tag}`);
   process.exit(1);
 }
 

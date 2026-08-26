@@ -37,13 +37,99 @@ function installAbortAwareFetch(): () => AbortSignal {
   globalThis.fetch = ((_, init) => {
     seenSignal = init?.signal as AbortSignal | undefined;
     return new Promise<Response>((_, reject) => {
-      seenSignal?.addEventListener("abort", () => reject(new Error("aborted by turn")), { once: true });
+      const signal = seenSignal;
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
   }) as typeof fetch;
   return () => {
     if (!seenSignal) throw new Error("fetch was not called");
     return seenSignal;
   };
+}
+
+function installBodyAbortFetch(): { getSignal: () => AbortSignal; getBody: () => ReadableStream<Uint8Array> } {
+  let seenSignal: AbortSignal | undefined;
+  let seenBody: ReadableStream<Uint8Array> | undefined;
+  globalThis.fetch = ((_, init) => {
+    seenSignal = init?.signal as AbortSignal | undefined;
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    seenBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+      },
+    });
+    const signal = seenSignal;
+    signal?.addEventListener("abort", () => bodyController?.error(signal.reason), { once: true });
+    return Promise.resolve(new Response(seenBody, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    }));
+  }) as typeof fetch;
+  return {
+    getSignal: () => {
+      if (!seenSignal) throw new Error("fetch was not called");
+      return seenSignal;
+    },
+    getBody: () => {
+      if (!seenBody) throw new Error("fetch was not called");
+      return seenBody;
+    },
+  };
+}
+
+function installPreReaderAbortFetch(
+  turn: AbortController,
+  reason: Error,
+  status = 200,
+): { getSignal: () => AbortSignal; wasBodyLockedAtAbort: () => boolean; wasBodyCanceled: () => boolean } {
+  let seenSignal: AbortSignal | undefined;
+  let bodyLockedAtAbort: boolean | undefined;
+  let bodyCanceled = false;
+  let fallback: ReturnType<typeof setTimeout> | undefined;
+  globalThis.fetch = ((_, init) => {
+    seenSignal = init?.signal as AbortSignal | undefined;
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+      },
+      cancel() {
+        bodyCanceled = true;
+        if (fallback !== undefined) clearTimeout(fallback);
+      },
+    });
+    queueMicrotask(() => {
+      bodyLockedAtAbort = body.locked;
+      turn.abort(reason);
+      fallback = setTimeout(() => {
+        if (!bodyCanceled) bodyController?.close();
+      }, 25);
+    });
+    return Promise.resolve(new Response(body, {
+      status,
+      headers: { "Content-Type": "text/event-stream" },
+    }));
+  }) as typeof fetch;
+  return {
+    getSignal: () => {
+      if (!seenSignal) throw new Error("fetch was not called");
+      return seenSignal;
+    },
+    wasBodyLockedAtAbort: () => {
+      if (bodyLockedAtAbort === undefined) throw new Error("abort did not run");
+      return bodyLockedAtAbort;
+    },
+    wasBodyCanceled: () => bodyCanceled,
+  };
+}
+
+async function waitForBodyReader(body: ReadableStream<Uint8Array>, turn: AbortController): Promise<void> {
+  for (let attempt = 0; attempt < 200 && !body.locked; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  if (body.locked) return;
+  turn.abort(new Error("sidecar response body reader was not attached"));
+  throw new Error("sidecar response body reader was not attached");
 }
 
 function sseText(text: string): Response {
@@ -97,6 +183,7 @@ describe("sidecar abort propagation", () => {
   test("web-search sidecar fetch observes the WebSocket turn abort signal", async () => {
     const getSignal = installAbortAwareFetch();
     const turn = new AbortController();
+    const recorded: unknown[] = [];
     const outcome = runWebSearch(
       "current docs",
       { type: "web_search" },
@@ -104,13 +191,15 @@ describe("sidecar abort propagation", () => {
       new Headers({ authorization: "Bearer token" }),
       { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
       turn.signal,
+      value => recorded.push(value),
     );
 
     const signal = getSignal();
     expect(signal.aborted).toBe(false);
-    turn.abort("replacement turn");
+    turn.abort(new Error("aborted by turn"));
     expect(signal.aborted).toBe(true);
     expect((await outcome).error).toBe("aborted by turn");
+    expect(recorded).toEqual(["connect_neutral"]);
   });
 
   test("web-search sidecar records HTTP and connect outcomes", async () => {
@@ -130,14 +219,19 @@ describe("sidecar abort propagation", () => {
     expect(httpOutcome.error).toBe("sidecar HTTP 401: expired");
     expect(recorded).toEqual([401]);
 
-    globalThis.fetch = (() => Promise.reject(new Error("network down"))) as typeof fetch;
+    const lateAbort = new AbortController();
+    globalThis.fetch = (() => {
+      const rejected = Promise.reject(new Error("network down"));
+      queueMicrotask(() => lateAbort.abort(new Error("late caller abort")));
+      return rejected;
+    }) as typeof fetch;
     const connectOutcome = await runWebSearch(
       "current docs",
       { type: "web_search" },
       forwardProvider,
       new Headers({ authorization: "Bearer token" }),
       { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
-      undefined,
+      lateAbort.signal,
       outcome => recorded.push(outcome),
     );
 
@@ -213,6 +307,7 @@ describe("sidecar abort propagation", () => {
   test("vision sidecar fetch observes the WebSocket turn abort signal", async () => {
     const getSignal = installAbortAwareFetch();
     const turn = new AbortController();
+    const recorded: unknown[] = [];
     const outcome = describeImage(
       "data:image/png;base64,iVBORw0KGgo=",
       "high",
@@ -221,13 +316,154 @@ describe("sidecar abort propagation", () => {
       new Headers({ authorization: "Bearer token" }),
       { model: "gpt-5.4-mini", timeoutMs: 30_000 },
       turn.signal,
+      value => recorded.push(value),
     );
 
     const signal = getSignal();
     expect(signal.aborted).toBe(false);
-    turn.abort("replacement turn");
+    turn.abort(new Error("aborted by turn"));
     expect(signal.aborted).toBe(true);
     expect((await outcome).error).toBe("aborted by turn");
+    expect(recorded).toEqual(["connect_neutral"]);
+  });
+
+  test("response-body caller aborts stay account-neutral for both sidecars", async () => {
+    const webFetch = installBodyAbortFetch();
+    const webTurn = new AbortController();
+    const webRecorded: unknown[] = [];
+    const webOutcome = runWebSearch(
+      "current docs",
+      { type: "web_search" },
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      webTurn.signal,
+      value => webRecorded.push(value),
+    );
+    const webSignal = webFetch.getSignal();
+    const webBody = webFetch.getBody();
+    await waitForBodyReader(webBody, webTurn);
+    const webReason = new Error("web body aborted by turn");
+    webTurn.abort(webReason);
+    expect(webSignal.reason).toBe(webReason);
+    expect((await webOutcome).error).toBe("web body aborted by turn");
+    expect(webRecorded).toEqual(["connect_neutral"]);
+
+    const visionFetch = installBodyAbortFetch();
+    const visionTurn = new AbortController();
+    const visionRecorded: unknown[] = [];
+    const visionOutcome = describeImage(
+      "data:image/png;base64,iVBORw0KGgo=",
+      "high",
+      "inspect screenshot",
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", timeoutMs: 30_000 },
+      visionTurn.signal,
+      value => visionRecorded.push(value),
+    );
+    const visionSignal = visionFetch.getSignal();
+    const visionBody = visionFetch.getBody();
+    await waitForBodyReader(visionBody, visionTurn);
+    const visionReason = new Error("vision body aborted by turn");
+    visionTurn.abort(visionReason);
+    expect(visionSignal.reason).toBe(visionReason);
+    expect((await visionOutcome).error).toBe("vision body aborted by turn");
+    expect(visionRecorded).toEqual(["connect_neutral"]);
+  });
+
+  test("pre-reader caller aborts stay account-neutral for both sidecars", async () => {
+    const webTurn = new AbortController();
+    const webReason = new Error("web aborted before reader attach");
+    const webFetch = installPreReaderAbortFetch(webTurn, webReason);
+    const webRecorded: unknown[] = [];
+    const webOutcome = await runWebSearch(
+      "current docs",
+      { type: "web_search" },
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      webTurn.signal,
+      value => webRecorded.push(value),
+    );
+    expect(webFetch.wasBodyLockedAtAbort()).toBe(false);
+    expect(webFetch.wasBodyCanceled()).toBe(true);
+    expect(webFetch.getSignal().reason).toBe(webReason);
+    expect(webOutcome.error).toBe("web aborted before reader attach");
+    expect(webRecorded).toEqual(["connect_neutral"]);
+
+    const visionTurn = new AbortController();
+    const visionReason = new Error("vision aborted before reader attach");
+    const visionFetch = installPreReaderAbortFetch(visionTurn, visionReason);
+    const visionRecorded: unknown[] = [];
+    const visionOutcome = await describeImage(
+      "data:image/png;base64,iVBORw0KGgo=",
+      "high",
+      "inspect screenshot",
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", timeoutMs: 30_000 },
+      visionTurn.signal,
+      value => visionRecorded.push(value),
+    );
+    expect(visionFetch.wasBodyLockedAtAbort()).toBe(false);
+    expect(visionFetch.wasBodyCanceled()).toBe(true);
+    expect(visionFetch.getSignal().reason).toBe(visionReason);
+    expect(visionOutcome.error).toBe("vision aborted before reader attach");
+    expect(visionRecorded).toEqual(["connect_neutral"]);
+  });
+
+  test("vision guards an HTTP-error body before a pre-reader caller abort", async () => {
+    const turn = new AbortController();
+    const reason = new Error("vision HTTP body aborted before reader attach");
+    const fetchState = installPreReaderAbortFetch(turn, reason, 403);
+    const recorded: unknown[] = [];
+    const outcome = await describeImage(
+      "data:image/png;base64,iVBORw0KGgo=",
+      "high",
+      "inspect screenshot",
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", timeoutMs: 30_000 },
+      turn.signal,
+      value => recorded.push(value),
+    );
+    expect(fetchState.wasBodyLockedAtAbort()).toBe(false);
+    expect(fetchState.wasBodyCanceled()).toBe(true);
+    expect(fetchState.getSignal().reason).toBe(reason);
+    expect(outcome.error).toBe("vision sidecar HTTP 403: ");
+    expect(recorded).toEqual([403]);
+  });
+
+  test("successful SSE bodies record HTTP success once for both sidecars", async () => {
+    const webRecorded: unknown[] = [];
+    globalThis.fetch = (() => Promise.resolve(sseText("done"))) as typeof fetch;
+    const webOutcome = await runWebSearch(
+      "current docs",
+      { type: "web_search" },
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      undefined,
+      value => webRecorded.push(value),
+    );
+    expect(webOutcome.text).toBe("done");
+    expect(webRecorded).toEqual([200]);
+
+    const visionRecorded: unknown[] = [];
+    globalThis.fetch = (() => Promise.resolve(sseText("image description"))) as typeof fetch;
+    const visionOutcome = await describeImage(
+      "data:image/png;base64,iVBORw0KGgo=",
+      "high",
+      "inspect screenshot",
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", timeoutMs: 30_000 },
+      undefined,
+      value => visionRecorded.push(value),
+    );
+    expect(visionOutcome.text).toBe("image description");
+    expect(visionRecorded).toEqual([200]);
   });
 
   test("vision sidecar records HTTP and connect outcomes", async () => {
@@ -248,7 +484,12 @@ describe("sidecar abort propagation", () => {
     expect(httpOutcome.error).toBe("vision sidecar HTTP 403: denied");
     expect(recorded).toEqual([403]);
 
-    globalThis.fetch = (() => Promise.reject(new Error("vision network down"))) as typeof fetch;
+    const lateAbort = new AbortController();
+    globalThis.fetch = (() => {
+      const rejected = Promise.reject(new Error("vision network down"));
+      queueMicrotask(() => lateAbort.abort(new Error("late caller abort")));
+      return rejected;
+    }) as typeof fetch;
     const connectOutcome = await describeImage(
       "data:image/png;base64,iVBORw0KGgo=",
       "high",
@@ -256,12 +497,43 @@ describe("sidecar abort propagation", () => {
       forwardProvider,
       new Headers({ authorization: "Bearer token" }),
       { model: "gpt-5.4-mini", timeoutMs: 30_000 },
-      undefined,
+      lateAbort.signal,
       outcome => recorded.push(outcome),
     );
 
     expect(connectOutcome.error).toBe("vision network down");
     expect(recorded).toEqual([403, "connect_error"]);
+  });
+
+  test("sidecar deadlines remain timeout health evidence", async () => {
+    const webRecorded: unknown[] = [];
+    installAbortAwareFetch();
+    const webOutcome = await runWebSearch(
+      "current docs",
+      { type: "web_search" },
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 1 },
+      undefined,
+      outcome => webRecorded.push(outcome),
+    );
+    expect(webOutcome.error).toBe("Timeout elapsed");
+    expect(webRecorded).toEqual(["timeout"]);
+
+    const visionRecorded: unknown[] = [];
+    installAbortAwareFetch();
+    const visionOutcome = await describeImage(
+      "data:image/png;base64,iVBORw0KGgo=",
+      "high",
+      "inspect screenshot",
+      forwardProvider,
+      new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.4-mini", timeoutMs: 1 },
+      undefined,
+      outcome => visionRecorded.push(outcome),
+    );
+    expect(visionOutcome.error).toBe("Timeout elapsed");
+    expect(visionRecorded).toEqual(["timeout"]);
   });
 
   test("vision sidecar redacts echoed bearer-shaped error bodies", async () => {

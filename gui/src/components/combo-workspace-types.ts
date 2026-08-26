@@ -1,4 +1,4 @@
-import type { ComboItem } from "../combo-workspace-data";
+import type { ComboItem, ProviderQuotaStates } from "../combo-workspace-data";
 
 export type ProviderOption = {
   name: string;
@@ -18,6 +18,7 @@ export type ModelOption = {
 
 export interface ComboWorkspaceProps {
   combos: ComboItem[];
+  providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
   /** Combo ids currently present in the live catalog (`provider === "combo"`). */

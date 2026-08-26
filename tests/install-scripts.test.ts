@@ -52,7 +52,7 @@ describe("install scripts", () => {
     expect(pkg.exports?.["."]?.default).toBe("./bin/package-main.mjs");
     expect(pkg.dependencies?.zod).toBe("4.4.3");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");
-    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.3.14");
+    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");
     expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:gui"]).toBe("cd gui && bun run dev");

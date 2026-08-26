@@ -41,6 +41,16 @@ export interface OwnershipRecord {
   fileFingerprint: string;
   /** Hash of our contribution — detects catalog/port drift. */
   blockFingerprint: string;
+  /**
+   * Hash of the fields the client must not rewrite. Present only when a
+   * client has explicitly declared runtime-derived paths below.
+   */
+  protectedBlockFingerprint?: string;
+  /**
+   * Exact document paths a client may derive after apply. These are recorded
+   * per operation so later catalog changes cannot widen an older grant.
+   */
+  refreshablePaths?: readonly (readonly string[])[];
   /** The exact paths we own. Removal touches these and nothing else. */
   fragmentPaths: readonly (readonly string[])[];
   /**

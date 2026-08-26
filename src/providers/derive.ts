@@ -483,6 +483,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.supportsOpenAiWebSearchToolFields === undefined && entry.supportsOpenAiWebSearchToolFields !== undefined) {
     prov.supportsOpenAiWebSearchToolFields = entry.supportsOpenAiWebSearchToolFields;
   }
+  if (prov.supportsResponsesCustomTools === undefined && entry.supportsResponsesCustomTools !== undefined) {
+    prov.supportsResponsesCustomTools = entry.supportsResponsesCustomTools;
+  }
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
   applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(entry, prov));

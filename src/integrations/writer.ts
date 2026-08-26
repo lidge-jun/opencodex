@@ -16,6 +16,7 @@ import { isLoopbackHostname } from "../codex/inject";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { fingerprint, canonicalContribution, fragmentPathsOf, type OwnershipRecord } from "./ownership";
+import { protectedContributionFingerprint, refreshablePathsOf } from "./ownership-policy";
 import { createdContainerPaths, mergeContribution, removeFragments } from "./merge";
 import { INTEGRATION_CLIENTS, isLoopbackOnly, type IntegrationClientId } from "./registry";
 import { classifyIntegration, exportContextOf } from "./state";
@@ -353,12 +354,17 @@ function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: bo
     opId, clientId, kind: classified.state === "stale" ? "refresh" : "apply", at, configPath,
     snapshot, resultFingerprint: fingerprint(text), resultAbsent: false, priorRecord: record,
   };
+  const refreshablePaths = refreshablePathsOf(contribution);
   return commit({
     io, store, clientId, configPath, before, nextText: text, state: "current",
     priorRecord: record,
     record: {
       clientId, configPath, fileFingerprint: fingerprint(text),
       blockFingerprint: fingerprint(canonicalContribution(contribution)),
+      ...(refreshablePaths.length > 0 ? {
+        protectedBlockFingerprint: protectedContributionFingerprint(contribution, refreshablePaths),
+        refreshablePaths,
+      } : {}),
       fragmentPaths: fragmentPathsOf(contribution), createdContainers: created,
       appliedAt: at, opId,
     },

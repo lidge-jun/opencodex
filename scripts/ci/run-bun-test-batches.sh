@@ -5,6 +5,11 @@ readonly SHARD_SPEC="${1:-}"
 readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
+# Runtime under test. Defaults to whatever `bun` PATH resolves to; the Bun 1.4
+# qualification lane sets OPENCODEX_BUN_PATH so the batches actually execute on
+# the candidate binary. Without this the lane would export an override, run the
+# bundled stable runtime anyway, and report a qualification it never performed.
+readonly BUN_BIN="${OPENCODEX_BUN_PATH:-bun}"
 
 usage() {
   echo "usage: $0 <shard/total>" >&2
@@ -106,7 +111,7 @@ run_test_once() {
   set +e
   timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
     "${BATCH_TIMEOUT_SECONDS}s" \
-    bun test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+    "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   status="${PIPESTATUS[0]}"
   set -e
 

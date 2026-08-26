@@ -276,10 +276,30 @@ export function parseCallbackInput(input: string): { kind: "url" | "query" | "ra
 
   try {
     const url = new URL(value);
+    // Also read the fragment. No provider configured here returns one — every
+    // OAuthCallbackFlow asks for response_type=code without response_mode, so
+    // the parameters land in the query — but a full URL whose parameters sit in
+    // the hash parses as a valid URL with no code, and reading only the query
+    // rejects it as "no authorization code found in input". This is the one
+    // place a fragment-returning provider would land, and the raw branch below
+    // already understands `code#state`.
+    //
+    // The query wins as a WHOLE when it carries the response, and the two
+    // fields are never mixed across collections. Reading `code` and `state`
+    // independently would accept `?state=<expected>#code=<other>` — one
+    // response assembled from two sources — which is exactly the confusion a
+    // state check exists to prevent. An authorization response arrives in one
+    // place; treat it that way.
+    //
+    // Only `code` and `state` are read — never a token. This repo does not
+    // implement the implicit grant and a paste field must not become the place
+    // it appears.
+    const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+    const source = url.searchParams.has("code") ? url.searchParams : fragment;
     return {
       kind: "url",
-      code: url.searchParams.get("code") ?? undefined,
-      state: url.searchParams.get("state") ?? undefined,
+      code: source.get("code") ?? undefined,
+      state: source.get("state") ?? undefined,
     };
   } catch {
     // Not a URL - check for query string format

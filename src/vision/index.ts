@@ -5,6 +5,8 @@ import { modelRecordValue } from "../reasoning-effort";
 import type { VisionReasoningEffort } from "../reasoning-effort";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
+import { describeImageRouted } from "./routed-describe";
+import { modelAcceptsImageInput } from "./eligibility";
 import { normalizeVisionReasoningForModel } from "./reasoning";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { resolveSidecarAuth } from "../sidecar/auth";
@@ -226,16 +228,23 @@ export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionP
 }
 
 export function resolveVisionBackend(
-  explicit: "openai" | "anthropic" | undefined,
+  explicit: "openai" | "anthropic" | "routed" | undefined,
   anthropicSidecar: AnthropicVisionProvider | undefined,
 ): "openai" | "anthropic" {
   if (explicit === "openai" || explicit === "anthropic") return explicit;
+  // "routed" collapses to the legacy default order until its describe executor
+  // lands (roadmap 170 → 180 revised): a persisted routed backend without a
+  // dispatchable arm degrades exactly like unset rather than crashing. wp3
+  // replaces this collapse with the real routed arm in planVisionSidecar.
   return anthropicSidecar ? "anthropic" : "openai";
 }
 
 /** Native model used by the OpenAI vision helper, including its bounded default. */
 export function resolveOpenAiVisionModel(config: Pick<OcxConfig, "visionSidecar">): string {
-  return config.visionSidecar?.model || DEFAULT_VISION_MODEL;
+  const configured = config.visionSidecar?.model;
+  // Namespaced routed ids never reach the forward executor (see
+  // resolveEffectiveVisionModel).
+  return configured && !configured.includes("/") ? configured : DEFAULT_VISION_MODEL;
 }
 
 /** Effective describer model for the backend `planVisionSidecar` selected. */
@@ -243,9 +252,15 @@ export function resolveEffectiveVisionModel(
   config: Pick<OcxConfig, "visionSidecar">,
   backend: "openai" | "anthropic",
 ): string {
+  const configured = config.visionSidecar?.model;
+  // A namespaced "provider/model" id belongs to the routed backend only; the
+  // forward/OAuth executors POST the model string verbatim, so it falls back
+  // to the side's default here (PUT coherence rejects new writes of this
+  // shape, but a legacy or hand-edited config must not break the executor).
+  const usable = configured && !configured.includes("/") ? configured : undefined;
   return backend === "anthropic"
-    ? config.visionSidecar?.model || DEFAULT_ANTHROPIC_VISION_MODEL
-    : resolveOpenAiVisionModel(config);
+    ? usable || DEFAULT_ANTHROPIC_VISION_MODEL
+    : usable || DEFAULT_VISION_MODEL;
 }
 
 /** A user/developer/toolResult message can carry images (toolResult: e.g. Codex view_image output). */
@@ -271,9 +286,13 @@ export function shouldResolveOpenAiVisionSidecar(
 }
 
 export interface VisionPlan {
-  backend: "openai" | "anthropic";
+  backend: "openai" | "anthropic" | "routed";
   forwardSidecar?: ResolvedOpenAiForwardSidecar;
   anthropicSidecar?: AnthropicVisionProvider;
+  /** Namespaced "provider/model" describer for the routed backend (roadmap 180). */
+  routedModel?: string;
+  /** Loopback dispatch inputs for the routed backend. */
+  routedConfig?: Pick<OcxConfig, "port" | "apiKeys">;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
 }
@@ -295,8 +314,45 @@ export function planVisionSidecar(
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;
+
+  // Routed arm (roadmap 180 revised): explicit backend + NAMESPACED explicit
+  // model only — never inferred from credential availability. Plan-time
+  // fence: the target must not be provably blind, and must not itself be a
+  // model this planner would re-enter for (belt; the terminal marker on the
+  // loopback request is the braces).
+  if (cfg.backend === "routed") {
+    const routedModel = cfg.model;
+    const sep = routedModel ? routedModel.indexOf("/") : -1;
+    if (routedModel && sep > 0) {
+      const targetProvider = routedModel.slice(0, sep);
+      const targetId = routedModel.slice(sep + 1);
+      const targetProviderConfig = config.providers?.[targetProvider];
+      const targetVisible = modelAcceptsImageInput(config, { provider: targetProvider, id: targetId }) !== false
+        && !(targetProviderConfig && isModelTextOnly(targetProviderConfig, targetId));
+      if (targetVisible) {
+        return {
+          backend: "routed",
+          routedModel,
+          routedConfig: { port: config.port, ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}) },
+          settings: {
+            model: routedModel,
+            reasoning: DEFAULT_REASONING,
+            timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
+          },
+          maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn),
+        };
+      }
+    }
+    // Misconfigured routed backend (bare id, unknown provider, or provably
+    // blind target): fall through to the legacy default order below rather
+    // than dispatching a describe that cannot work.
+  }
+
   const anthropicSidecar = findAnthropicVisionProvider(config);
   const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);
+  // A namespaced routed model must never reach the forward/OAuth executors
+  // (they POST the string verbatim); the effective-model resolver falls back
+  // to each side's default in that case.
   const model = resolveEffectiveVisionModel(config, backend);
   const maxDescriptionsPerTurn = resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn);
 
@@ -447,6 +503,18 @@ async function executeDescription(
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
 ): Promise<DescribeOutcome> {
+  if (plan.backend === "routed") {
+    if (!plan.routedModel || !plan.routedConfig) return { text: "", error: "routed vision sidecar is unavailable" };
+    return describeImageRouted(
+      job.imageUrl,
+      job.detail,
+      job.contextText,
+      plan.routedModel,
+      plan.routedConfig,
+      plan.settings,
+      abortSignal,
+    );
+  }
   if (plan.backend === "anthropic") {
     const sidecar = plan.anthropicSidecar;
     if (!sidecar) return { text: "", error: "anthropic vision sidecar is unavailable" };
