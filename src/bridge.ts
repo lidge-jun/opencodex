@@ -109,6 +109,18 @@ function responseError(status: number, type: string, message: string): OcxErrorP
  * once fragments have been streamed to the client they cannot be repaired the way
  * non-stream adapters degrade a bad payload to `{}`.
  */
+function codeModeExecCommandInput(args: string): string | null {
+  try {
+    const parsed = JSON.parse(args);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const canonical = JSON.parse(JSON.stringify(parsed));
+    return `const result = await tools.exec_command(JSON.parse(${JSON.stringify(JSON.stringify(canonical))}));
+text(result);`;
+  } catch {
+    return null;
+  }
+}
+
 function toolCallArgumentsUsable(args: string): boolean {
   if (args.length === 0) return true;
   const trimmed = args.trim();
@@ -179,7 +191,7 @@ export type ResponsesTerminalStatus = "completed" | "failed" | "incomplete";
 export function bridgeToResponsesSSE(
   events: AsyncIterable<AdapterEvent>,
   modelId: string,
-  toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>,
+  toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true; codeModeExecCommand?: true }>,
   freeformToolNames?: Set<string>,
   toolSearchToolNames?: Set<string>,
   onCancel?: () => void,
@@ -530,7 +542,7 @@ export function bridgeToResponsesSSE(
       // synthetic compaction item's payload on done.
       let compactionText = "";
       let compactionTextBytes = 0;
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; codeModeExecCommand?: boolean; codeModeExecCommandInput?: string; toolSearch?: boolean; inputEmitted?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -628,6 +640,13 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentToolCall = () => {
         if (!currentToolCall) return;
+        const customInput = currentToolCall.codeModeExecCommand
+          ? currentToolCall.codeModeExecCommandInput ?? codeModeExecCommandInput(currentToolCall.args)
+          : freeformInput(currentToolCall.args);
+        if (currentToolCall.codeModeExecCommand && customInput === null) {
+          failMalformedCodeModeExecCommand();
+          return;
+        }
         // Empty input (no-arg tools like computer_use get_app_state / list_apps) must serialize as
         // "{}", never "" — Codex echoes the call back as a function_call next turn, and JSON.parse("")
         // would 400 the whole session ("invalid JSON arguments"), poisoning all later turns.

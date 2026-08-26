@@ -164,6 +164,39 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   }
   return { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames };
 }
+/**
+ * Sensenova's Chat wire can emit its nested Code Mode helper as a top-level function call.
+ * This is intentionally request-local and called only after the final route selects that wire.
+ */
+export function enableSensenovaCodeModeExecCommandAlias(
+  parsed: OcxParsedRequest,
+  maps: ToolBridgeMaps,
+  budget?: TranslatorBudget,
+): void {
+  const requested = parsed.context.tools ?? [];
+  if (requested.some(tool => tool.name === "exec_command")) return;
+  const allowed = toolChoiceToolPredicate(parsed.options.toolChoice, requested);
+  const codeModeExec = requested.filter(tool =>
+    !tool.namespace
+    && tool.name === "exec"
+    && tool.freeform === true
+    && tool.description.includes("tools.exec_command")
+    && tool.description.includes("ALL_TOOLS")
+    && allowed(tool),
+  );
+  if (codeModeExec.length !== 1) return;
+  budget?.chargeRetained(new TextEncoder().encode("exec_command").byteLength, { kind: "retained_collectors" });
+  maps.declaredToolNames.add("exec_command");
+  budget?.chargeRetained(new TextEncoder().encode(JSON.stringify(["exec_command", "functions", "exec"])).byteLength, { kind: "retained_collectors" });
+  maps.toolNsMap.set("exec_command", {
+    namespace: "functions", name: "exec", freeform: true, codeModeExecCommand: true,
+  });
+  budget?.chargeRetained(new TextEncoder().encode("apply_patch").byteLength, { kind: "retained_collectors" });
+  maps.declaredToolNames.add("apply_patch");
+  budget?.chargeRetained(new TextEncoder().encode(JSON.stringify(["apply_patch", "apply_patch"])).byteLength, { kind: "retained_collectors" });
+  maps.toolNsMap.set("apply_patch", { namespace: "functions", name: "apply_patch", freeform: true });
+}
+
 
 
 

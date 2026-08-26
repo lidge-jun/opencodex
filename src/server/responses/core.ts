@@ -288,7 +288,7 @@ import {
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
-import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
+import { buildToolBridgeMaps, collabSurface, enableSensenovaCodeModeExecCommandAlias, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
@@ -2937,6 +2937,18 @@ async function handleResponsesInner(
     delete logCtx.accountLogLabel;
   }
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
+  if (route.providerName === "sensenova" && adapter.name === "openai-chat") {
+    try {
+      enableSensenovaCodeModeExecCommandAlias(parsed, toolBridgeMaps, translatorBudget);
+    } catch (err) {
+      if (isTranslatorBudgetExceededError(err)) {
+        return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+          requestId: parsed.options.requestId,
+        });
+      }
+      throw err;
+    }
+  }
   bindRouteReasoningReplayScope({
     parsed,
     providerName: route.providerName,
