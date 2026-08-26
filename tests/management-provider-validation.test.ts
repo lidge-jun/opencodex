@@ -13,7 +13,7 @@ import {
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
-import { loadConfig, saveConfig } from "../src/config";
+import { loadConfig, MAX_MODEL_DISPLAY_NAMES, saveConfig } from "../src/config";
 import { deriveProviderPresets } from "../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
@@ -950,6 +950,83 @@ describe("provider management validation", () => {
         // collapse into the same behaviour.
         expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
         expect((await seedProvider(server.url, {})).status).toBe(200);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    // Ingwannu, exact-head review of b0af8ebe: both write paths validate the *submitted
+    // fragment* and only then merge it with the stored map, so the cap is enforced against
+    // a number that is not the number that gets persisted. Two individually-legal maps
+    // therefore add up to an illegal one, and the loader is left to truncate it.
+    test("a POST that merges under the cap on its own still cannot exceed it once merged", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        const half = (prefix: string, count: number) =>
+          Object.fromEntries(Array.from({ length: count }, (_, i) => [`${prefix}-${i}`, `Label ${prefix} ${i}`]));
+
+        const first = half("a", MAX_MODEL_DISPLAY_NAMES);
+        expect((await seedProvider(server.url, { modelDisplayNames: first })).status).toBe(200);
+        expect(Object.keys(loadConfig().providers.labels?.modelDisplayNames ?? {}).length)
+          .toBe(MAX_MODEL_DISPLAY_NAMES);
+
+        // Legal in isolation: exactly at the cap, every label valid. Illegal once merged
+        // with the stored map, which preservation is about to do.
+        const second = half("b", MAX_MODEL_DISPLAY_NAMES);
+        const response = await seedProvider(server.url, { modelDisplayNames: second });
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toMatch(/at most/);
+
+        // The refused write leaves the stored map exactly as it was.
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(first);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a PATCH that merges over the cap is refused rather than persisted and truncated later", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        const first = Object.fromEntries(
+          Array.from({ length: MAX_MODEL_DISPLAY_NAMES }, (_, i) => [`a-${i}`, `Label A ${i}`]),
+        );
+        expect((await seedProvider(server.url, { modelDisplayNames: first })).status).toBe(200);
+
+        const patch = await fetch(new URL("/api/providers?name=labels", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelDisplayNames: { "b-0": "One More Label" } }),
+        });
+        expect(patch.status).toBe(400);
+        expect((await patch.json()).error).toMatch(/at most/);
+        expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(first);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("whitespace-collapsing keys are counted as what they become, not as what was sent", async () => {
+      // The stored key is `model.trim()`, so `"m"` and `" m "` are one entry after
+      // normalization but two before it. Counting before normalizing lets a map pass the
+      // cap on a number the store never sees — in this direction it merely miscounts, but
+      // it also means a collision silently overwrites rather than being rejected.
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelDisplayNames: LABELS })).status).toBe(200);
+
+        const patch = await fetch(new URL("/api/providers?name=labels", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            modelDisplayNames: { "moonshotai/kimi-k3": "First Wins", "  moonshotai/kimi-k3  ": "Second Wins" },
+          }),
+        });
+        expect(patch.status).toBe(400);
+        expect((await patch.json()).error).toMatch(/same model id|duplicate/i);
         expect(loadConfig().providers.labels?.modelDisplayNames).toEqual(LABELS);
       } finally {
         await server.stop(true);

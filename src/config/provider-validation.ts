@@ -158,8 +158,16 @@ export function displayLabelRecordConfigError(value: unknown, field = "modelDisp
   if (entries.length > MAX_MODEL_DISPLAY_NAMES) {
     return `${field} must hold at most ${MAX_MODEL_DISPLAY_NAMES} entries`;
   }
+  // Keys are stored trimmed, so two submitted keys can collapse into one stored entry.
+  // Counting before that happens means the cap is enforced against a number the store
+  // never sees, and the later of the two labels silently wins over the earlier — the
+  // operator gets a 200 for an instruction that was self-contradictory.
+  const seen = new Set<string>();
   for (const [key, label] of entries) {
-    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    const id = key.trim();
+    if (!id) return `${field} keys must be nonblank model ids`;
+    if (seen.has(id)) return `${field} must not set the same model id twice (${id})`;
+    seen.add(id);
     if (label === null) continue;
     if (typeof label !== "string") return `${field}.${key} must be a string`;
     if (!isValidDisplayLabel(label)) {
@@ -168,6 +176,25 @@ export function displayLabelRecordConfigError(value: unknown, field = "modelDisp
     }
   }
   return null;
+}
+
+/**
+ * Normalize a submitted label map to the shape that is actually persisted: keys and labels
+ * trimmed, non-string values carried through as tombstones for the caller to apply.
+ *
+ * PATCH already stored `model.trim()` while POST stored the key verbatim, so the same id
+ * submitted through the two routes produced two different stored keys for one model. This
+ * is the single definition of "what does this entry become", so the cap and the label rules
+ * can be checked against the map that will exist rather than the one that was sent.
+ */
+export function normalizeDisplayLabelRecord(value: object): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const [key, label] of Object.entries(value)) {
+    const id = key.trim();
+    if (!id) continue;
+    out[id] = typeof label === "string" ? label.trim() : null;
+  }
+  return out;
 }
 
 export function reasoningSummaryDeliveryRecordConfigError(

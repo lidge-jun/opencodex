@@ -78,6 +78,7 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { MAX_DISPLAY_LABEL_LENGTH, isValidDisplayLabel } from "../../codex/catalog/display-labels";
 import { providerDisplayNamesConfigError, providerServiceTierConfigError } from "./provider-capability-config";
+import { normalizeDisplayLabelRecord } from "../../config/provider-validation";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -298,8 +299,16 @@ function applyProviderPatchFields(
     } else {
       if (!isPlainRecord(value)) return { error: "modelDisplayNames must be a plain object or null" };
       const labels: Record<string, string> = { ...(next.modelDisplayNames ?? {}) };
+      // Collisions have to be caught against the *submitted* fragment. By the time the
+      // merged map is validated the duplicate has already collapsed into one key, so the
+      // later label wins silently and the check downstream has nothing left to see.
+      const submittedIds = new Set<string>();
       for (const [model, label] of Object.entries(value)) {
         if (!model.trim()) return { error: "modelDisplayNames keys must be nonblank model ids" };
+        if (submittedIds.has(model.trim())) {
+          return { error: `modelDisplayNames must not set the same model id twice (${model.trim()})` };
+        }
+        submittedIds.add(model.trim());
         // Per-key null clears one label, matching `modelContextWindows`, so an operator can
         // take a single label back off without resubmitting the rest of the map.
         if (label === null) {
@@ -672,11 +681,28 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Canonicalize to absent, which is what "clear" means everywhere else — the same
       // treatment `upstreamHttpVersion` gets above.
       delete prov.modelDisplayNames;
-    } else if (existing?.modelDisplayNames) {
-      prov.modelDisplayNames = submittedModelDisplayNames
-        ? { ...existing.modelDisplayNames, ...(prov.modelDisplayNames ?? {}) }
-        : { ...existing.modelDisplayNames };
+    } else {
+      // Normalize first, then apply tombstones, then merge. The order is the point: the
+      // pre-merge validation above saw only the submitted fragment, so two individually
+      // legal maps could merge into an over-cap one. That wrote 1024 entries to disk and
+      // the loader then kept the first 512 — all of them the *old* ones, so every label
+      // the operator had just submitted and received a 200 for was silently discarded.
+      const submitted = isPlainRecord(prov.modelDisplayNames)
+        ? normalizeDisplayLabelRecord(prov.modelDisplayNames)
+        : undefined;
+      const merged: Record<string, string> = { ...(existing?.modelDisplayNames ?? {}) };
+      for (const [model, label] of Object.entries(submitted ?? {})) {
+        if (label === null) delete merged[model];
+        else merged[model] = label;
+      }
+      if (Object.keys(merged).length > 0) prov.modelDisplayNames = merged;
+      else delete prov.modelDisplayNames;
     }
+    // Validate what will actually be persisted, not what was sent. This is the only check
+    // that sees the merged map, and it is the one the loader's salvage would otherwise be
+    // left to clean up after the write already reported success.
+    const mergedDisplayNamesError = providerDisplayNamesConfigError(name, prov);
+    if (mergedDisplayNamesError) return jsonResponse({ error: mergedDisplayNamesError }, 400);
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
