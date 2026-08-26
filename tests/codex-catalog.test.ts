@@ -1780,6 +1780,172 @@ describe("Cursor Kimi K3 catalog default effort", () => {
   });
 });
 
+describe("provider discovered model display names", () => {
+  const provider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    modelDisplayNames: { "grok-4.6": "Grok 4.6" },
+  };
+
+  test("an exact provider model id receives only the configured display name", () => {
+    const discovered = {
+      provider: "xai",
+      id: "grok-4.6",
+      displayName: "Provider Grok",
+      contextWindow: 131_072,
+      maxInputTokens: 100_000,
+      autoCompactTokenLimit: 90_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "high",
+      supportsReasoningSummaries: true,
+      supportsVerbosity: false,
+      priority: 17,
+      fallbackModels: ["grok-4.5"],
+      owned_by: "xai",
+    } as const;
+
+    const output = applyProviderConfigHints("xai", provider, discovered);
+    const { displayName: _beforeDisplayName, ...beforeIdentity } = discovered;
+    const { displayName: _afterDisplayName, ...afterIdentity } = output;
+
+    expect(output.displayName).toBe("Grok 4.6");
+    expect(afterIdentity).toEqual({ ...beforeIdentity, supportsServiceTier: false });
+    expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
+  });
+
+  test("display names use exact case-sensitive ids and stay provider scoped", () => {
+    const wrongCase = applyProviderConfigHints("xai", provider, { provider: "xai", id: "GROK-4.6" });
+    const otherProvider = applyProviderConfigHints("other", {
+      ...provider,
+      modelDisplayNames: { "grok-4.6": "Other Grok" },
+    }, { provider: "other", id: "grok-4.6" });
+
+    expect(wrongCase.displayName).toBeUndefined();
+    expect(otherProvider.displayName).toBe("Other Grok");
+  });
+
+  test("provider metadata remains when no operator display name exists", () => {
+    const output = applyProviderConfigHints("xai", {
+      ...provider,
+      modelDisplayNames: undefined,
+    }, {
+      provider: "xai",
+      id: "grok-4.6",
+      displayName: "Provider Grok",
+    });
+
+    expect(output.displayName).toBe("Provider Grok");
+  });
+
+  test("a configured display name emits into the Codex picker without changing its slug", () => {
+    const model = applyProviderConfigHints("xai", provider, { provider: "xai", id: "grok-4.6" });
+    const row = buildCatalogEntries(nativeTemplate(), [], [model])
+      .find(entry => entry.slug === "xai/grok-4.6");
+
+    expect(row?.display_name).toBe("Grok 4.6");
+    expect(row?.slug).toBe("xai/grok-4.6");
+  });
+
+  test("the label survives static, live, and configured failure catalog paths", async () => {
+    const staticModels = await gatherRoutedModels({
+      defaultProvider: "display-static",
+      providers: {
+        "display-static": {
+          adapter: "openai-chat",
+          baseUrl: "https://static.example.test/v1",
+          liveModels: false,
+          models: ["model-a"],
+          modelDisplayNames: { "model-a": "Static Model" },
+        },
+      },
+    });
+    expect(staticModels).toContainEqual(expect.objectContaining({
+      provider: "display-static",
+      id: "model-a",
+      displayName: "Static Model",
+    }));
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{ id: "model-a", name: "Provider Model" }],
+    }), { headers: { "content-type": "application/json" } })) as typeof fetch;
+    const liveModels = await gatherRoutedModels({
+      defaultProvider: "display-live",
+      providers: {
+        "display-live": {
+          adapter: "openai-chat",
+          baseUrl: "https://93.184.216.34/v1",
+          apiKey: "sk-test",
+          modelDisplayNames: { "model-a": "Live Model" },
+        },
+      },
+    });
+    expect(liveModels).toContainEqual(expect.objectContaining({
+      provider: "display-live",
+      id: "model-a",
+      displayName: "Live Model",
+    }));
+
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const failedModels = await gatherRoutedModels({
+        defaultProvider: "display-failure",
+        providers: {
+          "display-failure": {
+            adapter: "openai-chat",
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+            models: ["model-a"],
+            modelDisplayNames: { "model-a": "Failure Model" },
+          },
+        },
+      });
+      expect(failedModels).toContainEqual(expect.objectContaining({
+        provider: "display-failure",
+        id: "model-a",
+        displayName: "Failure Model",
+      }));
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test("a stale cached row receives the current operator label on every gather", async () => {
+    const providerName = "display-stale";
+    setCached(providerName, [{
+      provider: providerName,
+      id: "model-a",
+      displayName: "Old Provider Name",
+    }], Date.now() - 10_000);
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const config = {
+        modelCacheTtlMs: 1,
+        defaultProvider: providerName,
+        providers: {
+          [providerName]: {
+            adapter: "openai-chat" as const,
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+            modelDisplayNames: { "model-a": "Current Name" },
+          },
+        },
+      };
+      const first = await gatherRoutedModels(config);
+      const second = await gatherRoutedModels(config);
+
+      expect(first).toContainEqual(expect.objectContaining({ id: "model-a", displayName: "Current Name" }));
+      expect(second).toContainEqual(expect.objectContaining({ id: "model-a", displayName: "Current Name" }));
+      expect(first.filter(model => catalogModelSlug(model) === `${providerName}/model-a`)).toHaveLength(1);
+    } finally {
+      warning.mockRestore();
+      clearModelCache(providerName);
+    }
+  });
+});
+
 describe("configured CatalogModel displayName -> catalog display_name", () => {
   test("a routed CatalogModel displayName becomes the catalog display_name", () => {
     const model = { provider: "deepseek", id: "deepseek-v4", displayName: "DeepSeek V4", owned_by: "deepseek" };

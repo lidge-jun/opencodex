@@ -569,6 +569,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     adapter: prov.adapter ?? "",
     models: [...(prov.models ?? [])].sort(),
     selected: [...(prov.selectedModels ?? [])].sort(),
+    displayNames: prov.modelDisplayNames ?? null,
     defaultModel: prov.defaultModel ?? null,
     ctx: prov.contextWindow ?? null,
     ctxW: prov.modelContextWindows ?? null,
@@ -624,6 +625,16 @@ export function configuredInputModalities(prov: OcxProviderConfig, id: string): 
   return Array.isArray(modalities) && modalities.length > 0 ? [...modalities] : undefined;
 }
 
+/** Exact display-only override for one provider-native model id. */
+export function configuredModelDisplayName(
+  prov: OcxProviderConfig,
+  id: string,
+): string | undefined {
+  if (!prov.modelDisplayNames || !Object.hasOwn(prov.modelDisplayNames, id)) return undefined;
+  const value = prov.modelDisplayNames[id];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export function configuredMaxInputTokens(prov: OcxProviderConfig, id: string): number | undefined {
   const configured = modelRecordValue(prov.modelMaxInputTokens, id);
   return typeof configured === "number" && configured > 0 ? configured : undefined;
@@ -664,6 +675,7 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
+  const displayName = configuredModelDisplayName(prov, model.id);
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
@@ -696,6 +708,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     : (configuredCap ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined));
   const hinted = {
     ...modelWithoutServiceTier,
+    ...(displayName !== undefined ? { displayName } : {}),
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
