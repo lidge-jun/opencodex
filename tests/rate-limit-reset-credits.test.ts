@@ -481,4 +481,96 @@ describe("rate-limit reset credits", () => {
       });
     });
   });
+
+  /**
+   * Codex removed the 5-hour window and restored it for Plus and Team (Pro stays weekly-only).
+   * The header parser classified every non-monthly primary as weekly, so a 5h reading landed in
+   * weeklyPercent, the real weekly value was discarded, and the account stayed "exhausted" long
+   * after the burst window reset.
+   */
+  describe("header window duration classification (5h restoration)", () => {
+    it("files a 5h primary as the burst window and the 7-day secondary as weekly", () => {
+      clearAccountQuota();
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "97",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "1787401330",
+        "x-codex-secondary-used-percent": "12",
+        "x-codex-secondary-window-minutes": "10080",
+        "x-codex-secondary-reset-at": "1788000000",
+      });
+      applyAccountQuotaFromUpstreamHeaders("burst-A", headers);
+      expect(getAccountQuota("burst-A")).toEqual({
+        shortPercent: 97,
+        shortResetAt: 1787401330,
+        shortWindowSeconds: 18000,
+        weeklyPercent: 12,
+        weeklyResetAt: 1788000000,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("an exhausted burst window does not poison the weekly reading", () => {
+      // The damaging half of the bug: weeklyPercent=100 survives the 5h reset and keeps the
+      // account out of the pool until an unrelated WHAM refresh overwrites it.
+      clearAccountQuota();
+      applyAccountQuotaFromUpstreamHeaders("burst-B", new Headers({
+        "x-codex-primary-used-percent": "100",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-secondary-used-percent": "8",
+        "x-codex-secondary-window-minutes": "10080",
+      }));
+      const quota = getAccountQuota("burst-B");
+      expect(quota?.shortPercent).toBe(100);
+      expect(quota?.weeklyPercent).toBe(8);
+    });
+
+    it("a sub-day window at 1439 minutes is short; 1440 minutes is not", () => {
+      // Strict `<` against the 24h discriminator, matching isExplicitShortWindow exactly.
+      clearAccountQuota();
+      applyAccountQuotaFromUpstreamHeaders("edge-below", new Headers({
+        "x-codex-primary-used-percent": "60",
+        "x-codex-primary-window-minutes": "1439",
+      }));
+      expect(getAccountQuota("edge-below")?.shortPercent).toBe(60);
+      expect(getAccountQuota("edge-below")?.weeklyPercent).toBeUndefined();
+
+      clearAccountQuota();
+      applyAccountQuotaFromUpstreamHeaders("edge-at", new Headers({
+        "x-codex-primary-used-percent": "60",
+        "x-codex-primary-window-minutes": "1440",
+      }));
+      expect(getAccountQuota("edge-at")?.weeklyPercent).toBe(60);
+      expect(getAccountQuota("edge-at")?.shortPercent).toBeUndefined();
+    });
+
+    it("a primary with no declared duration stays weekly", () => {
+      // Duration classification is opt-in on a DECLARED duration. Legacy payloads omit the
+      // header, and guessing there would reclassify every account that predates the field.
+      clearAccountQuota();
+      applyAccountQuotaFromUpstreamHeaders("legacy-A", new Headers({
+        "x-codex-primary-used-percent": "80",
+        "x-codex-primary-reset-at": "1787000000",
+      }));
+      expect(getAccountQuota("legacy-A")).toEqual({
+        weeklyPercent: 80,
+        weeklyResetAt: 1787000000,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("the reset instant travels with its own window", () => {
+      clearAccountQuota();
+      applyAccountQuotaFromUpstreamHeaders("reset-A", new Headers({
+        "x-codex-primary-used-percent": "50",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "1787401330",
+      }));
+      const quota = getAccountQuota("reset-A");
+      expect(quota?.shortResetAt).toBe(1787401330);
+      // The primary reset belongs to the burst window; it must not be reported as the weekly one.
+      expect(quota?.weeklyResetAt).toBeUndefined();
+    });
+  });
+
 });

@@ -95,6 +95,9 @@ const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
  */
 const WEEKLY_WINDOW_MIN_SECONDS = 24 * 60 * 60;
 const MONTHLY_WINDOW_MIN_MINUTES = MONTHLY_WINDOW_MIN_SECONDS / 60;
+// Derived, never written as a literal: the header parser and the WHAM parser must not be able
+// to drift to different thresholds, which is the class of defect this pair exists to prevent.
+const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
 
 const accountQuota = new Map<string, StoredAccountQuota>();
 let lastReconciledGeneration = 0;
@@ -219,14 +222,24 @@ function isExplicitMonthlyWindow(window: WhamUsageWindow | null | undefined): bo
 }
 
 function isExplicitMonthlyWindowMinutes(windowMinutes: unknown): boolean {
-  const minutes = typeof windowMinutes === "number"
-    ? windowMinutes
-    : typeof windowMinutes === "string" && windowMinutes.trim() !== ""
-      ? Number(windowMinutes)
+  const minutes = windowMinutes_(windowMinutes);
+  return minutes !== undefined && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
+}
+
+/** The header wire reports a window duration in MINUTES; WHAM reports it in seconds. */
+function windowMinutes_(value: unknown): number | undefined {
+  const minutes = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
       : undefined;
-  return typeof minutes === "number"
-    && Number.isFinite(minutes)
-    && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
+  return typeof minutes === "number" && Number.isFinite(minutes) ? minutes : undefined;
+}
+
+/** Minutes-domain twin of isExplicitShortWindow. Same strict `<`, same 24h discriminator. */
+function isExplicitShortWindowMinutes(value: unknown): boolean {
+  const minutes = windowMinutes_(value);
+  return minutes !== undefined && minutes > 0 && minutes < WEEKLY_WINDOW_MIN_MINUTES;
 }
 
 
@@ -342,6 +355,12 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
   const secondaryResetAt = normalizeResetAt(secondaryResetRaw);
   const tertiaryResetAt = normalizeResetAt(tertiaryResetRaw);
   const primaryIsMonthly = primaryRaw !== null && isExplicitMonthlyWindowMinutes(primaryWindowMinutes);
+  // Codex removed the 5-hour window and has now restored it for Plus and Team (Pro stays
+  // weekly-only). A primary window that DECLARES a sub-day duration is a burst window: folding
+  // it into weeklyPercent both discards the real weekly reading and leaves the account looking
+  // exhausted long after the burst window resets. Duration decides, exactly as parseUsageQuota
+  // already does for the WHAM payload — the two parsers must not disagree about the same data.
+  const primaryIsShort = primaryRaw !== null && isExplicitShortWindowMinutes(primaryWindowMinutes);
 
   if (primaryIsMonthly) {
     if (primaryPercent !== undefined) {
@@ -352,6 +371,19 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
       // but the two parsers must agree on what a bare monthlyPercent means.
       quota.monthlyIsPrimaryWindow = true;
     }
+    if (secondaryPercent !== undefined) {
+      quota.weeklyPercent = secondaryPercent;
+      if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;
+    }
+  } else if (primaryIsShort) {
+    if (primaryPercent !== undefined) {
+      quota.shortPercent = primaryPercent;
+      if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
+      const minutes = windowMinutes_(primaryWindowMinutes);
+      if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
+    }
+    // The burst window vacates the primary slot, so the weekly reading is the secondary — which
+    // is where it was all along. Without this the true weekly value is silently dropped.
     if (secondaryPercent !== undefined) {
       quota.weeklyPercent = secondaryPercent;
       if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;

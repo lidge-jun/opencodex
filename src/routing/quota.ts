@@ -41,6 +41,12 @@ function codexAccountQuotaEvidence(accountId: string, plan?: string): RouteQuota
   const percents = [
     ...(monthly ? [] : [quota.weeklyPercent]),
     quota.monthlyPercent,
+    // The burst window is upstream-enforced independently of the governing window, so an
+    // account at 97% here has 3% headroom whatever its weekly figure says. This was invisible
+    // while the header parser misfiled 5h readings into weeklyPercent - routing saw the burst
+    // by accident. Once that is fixed, omitting it here reports 88% headroom for an account
+    // that is one request away from a 429. computeCodexUsageScore already folds it in.
+    quota.shortPercent,
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const maxPercent = percents.length > 0 ? Math.max(...percents) : undefined;
   // Credits-only snapshots prove neither usage nor exhaustion. Unknown must not
@@ -49,6 +55,10 @@ function codexAccountQuotaEvidence(accountId: string, plan?: string): RouteQuota
   const resets = [
     ...(monthly ? [] : [quota.weeklyResetAt]),
     quota.monthlyResetAt,
+    // Pair the reset with the window that can actually gate the next request: a burst-limited
+    // account recovers in hours, and reporting a distant weekly reset would defer a retry that
+    // is already safe.
+    quota.shortResetAt,
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value))
     .filter(value => value > Date.now());
   return {
