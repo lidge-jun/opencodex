@@ -183,6 +183,9 @@ export function CodexAccountPoolPageHead({
   actionFeedbackTone,
   onRefresh,
   onPauseExhausted,
+  sparkVisible,
+  sparkBusy,
+  onToggleSpark,
 }: {
   t: TFn;
   embedded: boolean;
@@ -193,6 +196,10 @@ export function CodexAccountPoolPageHead({
   actionFeedbackTone?: NoticeTone | null;
   onRefresh: () => void;
   onPauseExhausted: () => void;
+  /** undefined until the preference has loaded, so the switch never renders a guessed state. */
+  sparkVisible?: boolean;
+  sparkBusy?: boolean;
+  onToggleSpark?: () => void;
 }) {
   return (
     <div
@@ -208,6 +215,22 @@ export function CodexAccountPoolPageHead({
         >
           {actionFeedback ?? ""}
         </span>
+        {sparkVisible !== undefined && onToggleSpark && (
+          <span className="codex-auth-spark-toggle">
+            <span className="codex-auth-spark-toggle__label">{t("codexAuth.sparkQuota")}</span>
+            <button
+              type="button"
+              className={`toggle ${sparkVisible ? "on" : ""}`}
+              onClick={onToggleSpark}
+              disabled={!!sparkBusy}
+              aria-pressed={sparkVisible}
+              aria-label={t("codexAuth.sparkQuota")}
+              title={t("codexAuth.sparkQuotaHint")}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </span>
+        )}
         <button
           type="button"
           className="btn btn-sm btn-ghost codex-auth-action-btn"

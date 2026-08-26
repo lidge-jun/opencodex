@@ -72,6 +72,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [actionFeedbackTone, setActionFeedbackTone] = useState<NoticeTone | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
+  // undefined until /api/settings answers: the switch must not render a guessed position and
+  // then visibly correct itself a moment later.
+  const [sparkVisible, setSparkVisible] = useState<boolean | undefined>(undefined);
+  const [sparkBusy, setSparkBusy] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
@@ -228,6 +232,50 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/settings`);
+        if (!response.ok) return;
+        const payload = await response.json() as { showCodexSparkQuota?: unknown };
+        if (cancelled || typeof payload.showCodexSparkQuota !== "boolean") return;
+        setSparkVisible(payload.showCodexSparkQuota);
+      } catch {
+        // A settings read failure leaves the switch unrendered rather than guessing a position.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [apiBase]);
+
+  const toggleSpark = async () => {
+    if (sparkBusy || sparkVisible === undefined) return;
+    const requested = !sparkVisible;
+    setSparkBusy(true);
+    // Optimistic, then reconciled against what the server confirms — the same shape the account
+    // picker toggle uses, so a rejected write visibly snaps back instead of lying.
+    setSparkVisible(requested);
+    try {
+      const response = await fetch(`${apiBase}/api/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ showCodexSparkQuota: requested }),
+      });
+      if (!response.ok) throw new Error("save");
+      const payload = await response.json() as { showCodexSparkQuota?: unknown };
+      const confirmed = typeof payload.showCodexSparkQuota === "boolean" ? payload.showCodexSparkQuota : requested;
+      setSparkVisible(confirmed);
+      showActionFeedback(t(confirmed ? "codexAuth.sparkQuotaShown" : "codexAuth.sparkQuotaHidden"), "ok");
+      await load(true);
+    } catch {
+      setSparkVisible(!requested);
+      showActionFeedback(t("codexAuth.sparkQuotaFailed"), "err");
+    } finally {
+      setSparkBusy(false);
+    }
+  };
+
+
   const pauseExhausted = async () => {
     const result = await controller.pauseExhaustedAccounts();
     if (!result.ok && result.reason === "busy") return;
@@ -294,6 +342,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         pauseBusy={pauseBusy}
         onRefresh={() => { void refreshQuotas(); }}
         onPauseExhausted={() => { void pauseExhausted(); }}
+        sparkVisible={sparkVisible}
+        sparkBusy={sparkBusy}
+        onToggleSpark={() => { void toggleSpark(); }}
       />
 
       {banner}

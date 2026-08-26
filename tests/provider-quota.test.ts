@@ -114,7 +114,7 @@ describe("fetchProviderQuotaReports", () => {
     expect(cancelCalls).toBe(1);
   });
 
-  test("Codex report exposes primary, weekly, and Spark weekly windows", async () => {
+  test("Codex report exposes primary and weekly windows, and hides Spark by default", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
       return Response.json({
@@ -150,8 +150,11 @@ describe("fetchProviderQuotaReports", () => {
       fiveHourResetAt: 1,
       weeklyPercent: 22,
       weeklyResetAt: 2,
-      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
     });
+    // Spark is a single-model window that reads 0% for most operators; it is hidden unless the
+    // operator opts in. The upstream payload above still CARRIES it, so this asserts the
+    // projection dropped it rather than the fixture omitting it.
+    expect(result.reports[0]?.quota?.customWindows).toBeUndefined();
   });
 
   test("Anthropic report exposes the canonical Fable window from direct and limits payloads", async () => {

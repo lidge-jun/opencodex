@@ -3,6 +3,7 @@ import {
   effectiveCodexAuthAccountId,
   fetchMainAccountInfoSnapshot,
   listCodexAuthAccountsSnapshot,
+  withSparkVisibility,
 } from "../codex/auth-api";
 import type { StoredAccountQuota } from "../codex/quota";
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
@@ -171,6 +172,11 @@ function providerQuotaFromCodexQuota(
   quota: StoredAccountQuota | Omit<StoredAccountQuota, "updatedAt"> | null | undefined,
 ): CodexCapacityQuota | null {
   if (!quota) return null;
+  // Every Codex-sourced provider report funnels through here — the pooled path via
+  // listCodexAuthAccountsSnapshot and the `direct` path via fetchMainAccountInfoSnapshot, which
+  // never touches the Codex Auth DTO. Applying the Spark preference at this one point is what
+  // stops the row surviving on /api/provider-quotas after the operator switched it off.
+  quota = withSparkVisibility(quota ?? null) ?? quota;
   return {
     ...(quota.shortPercent !== undefined ? { fiveHourPercent: quota.shortPercent } : {}),
     ...(quota.shortResetAt !== undefined ? { fiveHourResetAt: quota.shortResetAt } : {}),

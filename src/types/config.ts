@@ -575,6 +575,15 @@ export interface OcxConfig {
    * selector map remains visible for compatibility with hand-written configurations.
    */
   codexAccountPickerEnabled?: boolean;
+  /**
+   * Show the GPT-5.3-Codex-Spark weekly window on Codex quota surfaces. Default false.
+   *
+   * Spark is a single-model window that reads 0% for most operators, and on a multi-account
+   * pool it doubles the bar count for information almost nobody acts on. Hidden by default and
+   * revealed by an explicit `true`; a malformed value reads as hidden rather than rejecting the
+   * whole config.
+   */
+  showCodexSparkQuota?: boolean;
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

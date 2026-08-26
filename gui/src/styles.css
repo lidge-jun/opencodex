@@ -1680,6 +1680,19 @@ dialog.modal-overlay::backdrop {
   gap: 10px;
   min-width: 0;
 }
+/* Spark visibility switch: a labelled toggle, not a bare knob. An unlabelled switch sitting
+   between two labelled buttons is a guessing game, and this one changes what every card in the
+   page renders. The label carries the meaning; the toggle carries the state. */
+.codex-auth-spark-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.codex-auth-spark-toggle__label {
+  font-size: 12px;
+  color: var(--muted);
+}
 /* Account actions (pause / copy doctor / pause-exhausted): clearer hover than plain
    btn-ghost on card surface — same raised-hover + faint border as icon/list cues. */
 .codex-auth-action-btn:hover:not(:disabled) {
